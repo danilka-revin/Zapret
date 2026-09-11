@@ -507,6 +507,50 @@ def main() -> int:
     check(window.service_rows["youtube"].state in ("ok", "checking"),
           "строка YouTube показывает результат проверки")
 
+    print("\n[6c] Клик и колесо доходят до виджетов")
+    # Регресс на «ни одна кнопка не нажимается»: пустой central widget поверх
+    # содержимого ловит все события, и окна выглядят живыми, но глухими.
+    check(window.scroll.parentWidget() is window.centralWidget(),
+          "прокрутка лежит внутри central widget, а не под ним")
+
+    bar = window.scroll.verticalScrollBar()
+    if bar.maximum() > 0:
+        bar.setValue(bar.maximum())       # карточка «Обслуживание» — в самом низу
+        pump(app, 80)
+
+    def topmost(widget):
+        pos = widget.mapTo(window, QPoint(widget.rect().center().x(),
+                                           widget.rect().center().y()))
+        return window.childAt(pos.x(), pos.y())
+
+    for label, widget in (("большая кнопка", window.power),
+                          ("«Обновить и перезапустить»", window.btn_update),
+                          ("«Создать ярлык»", window.btn_shortcut),
+                          ("«Починить установку»", window.btn_repair)):
+        hit = topmost(widget)
+        name = hit.metaObject().className() if hit is not None else "ничего"
+        check(hit is widget or widget.isAncestorOf(hit),
+              f"{label}: сверху сам виджет, а не {name}")
+
+    check(getattr(window, "_wheel_guard", None) is not None,
+          "защита прокрутки колесом установлена")
+    try:
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QWheelEvent
+
+        viewport = window.scroll.viewport()
+        point = viewport.rect().center()
+        bar.setValue(0)
+        pump(app, 40)
+        event = QWheelEvent(QPointF(point), viewport.mapToGlobal(point), QPoint(0, 0),
+                            QPoint(0, -120), Qt.MouseButton.NoButton,
+                            Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.ScrollUpdate, False)
+        QApplication.sendEvent(viewport, event)
+        pump(app, 40)
+        check(bar.value() > 0, f"колесо вниз прокручивает окно (сдвиг {bar.value()} px)")
+    except (ImportError, AttributeError, TypeError) as exc:   # разные версии Qt
+        print(f"  skip· колесо: {exc}")
+
     print("\n[7] Иконки темы")
     check(len(icons.ICONS) > 40, f"набор иконок загружен ({len(icons.ICONS)})")
     missing = [name for name in ("power", "shield-check", "rocket", "palette", "refresh")

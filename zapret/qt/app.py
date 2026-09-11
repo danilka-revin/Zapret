@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractScrollArea, QApplication, QFrame, QHBoxLayout,
                                QLabel, QMainWindow, QScrollArea, QSystemTrayIcon, QVBoxLayout, QWidget, QMenu)
 
 from .. import APP_NAME, APP_VERSION, app_dir
@@ -29,7 +29,7 @@ from .sheets import (CustomizerSheet, DiagnosticsSheet, HelpSheet, JournalSheet,
 from .theme import ThemeManager, apply_theme_to_app
 from .widgets import (Backdrop, Card, GlassButton, IconButton, LogView, PowerSwitch,
                       ServiceRow, SettingRow, Sparkline, StatTile, StatusPill, Switch,
-                      ToastHost, _Glass, font)
+                      ToastHost, WheelScrollGuard, _Glass, font)
 
 WINDOW_MIN = QSize(1040, 680)
 WINDOW_DEFAULT = QSize(1200, 820)
@@ -119,13 +119,26 @@ class ZapretWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_shell(self):
-        self.bg = Backdrop(self.theme, self)
+        # Фон и прокрутка живут ВНУТРИ central widget. Если сделать их соседями,
+        # Qt ставит central widget поверх: пустой контейнер перекрывает всё окно
+        # и съедает каждый клик и колесо мыши — выглядит как «ни одна кнопка не
+        # нажимается и прокрутка не работает», хотя интерфейс живой.
+        container = QWidget(self)
+        container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setCentralWidget(container)
+        shell = QVBoxLayout(container)      # прокрутка управляется layout'ом:
+        shell.setContentsMargins(0, 0, 0, 0)  # размер не зависит от порядка событий
+        shell.setSpacing(0)
+        self._shell = shell
+
+        self.bg = Backdrop(self.theme, container)
         _Glass.backdrop = self.bg
 
-        self.scroll = QScrollArea(self)
+        self.scroll = QScrollArea(container)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollMode(QAbstractScrollArea.ScrollMode.ScrollPerPixel)
         self.scroll.viewport().setAutoFillBackground(False)
         self.scroll.setStyleSheet(
             "QScrollArea, QScrollArea > QWidget#qt_scrollarea_viewport,"
@@ -140,13 +153,14 @@ class ZapretWindow(QMainWindow):
         self.root.setContentsMargins(24, 20, 24, 24)
         self.root.setSpacing(16)
         self.scroll.setWidget(self.content)
-        self.setCentralWidget(QWidget(self))
-        self.centralWidget().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        shell.addWidget(self.scroll)
+        # колесо крутит окно, даже когда курсор над карточкой или кнопкой
+        self._wheel_guard = WheelScrollGuard(self.scroll, self)
+        self.scroll.viewport().installEventFilter(self._wheel_guard)
 
     def resizeEvent(self, event):  # noqa: N802
         rect = self.centralWidget().rect()
-        self.bg.setGeometry(rect)
-        self.scroll.setGeometry(rect)
+        self.bg.setGeometry(rect)          # фон за прокруткой, он вне layout
         if hasattr(self, "toasts"):
             self.toasts.setGeometry(rect)
             self.toasts._layout_toasts()
@@ -157,8 +171,41 @@ class ZapretWindow(QMainWindow):
                 sheet._apply_offset(sheet.offset)
         super().resizeEvent(event)
 
-    def _layout_complete(self):
-        self.scroll.setGeometry(self.centralWidget().rect())
+    def showEvent(self, event):  # noqa: N802
+        """Qt поднимает central widget при показе окна — возвращаем на место
+        тосты и шторки, иначе они окажутся под содержимым."""
+        super().showEvent(event)
+        self._raise_overlays()
+        if not getattr(self, "_input_checked", False):
+            self._input_checked = True
+            QTimer.singleShot(250, self._selfcheck_input)
+
+    def _selfcheck_input(self):
+        """Курсор должен попадать в контент окна, а не в пустой контейнер поверх него.
+
+        Так интерфейс ловит ситуацию, которую не видно ни на скриншотах, ни в
+        smoke-тесте (там клики шлются виджету напрямую): окно выглядит целым,
+        а клики и колесо не работают ни на одной кнопке.
+        """
+        try:
+            if any(sheet.isVisible() for sheet in getattr(self, "sheets", {}).values()):
+                return
+            center = self.rect().center()
+            hit = self.childAt(center.x(), center.y())
+            if hit is None or hit is self.scroll or self.scroll.isAncestorOf(hit):
+                return
+            self.controller.log_now(
+                "Содержимое окна перекрыто виджетом " + hit.metaObject().className()
+                + " — клики могут не работать. Обновите приложение: «Обновить и перезапустить» "
+                "или bash install.sh update.", "warn")
+        except Exception:  # noqa: BLE001 — самопроверка не должна ронять интерфейс
+            pass
+
+    def _raise_overlays(self):
+        """Порядок важен: тосты — самое верхнее, поверх шторок и содержимого."""
+        for widget in [*getattr(self, "sheets", {}).values(), getattr(self, "toasts", None)]:
+            if widget is not None:
+                widget.raise_()
 
     # ------------------------------------------------------------------
     # Шапка

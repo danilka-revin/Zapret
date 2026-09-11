@@ -553,7 +553,7 @@ def running_gui_pids() -> list[int]:
     try:
         out = subprocess.run(["ps", "-eo", "pid=,args="],
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                             text=True, timeout=10).stdout
+                             text=True, timeout=3).stdout
     except (OSError, subprocess.TimeoutExpired):
         return []
     me = os.getpid()

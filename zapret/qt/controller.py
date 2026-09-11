@@ -80,6 +80,7 @@ class Controller(QObject):
         self.update_result: dict = {}
         self.repair_result: dict = {}
         self._restart_after_update = False
+        self._relaunch_plan: dict | None = None
         self._update_check_running = False
         self.finished.connect(self._on_operation_finished)
 
@@ -694,6 +695,11 @@ class Controller(QObject):
             if not result.get("ok"):
                 raise RuntimeError("Не удалось обновить код приложения: "
                                    + str(code.get("error") or "репозиторий недоступен"))
+            if self._restart_after_update:
+                # «ждущий» процесс готовим здесь: relaunch смотрит на запущенные
+                # экземпляры через ps, а вешать на это GUI-поток нельзя — окно
+                # станет неживым на секунды.
+                self._relaunch_plan = update_mod.relaunch()
             self.progress = 1.0
 
         self._submit("update", work, "Обновление завершено.", "Обновление не удалось")
@@ -740,12 +746,14 @@ class Controller(QObject):
         """Перезапуск после обновления — уже в GUI-потоке, с таймером на закрытие."""
         if key != "update":
             return
-        pending, self._restart_after_update = self._restart_after_update, False
-        if not (pending and success):
-            return
         from .. import update as update_mod
 
-        relaunch = update_mod.relaunch()
+        pending, self._restart_after_update = self._restart_after_update, False
+        relaunch, self._relaunch_plan = self._relaunch_plan, None
+        if not (pending and success):
+            return
+        if relaunch is None:
+            relaunch = update_mod.relaunch()
         if relaunch.get("ok"):
             self.log.emit("Перезапускаю интерфейс с новой версией — обход не отключается.",
                           "accent")

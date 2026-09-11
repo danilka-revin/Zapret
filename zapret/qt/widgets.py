@@ -9,13 +9,13 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QRect, QRectF,
-                            QSize, Qt, QTimer, QVariantAnimation, Signal)
+from PySide6.QtCore import (QEvent, QEasingCurve, QPoint, QPointF, QRect, QRectF,
+                            QObject, QSize, Qt, QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetrics, QLinearGradient,
                            QPainter, QPainterPath, QPen, QPixmap, QRadialGradient)
-from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
-                               QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractScrollArea, QFrame, QGraphicsOpacityEffect,
+                               QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
+                               QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from . import icons
 
@@ -1438,6 +1438,41 @@ class ToastHost(QWidget):
         super().resizeEvent(event)
 
 
+class WheelScrollGuard(QObject):
+    """Колесо мыши прокручивает окно всегда, даже над «стеклянными» виджетами.
+
+    Карточки, кнопки и графики рисуются сами и охотно принимают события; без
+    этой подстраховки колесо над ними не двигает список — пользователь видит
+    «прокрутка вниз не работает». Вложенная прокрутка (журнал) остаётся своей:
+    если она может прокрутиться, событие не перехватывается.
+    """
+
+    def __init__(self, scroll: QScrollArea, parent=None):
+        super().__init__(parent)
+        self.scroll = scroll
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if event.type() != QEvent.Type.Wheel:
+            return False
+        position = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        node = self.scroll.viewport().childAt(position)
+        while node is not None and node is not self.scroll:
+            if isinstance(node, QAbstractScrollArea):
+                inner = node.verticalScrollBar()
+                if inner.maximum() > inner.minimum():
+                    return False        # прокручивается сам виджет, не мешаем
+            node = node.parentWidget()
+        bar = self.scroll.verticalScrollBar()
+        if bar.maximum() <= bar.minimum():
+            return False
+        delta = event.angleDelta().y() or -event.pixelDelta().y()
+        if not delta:
+            return False
+        step = max(30, bar.singleStep() * 3)
+        bar.setValue(bar.value() - int(delta / 120 * step) or (-step if delta < 0 else step))
+        return True
+
+
 # ---------------------------------------------------------------------------
 # Выезжающая панель (кастомизация, журнал, справка)
 # ---------------------------------------------------------------------------
@@ -1553,6 +1588,9 @@ class Sheet(QWidget):
 
     def close(self):
         if not self.isVisible():
+            # панель могли спрятать вместе с окном в трей — затемнение живёт
+            # отдельным виджетом и обязано уйти вместе с ней
+            self.overlay.hide()
             return
         self._animate_overlay(0.45, 0.0, hide=True)
         animate(self, "offset", self.offset, self._width_target,
@@ -1591,6 +1629,15 @@ class Sheet(QWidget):
 
     def _overlay_click(self, event):
         self.close()
+
+    def hideEvent(self, event):  # noqa: N802
+        """Прячем панель как угодно — затемнение не должно остаться поверх окна.
+
+        Иначе после «свернуть в трей с открытым журналом» окно возвращается
+        глухим: клики и колесо уходят в прозрачный для глаза, но не для мыши слой.
+        """
+        super().hideEvent(event)
+        self.overlay.hide()
 
     def keyPressEvent(self, event):  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
