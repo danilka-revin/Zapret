@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QAbstractScrollArea, QApplication, QFrame, QHBoxLayout,
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout,
                                QLabel, QMainWindow, QScrollArea, QSystemTrayIcon, QVBoxLayout, QWidget, QMenu)
 
 from .. import APP_NAME, APP_VERSION, app_dir
@@ -138,7 +138,9 @@ class ZapretWindow(QMainWindow):
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.scroll.setVerticalScrollMode(QAbstractScrollArea.ScrollMode.ScrollPerPixel)
+        # Прокрутку колесом обрабатывает WheelScrollGuard ниже: он двигает
+        # verticalScrollBar напрямую. У QScrollArea нет setVerticalScrollMode()
+        # (это метод QAbstractItemView) — такой вызов ронял окно на старте.
         self.scroll.viewport().setAutoFillBackground(False)
         self.scroll.setStyleSheet(
             "QScrollArea, QScrollArea > QWidget#qt_scrollarea_viewport,"

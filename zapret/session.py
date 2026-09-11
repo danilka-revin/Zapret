@@ -604,9 +604,13 @@ def launch_gui(app_dir: str | Path, log_path: str | Path | None = None,
         return result
 
     if probe:
-        probe_code = ("import sys\n"
+        # os._exit(0) в конце: иначе PySide6 иногда падает с SIGSEGV при
+        # завершении процесса — проверка «открывается ли окно» ложно краснела.
+        probe_code = ("import os, sys\n"
                       "from PySide6.QtWidgets import QApplication\n"
-                      "QApplication(sys.argv); print('QT_OK')\n")
+                      "QApplication(sys.argv)\n"
+                      "print('QT_OK', flush=True)\n"
+                      "os._exit(0)\n")
         try:
             check = run_as_user([python, "-c", probe_code], user=user, env=env,
                                 cwd=app_dir, timeout=45)
