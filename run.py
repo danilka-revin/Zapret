@@ -87,41 +87,106 @@ XCB_HINT = {
 }
 
 
-def _qt_preflight() -> tuple[bool, str]:
-    """Проверяет, что Qt действительно может открыть окно (в отдельном процессе).
+WAYLAND_HINT = {
+    "debian": "sudo apt install libwayland-client0 libwayland-cursor0 libwayland-egl1",
+    "fedora": "sudo dnf install libwayland-client libwayland-cursor libwayland-egl",
+    "arch": "sudo pacman -S wayland",
+    "suse": "sudo zypper install libwayland-client0 libwayland-cursor0 libwayland-egl1",
+    "alpine": "sudo apk add wayland-libs-client wayland-libs-cursor wayland-libs-egl",
+    "gentoo": "sudo emerge dev-libs/wayland",
+    "unknown": "установите клиентские библиотеки Wayland (libwayland-client/cursor/egl)",
+}
 
-    Если не хватает плагина xcb или библиотек, диагностируем это заранее и
-    подсказываем точную команду установки — вместо непонятного падения Qt.
+
+# Последний известный статус системного трея (узнаём из probe-процесса,
+# где QApplication существует; вызывать isSystemTrayAvailable() без него —
+# падение с SIGSEGV на некоторых связках Qt/D-Bus).
+_LAST_TRAY_AVAILABLE: bool | None = None
+
+
+def _qt_probe(extra_env: dict[str, str] | None = None,
+              timeout: int = 25) -> tuple[bool | None, str]:
+    """Одна попытка создать QApplication в отдельном процессе.
+
+    Возвращает (True, вывод) при успехе, (False, вывод) при честном провале
+    и (None, '') когда проверить не удалось (Qt завис) — тогда запускаем как есть.
     """
     import subprocess
 
-    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        return False, ("нет графической среды: не заданы DISPLAY и WAYLAND_DISPLAY.\n"
-                       "Запустите приложение из-под рабочего стола "
-                       "(или выполните: python3 run.py doctor)")
+    global _LAST_TRAY_AVAILABLE
 
     # os._exit(0) в конце: иначе PySide6 иногда падает с SIGSEGV при завершении
     # процесса (QApplication разрушается уже после статики Qt) — в диагностике
     # это выглядело как «Ошибка сегментирования (core dumped)» без причины.
     probe = ("import os, sys\n"
-             "from PySide6.QtWidgets import QApplication\n"
+             "from PySide6.QtWidgets import QApplication, QSystemTrayIcon\n"
              "QApplication(sys.argv)\n"
-             "print('QT_OK', flush=True)\n"
+             "print('QT_OK', 'TRAY' if QSystemTrayIcon.isSystemTrayAvailable() "
+             "else 'NOTRAY', flush=True)\n"
              "os._exit(0)\n")
+    env = dict(os.environ)
+    if extra_env:
+        env.update(extra_env)
     try:
         proc = subprocess.run([sys.executable, "-c", probe], stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, text=True, timeout=60)
+                              stderr=subprocess.STDOUT, text=True, timeout=timeout, env=env)
     except (OSError, subprocess.TimeoutExpired):
-        return True, ""      # проверить не удалось — пробуем запустить как есть
+        return None, ""
     output = proc.stdout or ""
-    if proc.returncode == 0 and "QT_OK" in output:
-        return True, ""
-    if "xcb" in output.lower() or "platform plugin" in output.lower():
+    if "QT_OK" in output:
+        if "NOTRAY" in output:
+            _LAST_TRAY_AVAILABLE = False
+        elif "TRAY" in output:
+            _LAST_TRAY_AVAILABLE = True
+    return (proc.returncode == 0 and "QT_OK" in output), output
+
+
+def _qt_preflight() -> tuple[bool, str]:
+    """Проверяет, что Qt действительно может открыть окно (в отдельном процессе).
+
+    Платформы перебираются по очереди: выбор пользователя/системы → xcb →
+    wayland. На Wayland-сессии без wayland-плагина спасает xcb через XWayland
+    (есть в Ubuntu по умолчанию), и наоборот. Если ничего не завелось —
+    подсказываем точную команду установки вместо непонятного падения Qt.
+    """
+    from zapret.session import qt_platform_fallbacks
+
+    forced = (os.environ.get("QT_QPA_PLATFORM") or "").strip().lower()
+    if forced in ("offscreen", "minimal"):
+        return True, ""       # тестовые платформы: дисплея не надо
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return False, ("нет графической среды: не заданы DISPLAY и WAYLAND_DISPLAY.\n"
+                       "Запустите приложение из-под рабочего стола "
+                       "(или выполните: python3 run.py doctor)")
+
+    tried: list[str] = []
+    output = ""
+    for candidate in qt_platform_fallbacks():
+        tried.append(candidate or "авто")
+        extra = {"QT_QPA_PLATFORM": candidate} if candidate else None
+        ok, output = _qt_probe(extra)
+        if ok is None:
+            return True, ""   # проверить не удалось — пробуем запустить как есть
+        if ok:
+            if candidate:
+                # Запасная платформа завелась — фиксируем её для основного окна.
+                os.environ["QT_QPA_PLATFORM"] = candidate
+                _crash_log(f"[qt-preflight] платформа {tried[0]} недоступна, "
+                           f"использую QT_QPA_PLATFORM={candidate}")
+            return True, ""
+    tried_text = ", ".join(tried)
+    lowered = (output or "").lower()
+    if "wayland" in lowered and "xcb" not in lowered:
+        hint = WAYLAND_HINT.get(_distro_id(), WAYLAND_HINT["unknown"])
+        return False, (f"Qt не смог открыть окно (перебраны платформы: {tried_text}).\n"
+                       f"Установите библиотеки Wayland: {hint}\n"
+                       "Или принудительно через X11: QT_QPA_PLATFORM=xcb python3 run.py gui")
+    if "xcb" in lowered or "platform plugin" in lowered:
         hint = XCB_HINT.get(_distro_id(), XCB_HINT["unknown"])
-        return False, ("Qt не смог загрузить плагин xcb.\n"
+        return False, (f"Qt не смог загрузить плагин xcb (перебраны платформы: {tried_text}).\n"
                        f"Установите пакеты: {hint}\n"
                        "Если у вас Wayland, попробуйте: QT_QPA_PLATFORM=wayland python3 run.py gui")
-    return False, f"Qt не запустился:\n{output.strip()[:600]}"
+    return False, f"Qt не запустился (перебраны платформы: {tried_text}):\n{output.strip()[:600]}"
 
 
 def _pyside_state() -> tuple[bool, str]:
@@ -241,14 +306,13 @@ def _doctor() -> int:
            else ("нет" + (" (каталога Рабочий стол нет)" if not status["desktop_shown"] else "")),
            True if status["desktop"] else None)
     if PySide6 is not None:
-        try:
-            from PySide6.QtWidgets import QSystemTrayIcon
-            available = QSystemTrayIcon.isSystemTrayAvailable()
+        available = _LAST_TRAY_AVAILABLE
+        if available is None:
+            report("системный трей", "не проверен (окно не открывается?)", None)
+        else:
             report("системный трей", "доступен" if available
                    else "недоступен (окно просто не будет скрываться)",
                    True if available else None)
-        except Exception:  # noqa: BLE001
-            pass
 
     print("\nКто и откуда запускает приложение")
     from zapret import session
@@ -336,7 +400,9 @@ def _launch_gui_from_cli() -> int:
     _log(f"Пользователь рабочего стола: {owner}")
     display = env.get("DISPLAY") or env.get("WAYLAND_DISPLAY") or "не найден"
     _log(f"Дисплей: {display}")
-    if not session.has_display(env):
+    headless = (env.get("QT_QPA_PLATFORM") or "").strip().lower() in (
+        "offscreen", "minimal", "vnc")
+    if not session.has_display(env) and not headless:
         _log("[-] Графической сессии не видно: нет DISPLAY и WAYLAND_DISPLAY.")
         _log("    Запустите приложение из-под рабочего стола или выполните:")
         _log(f"    python3 {here / 'run.py'} doctor")

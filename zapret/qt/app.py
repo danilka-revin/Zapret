@@ -156,6 +156,9 @@ class ZapretWindow(QMainWindow):
         self.root.setSpacing(16)
         self.scroll.setWidget(self.content)
         shell.addWidget(self.scroll)
+        # Фон — строго под прокруткой: он декоративный и не должен получать ввод.
+        # (Дополнительно Backdrop прозрачен для мыши — см. widgets.Backdrop.)
+        self.bg.lower()
         # колесо крутит окно, даже когда курсор над карточкой или кнопкой
         self._wheel_guard = WheelScrollGuard(self.scroll, self)
         self.scroll.viewport().installEventFilter(self._wheel_guard)
@@ -898,7 +901,8 @@ class ZapretWindow(QMainWindow):
             self.tray_icon.setIcon(QIcon(icons.app_icon(64, pal.accent, pal.dark)))
         self.setWindowIcon(QIcon(icons.app_icon(128, pal.accent, pal.dark)))
         self.content.setMinimumWidth(0)
-        self.scroll.setGeometry(self.centralWidget().rect())
+        # Размером прокрутки управляет layout центрального виджета — вручную
+        # геометрию ей не задаём, иначе борьба с layout даёт дёрганье при смене темы.
 
     # ------------------------------------------------------------------
     # Действия интерфейса

@@ -404,6 +404,31 @@ def main() -> int:
     window.sheets["diagnostics"].close()
     pump(app, 300)
 
+    print("\n[3c] Затемнение и быстрые открытия/закрытия")
+    sheet = window.sheets["journal"]
+    sheet.open()
+    pump(app, 400)
+    check(sheet.overlay.isVisible(), "у открытой панели видно затемнение")
+    # Клик по затемнению (слева от панели) закрывает её
+    overlay_point = QPoint(30, window.height() // 2)
+    QTest.mouseClick(sheet.overlay, Qt.MouseButton.LeftButton,
+                     Qt.KeyboardModifier.NoModifier,
+                     sheet.overlay.mapFrom(window, overlay_point))
+    pump(app, 600)
+    check(not sheet.isVisible() and not sheet.overlay.isVisible(),
+          "клик по затемнению закрывает панель вместе с ним")
+    # Быстрое «закрыть → открыть»: старый таймер не должен прятать новую панель
+    sheet.open()
+    pump(app, 60)
+    sheet.close()
+    sheet.open()
+    pump(app, 600)
+    check(sheet.isVisible(), "быстрое закрыть→открыть не теряет панель")
+    sheet.close()
+    pump(app, 600)
+    check(not sheet.isVisible() and not sheet.overlay.isVisible(),
+          "затемнение не остаётся висеть после закрытия")
+
     print("\n[3b] Быстрое переключение темы")
     was_dark = theme.palette.dark
     click(window.theme_toggle_btn)
@@ -513,12 +538,21 @@ def main() -> int:
     check(window.scroll.parentWidget() is window.centralWidget(),
           "прокрутка лежит внутри central widget, а не под ним")
 
+    # Секция [6] оставляет открытой «Диагностику» — её затемнение честно
+    # перекрывает контент (так задумано), поэтому перед проверкой попаданий
+    # закрываем все шторки и ждём окончания анимаций закрытия.
+    for sheet in window.sheets.values():
+        sheet.close()
+    pump(app, 700)
+    check(all(not s.isVisible() and not s.overlay.isVisible()
+              for s in window.sheets.values()),
+          "все шторки и их затемнения закрыты")
+
     bar = window.scroll.verticalScrollBar()
-    if bar.maximum() > 0:
-        bar.setValue(bar.maximum())       # карточка «Обслуживание» — в самом низу
-        pump(app, 80)
 
     def topmost(widget):
+        window.scroll.ensureWidgetVisible(widget)
+        pump(app, 60)
         pos = widget.mapTo(window, QPoint(widget.rect().center().x(),
                                            widget.rect().center().y()))
         return window.childAt(pos.x(), pos.y())
@@ -548,6 +582,18 @@ def main() -> int:
         QApplication.sendEvent(viewport, event)
         pump(app, 40)
         check(bar.value() > 0, f"колесо вниз прокручивает окно (сдвиг {bar.value()} px)")
+        # Тачпад (Wayland): только пиксельная дельта, angleDelta нулевой.
+        # Знак тот же, что у angleDelta: вниз — отрицательный (см. QtWayland
+        # FrameData::pixelDeltaAndError). Раньше знак инвертировался и прокрутка
+        # ехала не туда.
+        bar.setValue(0)
+        pump(app, 40)
+        touch = QWheelEvent(QPointF(point), viewport.mapToGlobal(point), QPoint(0, -60),
+                            QPoint(0, 0), Qt.MouseButton.NoButton,
+                            Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.ScrollUpdate, False)
+        QApplication.sendEvent(viewport, touch)
+        pump(app, 40)
+        check(bar.value() > 0, f"тачпад вниз прокручивает окно (сдвиг {bar.value()} px)")
     except (ImportError, AttributeError, TypeError) as exc:   # разные версии Qt
         print(f"  skip· колесо: {exc}")
 

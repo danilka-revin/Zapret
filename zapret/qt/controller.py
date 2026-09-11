@@ -144,6 +144,14 @@ class Controller(QObject):
 
     def start(self):
         self.log.emit("Zapret Control запущен.", "accent")
+        try:
+            from PySide6.QtWidgets import QApplication
+
+            instance = QApplication.instance()
+            if instance is not None:
+                self.log.emit(f"Платформа Qt: {instance.platformName()}", "info")
+        except Exception:  # noqa: BLE001 — строка диагностики, не критично
+            pass
         self.refresh_status()
         QTimer.singleShot(600, self._sample_traffic)
         QTimer.singleShot(1500, self._log_environment)
