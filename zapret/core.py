@@ -52,6 +52,13 @@ def nfqws_path() -> Path:
     return app_dir() / "nfqws"
 
 
+NFQWS_MARKER = "nfqws.tag"
+STRATEGIES_MARKER = "flowseal.rev"
+
+# Списки, которые редактирует пользователь: их нельзя терять при обновлении
+USER_LISTS = ("list-general-user.txt", "list-exclude-user.txt", "ipset-exclude-user.txt")
+
+
 def extras_dir() -> Path:
     """Каталог с поставляемыми файлами (telegram.bat, списки Telegram).
 
@@ -216,10 +223,40 @@ def latest_release_tag(repo: str) -> str:
     return data["tag_name"]
 
 
-def ensure_nfqws(version: str, progress_cb=None) -> Path:
+def version_marker(name: str) -> Path:
+    """Метка скачанной версии (чтобы повторное обновление не качало впустую)."""
+    return deps_dir() / name
+
+
+def read_marker(name: str) -> str:
+    try:
+        return version_marker(name).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def write_marker(name: str, value: str) -> None:
+    try:
+        version_marker(name).parent.mkdir(parents=True, exist_ok=True)
+        version_marker(name).write_text(value, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def ensure_nfqws(version: str, progress_cb=None, force: bool = True) -> Path:
     """Скачивает бинарник nfqws из релизов bol-van/zapret."""
     dest = nfqws_path()
-    tag = version if version and version != "latest" else latest_release_tag(ZAPRET_REPO)
+    if version and version != "latest":
+        tag = version
+    elif force or not dest.exists():
+        tag = latest_release_tag(ZAPRET_REPO)
+    else:
+        # обновление «в тихую»: нет смысла тянуть релиз, если скачанный nfqws актуален
+        tag = read_marker(NFQWS_MARKER) or latest_release_tag(ZAPRET_REPO)
+    if not force and dest.exists() and read_marker(NFQWS_MARKER) == tag:
+        if progress_cb:
+            progress_cb(f"nfqws {tag} уже скачан — пропускаю.")
+        return dest
     archive_name = f"zapret-{tag}.tar.gz"
     url = f"https://github.com/{ZAPRET_REPO}/releases/download/{tag}/{archive_name}"
 
@@ -246,6 +283,7 @@ def ensure_nfqws(version: str, progress_cb=None) -> Path:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
         dest.chmod(0o755)
+        write_marker(NFQWS_MARKER, tag)
         if progress_cb:
             progress_cb(f"nfqws сохранён: {dest}")
         return dest
@@ -281,10 +319,14 @@ def _copy_file(src: Path, dst: Path) -> None:
     shutil.copyfile(src, dst)
 
 
-def ensure_strategies(rev: str, progress_cb=None) -> Path:
+def ensure_strategies(rev: str, progress_cb=None, force: bool = True) -> Path:
     """Скачивает стратегии Flowseal и дополняет их файлами Telegram."""
     sd = strategies_dir()
     rev = rev or STRATEGIES_DEFAULT_REV
+    if not force and sd.exists() and read_marker(STRATEGIES_MARKER) == rev:
+        if progress_cb:
+            progress_cb("Стратегии уже скачаны (тот же коммит) — пропускаю.")
+        return sd
     url = f"https://codeload.github.com/{STRATEGIES_REPO}/tar.gz/{rev}"
 
     tmp = tempfile.mkdtemp(prefix="zapret-strat-")
@@ -304,11 +346,27 @@ def ensure_strategies(rev: str, progress_cb=None) -> Path:
         if progress_cb:
             progress_cb("Установка стратегий…")
 
+        # Пользовательские списки живут поверх стратегий и не должны
+        # пропадать при обновлении — сохраняем и возвращаем на место
+        saved = {}
+        for name in USER_LISTS:
+            keep = sd / "lists" / name
+            if keep.exists():
+                try:
+                    saved[name] = keep.read_bytes()
+                except OSError:
+                    saved = {}
+                    break
         # Замена существующего каталога стратегий
         if sd.exists():
             shutil.rmtree(sd, ignore_errors=True)
         deps_dir().mkdir(parents=True, exist_ok=True)
         shutil.copytree(src_root, sd)
+        for name, payload in saved.items():
+            try:
+                (sd / "lists" / name).write_bytes(payload)
+            except OSError:
+                pass
 
         # Переименование .bat (транслитерация русских имён)
         for p in sd.glob("*.bat"):
@@ -317,6 +375,7 @@ def ensure_strategies(rev: str, progress_cb=None) -> Path:
                 p.rename(p.parent / new_name)
 
         _provision_lists(progress_cb)
+        write_marker(STRATEGIES_MARKER, rev)
         return sd
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -329,7 +388,7 @@ def _provision_lists(progress_cb=None) -> None:
     lists.mkdir(parents=True, exist_ok=True)
 
     # Пользовательские списки (на них ссылаются стратегии general*.bat)
-    for name in ("list-general-user.txt", "list-exclude-user.txt", "ipset-exclude-user.txt"):
+    for name in USER_LISTS:
         p = lists / name
         if not p.exists():
             p.write_text("", encoding="utf-8")
@@ -358,9 +417,10 @@ def _provision_lists(progress_cb=None) -> None:
         (sd / "telegram.bat").write_text(tg.TELEGRAM_STRATEGY_BAT, encoding="utf-8")
 
 
-def ensure_deps(version: str = "latest", rev: str = "", progress_cb=None) -> None:
-    ensure_nfqws(version, progress_cb)
-    ensure_strategies(rev, progress_cb)
+def ensure_deps(version: str = "latest", rev: str = "", progress_cb=None,
+                force: bool = True) -> None:
+    ensure_nfqws(version, progress_cb, force=force)
+    ensure_strategies(rev, progress_cb, force=force)
 
 
 def deps_ready() -> bool:

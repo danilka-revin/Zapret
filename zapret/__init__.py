@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "Zapret Control"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 APP_SLUG = "zapret-control"
 
 # Репозитории-источники (загружаются автоматически при установке зависимостей)
@@ -31,14 +31,33 @@ GAME_FILTER_OFF_PORTS = "12"
 
 
 def app_dir() -> Path:
-    """Корневая директория приложения (код + зависимости + конфиг)."""
+    """Корневая директория приложения (код + зависимости + конфиг).
+
+    Обычно это ~/.local/share/zapret-control. Отдельно обрабатывается случай
+    «всё установили через sudo -i»: каталога в /root нет, а в домашнем каталоге
+    пользователя рабочего стола он есть — тогда работаем с копией пользователя,
+    иначе ярлык и конфиг уезжали бы в /root и «приложение не появлялось».
+    """
     override = os.environ.get("ZAPRET_APP_DIR")
     if override:
         return Path(override).expanduser()
     base = os.environ.get("XDG_DATA_HOME")
     if not base:
         base = str(Path.home() / ".local" / "share")
-    return Path(base) / APP_SLUG
+    candidate = Path(base) / APP_SLUG
+    if candidate.exists() or getattr(os, "geteuid", lambda: 1)() != 0:
+        return candidate
+    try:
+        from . import session as _session
+
+        user = _session.desktop_user()
+        if user and user != "root":
+            other = _session.user_home(user) / ".local" / "share" / APP_SLUG
+            if (other / "run.py").exists():
+                return other
+    except Exception:  # noqa: BLE001 — диагностика окружения не должна ломать запуск
+        pass
+    return candidate
 
 
 def is_installed_mode() -> bool:

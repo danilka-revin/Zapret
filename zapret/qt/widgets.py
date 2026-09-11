@@ -590,6 +590,11 @@ class GlassButton(QPushButton):
         self.kind = kind
         self.update()
 
+    def setText(self, text: str):  # noqa: N802
+        """Подпись меняется (например «Обновить» → «Обновляю…») — ширина тоже."""
+        super().setText(text)
+        self._update_font()
+
     def set_icon(self, name: str):
         self.icon_name = name
         self.update()

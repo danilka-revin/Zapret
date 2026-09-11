@@ -345,22 +345,44 @@ class ZapretWindow(QMainWindow):
 
         self.maintenance_card = Card(self.theme, "Обслуживание",
                                      "редкие действия — обычно не нужны", "sliders")
+        # Главная кнопка обновлений: сама тянет код, зависимости, ярлык и права,
+        # а затем перезапускает интерфейс — «установил и забыл».
+        self.btn_update = GlassButton(self.theme, "Обновить и перезапустить", "refresh",
+                                      "accent-soft")
+        self.btn_update.clicked.connect(lambda: self.controller.update_and_restart(True))
+        self.btn_check_update = GlassButton(self.theme, "Проверить обновления", "search",
+                                            "ghost", compact=True)
+        self.btn_check_update.clicked.connect(lambda: self.controller.check_update())
+        self.update_state_label = QLabel("")
+        self.update_state_label.setWordWrap(True)
+        self.maintenance_card.body.addWidget(self.btn_update)
+        self.maintenance_card.body.addWidget(self.update_state_label)
         self.btn_deps = GlassButton(self.theme, "Обновить зависимости", "download", "secondary")
         self.btn_deps.clicked.connect(self.controller.download_deps)
-        self.btn_update = GlassButton(self.theme, "Обновить приложение", "refresh", "secondary")
-        self.btn_update.clicked.connect(self.controller.update_app)
         self.btn_autostart = GlassButton(self.theme, "Включить автозапуск", "power", "secondary")
         self.btn_autostart.clicked.connect(self.controller.toggle_autostart)
-        self.btn_shortcut = GlassButton(self.theme, "Пересоздать ярлык", "external", "ghost")
+        self.btn_shortcut = GlassButton(self.theme, "Создать ярлык (меню + рабочий стол)",
+                                        "external", "ghost")
         self.btn_shortcut.clicked.connect(self.controller.toggle_shortcut)
+        self.btn_repair = GlassButton(self.theme, "Починить установку", "settings", "ghost")
+        self.btn_repair.setToolTip("Перенести всё из /root, обновить ярлык на столе "
+                                   "и права NOPASSWD")
+        self.btn_repair.clicked.connect(self.controller.repair_install)
         self.btn_permissions = GlassButton(self.theme, "Права без пароля", "key", "ghost")
         self.btn_permissions.clicked.connect(
             lambda: self.controller.setup_permissions(self._open_terminal))
         self.btn_diagnostics = GlassButton(self.theme, "Диагностика", "flask", "ghost")
         self.btn_diagnostics.clicked.connect(lambda: self._toggle_sheet("diagnostics"))
-        for btn in (self.btn_deps, self.btn_update, self.btn_autostart, self.btn_shortcut,
-                    self.btn_permissions, self.btn_diagnostics):
+        for btn in (self.btn_deps, self.btn_autostart, self.btn_shortcut, self.btn_repair,
+                    self.btn_permissions):
             self.maintenance_card.body.addWidget(btn)
+        footer = QWidget()
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(8)
+        footer_layout.addWidget(self.btn_check_update, 1)
+        footer_layout.addWidget(self.btn_diagnostics, 1)
+        self.maintenance_card.body.addWidget(footer)
         self.maintenance_card.body.addStretch(1)
         row2.addWidget(self.maintenance_card, 2)
 
@@ -528,6 +550,8 @@ class ZapretWindow(QMainWindow):
         c.changed.connect(self._queue_refresh)
         c.finished.connect(self._on_finished)
         c.notify.connect(self._on_notify)
+        c.update_info_ready.connect(self._on_update_info)
+        c.restart_requested.connect(self._on_restart_requested)
 
         QShortcut(QKeySequence("Ctrl+P"), self, activated=self.controller.toggle_power)
         QShortcut(QKeySequence("Ctrl+R"), self,
@@ -587,10 +611,42 @@ class ZapretWindow(QMainWindow):
             elif key in ("deps", "update"):
                 self.toasts.show_toast("Готово: " + OPERATION_LABELS.get(key, "операция"),
                                        "ok")
+            elif key == "repair":
+                self.toasts.show_toast("Установка починена", "ok")
         else:
             self.toasts.show_toast(f"{OPERATION_LABELS.get(key, 'Операция')}: {message}",
                                    "error", 6000)
+        if key in ("update", "repair"):
+            self.controller.check_update(notify=False)
         self._queue_refresh()
+
+    def _on_update_info(self, info: dict) -> None:
+        """Результат проверки обновлений: подпись под кнопкой и её название."""
+        self._queue_refresh()
+        if info.get("available"):
+            self.toasts.show_toast("Доступна новая версия — нажмите «Обновить и перезапустить»",
+                                   "info", 5000)
+
+    def _on_restart_requested(self, message: str) -> None:
+        """Мягко закрываем окно: новое поднимет «ждущий» процесс после обновления."""
+        if message:
+            self.toasts.show_toast(message, "accent", 2500)
+        self.controller.log_now(message or "Перезапуск…", "accent")
+        QTimer.singleShot(600, self._quit_app)
+
+    def _update_state_text(self) -> str:
+        """Строка под кнопкой обновления: версия и что с ней."""
+        info = self.controller.update_info or {}
+        state = info.get("available")
+        version = APP_VERSION
+        if state is True:
+            return (f"v{version} · доступно обновление "
+                    + str(info.get("remote", ""))[:8] + " — нажмите кнопку выше")
+        if state is False:
+            return f"v{version} · обновление не требуется"
+        if info.get("message"):
+            return f"v{version} · " + str(info["message"])
+        return f"v{version} · проверяю обновления…"
 
     def _on_notify(self, title: str, message: str):
         if not self.theme.settings.notifications:
@@ -730,10 +786,21 @@ class ZapretWindow(QMainWindow):
                               else "Скачать зависимости")
         self.btn_deps.set_kind("secondary" if status.get("deps_ready") else "accent-soft")
         self.btn_permissions.set_kind("ghost" if status.get("sudo_ok") else "accent-soft")
-        if status.get("shortcut_installed"):
-            self.btn_shortcut.setText("Удалить ярлык")
+        self.btn_shortcut.setText("Создать ярлык (меню + рабочий стол)")
+
+        # Кнопка обновления: подсвечивается, когда есть новая версия
+        available = (self.controller.update_info or {}).get("available")
+        busy = bool(c.busy_key)
+        if busy and c.busy_key == "update":
+            self.btn_update.setText("Обновляю и перезапускаю…")
+            self.btn_update.set_kind("primary")
+        elif available:
+            self.btn_update.setText("Обновить и перезапустить")
+            self.btn_update.set_kind("primary")
         else:
-            self.btn_shortcut.setText("Создать ярлык")
+            self.btn_update.setText("Обновить и перезапустить")
+            self.btn_update.set_kind("accent-soft" if available is None else "secondary")
+        self.update_state_label.setText(self._update_state_text())
 
         self.services_footer.setText(c.last_check_text() +
                                      (f" · {c.average_latency()} мс" if avg else ""))
@@ -769,6 +836,10 @@ class ZapretWindow(QMainWindow):
         self.services_footer.setStyleSheet(f"color:{pal.muted};background:transparent;")
         self.iface_label.setFont(font(self.theme.font_family, pal.font_xs))
         self.iface_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
+        available = (self.controller.update_info or {}).get("available")
+        self.update_state_label.setFont(font(self.theme.font_family, pal.font_xs))
+        self.update_state_label.setStyleSheet(
+            f"color:{pal.accent if available else pal.muted};background:transparent;")
         if not hasattr(self, "_stat_labels"):
             self._stat_labels = [w for w in self.findChildren(QLabel)]
         for label in self.findChildren(QLabel):
@@ -831,9 +902,9 @@ class ZapretWindow(QMainWindow):
             self.controller.restart_with_current()
 
     def _set_buttons_enabled(self, enabled: bool):
-        for btn in (self.autopilot_quick, self.btn_deps, self.btn_update,
-                    self.btn_autostart, self.recheck_btn, self.btn_setup_rights,
-                    self.btn_target_test):
+        for btn in (self.autopilot_quick, self.btn_deps, self.btn_update, self.btn_check_update,
+                    self.btn_repair, self.btn_autostart, self.btn_shortcut,
+                    self.recheck_btn, self.btn_setup_rights, self.btn_target_test):
             btn.setEnabled(enabled)
 
     def _copy_log(self):

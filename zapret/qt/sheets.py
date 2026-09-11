@@ -324,7 +324,8 @@ class DiagnosticsSheet(Sheet):
         layout.addWidget(SectionTitle(theme, "Состояние", "обновляется автоматически", "gauge"))
         for key, title in (("run", "Помощник DPI (nfqws)"), ("fw", "Правила файрвола"),
                            ("deps", "Зависимости"), ("svc", "Автозапуск системы"),
-                           ("sudo", "Права без пароля"), ("backend", "Бэкенд файрвола"),
+                           ("sudo", "Права без пароля"), ("shortcut", "Ярлык на столе"),
+                           ("update", "Обновление"), ("backend", "Бэкенд файрвола"),
                            ("iface", "Сетевой интерфейс"), ("strategy", "Стратегия"),
                            ("appdir", "Каталог данных")):
             row = QWidget()
@@ -368,6 +369,7 @@ class DiagnosticsSheet(Sheet):
         self.set_content([self.rows_box, buttons])
         theme.changed.connect(self._restyle)
         controller.status_ready.connect(lambda _s: self.refresh())
+        controller.update_info_ready.connect(lambda _i: self.refresh())
         self._restyle()
         self.refresh()
 
@@ -398,13 +400,32 @@ class DiagnosticsSheet(Sheet):
             "strategy": (self.controller.cfg.get("strategy", "—"), True),
             "appdir": (status.get("app_dir", "—"), True),
         }
+        # ярлыки и обновления: именно по ним обычно видно «установил через sudo — и пусто»
+        try:
+            from .. import integration
+
+            shortcuts = integration.shortcut_status()
+            values["shortcut"] = (
+                "меню + стол" if shortcuts.get("menu") and shortcuts.get("desktop")
+                else ("только меню" if shortcuts.get("menu") else "нет"),
+                bool(shortcuts.get("menu") and shortcuts.get("desktop")))
+        except Exception:  # noqa: BLE001 — диагностика не должна ронять панель
+            values["shortcut"] = ("не проверить", False)
+        info = self.controller.update_info or {}
+        available = info.get("available")
+        if available not in (True, False, None):
+            available = None
+        texts = {True: "доступно " + str(info.get("remote", ""))[:8],
+                 False: "версия актуальна",
+                 None: info.get("message") or "ещё не проверялось"}
+        values["update"] = (texts[available], True)
         for key, (text, good) in values.items():
             label = self.rows.get(key)
             if label is None:
                 continue
-            label.setText(text)
+            label.setText(str(text))
             color = pal.good if good else pal.warn
-            if key in ("appdir", "iface", "strategy", "backend"):
+            if key in ("appdir", "iface", "strategy", "backend", "update", "shortcut"):
                 color = pal.text
             label.setStyleSheet(f"color:{color};background:transparent;")
 
