@@ -32,8 +32,8 @@ from .widgets import (Backdrop, Card, GlassButton, IconButton, LogView, PowerSwi
                       ToastHost, WheelScrollGuard, _Glass, font)
 
 WINDOW_MIN = QSize(1040, 680)
-WINDOW_DEFAULT = QSize(1200, 820)
-HERO_HEIGHT = 322
+WINDOW_DEFAULT = QSize(1300, 900)
+HERO_HEIGHT = 380
 
 
 def _human_speed(mbps: float) -> str:
@@ -273,7 +273,7 @@ class ZapretWindow(QMainWindow):
         row.setContentsMargins(6, 0, 6, 0)
         row.setSpacing(22)
 
-        self.power = PowerSwitch(self.theme, 250)
+        self.power = PowerSwitch(self.theme, 280)
         self.power.clicked.connect(self.controller.toggle_power)
         row.addWidget(self.power, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -308,12 +308,16 @@ class ZapretWindow(QMainWindow):
         self.btn_target_test = GlassButton(self.theme, "Подбор под сайт", "target",
                                            "secondary")
         self.btn_target_test.clicked.connect(lambda: self._toggle_sheet("targets"))
+        self.btn_update_git = GlassButton(self.theme, "Обновить из Git", "rotate",
+                                          "primary", compact=False)
+        self.btn_update_git.clicked.connect(self.controller.update_app)
         self.btn_setup_rights = GlassButton(self.theme, "Настроить права (1 раз)", "key",
                                             "primary")
         self.btn_setup_rights.clicked.connect(
             lambda: self.controller.setup_permissions(self._open_terminal))
         hero_buttons.addWidget(self.autopilot_quick)
         hero_buttons.addWidget(self.btn_target_test)
+        hero_buttons.addWidget(self.btn_update_git)
         hero_buttons.addWidget(self.btn_setup_rights)
         hero_buttons.addStretch(1)
         middle.addLayout(hero_buttons)
@@ -875,12 +879,12 @@ class ZapretWindow(QMainWindow):
         self.mark.setPixmap(icons.app_icon(42, pal.accent, pal.dark))
         self.title_label.setFont(font(self.theme.font_family, pal.font_xl, QFont.Weight.Bold))
         self.title_label.setStyleSheet(f"color:{pal.text};background:transparent;")
-        self.subtitle_label.setFont(font(self.theme.font_family, pal.font_xs))
+        self.subtitle_label.setFont(font(self.theme.font_family, pal.font_md))
         self.subtitle_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
-        self.hero_title.setFont(font(self.theme.font_family, max(20.0, pal.font_hero * 0.62),
+        self.hero_title.setFont(font(self.theme.font_family, max(26.0, pal.font_hero * 0.85),
                                      QFont.Weight.Bold))
         self.hero_title.setStyleSheet(f"color:{pal.text};background:transparent;")
-        self.hero_subtitle.setFont(font(self.theme.font_family, pal.font_md))
+        self.hero_subtitle.setFont(font(self.theme.font_family, pal.font_lg))
         self.hero_subtitle.setStyleSheet(f"color:{pal.muted};background:transparent;")
         self.hero_hint.setFont(font(self.theme.font_family, pal.font_xs))
         self.hero_hint.setStyleSheet(f"color:{pal.warn};background:transparent;")
@@ -957,7 +961,8 @@ class ZapretWindow(QMainWindow):
     def _set_buttons_enabled(self, enabled: bool):
         for btn in (self.autopilot_quick, self.btn_deps, self.btn_update, self.btn_check_update,
                     self.btn_repair, self.btn_autostart, self.btn_shortcut,
-                    self.recheck_btn, self.btn_setup_rights, self.btn_target_test):
+                    self.recheck_btn, self.btn_setup_rights, self.btn_target_test,
+                    self.btn_update_git):
             btn.setEnabled(enabled)
 
     def _copy_log(self):

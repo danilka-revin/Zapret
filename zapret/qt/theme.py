@@ -97,14 +97,14 @@ def contrast_text(bg: str, light: str = "#ffffff", dark: str = "#101510") -> str
 class UISettings:
     mode: str = "dark"            # light | dark | system
     accent: str = "#d5ff45"
-    glass: str = "soft"           # off | soft | vivid
+    glass: str = "vivid"           # off | soft | vivid
     glass_tint: str = "auto"      # auto | cool | warm
     density: str = "comfortable"  # comfortable | compact
     radius: str = "soft"          # soft | square
     motion: str = "full"          # full | reduced | off
-    font_scale: str = "normal"    # small | normal | large
+    font_scale: str = "large"    # small | normal | large
     orbs: bool = True             # цветные «пятна» на фоне
-    orbs_intensity: int = 100     # 0..160 (%)
+    orbs_intensity: int = 140     # 0..160 (%)
 
     # поведение: минимум настроек, максимум автономики
     autopilot: bool = True        # сам подбирает и проверяет стратегию
@@ -230,11 +230,11 @@ class Palette:
 
         # Метрики
         compact = settings.density == "compact"
-        scale = {"small": 0.92, "normal": 1.0, "large": 1.12}[settings.font_scale]
+        scale = {"small": 0.92, "normal": 1.0, "large": 1.35}[settings.font_scale]
         self.scale = scale
-        self.pad = int((12 if compact else 18) * scale)
-        self.gap = int((10 if compact else 14) * scale)
-        base = 8.5 if compact else 9.5
+        self.pad = int((14 if compact else 22) * scale)
+        self.gap = int((12 if compact else 18) * scale)
+        base = 10.5 if compact else 13.0
         self.font_xs = max(7.0, base * 0.78 * scale)
         self.font_sm = base * 0.9 * scale
         self.font_md = base * scale
@@ -265,7 +265,7 @@ class Palette:
 
     @property
     def anim_ms(self) -> int:
-        return {"full": 220, "reduced": 120, "off": 0}[self.s.motion]
+        return {"full": 300, "reduced": 180, "off": 0}[self.s.motion]
 
     @property
     def animated(self) -> bool:

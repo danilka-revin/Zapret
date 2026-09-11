@@ -25,7 +25,7 @@ from . import icons
 # ---------------------------------------------------------------------------
 
 def animate(owner: QWidget, name: str, start: float, end: float, duration: int,
-            apply, curve: QEasingCurve.Type = QEasingCurve.Type.OutCubic):
+            apply, curve: QEasingCurve.Type = QEasingCurve.Type.OutBack):
     """Анимирует значение без объявления Qt-свойств (хранит анимации на виджете)."""
     store: dict = owner.__dict__.setdefault("_zapret_anims", {})
     old = store.get(name)
@@ -130,7 +130,7 @@ class Backdrop(QWidget):
                 center = QPointF(cx * size.width(), cy * size.height())
                 rad = radius * max(size.width(), size.height()) * 0.55
                 glow = QRadialGradient(center, rad)
-                alpha = (0.30 if not pal.dark else 0.34) * strength
+                alpha = (0.36 if not pal.dark else 0.42) * strength
                 glow.setColorAt(0.0, _with_alpha(color, alpha))
                 glow.setColorAt(0.55, _with_alpha(color, alpha * 0.28))
                 glow.setColorAt(1.0, _with_alpha(color, 0.0))
@@ -228,13 +228,24 @@ class Card(QFrame):
         radius = pal.r_card + self.radius_extra
         path = round_path(rect, radius)
 
-        # Мягкая тень
+        # Более выразительная тень с мягким свечением
         shadow = QColor(pal.shadow)
-        for i in range(6, 0, -1):
-            shadow.setAlphaF(0.035 if pal.dark else 0.05)
-            p.setPen(QPen(shadow, i * 2.0))
+        glow_color = QColor(pal.accent) if self.accent_edge else QColor(pal.accent_text)
+        for i in range(8, 0, -1):
+            alpha = (0.05 if pal.dark else 0.08) * (1.0 - (i / 8) * 0.7)
+            shadow.setAlphaF(alpha)
+            p.setPen(QPen(shadow, i * 2.4))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawPath(round_path(rect.adjusted(i * 0.6, i * 1.1, -i * 0.6, -i * 0.2), radius))
+            p.drawPath(round_path(rect.adjusted(i * 0.8, i * 1.3, -i * 0.8, -i * 0.3), radius))
+        # Дополнительное свечение для акцентных карточек
+        if self.accent_edge:
+            glow_shadow = QRadialGradient(rect.center(), max(rect.width(), rect.height()) * 0.6)
+            glow_shadow.setColorAt(0.0, _with_alpha(pal.accent, 0.35))
+            glow_shadow.setColorAt(0.5, _with_alpha(pal.accent, 0.10))
+            glow_shadow.setColorAt(1.0, _with_alpha(pal.accent, 0.0))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(glow_shadow))
+            p.drawRoundedRect(rect.adjusted(-10, -10, 10, 10), radius + 6, radius + 6)
 
         # Стеклянная подложка
         p.setPen(Qt.PenStyle.NoPen)
@@ -420,9 +431,9 @@ class PowerSwitch(QWidget):
         disc = QRectF(-(self._size / 2 - 16), -(self._size / 2 - 16),
                       self._size - 32, self._size - 32)
 
-        # 1. Свечение вокруг кнопки
-        glow_strength = (0.55 if on else 0.16) + 0.10 * self.pulse + 0.18 * self.hover
-        glow_radius = disc.width() * (0.78 + 0.05 * self.pulse)
+        # Более выразительное свечение вокруг кнопки
+        glow_strength = (0.65 if on else 0.22) + 0.14 * self.pulse + 0.22 * self.hover
+        glow_radius = disc.width() * (0.85 + 0.06 * self.pulse)
         glow = QRadialGradient(QPointF(0, 0), glow_radius)
         glow.setColorAt(0.62, _with_alpha(accent.name(), 0.30 * glow_strength))
         glow.setColorAt(0.80, _with_alpha(accent.name(), 0.16 * glow_strength))
@@ -480,8 +491,8 @@ class PowerSwitch(QWidget):
 
         caption_color = QColor(pal.on_accent if on else pal.text)
         p.setPen(caption_color)
-        p.setFont(font(self.theme.font_family, max(11.0, self._size * 0.072),
-                       QFont.Weight.Bold, letter_spacing=1.2))
+        p.setFont(font(self.theme.font_family, max(15.0, self._size * 0.090),
+                       QFont.Weight.Bold, letter_spacing=1.5))
         cap_rect = QRectF(-disc.width() / 2, self._size * 0.055, disc.width(), self._size * 0.13)
         p.drawText(cap_rect, Qt.AlignmentFlag.AlignCenter, self.caption)
 
@@ -490,7 +501,7 @@ class PowerSwitch(QWidget):
         hint_color = QColor(baseline)
         hint_color.setAlphaF(0.72 if on else 0.95)
         p.setPen(hint_color)
-        p.setFont(font(self.theme.font_family, max(8.5, pal.font_xs)))
+        p.setFont(font(self.theme.font_family, max(11.0, pal.font_sm)))
         p.drawText(QRectF(-self._size, self._size * 0.185, self._size * 2, 40),
                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self.hint)
         p.end()
@@ -672,6 +683,16 @@ class GlassButton(QPushButton):
             p.setBrush(bg)
         p.setPen(QPen(border, 1.1))
         p.drawPath(path)
+
+        if self.kind == "primary" and self.hover > 0.01:
+            glow_rect = rect.adjusted(-4, -4, 4, 4)
+            glow = QRadialGradient(rect.center(), max(rect.width(), rect.height()) * 0.7)
+            glow.setColorAt(0.0, _with_alpha(pal.accent, 0.30 * self.hover))
+            glow.setColorAt(0.6, _with_alpha(pal.accent, 0.08 * self.hover))
+            glow.setColorAt(1.0, _with_alpha(pal.accent, 0.0))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(glow))
+            p.drawRoundedRect(glow_rect, radius + 2, radius + 2)
 
         if self.kind == "primary":
             p.setPen(QPen(_with_alpha("#ffffff", 0.35), 1.0))
@@ -1003,7 +1024,7 @@ class StatTile(QWidget):
         self.value = value
         self.icon_name = icon
         self.accent = False
-        self.setMinimumHeight(58)
+        self.setMinimumHeight(68)
         theme.changed.connect(self.update)
 
     def set_value(self, value: str, accent: bool = False):
@@ -1228,7 +1249,7 @@ class ServiceRow(QWidget):
         self.badge = ""
         self.hover = 0.0
         self.spin = 0.0
-        self.setFixedHeight(52)
+        self.setFixedHeight(60)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self._timer = QTimer(self)
@@ -1349,14 +1370,25 @@ class Toast(QFrame):
         icon = {"info": "info", "ok": "check-circle", "warn": "alert",
                 "error": "close-circle"}.get(kind, "info")
         self.icon_name = icon
-        font_metrics = QFontMetrics(font(theme.font_family, theme.palette.font_md))
-        width = min(parent.width() - 60, max(280, font_metrics.horizontalAdvance(text) + 90))
-        self.setFixedSize(width, 52)
+        font_metrics = QFontMetrics(font(theme.font_family, theme.palette.font_lg))
+        width = min(parent.width() - 80, max(360, font_metrics.horizontalAdvance(text) + 110))
+        self.setFixedSize(width, 64)
         self._effect = QGraphicsOpacityEffect(self)
         self._effect.setOpacity(0.0)
         self.setGraphicsEffect(self._effect)
+        self._slide_offset = 40
         QTimer.singleShot(timeout, self._fade_out)
-        animate(self, "opacity", 0.0, 1.0, theme.palette.anim_ms, self._set_opacity)
+        animate(self, "opacity", 0.0, 1.0, theme.palette.anim_ms, self._set_opacity,
+                QEasingCurve.Type.OutBack)
+        animate(self, "slide", 40, 0.0, theme.palette.anim_ms, self._set_slide,
+                QEasingCurve.Type.OutBack)
+
+    def _set_slide(self, value: float):
+        self._slide_offset = value
+        parent = self.parentWidget()
+        if parent is not None:
+            y = parent.height() - 28 - 64 + 40 - value
+            self.move(self.x(), max(10, y))
 
     def _set_opacity(self, value: float):
         self.opacity = value
@@ -1379,8 +1411,20 @@ class Toast(QFrame):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         color = self._color()
-        p.setBrush(_with_alpha(pal.surface_3 if pal.dark else "#ffffff", 0.97))
-        p.setPen(QPen(_with_alpha(color.name(), 0.5), 1.2))
+        # Яркое свечение по контуру для наглядности
+        glow = QRadialGradient(QPointF(rect.center().x(), rect.center().y()), rect.width() * 0.9)
+        glow.setColorAt(0.0, _with_alpha(color.name(), 0.55))
+        glow.setColorAt(0.7, _with_alpha(color.name(), 0.25))
+        glow.setColorAt(1.0, _with_alpha(color.name(), 0.0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(glow))
+        p.drawRoundedRect(rect.adjusted(-14, -14, 14, 14), pal.r_lg + 4, pal.r_lg + 4)
+        # Фон тоста с градиентом
+        bg_grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+        bg_grad.setColorAt(0.0, QColor(pal.surface_3 if pal.dark else "#ffffff"))
+        bg_grad.setColorAt(1.0, QColor(pal.surface_2 if pal.dark else "#f2f6f4"))
+        p.setBrush(QBrush(bg_grad))
+        p.setPen(QPen(_with_alpha(color.name(), 0.8), 2.0))
         p.drawRoundedRect(rect, pal.r_lg, pal.r_lg)
         p.setBrush(color)
         p.setPen(Qt.PenStyle.NoPen)
@@ -1511,7 +1555,7 @@ class _Overlay(QWidget):
 
     def paintEvent(self, event):  # noqa: N802
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(0, 0, 0, 110))
+        p.fillRect(self.rect(), QColor(0, 0, 0, 170))
         p.end()
 
 
@@ -1529,6 +1573,9 @@ class Sheet(QWidget):
         super().__init__(parent)
         self.theme = theme
         self._width_target = width
+        # Более широкая панель для наглядности
+        if width == 396:
+            self._width_target = 460
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         # Затемнение создаём ДО первого hide(): hide() доставляет hideEvent
         # сразу, а он прячет overlay — иначе конструктор падает с
