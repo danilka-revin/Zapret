@@ -273,7 +273,7 @@ class ZapretWindow(QMainWindow):
         row.setContentsMargins(6, 0, 6, 0)
         row.setSpacing(22)
 
-        self.power = PowerSwitch(self.theme, 280)
+        self.power = PowerSwitch(self.theme, 320)
         self.power.clicked.connect(self.controller.toggle_power)
         row.addWidget(self.power, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -381,7 +381,7 @@ class ZapretWindow(QMainWindow):
 
         self.traffic_card = Card(self.theme, "Трафик", "живая скорость соединения", "activity")
         self.spark = Sparkline(self.theme)
-        self.spark.setMinimumHeight(96)
+        self.spark.setMinimumHeight(160)
         self.traffic_card.body.addWidget(self.spark)
         stats = QHBoxLayout()
         stats.setSpacing(10)

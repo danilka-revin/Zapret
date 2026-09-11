@@ -496,14 +496,13 @@ class PowerSwitch(QWidget):
         cap_rect = QRectF(-disc.width() / 2, self._size * 0.055, disc.width(), self._size * 0.13)
         p.drawText(cap_rect, Qt.AlignmentFlag.AlignCenter, self.caption)
 
-        # На включённой кнопке подпись рисуем цветом, контрастным к акценту
-        baseline = pal.on_accent if on else pal.muted
-        hint_color = QColor(baseline)
-        hint_color.setAlphaF(0.72 if on else 0.95)
-        p.setPen(hint_color)
-        p.setFont(font(self.theme.font_family, max(11.0, pal.font_sm)))
-        p.drawText(QRectF(-self._size, self._size * 0.185, self._size * 2, 40),
-                   Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self.hint)
+        # Подпись только «ВКЛ» / «ВЫКЛ» — без подсказки под кнопкой
+        caption_color = QColor(pal.on_accent if on else pal.text)
+        p.setPen(caption_color)
+        p.setFont(font(self.theme.font_family, max(16.0, self._size * 0.095),
+                       QFont.Weight.Bold, letter_spacing=1.5))
+        cap_rect = QRectF(-disc.width() / 2, self._size * 0.055, disc.width(), self._size * 0.14)
+        p.drawText(cap_rect, Qt.AlignmentFlag.AlignCenter, self.caption)
         p.end()
 
 

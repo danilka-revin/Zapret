@@ -311,11 +311,18 @@ class Controller(QObject):
         self.targets_step.emit({"index": index, "total": total, "strategy": strategy})
 
     def _submit(self, key: str, work, success: str = "", failure: str = "Ошибка"):
-        if self.busy_key:
+        # Кнопка питания («ВЫКЛ» / «ОСТАНОВИТЬ») может прервать любую операцию.
+        override_stop = (key == "power_off")
+        if self.busy_key and not override_stop:
             self.log.emit(f"Сейчас выполняется: "
                           f"{OPERATION_LABELS.get(self.busy_key, self.busy_key)}. "
                           f"Дождитесь завершения.", "warn")
             return
+        # При остановке сбрасываем флаг остановки, чтобы автоподбор/автовосстановление
+        # не включились «за спиной».
+        if override_stop:
+            self.user_stopped = True
+            self._stop_flag = True
         self._set_busy(key)
 
         def runner():
