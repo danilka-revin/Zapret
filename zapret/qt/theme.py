@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Qt, Signal
@@ -389,9 +390,22 @@ def apply_theme_to_app(app: "QApplication", theme: ThemeManager) -> None:
 # ---------------------------------------------------------------------------
 
 FONT_CANDIDATES = [
-    "Inter", "SF Pro Display", "Segoe UI Variable Display", "Segoe UI",
-    "Manrope", "Ubuntu", "Noto Sans", "Cantarell", "DejaVu Sans",
+    "Inter", "Geist", "Manrope", "Plus Jakarta Sans", "Onest",
+    "SF Pro Display", "Segoe UI Variable Display", "Segoe UI",
+    "Ubuntu", "Noto Sans", "Cantarell", "DejaVu Sans",
 ]
+
+INTER_FONT_PATH = str(Path(__file__).resolve().parent.parent.parent / "fonts" / "Inter-Regular.ttf")
+
+
+def _load_inter_font() -> bool:
+    if Path(INTER_FONT_PATH).exists():
+        font_id = QFontDatabase.addApplicationFont(INTER_FONT_PATH)
+        if font_id >= 0:
+            families = QFontDatabase.applicationFontFamilies(font_id)
+            if families:
+                return True
+    return False
 
 
 def pick_font_family() -> str:
@@ -430,6 +444,7 @@ class ThemeManager(QObject):
         super().__init__(parent)
         self._settings = (settings or UISettings()).sanitized()
         self._palette = Palette(self._settings)
+        _load_inter_font()
         self.font_family = pick_font_family()
         self.mono_family = pick_mono_family()
 

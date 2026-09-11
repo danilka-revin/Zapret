@@ -19,7 +19,7 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout,
-                               QLabel, QMainWindow, QScrollArea, QSystemTrayIcon, QVBoxLayout, QWidget, QMenu)
+                               QLabel, QLineEdit, QMainWindow, QScrollArea, QSystemTrayIcon, QVBoxLayout, QWidget, QMenu)
 
 from .. import APP_NAME, APP_VERSION, app_dir
 from . import icons
@@ -432,6 +432,34 @@ class ZapretWindow(QMainWindow):
         for btn in (self.btn_deps, self.btn_autostart, self.btn_shortcut, self.btn_repair,
                     self.btn_permissions):
             self.maintenance_card.body.addWidget(btn)
+        # Полезные функции: проверка домена, глубокий скан, бэкап/восстановление
+        tools_layout = QHBoxLayout()
+        tools_layout.setContentsMargins(0, 8, 0, 0)
+        tools_layout.setSpacing(8)
+        self.custom_domain_input = QLineEdit()
+        self.custom_domain_input.setPlaceholderText("Домен для проверки (например youtube.com)")
+        self.custom_domain_input.setStyleSheet(
+            f"QLineEdit{{background:{pal.surface_2};color:{pal.text};"
+            f"border:1px solid {pal.line_strong};border-radius:8px;"
+            f"padding:8px 10px;font-family:'{self.theme.font_family}';font-size:{pal.font_sm}px;}}"
+        )
+        self.btn_check_custom = GlassButton(self.theme, "Проверить домен", "search", "secondary", compact=True)
+        self.btn_check_custom.clicked.connect(self._check_custom_domain)
+        self.btn_deep_scan = GlassButton(self.theme, "Глубокий скан", "flask", "accent-soft", compact=True)
+        self.btn_deep_scan.clicked.connect(self.controller.run_deep_scan)
+        self.btn_backup = GlassButton(self.theme, "Бэкап настроек", "download", "ghost", compact=True)
+        self.btn_backup.clicked.connect(lambda: self.controller.backup_config(
+            str(app_dir() / f"zapret-config-backup-{time.strftime('%Y%m%d-%H%M')}.json")))
+        self.btn_restore = GlassButton(self.theme, "Восстановить", "upload", "ghost", compact=True)
+        self.btn_restore.clicked.connect(lambda: self.controller.restore_config(
+            str(app_dir() / "zapret-config.json")))
+        tools_layout.addWidget(self.custom_domain_input, 1)
+        tools_layout.addWidget(self.btn_check_custom)
+        tools_layout.addWidget(self.btn_deep_scan)
+        tools_layout.addWidget(self.btn_backup)
+        tools_layout.addWidget(self.btn_restore)
+        self.maintenance_card.body.addLayout(tools_layout)
+
         footer = QWidget()
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(0, 0, 0, 0)
@@ -970,6 +998,13 @@ class ZapretWindow(QMainWindow):
                          for ts, msg, _k in self.log_history)
         QApplication.clipboard().setText(text)
         self.toasts.show_toast("Журнал скопирован в буфер обмена", "ok")
+
+    def _check_custom_domain(self):
+        domain = self.custom_domain_input.text().strip()
+        if not domain:
+            self.toasts.show_toast("Введите домен для проверки.", "warn")
+            return
+        self.controller.check_custom_domain(domain)
 
     def _open_readme(self):
         path = app_dir() / "README.md"

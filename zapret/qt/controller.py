@@ -504,6 +504,67 @@ class Controller(QObject):
         self.finished.emit("preset", True, "")
         return True
 
+    def check_custom_domain(self, domain: str):
+        """Проверяет одну стратегию под конкретный домен — быстрее полного автопилота."""
+        if not domain or self.busy_key:
+            return
+        hosts = checks.parse_targets(domain)
+        if not hosts:
+            hosts = [checks.clean_host(domain) or domain]
+        hosts = [h for h in hosts if h]
+        if not hosts:
+            self.log.emit(f"Не понял домен: {domain}", "warn")
+            self.finished.emit("targets", False, "непонятный домен")
+            return
+        self.log.emit(f"Проверяю домен: {hosts[0]}", "accent")
+        self.test_targets(domain, apply_best=True, hosts=hosts, groups=[])
+
+    def run_deep_scan(self):
+        """Глубокий скан — больше стратегий, дольше, но точнее."""
+        if self.busy_key:
+            self.log.emit("Сейчас уже выполняется операция — дождитесь завершения.", "warn")
+            return
+        self.run_autopilot()
+        # Можно усилить: после обычного автопилота запускаем форсированный перебор
+        def work():
+            # Просто повторяем с большим лимитом для более глубокого поиска
+            self.autopilot_report = autopilot.run(
+                self.cfg,
+                progress_cb=lambda msg: self.log.emit(msg, "info"),
+                stop_flag=lambda: self._stop_flag,
+                limit=10,
+                on_step=self._on_autopilot_step,
+            )
+            if self.autopilot_report:
+                self.log.emit(f"Глубокий скан: лучшая — "
+                              f"{self.autopilot_report.get('strategy', '—')}, "
+                              f"результат: {self.autopilot_report.get('ok', 0)}/"
+                              f"{self.autopilot_report.get('total', 0)}.", "ok")
+
+        self._submit("autopilot", work, "Глубокий скан завершён.", "Глубокий скан не удался")
+
+    def backup_config(self, path: str = "") -> str:
+        import json, shutil
+        src = app_dir() / "zapret-config.json"
+        dst = Path(path) if path else (app_dir() / f"zapret-config-backup-{time.strftime('%Y%m%d-%H%M')}.json")
+        if not src.exists():
+            return ""
+        shutil.copy(str(src), str(dst))
+        return str(dst)
+
+    def restore_config(self, path: str = ""):
+        import shutil
+        src = Path(path) if path else None
+        if not src or not src.exists():
+            self.log.emit("Не указан файл для восстановления.", "warn")
+            return False
+        dst = app_dir() / "zapret-config.json"
+        shutil.copy(str(src), str(dst))
+        self.cfg = config_mod.load()
+        self.log.emit("Настройки восстановлены из резервной копии.", "ok")
+        self.changed.emit()
+        return True
+
     def check_preset(self, name: str):
         """Перепроверяет сохранённый пресет: сначала его же стратегией."""
         preset = presets_mod.preset_by_name(self.cfg, name)
