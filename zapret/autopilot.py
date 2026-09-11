@@ -16,7 +16,9 @@ from . import checks, config as config_mod, core
 
 MAX_CANDIDATES = 4
 PROBE_TIMEOUT = 2.5
-IDEAL_LATENCY_MS = 500.0
+# «Отлично» — это быстро: 300 мс. Раньше было 500, и перебор останавливался
+# на первой посредственной стратегии, не находя по-настоящему быструю.
+IDEAL_LATENCY_MS = 300.0
 
 
 def _natural_key(name: str):
@@ -129,12 +131,14 @@ def run(cfg: dict,
                 log("Ошибка повторяется на всех стратегиях — перебор остановлен.")
                 raise RuntimeError(f"{message} (повторяется для всех стратегий)") from exc
             continue
-        report.append({k: v for k, v in result.items() if k != "results"})
+        # Результаты по каждому сайту оставляем в отчёте: панель «Подбор под
+        # сайт» показывает разбивку именно лучшей попытки, а не только итог.
+        report.append({k: v for k, v in result.items()})
         detail = " · ".join(
             f"{r['title']}: {'ок' if r['state'] == 'ok' else ('медленно' if r['state'] == 'warn' else 'нет')}"
             f" {r['latency_ms']} мс" for r in result["results"]
         )
-        log(f"[{index}/{total}] {name}: работает {result['ok']}/3, в среднем "
+        log(f"[{index}/{total}] {name}: работает {result['ok']}/{total_targets}, в среднем "
             f"{result['avg_ms']:.0f} мс — {detail}")
 
         if best is None or (result["ok"], -result["avg_ms"]) > (best["ok"], -best["avg_ms"]):

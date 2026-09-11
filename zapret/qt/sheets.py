@@ -9,16 +9,17 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+                               QTextEdit, QVBoxLayout, QWidget)
 
 from . import icons
 from .theme import ACCENTS, PRESETS
-from .widgets import (AccentPicker, Card, Chip, ChoiceCard, GlassButton, LabeledSlider,
-                      LogView, SectionTitle, SegmentedControl, ServiceRow, SettingRow,
-                      Sheet, SheetHeader, Switch, font)
+from .widgets import (AccentPicker, Card, Chip, ChoiceCard, Divider, EmptyState,
+                      GlassButton, LabeledSlider, LogView, SearchField, SectionTitle,
+                      SegmentedControl, ServiceRow, SettingRow, Sheet, SheetHeader,
+                      Switch, ThinProgress, font)
 
 
 class TextBlock(QWidget):
@@ -109,7 +110,9 @@ class CustomizerSheet(Sheet):
         grid = QGridLayout(presets_widget)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(8)
-        icons_for = {"glass": "droplet", "lime": "zap", "night": "moon", "contrast": "chart"}
+        icons_for = {"aurora": "sparkles", "glass": "droplet", "lime": "zap",
+                       "sunset": "sun", "ocean": "globe", "rose": "star",
+                       "night": "moon", "contrast": "chart"}
         for index, (key, label, _values) in enumerate(PRESETS):
             card = ChoiceCard(theme, key, label, "готовый набор", icons_for.get(key, "palette"))
             card.clicked.connect(self._apply_preset)
@@ -169,6 +172,12 @@ class CustomizerSheet(Sheet):
 
         self.reset_btn = GlassButton(theme, "Сбросить оформление", "rotate", "ghost")
         self.reset_btn.clicked.connect(theme.reset)
+        self.share_btn = GlassButton(theme, "Скопировать тему", "copy", "secondary")
+        self.share_btn.setToolTip("Скопировать оформление в буфер обмена — можно отправить другу")
+        self.share_btn.clicked.connect(self._share_theme)
+        self.paste_btn = GlassButton(theme, "Вставить тему", "save", "ghost")
+        self.paste_btn.setToolTip("Применить оформление из буфера обмена")
+        self.paste_btn.clicked.connect(self._paste_theme)
 
         self.set_content([
             section(theme, "Пресеты", "Один клик — готовый образ", "sparkles",
@@ -201,6 +210,8 @@ class CustomizerSheet(Sheet):
                      SettingRow(theme, "Проверка сервисов", "как часто проверять доступность",
                                 self.interval_seg)]),
             self.reset_btn,
+            section(theme, "Поделиться", "Отправьте оформление другу", "send",
+                    [self.share_btn, self.paste_btn]),
         ])
 
     # -- синхронизация -----------------------------------------------------
@@ -208,6 +219,26 @@ class CustomizerSheet(Sheet):
     def _apply_preset(self, key: str):
         self.theme.apply_preset(key)
         self._sync()
+
+    def _share_theme(self):
+        import json
+
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(json.dumps(self.theme.export_theme(),
+                                                    ensure_ascii=False))
+
+    def _paste_theme(self):
+        import json
+
+        from PySide6.QtWidgets import QApplication
+
+        try:
+            data = json.loads(QApplication.clipboard().text() or "")
+        except ValueError:
+            return
+        if self.theme.import_theme(data):
+            self._sync()
 
     def _sync(self):
         s = self.theme.settings
@@ -249,8 +280,12 @@ class JournalSheet(Sheet):
         self.filter_seg = SegmentedControl(theme, [("all", "Всё"), ("ok", "Успехи"),
                                                    ("error", "Ошибки")], "all")
         self.filter_seg.changed.connect(lambda _v: self._rebuild())
+        self.search = SearchField(theme, "Поиск по журналу…")
+        self.search.textChanged.connect(self._on_search)
         self.copy_btn = GlassButton(theme, "Скопировать", "copy", "secondary", compact=True)
         self.copy_btn.clicked.connect(self._copy)
+        self.export_btn = GlassButton(theme, "В файл", "save", "ghost", compact=True)
+        self.export_btn.clicked.connect(self._export)
         self.clear_btn = GlassButton(theme, "Очистить", "trash", "ghost", compact=True)
         self.clear_btn.clicked.connect(self._clear)
 
@@ -261,11 +296,17 @@ class JournalSheet(Sheet):
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(8)
         row_layout.addWidget(self.copy_btn)
+        row_layout.addWidget(self.export_btn)
         row_layout.addWidget(self.clear_btn)
         row_layout.addStretch(1)
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
 
-        self.set_content([self.filter_seg, row, self.view])
+        self.set_content([self.filter_seg, self.search, row, self.view, self.status_label])
         self.history: list[tuple[float, str, str]] = []
+        self._query = ""
+        self._restyle_status()
+        theme.changed.connect(self._restyle_status)
 
     def fill(self, history: list[tuple[float, str, str]]):
         self.history = list(history)
@@ -274,22 +315,41 @@ class JournalSheet(Sheet):
     def append(self, message: str, kind: str = "info"):
         self.history.append((time.time(), message, kind))
         del self.history[:-2000]
-        if self._visible_for(kind):
+        if self._visible_for(kind, message):
             self.view.append(message, kind)
 
-    def _visible_for(self, kind: str) -> bool:
+    def _restyle_status(self):
+        pal = self.theme.palette
+        self.status_label.setFont(font(self.theme.font_family, pal.font_xs))
+        self.status_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
+
+    def _on_search(self, text: str):
+        self._query = (text or "").strip().lower()
+        self._rebuild()
+
+    def _visible_for(self, kind: str, message: str = "") -> bool:
         mode = self.filter_seg.value
-        if mode == "all":
-            return True
         if mode == "ok":
-            return kind in ("ok", "accent")
-        return kind in ("error", "warn")
+            level_ok = kind in ("ok", "accent")
+        elif mode == "error":
+            level_ok = kind in ("error", "warn")
+        else:
+            level_ok = True
+        if not level_ok:
+            return False
+        if self._query and self._query not in (message or "").lower():
+            return False
+        return True
 
     def _rebuild(self):
         self.view.clear()
+        shown = 0
         for _ts, message, kind in self.history:
-            if self._visible_for(kind):
+            if self._visible_for(kind, message):
                 self.view.append(message, kind)
+                shown += 1
+        total = len(self.history)
+        self.status_label.setText(f"Показано {shown} из {total}" if total else "")
 
     def _copy(self):
         from PySide6.QtWidgets import QApplication
@@ -298,9 +358,24 @@ class JournalSheet(Sheet):
                          for ts, msg, _k in self.history)
         QApplication.clipboard().setText(text)
 
+    def _export(self):
+        from .. import app_dir
+
+        stamp = time.strftime("%Y%m%d-%H%M")
+        path = app_dir() / f"zapret-journal-{stamp}.txt"
+        try:
+            path.write_text("\n".join(
+                f"[{time.strftime('%H:%M:%S', time.localtime(ts))}] {msg}"
+                for ts, msg, _k in self.history), encoding="utf-8")
+        except OSError as exc:
+            self.status_label.setText(f"Не удалось сохранить: {exc}")
+            return
+        self.status_label.setText(f"Сохранено: {path}")
+
     def _clear(self):
         self.history.clear()
         self.view.clear()
+        self.status_label.setText("")
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +402,8 @@ class DiagnosticsSheet(Sheet):
                            ("sudo", "Права без пароля"), ("shortcut", "Ярлык на столе"),
                            ("update", "Обновление"), ("backend", "Бэкенд файрвола"),
                            ("iface", "Сетевой интерфейс"), ("strategy", "Стратегия"),
-                           ("appdir", "Каталог данных")):
+                           ("strategies", "Стратегий"), ("nfqws", "Версия nfqws"),
+                           ("session", "Сессия"), ("appdir", "Каталог данных")):
             row = QWidget()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(10, 6, 10, 6)
@@ -354,6 +430,19 @@ class DiagnosticsSheet(Sheet):
         self.autopilot_btn = GlassButton(theme, "Запустить автоподбор", "rocket", "primary",
                                          compact=True)
         self.autopilot_btn.clicked.connect(controller.run_autopilot)
+        self.rules_btn = GlassButton(theme, "Правила файрвола", "list", "secondary",
+                                     compact=True)
+        self.rules_btn.clicked.connect(self._show_rules)
+        self.ping_btn = GlassButton(theme, "Пинг", "activity", "ghost", compact=True)
+        self.ping_btn.clicked.connect(lambda: controller.run_ping("1.1.1.1"))
+        self.speed_btn = GlassButton(theme, "Скорость", "gauge", "ghost", compact=True)
+        self.speed_btn.clicked.connect(controller.run_speedtest)
+        self.copy_report_btn = GlassButton(theme, "Скопировать отчёт", "copy", "ghost",
+                                           compact=True)
+        self.copy_report_btn.clicked.connect(self._copy_report)
+        self.save_report_btn = GlassButton(theme, "Сохранить отчёт", "save", "ghost",
+                                           compact=True)
+        self.save_report_btn.clicked.connect(self._save_report)
 
         buttons = QWidget()
         buttons_layout = QVBoxLayout(buttons)
@@ -365,6 +454,17 @@ class DiagnosticsSheet(Sheet):
         top_row.addWidget(self.check_btn)
         buttons_layout.addLayout(top_row)
         buttons_layout.addWidget(self.autopilot_btn)
+        mid_row = QHBoxLayout()
+        mid_row.setSpacing(8)
+        mid_row.addWidget(self.rules_btn)
+        mid_row.addWidget(self.ping_btn)
+        mid_row.addWidget(self.speed_btn)
+        buttons_layout.addLayout(mid_row)
+        bot_row = QHBoxLayout()
+        bot_row.setSpacing(8)
+        bot_row.addWidget(self.copy_report_btn)
+        bot_row.addWidget(self.save_report_btn)
+        buttons_layout.addLayout(bot_row)
 
         self.set_content([self.rows_box, buttons])
         theme.changed.connect(self._restyle)
@@ -398,8 +498,17 @@ class DiagnosticsSheet(Sheet):
             "backend": (status.get("backend") or "—", bool(status.get("backend"))),
             "iface": (self.controller.cfg.get("interface", "any"), True),
             "strategy": (self.controller.cfg.get("strategy", "—"), True),
+            "strategies": (str(status.get("strategies", "—")), True),
+            "nfqws": ((status.get("nfqws_version") or "—")[:32], True),
             "appdir": (status.get("app_dir", "—"), True),
         }
+        try:
+            from .. import session as _session
+
+            values["session"] = (
+                "Wayland" if _session.is_wayland() else "X11/другая", True)
+        except Exception:  # noqa: BLE001 — диагностика не должна ронять панель
+            values["session"] = ("—", True)
         # ярлыки и обновления: именно по ним обычно видно «установил через sudo — и пусто»
         try:
             from .. import integration
@@ -419,16 +528,43 @@ class DiagnosticsSheet(Sheet):
                  False: "версия актуальна",
                  None: info.get("message") or "ещё не проверялось"}
         values["update"] = (texts[available], True)
-        for key, (text, good) in values.items():
+        for key, (text_value, good) in values.items():
             label = self.rows.get(key)
             if label is None:
                 continue
-            label.setText(str(text))
+            label.setText(str(text_value))
             color = pal.good if good else pal.warn
-            if key in ("appdir", "iface", "strategy", "backend", "update", "shortcut"):
+            if key in ("appdir", "iface", "strategy", "strategies", "nfqws",
+                       "session", "backend", "update", "shortcut"):
                 color = pal.text
             label.setStyleSheet(f"color:{color};background:transparent;")
 
+    def _viewer(self):
+        window = self.parentWidget()
+        if window is None:
+            return None
+        return getattr(window, "sheets", {}).get("text")
+
+    def _show_rules(self):
+        viewer = self._viewer()
+        rules = self.controller.firewall_rules()
+        if viewer is None:
+            self.controller.log_now(rules, "info")
+            return
+        window = self.parentWidget()
+        viewer.show_text("Правила файрвола", "текущие правила обхода", rules)
+        viewer.setGeometry(window.centralWidget().rect())
+        self.close()
+        viewer.open()
+
+    def _copy_report(self):
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(self.controller.report_text())
+        self.controller.log_now("Отчёт скопирован в буфер обмена.", "ok")
+
+    def _save_report(self):
+        self.controller.export_report()
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +605,11 @@ class HelpSheet(Sheet):
             TextBlock(theme, "Важно", "Приложение обходит искусственное замедление "
                       "легитимных сервисов. Используйте там, где это не запрещено законом.",
                       "info"),
+            TextBlock(theme, "Горячие клавиши",
+                      "Ctrl+P — вкл/выкл · Ctrl+R — проверка · Ctrl+T — подбор под сайт · "
+                      "Ctrl+B — стратегии · Ctrl+E — сеть · Ctrl+, — оформление · "
+                      "Ctrl+L — журнал · Ctrl+D — диагностика · Esc — закрыть панель",
+                      "zap"),
             self.perm_btn,
             self.open_btn,
         ]
@@ -593,6 +734,10 @@ class TargetSheet(Sheet):
 
         self.run_btn = GlassButton(theme, "Проверить стратегии", "rocket", "primary")
         self.run_btn.clicked.connect(self._run)
+        self.stop_btn = GlassButton(theme, "Остановить", "stop", "ghost")
+        self.stop_btn.clicked.connect(self._stop)
+        self.stop_btn.setVisible(False)
+        self.progress = ThinProgress(theme)
 
         self.apply_switch = Switch(theme, True)
         self.apply_switch.setToolTip("Сразу применять лучшую найденную стратегию")
@@ -670,6 +815,8 @@ class TargetSheet(Sheet):
                      SettingRow(theme, "Применять лучшую", "сразу переключить обход на неё",
                                 _switch_holder(theme, self.apply_switch)),
                      self.run_btn,
+                     self.stop_btn,
+                     self.progress,
                      group_holder,
                      self.selection_label,
                      self.btn_run_groups,
@@ -937,10 +1084,15 @@ class TargetSheet(Sheet):
 
     # -- реакция контроллера -----------------------------------------------
 
+    def _stop(self):
+        self.controller.cancel_operation()
+
     def _on_started(self, hosts: list):
         self._running = True
         self.run_btn.setEnabled(False)
         self.run_btn.setText("Подбираю…")
+        self.stop_btn.setVisible(True)
+        self.progress.set_value(0.02)
         self.btn_run_groups.setEnabled(False)
         self.status_label.setText(
             f"Проверяю {len(hosts)} домен(ов): {', '.join(hosts[:4])}"
@@ -956,12 +1108,18 @@ class TargetSheet(Sheet):
         self.status_label.setText(
             f"Стратегия {step.get('index')} из {step.get('total')}: "
             f"{step.get('strategy')} — проверяю сайты…")
+        try:
+            self.progress.set_value(float(step.get("index", 0)) / max(1, int(step.get("total", 1))))
+        except (TypeError, ValueError):
+            pass
 
     def _on_done(self, report: dict):
         self._running = False
         self.last_report = report
         self.run_btn.setEnabled(True)
         self.run_btn.setText("Проверить стратегии")
+        self.stop_btn.setVisible(False)
+        self.progress.set_value(1.0)
         self.btn_run_groups.setEnabled(bool(self.selected_groups()))
         best = report.get("strategy", "")
         self.status_label.setText(
@@ -1003,6 +1161,9 @@ class TargetSheet(Sheet):
         self._running = False
         self.run_btn.setEnabled(True)
         self.run_btn.setText("Проверить стратегии")
+        self.stop_btn.setVisible(False)
+        if success:
+            self.progress.set_value(1.0)
         self.btn_run_groups.setEnabled(bool(self.selected_groups()))
         if not success:
             self.status_label.setText(message or "Подбор не удался — смотрите журнал.")
@@ -1086,10 +1247,55 @@ class ResultsSheet(Sheet):
         self.table.setColumnWidth(2, 50)
         self.table.setColumnWidth(3, 90)
         self.table.setColumnWidth(4, 90)
-        self.set_content([self.table])
+        self.summary_label = QLabel("")
+        self.summary_label.setWordWrap(True)
+        self.apply_btn = GlassButton(theme, "Применить лучшую", "zap", "primary",
+                                     compact=True)
+        self.apply_btn.clicked.connect(self._apply_best)
+        self.copy_btn = GlassButton(theme, "Скопировать", "copy", "ghost", compact=True)
+        self.copy_btn.clicked.connect(self._copy_table)
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(8)
+        buttons_layout.addWidget(self.apply_btn, 1)
+        buttons_layout.addWidget(self.copy_btn, 1)
+        self.set_content([self.summary_label, self.table, buttons])
+        self._report: dict = {}
         theme.changed.connect(self._restyle)
+        self._restyle()
+
+    def _controller(self):
+        window = self.parentWidget()
+        return getattr(window, "controller", None) if window is not None else None
+
+    def _apply_best(self):
+        controller = self._controller()
+        best = (self._report or {}).get("strategy", "")
+        if controller is not None and best:
+            controller.set_strategy(best)
+        self.close()
+
+    def _copy_table(self):
+        from PySide6.QtWidgets import QApplication
+
+        report = self._report or {}
+        total = report.get("total", 0)
+        lines = [f"Лучшая: {report.get('strategy', '—')} "
+                 f"({report.get('ok', 0)}/{total}, {report.get('avg_ms', 0):.0f} мс)"]
+        for item in sorted((t for t in report.get("tries", []) if "error" not in t),
+                           key=lambda t: (-t.get("ok", 0), t.get("avg_ms", 99999))):
+            lines.append(f"{item.get('strategy', '—')}: {item.get('ok', 0)}/{total}, "
+                         f"{item.get('avg_ms', 0):.0f} мс")
+        QApplication.clipboard().setText("\n".join(lines))
 
     def fill_report(self, report: dict):
+        self._report = report
+        self.summary_label.setText(
+            f"Лучшая: {report.get('strategy', '—')} · "
+            f"успешно {report.get('ok', 0)} из {report.get('total', 0)} · "
+            f"средняя задержка {report.get('avg_ms', 0):.0f} мс"
+            + (" · применена" if report.get("applied") else ""))
         tries = [t for t in report.get("tries", []) if "error" not in t]
         tries.sort(key=lambda t: (-t.get("ok", 0), t.get("avg_ms", 99999)))
         best = report.get("strategy", "")
@@ -1132,13 +1338,16 @@ class ResultsSheet(Sheet):
             # Статус
             cell_status = QTableWidgetItem(status_text)
             cell_status.setFont(font(self.theme.font_family, pal.font_sm, QFont.Weight.DemiBold))
-            cell_status.setForeground(status_color)
+            cell_status.setForeground(QColor(status_color))
             cell_status.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row_idx, 4, cell_status)
         self.table.resizeRowsToContents()
 
     def _restyle(self):
         pal = self.theme.palette
+        self.summary_label.setFont(font(self.theme.font_family, pal.font_md,
+                                        QFont.Weight.DemiBold))
+        self.summary_label.setStyleSheet(f"color:{pal.text};background:transparent;")
         self.table.setStyleSheet(
             f"QTableWidget{{background:transparent;color:{pal.text};"
             f"gridline-color:{pal.line_strong};border:none;border-radius:10px;}}"
@@ -1155,3 +1364,451 @@ class ResultsSheet(Sheet):
     def open(self):
         super().open()
         self.raise_()
+
+
+# ---------------------------------------------------------------------------
+# Универсальный просмотр текста (правила файрвола, превью стратегии, чейнджлог)
+# ---------------------------------------------------------------------------
+
+class TextSheet(Sheet):
+    """Панель с моноширинным текстом и кнопкой копирования."""
+
+    def __init__(self, theme, parent=None):
+        super().__init__(theme, parent, width=560)
+        self.theme = theme
+        self.header_widget = SheetHeader(theme, "Просмотр", "", "file",
+                                         on_close=self.close)
+        self.set_header(self.header_widget)
+        self.view = QTextEdit()
+        self.view.setReadOnly(True)
+        self.view.setMinimumHeight(420)
+        self.copy_btn = GlassButton(theme, "Скопировать", "copy", "secondary",
+                                    compact=True)
+        self.copy_btn.clicked.connect(self._copy)
+        self.set_content([self.view, self.copy_btn])
+        theme.changed.connect(self._restyle)
+        self._restyle()
+
+    def show_text(self, title: str, subtitle: str, body: str):
+        self.header_widget.title_label.setText(title)
+        self.header_widget.subtitle_label.setText(subtitle)
+        self.view.setPlainText(body or "(пусто)")
+
+    def _copy(self):
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(self.view.toPlainText())
+
+    def _restyle(self):
+        pal = self.theme.palette
+        self.view.setFont(font(self.theme.mono_family, pal.font_sm))
+        self.view.setStyleSheet(
+            f"QTextEdit{{background:{pal.surface_2};color:{pal.text};"
+            f"border:1px solid {pal.line};border-radius:12px;padding:10px;}}")
+
+
+# ---------------------------------------------------------------------------
+# Стратегии: список, превью, применение в один клик
+# ---------------------------------------------------------------------------
+
+class StrategiesSheet(Sheet):
+    """Все стратегии Flowseal: что есть, что внутри, какая активна."""
+
+    def __init__(self, theme, controller, parent=None):
+        super().__init__(theme, parent, width=560)
+        self.theme = theme
+        self.controller = controller
+        self.set_header(SheetHeader(theme, "Стратегии",
+                                    "список, превью и применение", "layers",
+                                    on_close=self.close))
+        self.search = SearchField(theme, "Найти стратегию…")
+        self.search.textChanged.connect(lambda _t: self.refresh())
+        self.list_box = QWidget()
+        self.list_layout = QVBoxLayout(self.list_box)
+        self.list_layout.setContentsMargins(0, 0, 0, 0)
+        self.list_layout.setSpacing(6)
+        self.rows: list[ServiceRow] = []
+        self.preview = QTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setMinimumHeight(140)
+        self.preview.setMaximumHeight(220)
+        self.apply_btn = GlassButton(theme, "Применить выбранную", "zap", "primary",
+                                     compact=True)
+        self.apply_btn.clicked.connect(self._apply_selected)
+        self.test_btn = GlassButton(theme, "Проверить", "flask", "secondary",
+                                    compact=True)
+        self.test_btn.clicked.connect(self._test_selected)
+        self.refresh_btn = GlassButton(theme, "Обновить", "refresh", "ghost",
+                                       compact=True)
+        self.refresh_btn.clicked.connect(self.refresh)
+        buttons = QWidget()
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(8)
+        buttons_layout.addWidget(self.apply_btn, 1)
+        buttons_layout.addWidget(self.test_btn, 1)
+        buttons_layout.addWidget(self.refresh_btn, 1)
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        self.set_content([
+            section(theme, "Доступные", "клик — посмотреть содержимое", "layers",
+                    [self.search, self.list_box]),
+            self.preview,
+            buttons,
+            self.status_label,
+        ])
+        self._selected = ""
+        controller.finished.connect(self._on_finished)
+        theme.changed.connect(self._restyle)
+        self._restyle()
+        self.refresh()
+
+    def _restyle(self):
+        pal = self.theme.palette
+        self.preview.setFont(font(self.theme.mono_family, pal.font_xs))
+        self.preview.setStyleSheet(
+            f"QTextEdit{{background:{pal.surface_2};color:{pal.muted};"
+            f"border:1px solid {pal.line};border-radius:12px;padding:10px;}}")
+        self.status_label.setFont(font(self.theme.font_family, pal.font_xs))
+        self.status_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
+
+    def refresh(self):
+        for row in self.rows:
+            self.list_layout.removeWidget(row)
+            row.setParent(None)
+        self.rows = []
+        query = self.search.text().strip().lower()
+        current = (self.controller.cfg.get("strategy") or "")
+        items = self.controller.strategies()
+        shown = 0
+        for item in items:
+            name = item.get("name", "")
+            if query and query not in name.lower():
+                continue
+            detail = self._detail(item)
+            row = ServiceRow(self.theme, name, name, "layers")
+            row.set_status("ok" if name == current else "idle", detail)
+            if name == current:
+                row.set_badge("АКТИВНА")
+            row.clicked.connect(self._on_row_clicked)
+            self.list_layout.addWidget(row)
+            self.rows.append(row)
+            shown += 1
+        if not self.rows:
+            empty = QLabel("Ничего не найдено. Обновите зависимости — "
+                           "стратегии скачиваются вместе с ними.")
+            empty.setWordWrap(True)
+            self.list_layout.addWidget(empty)
+            self.rows.append(empty)  # type: ignore[arg-type]
+        self.status_label.setText(f"Всего стратегий: {len(items)}" +
+                                  (f" · показано {shown}" if query else ""))
+        if self._selected:
+            self._show_preview(self._selected)
+
+    @staticmethod
+    def _detail(item: dict) -> str:
+        parts = []
+        if item.get("tcp"):
+            parts.append(f"TCP {item['tcp']}")
+        if item.get("udp"):
+            parts.append(f"UDP {item['udp']}")
+        if item.get("filters"):
+            parts.append(f"фильтров: {item['filters']}")
+        size = item.get("size") or 0
+        if size:
+            parts.append(f"{size // 1024 + 1} КБ")
+        return " · ".join(parts) or "—"
+
+    def _on_row_clicked(self, name: str):
+        if not isinstance(name, str) or not name.endswith(".bat"):
+            return
+        self._selected = name
+        self._show_preview(name)
+        for row in self.rows:
+            if isinstance(row, ServiceRow):
+                current = (self.controller.cfg.get("strategy") or "")
+                row.set_badge("АКТИВНА" if row.key == current else "")
+
+    def _show_preview(self, name: str):
+        self.preview.setPlainText(self.controller.strategy_preview(name))
+
+    def _apply_selected(self):
+        if not self._selected:
+            self.status_label.setText("Сначала выберите стратегию из списка.")
+            return
+        if self.controller.set_strategy(self._selected):
+            self.refresh()
+
+    def _test_selected(self):
+        if not self._selected:
+            self.status_label.setText("Сначала выберите стратегию из списка.")
+            return
+        self.controller.test_strategy(self._selected)
+
+    def _on_finished(self, key: str, success: bool, _message: str):
+        if key in ("apply", "strategy_test", "deps") and self.isVisible():
+            self.refresh()
+
+
+# ---------------------------------------------------------------------------
+# Сеть и файрвол: интерфейс, бэкенд, версии зависимостей
+# ---------------------------------------------------------------------------
+
+class NetworkSheet(Sheet):
+    """Сетевые настройки: интерфейс, файрвол, GameFilter, версии."""
+
+    def __init__(self, theme, controller, parent=None):
+        super().__init__(theme, parent)
+        self.theme = theme
+        self.controller = controller
+        self.set_header(SheetHeader(theme, "Сеть и файрвол",
+                                    "интерфейс, бэкенд и версии", "server",
+                                    on_close=self.close))
+
+        self.iface_combo = QComboBox()
+        self.iface_combo.setMinimumHeight(38)
+        self.backend_seg = SegmentedControl(
+            theme, [("auto", "Авто"), ("nftables", "nftables"), ("iptables", "iptables")],
+            "auto")
+        self.nfqws_input = QLineEdit()
+        self.nfqws_input.setPlaceholderText("latest или тег, например v1.7.2")
+        self.nfqws_input.setMinimumHeight(38)
+        self.rev_input = QLineEdit()
+        self.rev_input.setPlaceholderText("пусто — рекомендованный коммит")
+        self.rev_input.setMinimumHeight(38)
+        self.game_tcp = Switch(theme, False)
+        self.game_udp = Switch(theme, False)
+        self.telegram_sw = Switch(theme, True)
+
+        self.apply_btn = GlassButton(theme, "Применить и перезапустить", "zap",
+                                     "primary")
+        self.apply_btn.clicked.connect(self._apply)
+        self.ping_btn = GlassButton(theme, "Пинг 1.1.1.1", "activity", "secondary",
+                                    compact=True)
+        self.ping_btn.clicked.connect(lambda: controller.run_ping("1.1.1.1"))
+        self.speed_btn = GlassButton(theme, "Замер скорости", "gauge", "secondary",
+                                     compact=True)
+        self.speed_btn.clicked.connect(controller.run_speedtest)
+        self.dns_btn = GlassButton(theme, "Проверка DNS", "globe", "ghost",
+                                   compact=True)
+        self.dns_btn.clicked.connect(self._dns_check)
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+
+        tools = QWidget()
+        tools_layout = QHBoxLayout(tools)
+        tools_layout.setContentsMargins(0, 0, 0, 0)
+        tools_layout.setSpacing(8)
+        tools_layout.addWidget(self.ping_btn, 1)
+        tools_layout.addWidget(self.speed_btn, 1)
+        tools_layout.addWidget(self.dns_btn, 1)
+
+        self.set_content([
+            section(theme, "Подключение", "куда применять правила", "wifi",
+                    [SettingRow(theme, "Сетевой интерфейс", "any — все сразу",
+                                self.iface_combo),
+                     SettingRow(theme, "Файрвол", "бэкенд правил", self.backend_seg)]),
+            section(theme, "Протоколы", "что обходить", "filter",
+                    [SettingRow(theme, "Telegram", "MTProto, веб и звонки",
+                                _switch_holder(theme, self.telegram_sw)),
+                     SettingRow(theme, "GameFilter TCP", "порты игр",
+                                _switch_holder(theme, self.game_tcp)),
+                     SettingRow(theme, "GameFilter UDP", "порты игр",
+                                _switch_holder(theme, self.game_udp))]),
+            section(theme, "Версии", "что качать при обновлении", "download",
+                    [SettingRow(theme, "nfqws", "latest — свежий релиз",
+                                self.nfqws_input),
+                     SettingRow(theme, "Коммит стратегий", "пусто — проверенный",
+                                self.rev_input)]),
+            self.apply_btn,
+            tools,
+            self.status_label,
+        ])
+        theme.changed.connect(self._restyle)
+        self._restyle()
+        self.reload()
+
+    def _restyle(self):
+        pal = self.theme.palette
+        self.status_label.setFont(font(self.theme.font_family, pal.font_xs))
+        self.status_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
+
+    def reload(self):
+        """Подтягивает значения из конфига в поля."""
+        from .. import checks as _checks
+
+        cfg = self.controller.cfg
+        self.iface_combo.blockSignals(True)
+        self.iface_combo.clear()
+        ifaces = ["any"] + [i for i in _checks.list_interfaces()
+                            if i != "lo"][:12]
+        self.iface_combo.addItems(ifaces)
+        current = cfg.get("interface", "any") or "any"
+        self.iface_combo.setCurrentText(current if current in ifaces else "any")
+        self.iface_combo.blockSignals(False)
+        self.backend_seg.set_value(cfg.get("firewall_backend", "auto") or "auto")
+        self.nfqws_input.setText(cfg.get("nfqws_version", "latest") or "latest")
+        self.rev_input.setText(cfg.get("strategy_rev", "") or "")
+        self.game_tcp.setChecked(bool(cfg.get("gamefilter_tcp")), animate_value=False)
+        self.game_udp.setChecked(bool(cfg.get("gamefilter_udp")), animate_value=False)
+        self.telegram_sw.setChecked(bool(cfg.get("telegram", True)), animate_value=False)
+
+    def open(self):
+        self.reload()
+        super().open()
+
+    def _apply(self):
+        from .. import config as _config
+        from .. import core as _core
+
+        cfg = self.controller.cfg
+        cfg["interface"] = self.iface_combo.currentText() or "any"
+        cfg["firewall_backend"] = self.backend_seg.value or "auto"
+        cfg["nfqws_version"] = self.nfqws_input.text().strip() or "latest"
+        cfg["strategy_rev"] = self.rev_input.text().strip()
+        cfg["gamefilter_tcp"] = self.game_tcp.isChecked()
+        cfg["gamefilter_udp"] = self.game_udp.isChecked()
+        cfg["telegram"] = self.telegram_sw.isChecked()
+        _config.save(cfg)
+        self.controller.log_now("Сетевые настройки сохранены.", "ok")
+        if _core.nfqws_running():
+            self.controller.restart_with_current()
+        else:
+            self.status_label.setText("Сохранено. Обход выключен — применится при включении.")
+        self.controller.changed.emit()
+
+    def _dns_check(self):
+        from .. import checks as _checks
+
+        result = _checks.dns_check()
+        self.status_label.setText(f"DNS {result['host']}: {result['detail']}")
+        self.controller.log_now(f"DNS {result['host']}: {result['detail']}.",
+                                "ok" if result["ok"] else "warn")
+
+
+# ---------------------------------------------------------------------------
+# О программе: версия, ссылки, чейнджлог
+# ---------------------------------------------------------------------------
+
+class AboutSheet(Sheet):
+    """О приложении: версия, чейнджлог, ссылки."""
+
+    changelog_ready = Signal(list)
+
+    def __init__(self, theme, controller, parent=None):
+        super().__init__(theme, parent)
+        self.theme = theme
+        self.controller = controller
+        self.set_header(SheetHeader(theme, "О программе",
+                                    "версия, новости и ссылки", "info",
+                                    on_close=self.close))
+        self.title_label = QLabel("")
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.version_label = QLabel("")
+        self.version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.desc_label = QLabel(
+            "Обход DPI-замедлений без VPN: YouTube, Discord, Telegram и другие "
+            "сервисы открываются напрямую через nfqws и стратегии Flowseal.")
+        self.desc_label.setWordWrap(True)
+        self.desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.update_btn = GlassButton(theme, "Проверить обновления", "refresh",
+                                      "accent-soft")
+        self.update_btn.clicked.connect(lambda: controller.update_and_restart(True))
+        self.changelog_btn = GlassButton(theme, "Что нового", "book", "secondary")
+        self.changelog_btn.clicked.connect(self._load_changelog)
+        self.github_btn = GlassButton(theme, "GitHub проекта", "github", "ghost")
+        self.github_btn.clicked.connect(
+            lambda: self._open_url("https://github.com/danilka-revin/Zapret"))
+        self.copy_btn = GlassButton(theme, "Скопировать версию", "copy", "ghost",
+                                    compact=True)
+        self.copy_btn.clicked.connect(self._copy_version)
+
+        self.changelog_label = QLabel("")
+        self.changelog_label.setWordWrap(True)
+        self.changelog_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        self.set_content([
+            self.title_label,
+            self.version_label,
+            self.desc_label,
+            Divider(theme),
+            self.update_btn,
+            self.changelog_btn,
+            self.github_btn,
+            self.copy_btn,
+            self.changelog_label,
+        ])
+        self.changelog_ready.connect(self._fill_changelog)
+        theme.changed.connect(self._restyle)
+        self._restyle()
+
+    def _restyle(self):
+        from .. import APP_NAME, APP_VERSION
+
+        pal = self.theme.palette
+        self.title_label.setText(APP_NAME)
+        self.title_label.setFont(font(self.theme.font_family, pal.font_xl,
+                                      QFont.Weight.Bold))
+        self.title_label.setStyleSheet(f"color:{pal.text};background:transparent;")
+        self.version_label.setText(f"версия {APP_VERSION}")
+        self.version_label.setFont(font(self.theme.font_family, pal.font_md))
+        self.version_label.setStyleSheet(
+            f"color:{pal.accent_text};background:transparent;")
+        self.desc_label.setFont(font(self.theme.font_family, pal.font_sm))
+        self.desc_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
+        self.changelog_label.setFont(font(self.theme.font_family, pal.font_sm))
+        self.changelog_label.setStyleSheet(
+            f"color:{pal.text};background:transparent;")
+
+    def _copy_version(self):
+        from PySide6.QtWidgets import QApplication
+
+        from .. import APP_NAME, APP_VERSION
+
+        QApplication.clipboard().setText(f"{APP_NAME} {APP_VERSION}")
+
+    def _open_url(self, url: str):
+        import shutil as _shutil
+        import subprocess as _subprocess
+
+        opener = _shutil.which("xdg-open")
+        if opener:
+            try:
+                _subprocess.Popen([opener, url], stdout=_subprocess.DEVNULL,
+                                  stderr=_subprocess.DEVNULL)
+                return
+            except OSError:
+                pass
+        self.controller.log_now(url, "info")
+
+    def _load_changelog(self):
+        import threading as _threading
+
+        self.changelog_label.setText("Загружаю список изменений…")
+        self.changelog_btn.setEnabled(False)
+
+        def worker():
+            from .. import update as _update
+
+            try:
+                entries = _update.fetch_changelog(limit=4)
+            except Exception:  # noqa: BLE001
+                entries = []
+            self.changelog_ready.emit(entries)
+
+        _threading.Thread(target=worker, daemon=True).start()
+
+    def _fill_changelog(self, entries: list):
+        self.changelog_btn.setEnabled(True)
+        if not entries:
+            self.changelog_label.setText("Не удалось загрузить (нет сети?).")
+            return
+        parts = []
+        for entry in entries:
+            body = (entry.get("body") or "").strip().replace("\r", "")
+            lines = [line.strip() for line in body.splitlines() if line.strip()][:6]
+            parts.append(f"● {entry.get('tag', '')} — {entry.get('name', '')}\n" +
+                         "\n".join(f"  {line}" for line in lines))
+        self.changelog_label.setText("\n\n".join(parts))

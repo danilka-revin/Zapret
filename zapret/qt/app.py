@@ -18,18 +18,18 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout,
+from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
                                QLabel, QLineEdit, QMainWindow, QScrollArea, QSystemTrayIcon, QVBoxLayout, QWidget, QMenu)
 
 from .. import APP_NAME, APP_VERSION, app_dir
 from . import icons
 from .controller import OPERATION_LABELS, Controller
-from .sheets import (CustomizerSheet, DiagnosticsSheet, HelpSheet, JournalSheet,
-                    ResultsSheet, TargetSheet)
+from .sheets import (AboutSheet, CustomizerSheet, DiagnosticsSheet, HelpSheet, JournalSheet,
+                    NetworkSheet, ResultsSheet, StrategiesSheet, TargetSheet, TextSheet)
 from .theme import ThemeManager, apply_theme_to_app
-from .widgets import (Backdrop, Card, GlassButton, IconButton, LogView, PowerSwitch,
+from .widgets import (Backdrop, Card, Divider, GlassButton, IconButton, LogView, PowerSwitch,
                       ServiceRow, SettingRow, Sparkline, StatTile, StatusPill, Switch,
-                      ToastHost, WheelScrollGuard, _Glass, font)
+                      ThinProgress, ToastHost, WheelScrollGuard, _Glass, font)
 
 WINDOW_MIN = QSize(1040, 680)
 WINDOW_DEFAULT = QSize(1300, 900)
@@ -93,6 +93,7 @@ class ZapretWindow(QMainWindow):
         QTimer.singleShot(80, self.controller.refresh_status)
         if os.environ.get("ZAPRET_NO_AUTOSTART") != "1":
             QTimer.singleShot(700, self.controller.bootstrap)
+            QTimer.singleShot(2500, self._maybe_onboard)
         if self.theme.settings.start_minimized and self.tray_icon is not None:
             QTimer.singleShot(1200, self._maybe_start_hidden)
 
@@ -247,14 +248,23 @@ class ZapretWindow(QMainWindow):
         self.target_btn = IconButton(self.theme, "target",
                                      "Подбор стратегии под сайт (Ctrl+T)", 40)
         self.target_btn.clicked.connect(lambda: self._toggle_sheet("targets"))
+        self.strategies_btn = IconButton(self.theme, "layers",
+                                         "Все стратегии (Ctrl+B)", 40)
+        self.strategies_btn.clicked.connect(lambda: self._toggle_sheet("strategies"))
+        self.network_btn = IconButton(self.theme, "server",
+                                      "Сеть и файрвол (Ctrl+E)", 40)
+        self.network_btn.clicked.connect(lambda: self._toggle_sheet("network"))
         self.palette_btn = IconButton(self.theme, "palette", "Оформление (Ctrl+,)", 40)
         self.palette_btn.clicked.connect(lambda: self._toggle_sheet("customizer"))
         self.journal_btn = IconButton(self.theme, "terminal", "Журнал (Ctrl+L)", 40)
         self.journal_btn.clicked.connect(lambda: self._toggle_sheet("journal"))
         self.help_btn = IconButton(self.theme, "help", "Справка", 40)
         self.help_btn.clicked.connect(lambda: self._toggle_sheet("help"))
+        self.about_btn = IconButton(self.theme, "info", "О программе (Ctrl+I)", 40)
+        self.about_btn.clicked.connect(lambda: self._toggle_sheet("about"))
         for btn in (self.theme_toggle_btn, self.autopilot_btn, self.target_btn,
-                    self.palette_btn, self.journal_btn, self.help_btn):
+                    self.strategies_btn, self.network_btn, self.palette_btn,
+                    self.journal_btn, self.help_btn, self.about_btn):
             layout.addWidget(btn)
 
         self.header_card = Card(self.theme)
@@ -273,7 +283,7 @@ class ZapretWindow(QMainWindow):
         row.setContentsMargins(6, 0, 6, 0)
         row.setSpacing(22)
 
-        self.power = PowerSwitch(self.theme, 340)
+        self.power = PowerSwitch(self.theme, 300)
         self.power.clicked.connect(self.controller.toggle_power)
         row.addWidget(self.power, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -300,14 +310,26 @@ class ZapretWindow(QMainWindow):
         self.hero_hint.setWordWrap(True)
         middle.addWidget(self.hero_hint)
 
-        hero_buttons = QHBoxLayout()
+        # Два ряда по три: один ряд из шести кнопок растягивал героя шире
+        # окна и включал горизонтальную прокрутку.
+        hero_buttons = QGridLayout()
         hero_buttons.setSpacing(10)
+        hero_buttons.setContentsMargins(0, 0, 0, 0)
         self.autopilot_quick = GlassButton(self.theme, "Перебрать стратегии", "refresh",
                                            "accent-soft")
         self.autopilot_quick.clicked.connect(self.controller.run_autopilot)
         self.btn_target_test = GlassButton(self.theme, "Подбор под сайт", "target",
                                            "secondary")
         self.btn_target_test.clicked.connect(lambda: self._toggle_sheet("targets"))
+        self.btn_strategy_quick = GlassButton(self.theme, "Стратегии", "layers",
+                                              "ghost", compact=True)
+        self.btn_strategy_quick.setToolTip("Открыть список стратегий (Ctrl+B)")
+        self.btn_strategy_quick.clicked.connect(lambda: self._toggle_sheet("strategies"))
+        self.btn_cancel = GlassButton(self.theme, "Остановить", "stop",
+                                      "danger", compact=True)
+        self.btn_cancel.setToolTip("Остановить текущую операцию")
+        self.btn_cancel.clicked.connect(self.controller.cancel_operation)
+        self.btn_cancel.setVisible(False)
         self.btn_update_git = GlassButton(self.theme, "Обновить из Git", "rotate",
                                           "primary", compact=False)
         self.btn_update_git.clicked.connect(self.controller.update_app)
@@ -315,11 +337,15 @@ class ZapretWindow(QMainWindow):
                                             "primary")
         self.btn_setup_rights.clicked.connect(
             lambda: self.controller.setup_permissions(self._open_terminal))
-        hero_buttons.addWidget(self.autopilot_quick)
-        hero_buttons.addWidget(self.btn_target_test)
-        hero_buttons.addWidget(self.btn_update_git)
-        hero_buttons.addWidget(self.btn_setup_rights)
-        hero_buttons.addStretch(1)
+        hero_buttons.addWidget(self.autopilot_quick, 0, 0)
+        hero_buttons.addWidget(self.btn_target_test, 0, 1)
+        hero_buttons.addWidget(self.btn_strategy_quick, 0, 2)
+        hero_buttons.addWidget(self.btn_update_git, 1, 0)
+        hero_buttons.addWidget(self.btn_setup_rights, 1, 1)
+        hero_buttons.addWidget(self.btn_cancel, 1, 2)
+        hero_buttons.setColumnStretch(0, 1)
+        hero_buttons.setColumnStretch(1, 1)
+        hero_buttons.setColumnStretch(2, 1)
         middle.addLayout(hero_buttons)
         row.addLayout(middle, 1)
 
@@ -335,16 +361,16 @@ class ZapretWindow(QMainWindow):
                                     bool(self.controller.cfg.get("gamefilter_tcp", False)))
         self.sw_gamefilter.toggled.connect(self._on_gamefilter)
 
-        side.addWidget(SettingRow(self.theme, "Автопилот", "сам подбирает стратегию",
+        side.addWidget(SettingRow(self.theme, "Автопилот", "сам подбирает",
                                   _wrap(self.sw_autopilot)))
-        side.addWidget(SettingRow(self.theme, "Telegram", "обход MTProto и веб-версии",
+        side.addWidget(SettingRow(self.theme, "Telegram", "MTProto и веб",
                                   _wrap(self.sw_telegram)))
-        side.addWidget(SettingRow(self.theme, "GameFilter", "порты игр TCP и UDP",
+        side.addWidget(SettingRow(self.theme, "GameFilter", "порты игр",
                                   _wrap(self.sw_gamefilter)))
         side.addStretch(1)
         side_panel = QWidget()
         side_panel.setLayout(side)
-        side_panel.setFixedWidth(300)
+        side_panel.setFixedWidth(240)
         row.addWidget(side_panel, 0)
 
         self.hero.body.addLayout(row)
@@ -374,7 +400,10 @@ class ZapretWindow(QMainWindow):
         self.services_footer = QLabel("проверок пока не было")
         self.recheck_btn = GlassButton(self.theme, "Проверить", "target", "ghost", compact=True)
         self.recheck_btn.clicked.connect(lambda: self.controller.check_services())
+        self.speedtest_btn = GlassButton(self.theme, "Скорость", "gauge", "ghost", compact=True)
+        self.speedtest_btn.clicked.connect(self.controller.run_speedtest)
         footer_layout.addWidget(self.services_footer, 1)
+        footer_layout.addWidget(self.speedtest_btn)
         footer_layout.addWidget(self.recheck_btn)
         self.services_card.body.addWidget(footer)
         row1.addWidget(self.services_card, 3)
@@ -393,6 +422,18 @@ class ZapretWindow(QMainWindow):
         self.traffic_card.body.addLayout(stats)
         self.iface_label = QLabel("интерфейс: —")
         self.traffic_card.body.addWidget(self.iface_label)
+        traffic_tools = QWidget()
+        traffic_tools_layout = QHBoxLayout(traffic_tools)
+        traffic_tools_layout.setContentsMargins(0, 0, 0, 0)
+        traffic_tools_layout.setSpacing(8)
+        self.ping_btn = GlassButton(self.theme, "Пинг", "activity", "ghost", compact=True)
+        self.ping_btn.clicked.connect(lambda: self.controller.run_ping("1.1.1.1"))
+        self.traffic_speed_btn = GlassButton(self.theme, "Замер скорости", "gauge",
+                                             "secondary", compact=True)
+        self.traffic_speed_btn.clicked.connect(self.controller.run_speedtest)
+        traffic_tools_layout.addWidget(self.ping_btn, 1)
+        traffic_tools_layout.addWidget(self.traffic_speed_btn, 1)
+        self.traffic_card.body.addWidget(traffic_tools)
         row1.addWidget(self.traffic_card, 2)
         self.root.addLayout(row1)
 
@@ -432,7 +473,62 @@ class ZapretWindow(QMainWindow):
         for btn in (self.btn_deps, self.btn_autostart, self.btn_shortcut, self.btn_repair,
                     self.btn_permissions):
             self.maintenance_card.body.addWidget(btn)
+        self.maintenance_card.body.addWidget(Divider(self.theme, "Стратегия и профили"))
+        # Быстрая смена стратегии без перебора
+        strategy_row = QWidget()
+        strategy_layout = QHBoxLayout(strategy_row)
+        strategy_layout.setContentsMargins(0, 0, 0, 0)
+        strategy_layout.setSpacing(8)
+        self.strategy_combo = QComboBox()
+        self.strategy_combo.setMinimumHeight(36)
+        self.strategy_combo.setToolTip("Текущая стратегия обхода")
+        self.btn_strategy_apply = GlassButton(self.theme, "Применить", "zap",
+                                              "secondary", compact=True)
+        self.btn_strategy_apply.clicked.connect(self._apply_combo_strategy)
+        self.btn_strategy_list = GlassButton(self.theme, "Все", "layers",
+                                             "ghost", compact=True)
+        self.btn_strategy_list.clicked.connect(lambda: self._toggle_sheet("strategies"))
+        strategy_layout.addWidget(self.strategy_combo, 1)
+        strategy_layout.addWidget(self.btn_strategy_apply)
+        strategy_layout.addWidget(self.btn_strategy_list)
+        self.maintenance_card.body.addWidget(strategy_row)
+        self._strategy_combo_key: str | None = None
+        # Профили конфигурации
+        profile_row = QWidget()
+        profile_layout = QHBoxLayout(profile_row)
+        profile_layout.setContentsMargins(0, 0, 0, 0)
+        profile_layout.setSpacing(8)
+        self.profile_combo = QComboBox()
+        self.profile_combo.setMinimumHeight(36)
+        self.profile_combo.setToolTip("Сохранённые наборы настроек")
+        self.btn_profile_apply = GlassButton(self.theme, "Применить", "bookmark",
+                                             "secondary", compact=True)
+        self.btn_profile_apply.clicked.connect(self._apply_combo_profile)
+        self.btn_profile_del = GlassButton(self.theme, "", "trash",
+                                           "ghost", compact=True, icon_only=True)
+        self.btn_profile_del.setToolTip("Удалить профиль")
+        self.btn_profile_del.clicked.connect(self._delete_combo_profile)
+        profile_layout.addWidget(self.profile_combo, 1)
+        profile_layout.addWidget(self.btn_profile_apply)
+        profile_layout.addWidget(self.btn_profile_del)
+        self.maintenance_card.body.addWidget(profile_row)
+        profile_save_row = QWidget()
+        profile_save_layout = QHBoxLayout(profile_save_row)
+        profile_save_layout.setContentsMargins(0, 0, 0, 0)
+        profile_save_layout.setSpacing(8)
+        self.profile_name = QLineEdit()
+        self.profile_name.setPlaceholderText("Название профиля, например «Дом»")
+        self.profile_name.setMinimumHeight(36)
+        self.profile_name.returnPressed.connect(self._save_combo_profile)
+        self.btn_profile_save = GlassButton(self.theme, "Сохранить текущий", "save",
+                                            "ghost", compact=True)
+        self.btn_profile_save.clicked.connect(self._save_combo_profile)
+        profile_save_layout.addWidget(self.profile_name, 1)
+        profile_save_layout.addWidget(self.btn_profile_save)
+        self.maintenance_card.body.addWidget(profile_save_row)
+        self._profile_combo_key: str | None = None
         # Полезные функции: проверка домена, глубокий скан, бэкап/восстановление
+        self.maintenance_card.body.addWidget(Divider(self.theme, "Инструменты"))
         tools_layout = QHBoxLayout()
         tools_layout.setContentsMargins(0, 8, 0, 0)
         tools_layout.setSpacing(8)
@@ -449,17 +545,21 @@ class ZapretWindow(QMainWindow):
         self.btn_deep_scan = GlassButton(self.theme, "Глубокий скан", "flask", "accent-soft", compact=True)
         self.btn_deep_scan.clicked.connect(self.controller.run_deep_scan)
         self.btn_backup = GlassButton(self.theme, "Бэкап настроек", "download", "ghost", compact=True)
-        self.btn_backup.clicked.connect(lambda: self.controller.backup_config(
-            str(app_dir() / f"zapret-config-backup-{time.strftime('%Y%m%d-%H%M')}.json")))
+        self.btn_backup.clicked.connect(self._backup_config)
         self.btn_restore = GlassButton(self.theme, "Восстановить", "upload", "ghost", compact=True)
-        self.btn_restore.clicked.connect(lambda: self.controller.restore_config(
-            str(app_dir() / "zapret-config.json")))
+        self.btn_restore.clicked.connect(self._restore_config)
         tools_layout.addWidget(self.custom_domain_input, 1)
         tools_layout.addWidget(self.btn_check_custom)
-        tools_layout.addWidget(self.btn_deep_scan)
-        tools_layout.addWidget(self.btn_backup)
-        tools_layout.addWidget(self.btn_restore)
         self.maintenance_card.body.addLayout(tools_layout)
+        # Второй ряд уже: пять виджетов в одном ряду растягивали карточку
+        # шире окна и включали горизонтальную прокрутку.
+        tools_layout2 = QHBoxLayout()
+        tools_layout2.setContentsMargins(0, 0, 0, 0)
+        tools_layout2.setSpacing(8)
+        tools_layout2.addWidget(self.btn_deep_scan, 1)
+        tools_layout2.addWidget(self.btn_backup, 1)
+        tools_layout2.addWidget(self.btn_restore, 1)
+        self.maintenance_card.body.addLayout(tools_layout2)
 
         footer = QWidget()
         footer_layout = QHBoxLayout(footer)
@@ -486,6 +586,17 @@ class ZapretWindow(QMainWindow):
             switch.toggled.connect(lambda value, k=key: self.theme.update(**{k: value}))
             self.extra_rows[key] = switch
             self.extra_card.body.addWidget(SettingRow(self.theme, title, hint, _wrap(switch)))
+        self.sw_auto_update = Switch(self.theme,
+                                     bool(self.controller.cfg.get("auto_update_check", True)))
+        self.sw_auto_update.toggled.connect(
+            lambda v: self.controller.set_config_value("auto_update_check", v))
+        self.extra_card.body.addWidget(SettingRow(
+            self.theme, "Проверка обновлений", "тихо искать новую версию при старте",
+            _wrap(self.sw_auto_update)))
+        self.btn_user_autostart = GlassButton(self.theme, "Автозапуск при входе", "timer",
+                                              "ghost", compact=True)
+        self.btn_user_autostart.clicked.connect(self._toggle_user_autostart)
+        self.extra_card.body.addWidget(self.btn_user_autostart)
         self.extra_card.body.addStretch(1)
         row2.addWidget(self.extra_card, 3)
         self.root.addLayout(row2)
@@ -507,20 +618,31 @@ class ZapretWindow(QMainWindow):
         self.btn_log_copy.clicked.connect(self._copy_log)
         self.btn_log_clear = GlassButton(self.theme, "Очистить", "trash", "ghost", compact=True)
         self.btn_log_clear.clicked.connect(self.log_view.clear)
+        self.btn_log_export = GlassButton(self.theme, "В файл", "save", "ghost", compact=True)
+        self.btn_log_export.clicked.connect(self._export_log)
         layout.addWidget(self.btn_log_journal)
         layout.addStretch(1)
         layout.addWidget(self.btn_log_copy)
+        layout.addWidget(self.btn_log_export)
         layout.addWidget(self.btn_log_clear)
         self.log_card.body.addWidget(row)
         self.root.addWidget(self.log_card)
+        self.footer_label = QLabel("")
+        self.footer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.footer_label.setWordWrap(True)
+        self.root.addWidget(self.footer_label)
 
     def _build_sheets(self):
         self.sheets = {
             "customizer": CustomizerSheet(self.theme, self),
             "journal": JournalSheet(self.theme, self),
             "targets": TargetSheet(self.theme, self.controller, self),
+            "strategies": StrategiesSheet(self.theme, self.controller, self),
+            "network": NetworkSheet(self.theme, self.controller, self),
             "diagnostics": DiagnosticsSheet(self.theme, self.controller, self),
             "help": HelpSheet(self.theme, self.controller, self),
+            "about": AboutSheet(self.theme, self.controller, self),
+            "text": TextSheet(self.theme, self),
             "results": ResultsSheet(self.theme, self),
         }
         self.sheets["help"].set_actions(
@@ -549,12 +671,17 @@ class ZapretWindow(QMainWindow):
         self.act_show.triggered.connect(self._show_window)
         self.act_check = QAction("Проверить сервисы", menu)
         self.act_check.triggered.connect(lambda: self.controller.check_services())
+        self.act_autopilot = QAction("Перебрать стратегии", menu)
+        self.act_autopilot.triggered.connect(self.controller.run_autopilot)
+        self.act_update = QAction("Проверить обновления", menu)
+        self.act_update.triggered.connect(lambda: self.controller.check_update(notify=True))
         self.act_autostart = QAction("Автозапуск системы", menu)
         self.act_autostart.setCheckable(True)
         self.act_autostart.triggered.connect(self.controller.toggle_autostart)
         self.act_quit = QAction("Выход", menu)
         self.act_quit.triggered.connect(self._quit_app)
-        for action in (self.act_toggle, self.act_show, self.act_check, self.act_autostart):
+        for action in (self.act_toggle, self.act_show, self.act_check, self.act_autopilot,
+                       self.act_update, self.act_autostart):
             menu.addAction(action)
         menu.addSeparator()
         menu.addAction(self.act_quit)
@@ -646,6 +773,9 @@ class ZapretWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+L"), self, activated=lambda: self._toggle_sheet("journal"))
         QShortcut(QKeySequence("Ctrl+D"), self, activated=lambda: self._toggle_sheet("diagnostics"))
         QShortcut(QKeySequence("Ctrl+T"), self, activated=lambda: self._toggle_sheet("targets"))
+        QShortcut(QKeySequence("Ctrl+B"), self, activated=lambda: self._toggle_sheet("strategies"))
+        QShortcut(QKeySequence("Ctrl+E"), self, activated=lambda: self._toggle_sheet("network"))
+        QShortcut(QKeySequence("Ctrl+I"), self, activated=lambda: self._toggle_sheet("about"))
         QShortcut(QKeySequence("Ctrl+Q"), self, activated=self._quit_app)
         QShortcut(QKeySequence("Escape"), self, activated=self._close_sheets)
 
@@ -674,7 +804,7 @@ class ZapretWindow(QMainWindow):
                 row.set_status("checking", "проверяю…")
 
     def _on_metrics(self, metrics: dict):
-        self.spark.push(metrics.get("rx_mbps", 0.0))
+        self.spark.push(metrics.get("rx_mbps", 0.0), metrics.get("tx_mbps", 0.0))
         self.tile_rx.set_value(_human_speed(metrics.get("rx_mbps", 0.0)))
         self.tile_tx.set_value(_human_speed(metrics.get("tx_mbps", 0.0)))
         self.tile_total.set_value(_human_bytes(metrics.get("total_rx", 0)
@@ -907,6 +1037,30 @@ class ZapretWindow(QMainWindow):
             self._apply_tray_visibility()
         self.sw_autopilot.setChecked(self.theme.settings.autopilot, animate_value=False)
 
+        # Кнопка отмены — только для прерываемых операций
+        self.btn_cancel.setVisible(bool(c.busy_key) and c.busy_key in (
+            "autopilot", "deep_scan", "targets", "bootstrap", "power_on"))
+        # Текущая стратегия видна в подсказке героя и статус-баре, кнопка статична
+        strategy = c.cfg.get("strategy", "") or "—"
+        self.btn_strategy_quick.setToolTip(f"Текущая: {strategy} (Ctrl+B)")
+        # Нижняя строка состояния
+        backend = status.get("backend") or "нет файрвола"
+        self.footer_label.setText(
+            f"v{APP_VERSION} · {backend} · {strategy} · {c.uptime_text()} · "
+            f"{c.last_check_text()}")
+        # Селекторы стратегии и профилей (обновляем, только если список сменился)
+        self._sync_combos()
+        # Пользовательский автозапуск
+        try:
+            from .. import integration as _integration
+
+            installed = _integration.user_autostart_installed()
+            self.btn_user_autostart.setText(
+                "Отключить автозапуск при входе" if installed else "Автозапуск при входе")
+            self.btn_user_autostart.set_kind("danger" if installed else "ghost")
+        except Exception:  # noqa: BLE001 — кнопка не должна ронять обновление экрана
+            pass
+
     # ------------------------------------------------------------------
     # Стили
     # ------------------------------------------------------------------
@@ -929,6 +1083,8 @@ class ZapretWindow(QMainWindow):
         self.services_footer.setStyleSheet(f"color:{pal.muted};background:transparent;")
         self.iface_label.setFont(font(self.theme.font_family, pal.font_xs))
         self.iface_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
+        self.footer_label.setFont(font(self.theme.font_family, pal.font_xs))
+        self.footer_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
         available = (self.controller.update_info or {}).get("available")
         self.update_state_label.setFont(font(self.theme.font_family, pal.font_xs))
         self.update_state_label.setStyleSheet(
@@ -999,7 +1155,9 @@ class ZapretWindow(QMainWindow):
         for btn in (self.autopilot_quick, self.btn_deps, self.btn_update, self.btn_check_update,
                     self.btn_repair, self.btn_autostart, self.btn_shortcut,
                     self.recheck_btn, self.btn_setup_rights, self.btn_target_test,
-                    self.btn_update_git):
+                    self.btn_update_git, self.speedtest_btn, self.ping_btn,
+                    self.traffic_speed_btn, self.btn_strategy_apply,
+                    self.btn_profile_apply):
             btn.setEnabled(enabled)
 
     def _copy_log(self):
@@ -1014,6 +1172,114 @@ class ZapretWindow(QMainWindow):
             self.toasts.show_toast("Введите домен для проверки.", "warn")
             return
         self.controller.check_custom_domain(domain)
+
+    def _sync_combos(self):
+        """Обновляет селекторы стратегии и профилей, не мешая выбору."""
+        try:
+            from .. import core as _core
+        except Exception:  # noqa: BLE001
+            return
+        try:
+            names = _core.list_strategies()
+        except OSError:
+            names = []
+        key = "|".join(names) + "#" + str(self.controller.cfg.get("strategy", ""))
+        if key != self._strategy_combo_key and not self.strategy_combo.hasFocus():
+            self._strategy_combo_key = key
+            self.strategy_combo.blockSignals(True)
+            self.strategy_combo.clear()
+            self.strategy_combo.addItems(names or ["—"])
+            current = self.controller.cfg.get("strategy", "")
+            index = self.strategy_combo.findText(current)
+            self.strategy_combo.setCurrentIndex(max(0, index))
+            self.strategy_combo.blockSignals(False)
+        profiles = self.controller.profiles()
+        pkey = "|".join(sorted(profiles))
+        if pkey != self._profile_combo_key and not self.profile_combo.hasFocus():
+            self._profile_combo_key = pkey
+            self.profile_combo.blockSignals(True)
+            self.profile_combo.clear()
+            self.profile_combo.addItems(sorted(profiles) or ["—"])
+            self.profile_combo.blockSignals(False)
+
+    def _apply_combo_strategy(self):
+        name = self.strategy_combo.currentText().strip()
+        if not name or name == "—":
+            return
+        self.controller.set_strategy(name)
+
+    def _apply_combo_profile(self):
+        name = self.profile_combo.currentText().strip()
+        if not name or name == "—":
+            self.toasts.show_toast("Сначала сохраните профиль.", "warn")
+            return
+        self.controller.apply_profile(name)
+
+    def _delete_combo_profile(self):
+        name = self.profile_combo.currentText().strip()
+        if name and name != "—":
+            self.controller.remove_profile(name)
+
+    def _save_combo_profile(self):
+        name = self.profile_name.text().strip()
+        if not name:
+            self.toasts.show_toast("Введите название профиля.", "warn")
+            return
+        if self.controller.save_profile(name):
+            self.profile_name.clear()
+            self.toasts.show_toast(f"Профиль «{name}» сохранён", "ok")
+
+    def _backup_config(self):
+        path = self.controller.backup_config()
+        if path:
+            self.toasts.show_toast("Копия настроек сохранена", "ok")
+
+    def _restore_config(self):
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "Выбрать копию настроек", str(app_dir()),
+            "Копии настроек (config-backup-*.json);;Все файлы (*)")
+        if path:
+            self.controller.restore_config(path)
+        else:
+            # Без выбора — пробуем самую свежую копию в каталоге приложения
+            self.controller.restore_config(str(app_dir()))
+
+    def _export_log(self):
+        stamp = time.strftime("%Y%m%d-%H%M")
+        path = app_dir() / f"zapret-journal-{stamp}.txt"
+        try:
+            path.write_text("\n".join(
+                f"[{time.strftime('%H:%M:%S', time.localtime(ts))}] {msg}"
+                for ts, msg, _k in self.log_history), encoding="utf-8")
+        except OSError as exc:
+            self.toasts.show_toast(f"Не удалось сохранить: {exc}", "error")
+            return
+        self.toasts.show_toast(f"Журнал сохранён: {path.name}", "ok")
+
+    def _toggle_user_autostart(self):
+        from .. import integration as _integration
+
+        if _integration.user_autostart_installed():
+            _integration.remove_user_autostart()
+            self.controller.log_now("Автозапуск при входе выключен.", "info")
+        else:
+            where = _integration.install_user_autostart()
+            self.controller.log_now(f"Автозапуск при входе включён: {where}", "ok")
+        self._queue_refresh()
+
+    def _maybe_onboard(self):
+        """Первый запуск: короткое знакомство вместо пустого окна."""
+        try:
+            if self.controller.cfg.get("onboarded"):
+                return
+            self.controller.cfg["onboarded"] = True
+            from .. import config as _config
+            _config.save(self.controller.cfg)
+        except OSError:
+            pass
+        self.controller.log_now(
+            "Добро пожаловать! Нажмите большую кнопку — дальше всё само.", "accent")
+        self._toggle_sheet("help")
 
     def _open_readme(self):
         path = app_dir() / "README.md"
@@ -1080,9 +1346,13 @@ class ZapretWindow(QMainWindow):
                 self.service_rows[service["key"]].set_status(
                     service["state"], {"ok": f"{service['latency_ms']} мс · работает",
                                        "warn": f"{service['latency_ms']} мс · медленно"}[service["state"]])
-            for value in (0.4, 0.8, 1.4, 2.2, 3.1, 2.7, 3.6, 4.2, 3.8, 4.6, 5.2, 4.9, 5.6, 6.2,
-                          5.8, 6.4, 5.9, 6.8, 7.2, 6.6, 7.4, 8.1, 7.6, 8.4):
-                self.spark.push(value)
+            for value, up in ((0.4, 0.2), (0.8, 0.3), (1.4, 0.4), (2.2, 0.5),
+                              (3.1, 0.6), (2.7, 0.5), (3.6, 0.7), (4.2, 0.8),
+                              (3.8, 0.7), (4.6, 0.8), (5.2, 0.9), (4.9, 0.8),
+                              (5.6, 0.9), (6.2, 1.0), (5.8, 0.9), (6.4, 1.0),
+                              (5.9, 0.9), (6.8, 1.1), (7.2, 1.0), (6.6, 0.9),
+                              (7.4, 1.1), (8.1, 1.2), (7.6, 1.0), (8.4, 1.1)):
+                self.spark.push(value, up)
             self._on_metrics({"iface": "wlan0", "rx_mbps": 8.4, "tx_mbps": 0.9,
                               "total_rx": 3_100_000_000, "total_tx": 320_000_000})
         self._refresh_dashboard()

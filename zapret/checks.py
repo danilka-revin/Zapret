@@ -102,6 +102,14 @@ SITE_GROUPS: list[tuple[str, str, str, tuple[str, ...]]] = [
      ("rutracker.org", "rutor.info", "nnmclub.to", "kinozal.tv")),
     ("clouds", "Облака", "cloud",
      ("drive.google.com", "dropbox.com", "mega.nz", "onedrive.live.com")),
+    ("mail", "Почта", "send",
+     ("mail.google.com", "outlook.live.com", "mail.yandex.ru", "e.mail.ru")),
+    ("video_ru", "Видео RU", "play",
+     ("vk.com", "rutube.ru", "dzen.ru", "cdnvideo.ru")),
+    ("shop", "Магазины", "box",
+     ("ozon.ru", "wildberries.ru", "market.yandex.ru", "avito.ru")),
+    ("news", "Новости", "globe",
+     ("ria.ru", "lenta.ru", "rbc.ru", "meduza.io")),
 ]
 SITE_GROUPS_BY_KEY = {key: (title, icon, hosts) for key, title, icon, hosts in SITE_GROUPS}
 
@@ -256,6 +264,133 @@ def probe_all(timeout: float = 6.0, keys: list[str] | None = None) -> list[dict]
     wanted = SERVICES if not keys else tuple(SERVICES_BY_KEY[k] for k in keys
                                              if k in SERVICES_BY_KEY)
     return [probe_service(s, timeout) for s in wanted]
+
+
+def probe_all_parallel(timeout: float = 6.0, keys: list[str] | None = None,
+                       max_workers: int = 3) -> list[dict]:
+    """Та же проверка сервисов, но параллельно — в 2–3 раза быстрее.
+
+    Порядок результатов совпадает с порядком SERVICES, чтобы интерфейс
+    не «прыгал» при каждом обновлении.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    wanted = SERVICES if not keys else tuple(SERVICES_BY_KEY[k] for k in keys
+                                             if k in SERVICES_BY_KEY)
+    if len(wanted) <= 1:
+        return [probe_service(s, timeout) for s in wanted]
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(wanted)))) as pool:
+        futures = [pool.submit(probe_service, service, timeout) for service in wanted]
+        return [future.result() for future in futures]
+
+
+def probe_hosts_parallel(hosts: list[str], timeout: float = 6.0,
+                         max_workers: int = 4) -> list[dict]:
+    """Параллельная проверка списка доменов (для подбора под сайты)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    if len(hosts) <= 1:
+        return [probe_host(host, timeout) for host in hosts]
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(hosts)))) as pool:
+        futures = [pool.submit(probe_host, host, timeout, 1) for host in hosts]
+        return [future.result() for future in futures]
+
+
+def ping(host: str = "1.1.1.1", timeout: float = 3.0, count: int = 3) -> dict:
+    """ICMP-пинг хоста системной утилитой ping. Возвращает dict с задержкой.
+
+    {"host": ..., "ok": bool, "avg_ms": float|None, "loss": float, "detail": str}
+    """
+    import re as _re
+
+    ping_bin = shutil.which("ping")
+    result = {"host": host, "ok": False, "avg_ms": None, "loss": 100.0, "detail": "нет ответа"}
+    if not ping_bin:
+        result["detail"] = "утилита ping не найдена"
+        return result
+    try:
+        proc = subprocess.run(
+            [ping_bin, "-c", str(max(1, count)), "-W", str(max(1, int(timeout))), host],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            timeout=timeout * max(1, count) + 5)
+    except (OSError, subprocess.TimeoutExpired):
+        return result
+    output = proc.stdout or ""
+    avg_match = _re.search(r"=\s*[\d.]+/([\d.]+)/", output)
+    loss_match = _re.search(r"(\d+(?:\.\d+)?)% packet loss", output)
+    loss = float(loss_match.group(1)) if loss_match else 100.0
+    avg = float(avg_match.group(1)) if avg_match else None
+    result["loss"] = loss
+    result["avg_ms"] = round(avg, 1) if avg is not None else None
+    result["ok"] = avg is not None and loss < 100
+    if result["ok"]:
+        result["detail"] = f"{avg:.0f} мс · потери {loss:.0f}%"
+    elif loss >= 100:
+        result["detail"] = "нет ответа · узел недоступен"
+    else:
+        result["detail"] = f"потери {loss:.0f}%"
+    return result
+
+
+def dns_check(host: str = "www.youtube.com", timeout: float = 4.0) -> dict:
+    """Проверяет, резолвится ли домен и как быстро (socket.getaddrinfo)."""
+    import socket as _socket
+
+    started = time.monotonic()
+    result = {"host": host, "ok": False, "ms": None, "detail": "не резолвится"}
+    try:
+        _socket.setdefaulttimeout(timeout)
+        infos = _socket.getaddrinfo(host, 443, type=_socket.SOCK_STREAM)
+    except Exception:  # noqa: BLE001 — любая ошибка DNS = недоступно
+        return result
+    finally:
+        _socket.setdefaulttimeout(None)
+    ms = (time.monotonic() - started) * 1000
+    if infos:
+        result.update(ok=True, ms=round(ms), detail=f"{ms:.0f} мс · {infos[0][4][0]}")
+    return result
+
+
+SPEEDTEST_URLS = (
+    "https://speed.cloudflare.com/__down?bytes=8000000",
+    "https://cachefly.cachefly.net/10mb.test",
+)
+
+
+def speedtest(timeout: float = 20.0, max_bytes: int = 8_000_000) -> dict:
+    """Простой замер скорости скачивания: качаем тестовый файл и меряем MB/s.
+
+    Возвращает {"ok": bool, "mbps": float, "ms": int, "detail": str, "url": str}.
+    """
+    result = {"ok": False, "mbps": 0.0, "ms": 0, "detail": "не удалось", "url": ""}
+    errors: list[str] = []
+    for url in SPEEDTEST_URLS:
+        started = time.monotonic()
+        received = 0
+        try:
+            req = urlrequest.Request(url, headers={"User-Agent": USER_AGENT})
+            with urlrequest.urlopen(req, timeout=timeout) as resp:
+                while received < max_bytes:
+                    chunk = resp.read(256 * 1024)
+                    if not chunk:
+                        break
+                    received += len(chunk)
+                    if time.monotonic() - started > timeout:
+                        break
+        except Exception as exc:  # noqa: BLE001 — пробуем следующий сервер
+            errors.append(str(exc)[:80])
+            continue
+        elapsed = max(0.1, time.monotonic() - started)
+        if received < 256 * 1024:
+            errors.append("пустой ответ")
+            continue
+        mbps = received * 8 / elapsed / 1_000_000
+        result.update(ok=True, mbps=round(mbps, 1), ms=int(elapsed * 1000), url=url,
+                      detail=f"{mbps:.1f} Мбит/с за {elapsed:.1f} с")
+        return result
+    if errors:
+        result["detail"] = f"не удалось: {errors[-1]}"
+    return result
 
 
 def probe_host(host: str, timeout: float = 6.0, attempts: int = 2) -> dict:

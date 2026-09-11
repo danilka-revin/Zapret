@@ -1,0 +1,24 @@
+[project]
+name = "zapret-control"
+version = "3.0.0"
+description = "Linux-приложение для обхода DPI-замедлений без VPN (nfqws + стратегии Flowseal)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "Zapret Control contributors" }]
+keywords = ["zapret", "dpi", "nfqws", "youtube", "discord", "telegram", "qt"]
+dependencies = ["PySide6-Essentials"]
+
+[project.urls]
+Homepage = "https://github.com/danilka-revin/Zapret"
+Issues = "https://github.com/danilka-revin/Zapret/issues"
+
+[project.scripts]
+zapret-control = "run:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

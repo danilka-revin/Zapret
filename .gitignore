@@ -7,8 +7,17 @@ __pycache__/
 
 # Локальная конфигурация
 config.json
+update.json
+history.json
+zapret-control.log
+zapret-report-*.md
+zapret-journal-*.txt
+config-backup-*.json
 
 # Кэши инструментов разработки
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
+.venv/
+dist/
+build/

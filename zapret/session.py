@@ -448,6 +448,26 @@ def has_display(env: dict[str, str] | None = None) -> bool:
     return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
 
 
+def is_wayland(env: dict[str, str] | None = None) -> bool:
+    """True, если сессия — Wayland (важно для диагностики Qt-платформы)."""
+    env = env if env is not None else os.environ
+    session_type = (env.get("XDG_SESSION_TYPE") or "").strip().lower()
+    if session_type == "wayland":
+        return True
+    if session_type == "x11":
+        return False
+    return bool(env.get("WAYLAND_DISPLAY")) and not env.get("DISPLAY")
+
+
+def is_flatpak() -> bool:
+    """True внутри Flatpak-песочницы (там свои ограничения на sudo/nft)."""
+    return Path("/.flatpak-info").exists() or bool(os.environ.get("FLATPAK_ID"))
+
+
+def is_snap() -> bool:
+    return bool(os.environ.get("SNAP")) or bool(os.environ.get("SNAP_NAME"))
+
+
 def qt_platform_fallbacks(env: dict[str, str] | None = None) -> list[str]:
     """Порядок перебора Qt-платформ: текущая → xcb → wayland.
 

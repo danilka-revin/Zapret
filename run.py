@@ -20,6 +20,14 @@
   python3 run.py repair [--no-deps]      — починить установку (root → пользователь,
                                            ярлык на столе, права, запуск окна)
   python3 run.py doctor                  — самодиагностика (что мешает работать)
+  python3 run.py strategy list|set|test|preview — управление стратегиями
+  python3 run.py speedtest               — замер скорости соединения
+  python3 run.py ping [host]             — пинг узла (по умолчанию 1.1.1.1)
+  python3 run.py report [--save PATH]    — текстовый отчёт о состоянии
+  python3 run.py profile list|save|apply|remove — профили конфигурации
+  python3 run.py history [--clear]       — история событий приложения
+  python3 run.py logs [--tail N]         — последние строки журнала
+  python3 run.py changelog               — последние релизы с GitHub
 """
 
 import os
@@ -282,6 +290,9 @@ def _doctor() -> int:
     print("\nОбход DPI")
     report("nfqws", str(core.nfqws_path()) if core.nfqws_path().exists() else "не скачан",
            core.nfqws_path().exists())
+    if core.nfqws_path().exists():
+        version = core.nfqws_version()
+        report("версия nfqws", version or "не определена", bool(version))
     strategies = core.list_strategies()
     report("стратегии", f"{len(strategies)} шт." if strategies else "не найдены",
            bool(strategies))
@@ -298,6 +309,9 @@ def _doctor() -> int:
     # всё ниже — опционально: «нет» не считается неисправностью, поэтому ok=None
     report("служба автозапуска", "установлена" if integration.service_installed() else "нет",
            True if integration.service_installed() else None)
+    report("автозапуск пользователя",
+           "включён" if integration.user_autostart_installed() else "нет",
+           True if integration.user_autostart_installed() else None)
     status = integration.shortcut_status()
     report("ярлык в меню", ("есть: " + status["menu_path"]) if status["menu"] else "нет",
            True if status["menu"] else None)
@@ -338,6 +352,11 @@ def _doctor() -> int:
     display = env.get("DISPLAY") or env.get("WAYLAND_DISPLAY") or "не найден"
     report("дисплей", display + (f" (XAUTHORITY: {'есть' if env.get('XAUTHORITY') else 'нет'})"),
            session.has_display(env))
+    report("сессия", "Wayland" if session.is_wayland(env) else "X11/другая", None)
+    if session.is_flatpak():
+        report("песочница", "Flatpak — sudo/nft могут быть недоступны", None)
+    if session.is_snap():
+        report("песочница", "Snap — sudo/nft могут быть недоступны", None)
 
     if problems:
         print("\nЧто мешает работе:")
@@ -780,6 +799,206 @@ def main() -> int:
     if cmd in ("--version", "version"):
         from zapret import APP_VERSION
         _log(APP_VERSION)
+        return 0
+
+    if cmd in ("--help", "-h", "help"):
+        _log(__doc__)
+        return 0
+
+    if cmd == "strategy":
+        sub = args[1] if len(args) > 1 else "list"
+        if sub == "list":
+            import json
+
+            names = core.list_strategies()
+            if "--json" in args:
+                _log(json.dumps(names, ensure_ascii=False, indent=2))
+            elif not names:
+                _log("Стратегии не найдены. Выполните: python3 run.py ensure-deps")
+            else:
+                from zapret import config as _config
+                current = _config.load().get("strategy", "")
+                for name in names:
+                    mark = "●" if name == current else "○"
+                    _log(f"  {mark} {name}")
+            return 0
+        if sub in ("set", "use", "apply") and len(args) > 2:
+            from zapret import config as _config
+            cfg = _config.load()
+            if core.resolve_strategy(args[2]) is None:
+                _log(f"Стратегия «{args[2]}» не найдена.")
+                return 1
+            cfg["strategy"] = core.resolve_strategy(args[2]).name
+            _config.save(cfg)
+            _log(f"Стратегия: {cfg['strategy']}")
+            if core.nfqws_running():
+                core.run_zapret(cfg)
+                _log("Обход перезапущен.")
+            return 0
+        if sub == "test" and len(args) > 2:
+            name = args[2]
+            if core.resolve_strategy(name) is None:
+                _log(f"Стратегия «{name}» не найдена.")
+                return 1
+            from zapret import config as _config
+            trial = _config.load()
+            trial["strategy"] = core.resolve_strategy(name).name
+            core.run_zapret(trial)
+            results = checks.probe_all_parallel(timeout=6.0)
+            ok, avg = checks.score(results)
+            _log(f"{trial['strategy']}: работает {ok}/{len(results)}, "
+                 f"средняя задержка {avg:.0f} мс")
+            for item in results:
+                _log(f"  {item['title']}: {item['detail']}")
+            return 0
+        if sub in ("preview", "show", "cat") and len(args) > 2:
+            _log(core.strategy_preview(args[2]))
+            return 0
+        _log("Использование: run.py strategy list [--json] | set <имя> | "
+             "test <имя> | preview <имя>")
+        return 1
+
+    if cmd == "speedtest":
+        result = checks.speedtest()
+        if "--json" in args:
+            import json
+            _log(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            _log(f"Скорость: {result['detail']}" + ("" if result.get("ok") else " (не удалось)"))
+        return 0 if result.get("ok") else 1
+
+    if cmd == "ping":
+        host = args[1] if len(args) > 1 and not args[1].startswith("-") else "1.1.1.1"
+        result = checks.ping(host)
+        if "--json" in args:
+            import json
+            _log(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            _log(f"Пинг {result['host']}: {result['detail']}")
+        return 0 if result.get("ok") else 1
+
+    if cmd == "report":
+        from zapret import update as _update  # noqa: F401  (прогрев кэша версий)
+        import platform as _platform
+
+        from zapret import APP_NAME, APP_VERSION
+        status = core.status()
+        lines = [
+            f"{APP_NAME} v{APP_VERSION} — отчёт",
+            f"Система: {_platform.system()} {_platform.release()} ({_platform.machine()})",
+            f"nfqws: {'запущен' if status.get('running') else 'остановлен'}",
+            f"файрвол: {'активен' if status.get('firewall') else 'неактивен'} "
+            f"({status.get('backend') or 'нет'})",
+            f"стратегий: {status.get('strategies', '—')}",
+            f"зависимости: {'готовы' if status.get('deps_ready') else 'нет'}",
+            f"права: {'ок' if status.get('sudo_ok') else 'нужен пароль'}",
+        ]
+        text = "\n".join(lines)
+        if "--save" in args:
+            index = args.index("--save")
+            dest = args[index + 1] if index + 1 < len(args) else "zapret-report.txt"
+            open(dest, "w", encoding="utf-8").write(text + "\n")
+            _log(f"Отчёт сохранён: {dest}")
+        else:
+            _log(text)
+        return 0
+
+    if cmd == "profile":
+        from zapret import config as _config
+        sub = args[1] if len(args) > 1 else "list"
+        cfg = _config.load()
+        profiles = cfg.get("profiles") or {}
+        if sub == "list":
+            if not profiles:
+                _log("Профилей пока нет. Создать: run.py profile save <имя>")
+            for name in profiles:
+                _log(f"  ● {name}: {(profiles[name] or {}).get('strategy', '—')}")
+            return 0
+        if sub == "save" and len(args) > 2:
+            name = args[2]
+            keys = ("strategy", "telegram", "gamefilter_tcp", "gamefilter_udp",
+                    "interface", "firewall_backend")
+            profiles[name] = {key: cfg.get(key) for key in keys}
+            cfg["profiles"] = profiles
+            _config.save(cfg)
+            _log(f"Профиль «{name}» сохранён.")
+            return 0
+        if sub == "apply" and len(args) > 2:
+            name = args[2]
+            if name not in profiles:
+                _log(f"Профиль «{name}» не найден.")
+                return 1
+            cfg.update(profiles[name])
+            _config.save(cfg)
+            _log(f"Профиль «{name}» применён.")
+            if core.nfqws_running():
+                core.run_zapret(cfg)
+                _log("Обход перезапущен.")
+            return 0
+        if sub in ("remove", "delete", "rm") and len(args) > 2:
+            if args[2] in profiles:
+                del profiles[args[2]]
+                cfg["profiles"] = profiles
+                _config.save(cfg)
+                _log(f"Профиль «{args[2]}» удалён.")
+            return 0
+        _log("Использование: run.py profile list | save <имя> | apply <имя> | remove <имя>")
+        return 1
+
+    if cmd == "history":
+        import json
+
+        from zapret import app_dir as _app_dir
+        path = _app_dir() / "history.json"
+        if "--clear" in args:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            _log("История очищена.")
+            return 0
+        try:
+            items = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            items = []
+        if not items:
+            _log("История пуста.")
+            return 0
+        for item in items[-30:]:
+            import time as _time
+            stamp = _time.strftime("%m-%d %H:%M", _time.localtime(item.get("at", 0)))
+            _log(f"  [{stamp}] {item.get('text', '')}")
+        return 0
+
+    if cmd == "logs":
+        from zapret import app_dir as _app_dir
+        tail = 50
+        if "--tail" in args:
+            try:
+                tail = max(1, int(args[args.index("--tail") + 1]))
+            except (ValueError, IndexError):
+                pass
+        for candidate in (_app_dir() / "zapret-control.log",):
+            if candidate.exists():
+                lines = candidate.read_text(encoding="utf-8", errors="replace").splitlines()
+                for line in lines[-tail:]:
+                    _log(line)
+                return 0
+        _log("Файл журнала пока не создан.")
+        return 1
+
+    if cmd == "changelog":
+        from zapret import update as _update
+        entries = _update.fetch_changelog(limit=5)
+        if not entries:
+            _log("Не удалось получить список релизов (нет сети?).")
+            return 1
+        for entry in entries:
+            _log(f"● {entry['tag']} — {entry['name']}")
+            body = (entry["body"] or "").strip().splitlines()[:8]
+            for line in body:
+                _log(f"    {line}")
+            _log("")
         return 0
 
     _log(__doc__)

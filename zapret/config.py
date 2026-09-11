@@ -24,6 +24,12 @@ DEFAULTS = {
     # Группы сайтов и пресеты «домены + подобранная стратегия» (см. zapret/presets.py)
     "site_groups": [],
     "site_presets": [],
+    # Профили конфигурации: имя -> {strategy, telegram, gamefilter_tcp, ...}
+    "profiles": {},
+    # Показывали ли онбординг при первом запуске
+    "onboarded": False,
+    # Автоматически проверять обновления при старте (тихо, в фоне)
+    "auto_update_check": True,
 }
 
 
