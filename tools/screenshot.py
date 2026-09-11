@@ -22,6 +22,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 os.environ.setdefault("ZAPRET_NO_AUTOSTART", "1")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Герметичность: демо-пресеты и тема для кадров не должны утекать в реальный
+# конфиг пользователя (и наоборот — чужой конфиг не должен портить кадры).
+if "ZAPRET_APP_DIR" not in os.environ:
+    import tempfile as _tempfile
+
+    os.environ["ZAPRET_APP_DIR"] = _tempfile.mkdtemp(prefix="zapret-shots-")
 
 from PySide6.QtCore import QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
@@ -77,8 +83,10 @@ def main() -> int:
 
     app = QApplication.instance() or QApplication(sys.argv)
     cfg = config_mod.load()
+    # motion=off: панели встают мгновенно, кадры не ловят анимацию на середине.
     settings = UISettings.from_dict({**(cfg.get("ui") or {}), "mode": args.theme,
-                                     "accent": args.accent, "glass": args.glass})
+                                     "accent": args.accent, "glass": args.glass,
+                                     "motion": "off"})
     theme = ThemeManager(settings)
     # Красим и системные элементы (поля ввода, подсказки, меню) — как в run().
     app.setStyle("Fusion")
@@ -151,6 +159,38 @@ def main() -> int:
             QTimer.singleShot(200, shot(name))
         return inner
 
+    def demo_strategies():
+        """Демонстрационные стратегии для панели — без скачанных файлов."""
+        now = time.time()
+        controller.strategies = lambda: [  # type: ignore[assignment]
+            {"name": "general.bat", "tcp": "80,443", "udp": "443,50000-50099",
+             "filters": 4, "size": 8192},
+            {"name": "general_alt.bat", "tcp": "80,443", "udp": "443",
+             "filters": 3, "size": 6144},
+            {"name": "general_alt2.bat", "tcp": "80,443", "udp": "443,3478",
+             "filters": 5, "size": 9728},
+            {"name": "discord.bat", "tcp": "443", "udp": "50000-50100",
+             "filters": 2, "size": 4096},
+            {"name": "telegram.bat", "tcp": "80,443", "udp": "", "filters": 2,
+             "size": 3584},
+        ]
+        controller.cfg["strategy"] = "general_alt2.bat"
+        controller.strategy_preview = (  # type: ignore[assignment]
+            lambda name, max_lines=40, max_chars=4000:
+            f"@echo off\nREM {name} — демонстрационное содержимое\n"
+            "set ARGS=--wf-tcp=80,443 --wf-udp=443 ^\n"
+            " --dpi-desync=fake,multisplit --dpi-desync-ttl=4 --new ^\n"
+            " --filter-tcp=443 --dpi-desync=fake --new ^\n"
+            " --filter-udp=443 --dpi-desync=fake")
+        controller.strategy_info = (  # type: ignore[assignment]
+            lambda name: {"name": name, "exists": True, "size": 8192,
+                          "lines": 24, "tcp": "80,443", "udp": "443",
+                          "filters": 4})
+        sheet = window.sheets["strategies"]
+        sheet._selected = "general_alt2.bat"
+        sheet.refresh()
+
+    lime_preset = dict(next(p[2] for p in PRESETS if p[0] == "lime"))
     sequence = [
         (200, shot("01-main-dark.png", close_sheets=True)),
         (500, open_sheet("customizer", "02-customizer.png")),
@@ -158,20 +198,23 @@ def main() -> int:
         (1450, open_sheet("diagnostics", "04-diagnostics.png")),
         (1900, open_sheet("help", "05-help.png")),
         (2250, open_targets("05b-targets.png")),
-        (2700, lambda: theme.update(mode="light", glass="soft", accent="#69a7ff")),
-        (3300, shot("06-main-light.png", close_sheets=True)),
-        (3700, lambda: theme.update(mode="dark", accent="#ffad4d", glass="off",
+        (2700, lambda: (demo_strategies(), open_sheet("strategies", "05c-strategies.png")())),
+        (3300, open_sheet("network", "05d-network.png")),
+        (3800, open_sheet("about", "05e-about.png")),
+        (4300, lambda: theme.update(mode="light", glass="soft", accent="#69a7ff")),
+        (4900, shot("06-main-light.png", close_sheets=True)),
+        (5300, lambda: theme.update(mode="dark", accent="#ffad4d", glass="off",
                                     density="compact", radius="square", motion="off")),
-        (4100, shot("07-main-compact-square.png")),
-        (4500, lambda: theme.update(accent="#34e0a1", glass="vivid", radius="soft",
+        (5700, shot("07-main-compact-square.png")),
+        (6100, lambda: theme.update(accent="#34e0a1", glass="vivid", radius="soft",
                                     density="comfortable", font_scale="large")),
-        (4900, shot("08-main-large-text.png")),
-        (5200, lambda: theme.update(font_scale="normal", **dict(PRESETS[1][2]))),
-        (5600, shot("09-preset-lime.png")),
+        (6500, shot("08-main-large-text.png")),
+        (6800, lambda: theme.update(font_scale="normal", **lime_preset)),
+        (7200, shot("09-preset-lime.png")),
     ]
     for delay, action in sequence:
         QTimer.singleShot(delay, action)
-    QTimer.singleShot(6100, app.quit)
+    QTimer.singleShot(7700, app.quit)
     app.exec()
     return 0
 

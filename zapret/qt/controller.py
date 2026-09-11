@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from .. import checks, config as config_mod, core, integration
+from .. import app_dir, checks, config as config_mod, core, integration
 from .. import autopilot, presets as presets_mod
 
 OPERATION_LABELS = {
@@ -22,6 +23,7 @@ OPERATION_LABELS = {
     "power_off": "Выключение защиты",
     "deps": "Скачивание зависимостей",
     "autopilot": "Автоподбор стратегии",
+    "deep_scan": "Глубокий скан стратегий",
     "update": "Обновление приложения",
     "repair": "Починка установки",
     "service_install": "Установка автозапуска",
@@ -29,7 +31,14 @@ OPERATION_LABELS = {
     "shortcut": "Создание ярлыка",
     "bootstrap": "Первый запуск",
     "restart": "Перезапуск с новой стратегией",
+    "apply": "Применение стратегии",
     "targets": "Подбор стратегии под сайт",
+    "speedtest": "Замер скорости",
+    "ping": "Проверка пинга",
+    "report": "Сборка отчёта",
+    "strategy_test": "Проверка стратегии",
+    "group": "Группа сайтов",
+    "preset": "Пресет сайтов",
 }
 
 
@@ -265,7 +274,10 @@ class Controller(QObject):
 
         def worker():
             try:
-                results = checks.probe_all(timeout=6.0)
+                try:
+                    results = checks.probe_all_parallel(timeout=6.0)
+                except Exception:  # noqa: BLE001 — запасной путь без потоков
+                    results = checks.probe_all(timeout=6.0)
             except Exception as exc:  # noqa: BLE001
                 self.log.emit(f"Проверка сервисов не удалась: {exc}", "error")
             else:
@@ -323,6 +335,12 @@ class Controller(QObject):
         if override_stop:
             self.user_stopped = True
             self._stop_flag = True
+        else:
+            # Новая операция начинается с чистого флага остановки: иначе
+            # остановка прошлой (кнопка питания, «Остановить») мгновенно
+            # убивала бы следующий подбор. user_stopped не трогаем — им
+            # владеют только включение/выключение защиты.
+            self._stop_flag = False
         self._set_busy(key)
 
         def runner():
@@ -339,6 +357,13 @@ class Controller(QObject):
                 self.hint = ""
                 if success:
                     self.log.emit(success, "ok")
+                if key in ("power_on", "power_off", "restart", "bootstrap",
+                           "autopilot", "deep_scan"):
+                    try:
+                        self._record_event(
+                            key, success or OPERATION_LABELS.get(key, key))
+                    except Exception:  # noqa: BLE001 — история не должна мешать
+                        pass
                 self.finished.emit(key, True, "")
             finally:
                 self.progress = None
@@ -531,10 +556,8 @@ class Controller(QObject):
         if self.busy_key:
             self.log.emit("Сейчас уже выполняется операция — дождитесь завершения.", "warn")
             return
-        self.run_autopilot()
-        # Можно усилить: после обычного автопилота запускаем форсированный перебор
+
         def work():
-            # Просто повторяем с большим лимитом для более глубокого поиска
             self.autopilot_report = autopilot.run(
                 self.cfg,
                 progress_cb=lambda msg: self.log.emit(msg, "info"),
@@ -547,29 +570,65 @@ class Controller(QObject):
                               f"{self.autopilot_report.get('strategy', '—')}, "
                               f"результат: {self.autopilot_report.get('ok', 0)}/"
                               f"{self.autopilot_report.get('total', 0)}.", "ok")
+            self.services = self.autopilot_report.get("results") or []
+            if self.services:
+                self.services_ready.emit(self.services)
+                self.last_check_at = time.time()
 
-        self._submit("autopilot", work, "Глубокий скан завершён.", "Глубокий скан не удался")
+        self._submit("deep_scan", work, "Глубокий скан завершён.", "Глубокий скан не удался")
+
+    def cancel_operation(self):
+        """Просит текущую длительную операцию (подбор, скан) остановиться."""
+        if not self.busy_key:
+            return
+        self._stop_flag = True
+        self.log.emit("Останавливаю: " + OPERATION_LABELS.get(self.busy_key, "операция"), "warn")
+        QTimer.singleShot(2500, lambda: setattr(self, "_stop_flag", False))
 
     def backup_config(self, path: str = "") -> str:
-        import json, shutil
-        src = app_dir() / "zapret-config.json"
-        dst = Path(path) if path else (app_dir() / f"zapret-config-backup-{time.strftime('%Y%m%d-%H%M')}.json")
+        """Копия config.json в указанный файл. Возвращает путь или ''."""
+        import shutil
+
+        src = config_mod.config_path()
         if not src.exists():
+            self.log.emit("Конфиг пока не создан — нечего копировать.", "warn")
             return ""
-        shutil.copy(str(src), str(dst))
+        dst = Path(path) if path else (
+            app_dir() / f"config-backup-{time.strftime('%Y%m%d-%H%M')}.json")
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(str(src), str(dst))
+        except OSError as exc:
+            self.log.emit(f"Не удалось сохранить копию: {exc}", "error")
+            return ""
+        self.log.emit(f"Копия настроек сохранена: {dst.name}", "ok")
+        self.finished.emit("backup", True, "")
         return str(dst)
 
     def restore_config(self, path: str = ""):
+        """Восстанавливает config.json из резервной копии."""
         import shutil
+
         src = Path(path) if path else None
+        if src is not None and src.is_dir():
+            # Подсказали каталог — берём самую свежую копию в нём
+            candidates = sorted(src.glob("config-backup-*.json"))
+            src = candidates[-1] if candidates else None
         if not src or not src.exists():
-            self.log.emit("Не указан файл для восстановления.", "warn")
+            self.log.emit("Файл копии не найден. Укажите путь к config-backup-*.json.", "warn")
             return False
-        dst = app_dir() / "zapret-config.json"
-        shutil.copy(str(src), str(dst))
+        try:
+            import json
+
+            json.loads(src.read_text(encoding="utf-8"))
+            shutil.copy(str(src), str(config_mod.config_path()))
+        except (OSError, ValueError) as exc:
+            self.log.emit(f"Не удалось восстановиться из {src.name}: {exc}", "error")
+            return False
         self.cfg = config_mod.load()
-        self.log.emit("Настройки восстановлены из резервной копии.", "ok")
+        self.log.emit(f"Настройки восстановлены из {src.name}.", "ok")
         self.changed.emit()
+        self.finished.emit("backup", True, "")
         return True
 
     def check_preset(self, name: str):
@@ -722,6 +781,251 @@ class Controller(QObject):
     def stop_autopilot(self):
         self._stop_flag = True
         QTimer.singleShot(100, lambda: setattr(self, "_stop_flag", False))
+
+    # ------------------------------------------------------------------
+    # Стратегии: список, применение, точечная проверка
+    # ------------------------------------------------------------------
+
+    def strategies(self) -> list[dict]:
+        """Все доступные стратегии со сводкой (имя, размер, порты)."""
+        result = []
+        for name in core.list_strategies():
+            try:
+                result.append(core.strategy_info(name))
+            except OSError:
+                result.append({"name": name, "exists": True})
+        return result
+
+    def strategy_preview(self, name: str) -> str:
+        return core.strategy_preview(name)
+
+    def set_strategy(self, name: str, restart: bool = True) -> bool:
+        """Ставит стратегию; при включённом обходе — с перезапуском."""
+        if core.resolve_strategy(name) is None:
+            self.log.emit(f"Стратегия «{name}» не найдена.", "warn")
+            return False
+        self.cfg["strategy"] = name
+        config_mod.save(self.cfg)
+        self._record_event("strategy", f"Стратегия → {name}")
+        self.log.emit(f"Стратегия: {name}.", "ok")
+        if restart and core.nfqws_running():
+            self._submit("apply", lambda: core.run_zapret(self.cfg),
+                         f"Обход перезапущен со стратегией {name}.",
+                         "Не удалось перезапустить обход")
+        elif restart:
+            self.log.emit("Обход выключен — стратегия применится при включении.", "info")
+        self.changed.emit()
+        return True
+
+    def test_strategy(self, name: str):
+        """Включает одну стратегию и сразу проверяет сервисы."""
+        if self.busy_key:
+            self.log.emit("Сейчас выполняется другая операция — дождитесь завершения.", "warn")
+            return
+
+        def work():
+            trial = dict(self.cfg)
+            trial["strategy"] = name
+            core.run_zapret(trial)
+            self.cfg["strategy"] = name
+            config_mod.save(self.cfg)
+            self.services = checks.probe_all_parallel(timeout=6.0)
+            self.services_ready.emit(self.services)
+            self.last_check_at = time.time()
+            ok, avg = checks.score(self.services)
+            self.log.emit(f"Стратегия {name}: работает {ok}/{len(self.services)}, "
+                          f"средняя задержка {avg:.0f} мс.", "ok" if ok else "warn")
+
+        self._submit("strategy_test", work, "", "Проверка стратегии не удалась")
+
+    # ------------------------------------------------------------------
+    # Замеры: скорость, пинг, DNS
+    # ------------------------------------------------------------------
+
+    def run_speedtest(self):
+        """Замер скорости скачивания — в фоне, результат в журнал и тост."""
+        if self.busy_key:
+            self.log.emit("Сейчас выполняется другая операция — дождитесь завершения.", "warn")
+            return
+
+        def work():
+            self.log.emit("Замеряю скорость соединения…", "info")
+            result = checks.speedtest()
+            self.metrics = {**self.metrics, "speedtest_mbps": result.get("mbps", 0.0)}
+            if result.get("ok"):
+                self.log.emit(f"Скорость: {result['detail']}.", "ok")
+                self.notify.emit("Замер скорости", result["detail"])
+            else:
+                raise RuntimeError(result.get("detail", "замер не удался"))
+
+        self._submit("speedtest", work, "", "Замер скорости не удался")
+
+    def run_ping(self, host: str = "1.1.1.1"):
+        if self.busy_key:
+            self.log.emit("Сейчас выполняется другая операция — дождитесь завершения.", "warn")
+            return
+
+        def work():
+            result = checks.ping(host or "1.1.1.1")
+            if result.get("ok"):
+                self.log.emit(f"Пинг {result['host']}: {result['detail']}.", "ok")
+            else:
+                raise RuntimeError(f"{result['host']}: {result['detail']}")
+
+        self._submit("ping", work, "", "Пинг не удался")
+
+    # ------------------------------------------------------------------
+    # Отчёты и диагностика текстом
+    # ------------------------------------------------------------------
+
+    def firewall_rules(self) -> str:
+        try:
+            return core.firewall_rules_text()
+        except Exception as exc:  # noqa: BLE001 — диагностика не должна падать
+            return f"Не удалось прочитать правила: {exc}"
+
+    def report_text(self) -> str:
+        """Текстовый отчёт о состоянии — для копирования и сохранения."""
+        import platform as _platform
+
+        from .. import APP_NAME, APP_VERSION
+
+        status = self.status or {}
+        lines = [
+            f"{APP_NAME} v{APP_VERSION} — отчёт",
+            f"Время: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Система: {_platform.system()} {_platform.release()} ({_platform.machine()})",
+            "",
+            "Обход:",
+            f"  nfqws: {'запущен' if status.get('running') else 'остановлен'}"
+            + (f" ({status.get('nfqws_version')})" if status.get("nfqws_version") else ""),
+            f"  файрвол: {'правила активны' if status.get('firewall') else 'нет правил'}"
+            + (f" ({status.get('backend')})" if status.get("backend") else ""),
+            f"  стратегия: {self.cfg.get('strategy', '—')}",
+            f"  стратегий доступно: {status.get('strategies', '—')}",
+            f"  зависимости: {'готовы' if status.get('deps_ready') else 'не скачаны'}",
+            f"  права без пароля: {'да' if status.get('sudo_ok') else 'нет'}",
+            "",
+            "Сервисы:",
+        ]
+        if self.services:
+            for item in self.services:
+                lines.append(f"  {item.get('title', '?')}: {item.get('detail', '?')}")
+        else:
+            lines.append("  проверок пока не было")
+        lines += [
+            "",
+            f"Проверок выполнено: {self.checks_done} ({self.last_check_text()})",
+            f"Аптайм защиты: {self.uptime_text()}",
+            f"Интерфейс: {self.cfg.get('interface', 'any')}",
+            f"Каталог: {status.get('app_dir', '—')}",
+        ]
+        return "\n".join(lines)
+
+    def export_report(self, path: str = "") -> str:
+        """Сохраняет отчёт в файл. Возвращает путь или ''."""
+        dst = Path(path) if path else (
+            app_dir() / f"zapret-report-{time.strftime('%Y%m%d-%H%M')}.md")
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(self.report_text() + "\n", encoding="utf-8")
+        except OSError as exc:
+            self.log.emit(f"Не удалось сохранить отчёт: {exc}", "error")
+            return ""
+        self.log.emit(f"Отчёт сохранён: {dst}", "ok")
+        return str(dst)
+
+    # ------------------------------------------------------------------
+    # История событий
+    # ------------------------------------------------------------------
+
+    def _history_path(self) -> Path:
+        return app_dir() / "history.json"
+
+    def history_events(self, limit: int = 100) -> list[dict]:
+        import json
+
+        try:
+            data = json.loads(self._history_path().read_text(encoding="utf-8"))
+            items = data if isinstance(data, list) else []
+        except (OSError, ValueError):
+            items = []
+        return items[-limit:]
+
+    def _record_event(self, kind: str, text: str) -> None:
+        import json
+
+        path = self._history_path()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            items = data if isinstance(data, list) else []
+        except (OSError, ValueError):
+            items = []
+        items.append({"at": time.time(), "kind": kind, "text": text})
+        items = items[-300:]
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+
+    def clear_history(self) -> None:
+        try:
+            self._history_path().unlink()
+        except OSError:
+            pass
+        self.log.emit("История событий очищена.", "info")
+
+    # ------------------------------------------------------------------
+    # Профили конфигурации
+    # ------------------------------------------------------------------
+
+    _PROFILE_KEYS = ("strategy", "telegram", "gamefilter_tcp", "gamefilter_udp",
+                     "interface", "firewall_backend")
+
+    def profiles(self) -> dict:
+        data = self.cfg.get("profiles") or {}
+        return dict(data) if isinstance(data, dict) else {}
+
+    def save_profile(self, name: str) -> bool:
+        name = (name or "").strip()
+        if not name:
+            self.log.emit("Введите название профиля.", "warn")
+            return False
+        profiles = self.profiles()
+        profiles[name] = {key: self.cfg.get(key) for key in self._PROFILE_KEYS}
+        self.cfg["profiles"] = profiles
+        config_mod.save(self.cfg)
+        self.log.emit(f"Профиль «{name}» сохранён.", "ok")
+        self.changed.emit()
+        return True
+
+    def apply_profile(self, name: str) -> bool:
+        profiles = self.profiles()
+        if name not in profiles:
+            self.log.emit(f"Профиль «{name}» не найден.", "warn")
+            return False
+        for key, value in profiles[name].items():
+            if key in self._PROFILE_KEYS:
+                self.cfg[key] = value
+        config_mod.save(self.cfg)
+        self._record_event("profile", f"Профиль → {name}")
+        self.log.emit(f"Профиль «{name}» применён.", "ok")
+        if core.nfqws_running():
+            self.restart_with_current()
+        self.changed.emit()
+        return True
+
+    def remove_profile(self, name: str) -> bool:
+        profiles = self.profiles()
+        if name not in profiles:
+            return False
+        del profiles[name]
+        self.cfg["profiles"] = profiles
+        config_mod.save(self.cfg)
+        self.log.emit(f"Профиль «{name}» удалён.", "info")
+        self.changed.emit()
+        return True
 
     # ------------------------------------------------------------------
     # Обслуживание

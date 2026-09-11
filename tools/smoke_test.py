@@ -20,6 +20,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("ZAPRET_NO_AUTOSTART", "1")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Герметичность: конфиг, история и журнал теста живут во временном каталоге
+# и не пачкают реальные данные пользователя (иначе остатки пресетов роняли
+# бы последующие прогоны).
+if "ZAPRET_APP_DIR" not in os.environ:
+    import tempfile as _tempfile
+
+    os.environ["ZAPRET_APP_DIR"] = _tempfile.mkdtemp(prefix="zapret-smoke-")
 
 from PySide6.QtCore import QPoint, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
@@ -82,6 +89,19 @@ def install_fakes(state: dict):
     checks_mod.probe_all = fake_probe_all                        # type: ignore[assignment]
     checks_mod.internet_available = lambda timeout=4.0: True      # type: ignore[assignment]
     autopilot_mod.checks.probe_all = fake_probe_all               # type: ignore[attr-defined]
+    # Параллельная проверка идёт через probe_service напрямую, минуя probe_all
+    _fake_by_key = {item["key"]: item for item in fake_probe_all()}
+
+    def fake_probe_service(service, timeout: float = 6.0):
+        key = getattr(service, "key", service)
+        data = _fake_by_key.get(key)
+        if data is None:
+            return {"key": str(key), "title": str(key), "icon": "globe",
+                    "state": "error", "latency_ms": 0, "code": 0,
+                    "detail": "нет данных", "hint": ""}
+        return dict(data)
+
+    checks_mod.probe_service = fake_probe_service                # type: ignore[assignment]
 
     # Обслуживание: обновление, ярлык и починка не должны трогать систему и сеть
     from zapret import integration as integration_mod

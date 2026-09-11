@@ -740,16 +740,103 @@ def nfqws_running() -> bool:
 
 
 def firewall_active() -> bool:
-    if not which("nft"):
+    """Проверяет, активны ли правила обхода (nftables или iptables)."""
+    if which("nft"):
+        for args in ([*elevation_prefix(), "nft", "list", "table", NFT_TABLE],
+                     ["nft", "list", "table", NFT_TABLE]):
+            try:
+                r = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return r.returncode == 0
+            except OSError:
+                continue
         return False
-    for args in ([*elevation_prefix(), "nft", "list", "table", NFT_TABLE],
-                 ["nft", "list", "table", NFT_TABLE]):
-        try:
-            r = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return r.returncode == 0
-        except OSError:
+    # Запасной путь: цепочка zapret в iptables (mangle)
+    for tool in ("iptables", "ip6tables"):
+        if not which(tool):
             continue
+        for args in ([*elevation_prefix(), tool, "-t", "mangle", "-L", "zapret", "-n"],
+                     [tool, "-t", "mangle", "-L", "zapret", "-n"]):
+            try:
+                r = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if r.returncode == 0:
+                    return True
+            except OSError:
+                continue
     return False
+
+
+def firewall_rules_text(max_chars: int = 6000) -> str:
+    """Текущие правила обхода текстом — для диагностики и отчётов."""
+    if which("nft"):
+        for args in ([*elevation_prefix(), "nft", "list", "table", NFT_TABLE],
+                     ["nft", "list", "table", NFT_TABLE]):
+            try:
+                proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      text=True, timeout=10)
+                if proc.returncode == 0 and proc.stdout.strip():
+                    return proc.stdout.strip()[:max_chars]
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+        return "Таблица nftables не найдена — правила не активны."
+    for tool in ("iptables", "ip6tables"):
+        if not which(tool):
+            continue
+        try:
+            proc = subprocess.run([*elevation_prefix(), tool, "-t", "mangle", "-L", "-n", "-v"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, timeout=10)
+            if proc.returncode == 0 and "zapret" in (proc.stdout or ""):
+                return proc.stdout.strip()[:max_chars]
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return "Файрвол не найден: нет ни nft, ни iptables."
+
+
+def nfqws_version() -> str:
+    """Версия бинарника nfqws (первая строка --help) или пусто."""
+    binary = nfqws_path()
+    if not binary.exists():
+        return ""
+    try:
+        proc = subprocess.run([str(binary), "--help"], stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    first = (proc.stdout or "").strip().splitlines()
+    return first[0][:120] if first else ""
+
+
+def strategy_preview(name: str, max_lines: int = 40, max_chars: int = 4000) -> str:
+    """Начало .bat-файла стратегии — для просмотра перед применением."""
+    path = resolve_strategy(name)
+    if path is None:
+        return f"Стратегия «{name}» не найдена."
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"Не удалось прочитать {path.name}: {exc}"
+    lines = text.replace("\r\n", "\n").splitlines()[:max_lines]
+    out = "\n".join(lines)
+    return out[:max_chars]
+
+
+def strategy_info(name: str) -> dict:
+    """Краткая сводка о стратегии: размер, порты, число фильтров."""
+    path = resolve_strategy(name)
+    if path is None:
+        return {"name": name, "exists": False}
+    try:
+        size = path.stat().st_size
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {"name": name, "exists": False}
+    try:
+        tcp, udp, blocks = parse_strategy_text(text, False, False)
+    except Exception:  # noqa: BLE001 — битый файл не должен ронять список
+        tcp, udp, blocks = "", "", []
+    return {"name": path.name, "exists": True, "size": size,
+            "lines": text.count("\n") + 1, "tcp": tcp, "udp": udp,
+            "filters": len(blocks)}
 
 
 # ----------------------------------------------------------------------------
@@ -782,6 +869,10 @@ def status() -> dict:
         service_active,
         shortcut_installed,
     )
+    try:
+        strategies = list_strategies()
+    except OSError:
+        strategies = []
     return {
         "running": nfqws_running(),
         "firewall": firewall_active(),
@@ -792,6 +883,8 @@ def status() -> dict:
         "sudo_ok": permissions_ready(),
         "backend": detect_backend("auto") if (which("nft") or which("iptables")) else None,
         "app_dir": str(app_dir()),
+        "strategies": len(strategies),
+        "nfqws_version": nfqws_version(),
     }
 
 

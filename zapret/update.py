@@ -64,8 +64,24 @@ def _http_get(url: str, timeout: int = 30) -> bytes:
         return response.read()
 
 
+_REMOTE_CACHE: dict = {"at": 0.0, "value": ""}
+
+
 def remote_commit() -> str:
-    """HEAD ветки в репозитории: сначала git, затем GitHub API."""
+    """HEAD ветки в репозитории: сначала git, затем GitHub API.
+
+    Результат кэшируется на 5 минут, чтобы частые проверки не долбили сеть.
+    """
+    import time as _time
+
+    if _REMOTE_CACHE["value"] and _TIME_NOW() - _REMOTE_CACHE["at"] < 300:
+        return _REMOTE_CACHE["value"]
+
+    def _remember(value: str) -> str:
+        _REMOTE_CACHE["value"] = value
+        _REMOTE_CACHE["at"] = _TIME_NOW()
+        return value
+
     if shutil.which("git"):
         try:
             out = subprocess.run(["git", "ls-remote", REPO_URL, BRANCH],
@@ -73,15 +89,55 @@ def remote_commit() -> str:
                                  text=True, timeout=40).stdout
             head = out.strip().split("\t", 1)[0].strip()
             if re.fullmatch(r"[0-9a-f]{7,40}", head or ""):
-                return head[:12]
+                return _remember(head[:12])
         except (OSError, subprocess.SubprocessError):
             pass
     try:
         data = json.loads(_http_get(
             f"https://api.github.com/repos/{REPO_SLUG}/commits/{BRANCH}").decode("utf-8", "replace"))
-        return (data.get("sha") or "")[:12]
+        return _remember((data.get("sha") or "")[:12])
     except Exception:  # noqa: BLE001 — сеть может быть недоступна, это не ошибка обновления
-        return ""
+        return _REMOTE_CACHE["value"]
+
+
+def _TIME_NOW() -> float:
+    return time.time()
+
+
+def compare_versions(left: str, right: str) -> int:
+    """Сравнение версий вида 3.0.0: -1/0/1. Мусор считается нулём."""
+
+    def parts(value: str) -> list[int]:
+        out = []
+        for chunk in re.split(r"[.\-+_]", str(value or "")):
+            digits = "".join(ch for ch in chunk if ch.isdigit())
+            out.append(int(digits) if digits else 0)
+        return (out + [0, 0, 0])[:3]
+
+    left_parts, right_parts = parts(left), parts(right)
+    return (left_parts > right_parts) - (left_parts < right_parts)
+
+
+def fetch_changelog(limit: int = 5, timeout: int = 20) -> list[dict]:
+    """Последние релизы с GitHub: [{tag, name, body, url}]. Пусто при ошибке сети."""
+    try:
+        raw = _http_get(
+            f"https://api.github.com/repos/{REPO_SLUG}/releases?per_page={max(1, limit)}",
+            timeout=timeout)
+        data = json.loads(raw.decode("utf-8", "replace"))
+    except Exception:  # noqa: BLE001 — чейнджлог не критичен
+        return []
+    if not isinstance(data, list):
+        return []
+    out = []
+    for item in data[:limit]:
+        if not isinstance(item, dict):
+            continue
+        out.append({"tag": str(item.get("tag_name", "")),
+                    "name": str(item.get("name", "") or item.get("tag_name", "")),
+                    "body": str(item.get("body", "") or "")[:2000],
+                    "url": str(item.get("html_url", ""))})
+    return out
 
 
 def code_version(path: Path | None = None) -> str:

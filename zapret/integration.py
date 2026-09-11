@@ -210,8 +210,49 @@ StartupNotify=true
 
 def _exec_command() -> str:
     """Команда запуска. От своего пользователя: под root окно всё равно не видно."""
+    import shlex
+
     python = shutil.which("python3") or shutil.which("python") or "python3"
-    return f"{python} {run_py_path()} gui"
+    return f"{shlex.quote(python)} {shlex.quote(str(run_py_path()))} gui"
+
+
+# ---------------------------------------------------------------------------
+# Пользовательский автозапуск (запасной путь без системной службы)
+# ---------------------------------------------------------------------------
+
+def user_autostart_path() -> Path:
+    """Файл ~/.config/autostart/*.desktop — окно стартует вместе с сессией."""
+    return user_home() / ".config" / "autostart" / DESKTOP_NAME
+
+
+def user_autostart_installed() -> bool:
+    return user_autostart_path().exists()
+
+
+def install_user_autostart() -> str:
+    """Автозапуск уровня пользователя: не требует прав root и systemd."""
+    icon = install_icon()
+    text = _desktop_text(icon)
+    path = user_autostart_path()
+    _write_text(path, text)
+    try:
+        visible = path.read_text(encoding="utf-8")
+        if "X-GNOME-Autostart-enabled" not in visible:
+            path.write_text(visible + "X-GNOME-Autostart-enabled=true\n", encoding="utf-8")
+    except OSError:
+        pass
+    return str(path)
+
+
+def remove_user_autostart() -> bool:
+    path = user_autostart_path()
+    if not path.exists():
+        return False
+    try:
+        path.unlink()
+        return True
+    except OSError:
+        return False
 
 
 def desktop_entry_ready(path: Path | None = None) -> bool:

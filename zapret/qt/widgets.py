@@ -502,6 +502,17 @@ class PowerSwitch(QWidget):
         p.drawText(cap_rect.adjusted(2, 2, 2, 2), Qt.AlignmentFlag.AlignCenter, self.caption)
         p.setPen(caption_color)
         p.drawText(cap_rect, Qt.AlignmentFlag.AlignCenter, self.caption)
+        p.resetTransform()
+        # Подпись под кнопкой: что сейчас происходит (стратегия, прогресс, совет)
+        if self.hint:
+            metrics = QFontMetrics(font(self.theme.font_family, pal.font_xs))
+            elided = metrics.elidedText(self.hint, Qt.TextElideMode.ElideMiddle,
+                                        self._size - 16)
+            p.setPen(QColor(pal.muted))
+            p.setFont(font(self.theme.font_family, pal.font_xs))
+            p.drawText(QRectF(8, self._size + 6, self._size - 16, 42),
+                       Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                       elided)
         p.end()
 
 
@@ -1064,17 +1075,23 @@ class Sparkline(QWidget):
         super().__init__(parent)
         self.theme = theme
         self.values: list[float] = [0.0] * points
+        self.values_tx: list[float] = [0.0] * points
         self.limit = points
         self.setMinimumHeight(52)
         self.peak = 1.0
         self.unit = "Мбит/с"
         theme.changed.connect(self.update)
 
-    def push(self, value: float):
+    def push(self, value: float, tx: float | None = None):
         self.values.append(max(0.0, float(value)))
         if len(self.values) > self.limit:
             self.values = self.values[-self.limit:]
-        self.peak = max(1.0, max(self.values))
+        if tx is None:
+            tx = self.values_tx[-1] if self.values_tx else 0.0
+        self.values_tx.append(max(0.0, float(tx)))
+        if len(self.values_tx) > self.limit:
+            self.values_tx = self.values_tx[-self.limit:]
+        self.peak = max(1.0, max(self.values), max(self.values_tx))
         self.update()
 
     def paintEvent(self, event):  # noqa: N802
@@ -1122,12 +1139,34 @@ class Sparkline(QWidget):
                       Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         p.drawPath(path)
 
+        # Вторая линия — отдача (приглушённая, пунктиром)
+        if any(v > 0.001 for v in self.values_tx):
+            tx_path = QPainterPath()
+            for i, value in enumerate(self.values_tx):
+                x = inner.left() + step * i
+                y = inner.bottom() - inner.height() * min(1.0, value / self.peak)
+                if i == 0:
+                    tx_path.moveTo(x, y)
+                else:
+                    tx_path.lineTo(x, y)
+            tx_pen = QPen(QColor(pal.muted), 1.4, Qt.PenStyle.DashLine,
+                          Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+            p.setPen(tx_pen)
+            p.drawPath(tx_path)
+            # Точка последнего значения приёма
+            last_x = inner.right()
+            last_y = inner.bottom() - inner.height() * min(1.0, self.values[-1] / self.peak)
+            p.setBrush(QColor(pal.accent_text))
+            p.setPen(QPen(QColor(pal.surface), 1.5))
+            p.drawEllipse(QPointF(last_x, last_y), 3.5, 3.5)
+
         last = self.values[-1]
+        last_tx = self.values_tx[-1] if self.values_tx else 0.0
         p.setPen(QColor(pal.muted))
         p.setFont(font(self.theme.font_family, pal.font_xs))
         p.drawText(QRectF(rect.left() + 10, rect.bottom() - 17, rect.width() - 20, 16),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                   f"{last:.2f} {self.unit}   ·   пик {self.peak:.2f}")
+                   f"↓ {last:.2f}  ↑ {last_tx:.2f} {self.unit}   ·   пик {self.peak:.2f}")
         p.end()
 
 
@@ -1746,6 +1785,7 @@ class SheetHeader(QWidget):
                  on_close=None, parent=None):
         super().__init__(parent)
         self.theme = theme
+        self.icon_name = icon
         self.setFixedHeight(76)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(18, 12, 12, 12)
@@ -1786,7 +1826,8 @@ class SheetHeader(QWidget):
         if hasattr(self, "badge"):
             self.badge.setStyleSheet(
                 f"border-radius:11px;background:{_rgba(self.theme.palette.accent, 0.16)};")
-            self.badge.setPixmap(icons.icon_pixmap("", 1, "#000000"))
+            self.badge.setPixmap(icons.icon_pixmap(
+                self.icon_name or "info", 20, self.theme.palette.accent, 1.8))
 
 
 def _rgba(hex_color: str, alpha: float) -> str:
@@ -2179,4 +2220,205 @@ class LabeledSlider(QWidget):
         p.drawText(QRectF(track.right() - 60, 0, 60, 14),
                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                    f"{self.value}{self.suffix}")
+        p.end()
+
+
+# ---------------------------------------------------------------------------
+# Новые примитивы v3.0: разделитель, пустое состояние, поиск, прогресс, точка
+# ---------------------------------------------------------------------------
+
+class Divider(QFrame):
+    """Тонкая горизонтальная линия-разделитель с необязательной подписью."""
+
+    def __init__(self, theme, text: str = "", parent=None):
+        super().__init__(parent)
+        self.theme = theme
+        self.text = text
+        self.setFixedHeight(22 if not text else 26)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        theme.changed.connect(self.update)
+
+    def paintEvent(self, event):  # noqa: N802
+        pal = self.theme.palette
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        cy = self.height() / 2
+        p.setPen(QPen(_with_alpha(pal.text, 0.10), 1.0))
+        if not self.text:
+            p.drawLine(QPointF(0, cy), QPointF(self.width(), cy))
+        else:
+            p.setFont(font(self.theme.font_family, pal.font_xs, QFont.Weight.DemiBold))
+            fm = QFontMetrics(p.font())
+            tw = fm.horizontalAdvance(self.text) + 16
+            p.drawLine(QPointF(0, cy), QPointF(8, cy))
+            p.setPen(QColor(pal.muted))
+            p.drawText(QRectF(12, 0, tw, self.height()),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       self.text)
+            p.setPen(QPen(_with_alpha(pal.text, 0.10), 1.0))
+            p.drawLine(QPointF(16 + tw, cy), QPointF(self.width(), cy))
+        p.end()
+
+
+class EmptyState(QWidget):
+    """Заглушка пустого списка: иконка + заголовок + подсказка."""
+
+    def __init__(self, theme, icon: str = "inbox", title: str = "Пусто",
+                 hint: str = "", parent=None):
+        super().__init__(parent)
+        self.theme = theme
+        self.icon_name = icon
+        self.title = title
+        self.hint = hint
+        self.setMinimumHeight(120)
+        theme.changed.connect(self.update)
+
+    def paintEvent(self, event):  # noqa: N802
+        pal = self.theme.palette
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        cx = self.width() / 2
+        pm = icons.icon_pixmap(self.icon_name, 34, pal.muted, 1.6)
+        p.setOpacity(0.7)
+        p.drawPixmap(QPointF(cx - pm.width() / 2, 10), pm)
+        p.setOpacity(1.0)
+        p.setPen(QColor(pal.text))
+        p.setFont(font(self.theme.font_family, pal.font_md, QFont.Weight.DemiBold))
+        p.drawText(QRectF(0, 52, self.width(), 22), Qt.AlignmentFlag.AlignCenter,
+                   self.title)
+        if self.hint:
+            p.setPen(QColor(pal.muted))
+            p.setFont(font(self.theme.font_family, pal.font_xs))
+            p.drawText(QRectF(16, 74, self.width() - 32, 40),
+                       Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                       self.hint)
+        p.end()
+
+
+class SearchField(QWidget):
+    """Поле поиска с иконкой-лупой и кнопкой очистки."""
+
+    textChanged = Signal(str)
+
+    def __init__(self, theme, placeholder: str = "Поиск…", parent=None):
+        super().__init__(parent)
+        self.theme = theme
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        from PySide6.QtWidgets import QLineEdit as _QLE
+        self.edit = _QLE(self)
+        self.edit.setPlaceholderText(placeholder)
+        self.edit.setClearButtonEnabled(True)
+        self.edit.textChanged.connect(self.textChanged.emit)
+        layout.addWidget(self.edit)
+        self.setFixedHeight(40)
+        self._restyle()
+        theme.changed.connect(self._restyle)
+
+    def _restyle(self):
+        pal = self.theme.palette
+        self.edit.setFont(font(self.theme.font_family, pal.font_md))
+        self.edit.setStyleSheet(
+            f"QLineEdit{{background:{pal.surface_2};color:{pal.text};"
+            f"border:1px solid {pal.line_strong};border-radius:10px;"
+            f"padding:8px 12px 8px 34px;}}"
+            f"QLineEdit:focus{{border:1px solid {pal.accent};}}")
+
+    def text(self) -> str:
+        return self.edit.text()
+
+    def setText(self, value: str):  # noqa: N802
+        self.edit.setText(value)
+
+    def clear(self):
+        self.edit.clear()
+
+    def paintEvent(self, event):  # noqa: N802
+        super().paintEvent(event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pm = icons.icon_pixmap("search", 16, self.theme.palette.muted, 1.8)
+        p.drawPixmap(QPointF(11, (self.height() - pm.height()) / 2), pm)
+        p.end()
+
+
+class ThinProgress(QWidget):
+    """Тонкий линейный прогресс для длительных операций."""
+
+    def __init__(self, theme, parent=None):
+        super().__init__(parent)
+        self.theme = theme
+        self.value = 0.0
+        self.setFixedHeight(8)
+        theme.changed.connect(self.update)
+
+    def set_value(self, value: float):
+        self.value = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802
+        pal = self.theme.palette
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        track = QRectF(0, 1, self.width(), self.height() - 2)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(_with_alpha(pal.text, 0.08))
+        p.drawRoundedRect(track, track.height() / 2, track.height() / 2)
+        if self.value > 0.001:
+            grad = QLinearGradient(track.topLeft(), track.topRight())
+            grad.setColorAt(0.0, QColor(pal.accent))
+            grad.setColorAt(1.0, QColor(pal.accent).lighter(115))
+            p.setBrush(QBrush(grad))
+            filled = QRectF(track.left(), track.top(),
+                            track.width() * self.value, track.height())
+            p.drawRoundedRect(filled, track.height() / 2, track.height() / 2)
+        p.end()
+
+
+class StatusDot(QWidget):
+    """Мигающая/статичная точка статуса с подписью."""
+
+    def __init__(self, theme, text: str = "", state: str = "idle", parent=None):
+        super().__init__(parent)
+        self.theme = theme
+        self.text = text
+        self.state = state
+        self.blink = 1.0
+        self.setFixedHeight(22)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        theme.changed.connect(self.update)
+
+    def set_status(self, text: str, state: str = "idle", blink: bool = False):
+        self.text = text
+        self.state = state
+        if blink and self.theme.palette.animated:
+            self._timer.start(500)
+        else:
+            self._timer.stop()
+            self.blink = 1.0
+        self.update()
+
+    def _tick(self):
+        self.blink = 0.35 if self.blink > 0.6 else 1.0
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802
+        pal = self.theme.palette
+        color = {"ok": QColor(pal.good), "warn": QColor(pal.warn),
+                 "bad": QColor(pal.bad), "accent": QColor(pal.accent),
+                 "idle": QColor(pal.muted)}.get(self.state, QColor(pal.muted))
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setOpacity(self.blink)
+        p.setBrush(color)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(8, self.height() / 2), 4.0, 4.0)
+        p.setOpacity(1.0)
+        p.setPen(QColor(pal.muted))
+        p.setFont(font(self.theme.font_family, pal.font_xs))
+        p.drawText(QRectF(20, 0, self.width() - 20, self.height()),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   self.text)
         p.end()

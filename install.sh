@@ -58,6 +58,7 @@ Zapret Control — установка одной командой.
   bash install.sh repair         починить установку (ярлык на столе, права,
                                  перенос из /root, запуск окна)
   bash install.sh doctor         диагностика: что мешает работе
+  bash install.sh status         краткая сводка об установке
   bash install.sh uninstall      удалить всё (служба, ярлык, данные, sudoers)
 
 Ключи:
@@ -77,7 +78,7 @@ DO_DEPS=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        install|update|gui|launch|run|repair|doctor|uninstall) CMD="$1" ;;
+        install|update|gui|launch|run|repair|doctor|status|uninstall) CMD="$1" ;;
         --user)      RUN_USER_REQUESTED="${2:-}"; shift ;;
         --user=*)    RUN_USER_REQUESTED="${1#*=}" ;;
         --app-dir)   APP_DIR="${2:-}"; shift ;;
@@ -95,13 +96,13 @@ AM_ROOT=0
 [ "$(id -u)" -eq 0 ] && AM_ROOT=1
 
 human_user() {
-    # существует, не root и имеет домашний каталог в /home
+    # существует, не root и имеет домашний каталог пользователя
     local name="$1" home
     [ -n "$name" ] || return 1
     [ "$name" != "root" ] || return 1
     id "$name" >/dev/null 2>&1 || return 1
     home="$(getent passwd "$name" 2>/dev/null | cut -d: -f6 || true)"
-    case "$home" in /home/*) return 0 ;; *) return 1 ;; esac
+    case "$home" in /home/*|/var/home/*|/data/*|/mnt/*) return 0 ;; *) return 1 ;; esac
 }
 
 active_desktop_user() {
@@ -589,6 +590,17 @@ case "$CMD" in
             py_user "$APP_DIR/run.py" doctor
         else
             info "Установка ещё не выполнена — сначала: bash install.sh"
+        fi
+        ;;
+
+    status)
+        echo "Пользователь:  $RUN_USER"
+        echo "Каталог:       $APP_DIR"
+        if app_ready; then
+            echo "Версия:        $(py_user "$APP_DIR/run.py" version 2>/dev/null || echo '?')"
+            py_user "$APP_DIR/run.py" report 2>/dev/null | indent || true
+        else
+            echo "Состояние:     не установлено (запустите: bash install.sh)"
         fi
         ;;
 

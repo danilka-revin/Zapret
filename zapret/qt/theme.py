@@ -31,17 +31,42 @@ ACCENTS: list[tuple[str, str, str]] = [
     ("violet", "#a98cff", "Фиалка"),
     ("mint", "#34e0a1", "Мята"),
     ("rose", "#ff6b8b", "Роза"),
+    ("cyan", "#4de3ff", "Циан"),
+    ("gold", "#ffd166", "Золото"),
+    ("coral", "#ff7a59", "Коралл"),
+    ("azure", "#4d7cff", "Лазурь"),
+    ("orchid", "#e08cff", "Орхидея"),
+    ("slate", "#9fb3c8", "Графит"),
 ]
 
 PRESETS: list[tuple[str, str, dict]] = [
+    ("aurora", "Аврора", {"mode": "dark", "accent": "#34e0a1", "glass": "vivid",
+                          "glass_tint": "auto", "radius": "soft", "density": "comfortable",
+                          "motion": "full", "font_scale": "normal", "orbs": True,
+                          "orbs_intensity": 140}),
     ("glass", "Тёмное стекло", {"mode": "dark", "accent": "#69a7ff", "glass": "vivid",
-                                "radius": "soft", "density": "comfortable"}),
-    ("lime", "Как в zmk", {"mode": "light", "accent": "#d5ff45", "glass": "soft",
-                           "radius": "soft", "density": "comfortable"}),
-    ("night", "Ночной дозор", {"mode": "dark", "accent": "#34e0a1", "glass": "soft",
-                               "radius": "square", "density": "compact"}),
-    ("contrast", "Контраст", {"mode": "dark", "accent": "#ffad4d", "glass": "off",
-                              "radius": "square", "density": "comfortable"}),
+                                "glass_tint": "cool", "radius": "soft",
+                                "density": "comfortable", "orbs": True,
+                                "orbs_intensity": 120}),
+    ("lime", "Лайм", {"mode": "light", "accent": "#d5ff45", "glass": "soft",
+                      "glass_tint": "auto", "radius": "soft", "density": "comfortable",
+                      "orbs": True, "orbs_intensity": 100}),
+    ("sunset", "Закат", {"mode": "dark", "accent": "#ffad4d", "glass": "vivid",
+                         "glass_tint": "warm", "radius": "soft", "density": "comfortable",
+                         "orbs": True, "orbs_intensity": 150}),
+    ("ocean", "Океан", {"mode": "dark", "accent": "#4de3ff", "glass": "soft",
+                        "glass_tint": "cool", "radius": "soft", "density": "comfortable",
+                        "orbs": True, "orbs_intensity": 110}),
+    ("rose", "Роза", {"mode": "light", "accent": "#ff6b8b", "glass": "soft",
+                      "glass_tint": "warm", "radius": "soft", "density": "comfortable",
+                      "orbs": True, "orbs_intensity": 90}),
+    ("night", "Ночной дозор", {"mode": "dark", "accent": "#a98cff", "glass": "soft",
+                               "glass_tint": "auto", "radius": "square", "density": "compact",
+                               "orbs": False, "orbs_intensity": 60}),
+    ("contrast", "Контраст", {"mode": "dark", "accent": "#ffd166", "glass": "off",
+                              "glass_tint": "auto", "radius": "square",
+                              "density": "comfortable", "orbs": False,
+                              "orbs_intensity": 0}),
 ]
 
 HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
@@ -182,51 +207,57 @@ class Palette:
         self.accent_text = accent if self.dark else mix(accent, "#0b1512", 0.42)
 
         if self.dark:
-            self.page = "#0b100e"
-            self.page_alt = "#070b0a"
-            self.surface = "#131a17"
-            self.surface_2 = "#182220"
-            self.surface_3 = "#1e2a26"
-            self.line = "#25332e"
-            self.line_strong = "#33463f"
-            self.text = "#eef4f0"
-            self.muted = "#8ea49a"
+            self.page = "#0a0f0e"
+            self.page_alt = "#060a09"
+            self.surface = "#121917"
+            self.surface_2 = "#17211e"
+            self.surface_3 = "#1f2c28"
+            self.line = "#243230"
+            self.line_strong = "#354844"
+            self.text = "#f0f5f2"
+            self.muted = "#93a8a0"
             self.shadow = "#000000"
         else:
-            self.page = "#f2f5f3"
-            self.page_alt = "#e7ece9"
+            self.page = "#eef3f1"
+            self.page_alt = "#e2e9e6"
             self.surface = "#ffffff"
-            self.surface_2 = "#f6f9f7"
-            self.surface_3 = "#eef3f0"
-            self.line = "#e0e7e3"
-            self.line_strong = "#cdd8d2"
-            self.text = "#16211c"
-            self.muted = "#7d8d86"
-            self.shadow = "#22322c"
+            self.surface_2 = "#f4f8f6"
+            self.surface_3 = "#e9f0ed"
+            self.line = "#dde6e2"
+            self.line_strong = "#c6d4ce"
+            self.text = "#14201b"
+            self.muted = "#75867f"
+            self.shadow = "#1d2b26"
 
-        self.good = "#34e0a1" if self.dark else "#12a56f"
-        self.warn = "#ffc061" if self.dark else "#c8801b"
-        self.bad = "#ff6b7f" if self.dark else "#d8445f"
+        self.good = "#2fe39b" if self.dark else "#0da271"
+        self.good_soft = mix(self.good, self.surface, 0.82)
+        self.warn = "#ffc25e" if self.dark else "#c07c14"
+        self.warn_soft = mix(self.warn, self.surface, 0.82)
+        self.bad = "#ff6b81" if self.dark else "#d63a58"
+        self.bad_soft = mix(self.bad, self.surface, 0.82)
+        self.info = "#69a7ff" if self.dark else "#2f6fe0"
+        self.info_soft = mix(self.info, self.surface, 0.82)
         self.idle = self.muted
 
         # Стекло
-        glass_alpha = {"off": 0.0, "soft": 0.55, "vivid": 0.95}[settings.glass]
+        glass_alpha = {"off": 0.0, "soft": 0.55, "vivid": 0.92}[settings.glass]
         self.glass_alpha = glass_alpha
         if settings.glass_tint == "cool":
-            tint = mix(accent, "#5dade2", 1.0)
+            tint = mix(accent, "#5dade2", 0.55)
         elif settings.glass_tint == "warm":
-            tint = mix(accent, "#ffb35c", 1.0)
+            tint = mix(accent, "#ffb35c", 0.55)
         else:
             tint = accent
         self.tint = tint
-        self.card_border = with_alpha(self.text if self.dark else "#ffffff", 0.10 if self.dark else 0.5)
-        self.card_top_line = with_alpha("#ffffff", 0.10 if self.dark else 0.9)
+        self.card_border = with_alpha(self.text if self.dark else "#ffffff",
+                                      0.12 if self.dark else 0.55)
+        self.card_top_line = with_alpha("#ffffff", 0.12 if self.dark else 0.9)
 
-        # Орбы фона
+        # Орбы фона: акцент + два гармонирующих оттенка
         self.orb_colors = [
-            mix(accent, "#ffffff", 0.0),
-            "#5dade2",
-            mix(accent, "#a98cff", 0.5),
+            accent,
+            mix(accent, "#5dade2", 0.65),
+            mix(accent, "#a98cff", 0.55),
         ]
 
         # Метрики
@@ -338,9 +369,12 @@ def build_qpalette(pal: Palette) -> QPalette:
 
 
 def style_sheet(pal: "Palette") -> str:
-    """Минимальный QSS: убирает системные светлые подложки у прокрутки и меню."""
+    """QSS приложения: системные элементы в цветах темы, без светлых заплаток."""
     return f"""
 QWidget {{ color: {pal.text}; }}
+QMainWindow, QDialog, QMessageBox, QColorDialog, QFileDialog {{
+    background: {pal.page}; color: {pal.text};
+}}
 QScrollArea, QScrollArea > QWidget#qt_scrollarea_viewport,
 QAbstractScrollArea, QAbstractScrollArea > QWidget#qt_scrollarea_viewport {{
     background: transparent; border: none;
@@ -355,24 +389,66 @@ QMenu {{
 }}
 QMenu::item {{ padding: 7px 14px; border-radius: 7px; }}
 QMenu::item:selected {{ background: {pal.surface_3}; color: {pal.text}; }}
+QMenu::item:disabled {{ color: {pal.muted}; }}
 QMenu::separator {{ height: 1px; background: {pal.line}; margin: 5px 8px; }}
-QDialog, QMessageBox, QColorDialog {{ background: {pal.surface}; color: {pal.text}; }}
-QLineEdit {{
+QLineEdit, QTextEdit, QPlainTextEdit {{
     background: {pal.surface_2}; color: {pal.text};
     border: 1px solid {pal.line_strong}; border-radius: 10px;
     padding: 8px 12px; selection-background-color: {pal.accent};
     selection-color: {pal.on_accent};
 }}
-QLineEdit:focus {{ border: 1px solid {pal.accent}; }}
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{ border: 1px solid {pal.accent}; }}
+QLineEdit:disabled {{ color: {pal.muted}; }}
+QComboBox {{
+    background: {pal.surface_2}; color: {pal.text};
+    border: 1px solid {pal.line_strong}; border-radius: 10px;
+    padding: 7px 12px; min-height: 20px;
+}}
+QComboBox:focus {{ border: 1px solid {pal.accent}; }}
+QComboBox QAbstractItemView {{
+    background: {pal.surface}; color: {pal.text};
+    border: 1px solid {pal.line_strong}; border-radius: 8px;
+    selection-background-color: {pal.surface_3}; selection-color: {pal.text};
+    padding: 4px;
+}}
+QTableWidget {{
+    background: {pal.surface}; color: {pal.text};
+    border: 1px solid {pal.line}; border-radius: 12px;
+    gridline-color: {pal.line}; alternate-background-color: {pal.surface_2};
+}}
+QTableWidget::item {{ padding: 6px; border: none; }}
+QTableWidget::item:selected {{ background: {pal.surface_3}; color: {pal.text}; }}
+QHeaderView::section {{
+    background: {pal.surface_2}; color: {pal.muted};
+    border: none; border-bottom: 1px solid {pal.line_strong};
+    padding: 8px; font-weight: bold;
+}}
+QTabWidget::pane {{ border: 1px solid {pal.line}; border-radius: 12px; background: {pal.surface}; }}
+QTabBar::tab {{
+    background: transparent; color: {pal.muted};
+    padding: 8px 16px; margin: 2px; border-radius: 8px;
+}}
+QTabBar::tab:selected {{ background: {pal.surface_3}; color: {pal.text}; }}
+QCheckBox, QRadioButton {{ color: {pal.text}; spacing: 8px; }}
+QGroupBox {{
+    color: {pal.text}; border: 1px solid {pal.line}; border-radius: 12px;
+    margin-top: 12px; padding-top: 8px;
+}}
+QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; color: {pal.muted}; }}
+QSplitter::handle {{ background: {pal.line}; }}
+QSplitter::handle:horizontal {{ width: 2px; }}
+QSplitter::handle:vertical {{ height: 2px; }}
+QPushButton:focus {{ outline: none; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{
-    background: {pal.muted}; border-radius: 5px; min-height: 36px; opacity: .5;
+    background: {pal.muted}; border-radius: 5px; min-height: 36px;
 }}
 QScrollBar::handle:vertical:hover {{ background: {pal.text}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
 QScrollBar::handle:horizontal {{ background: {pal.muted}; border-radius: 5px; min-width: 36px; }}
+QScrollBar::handle:horizontal:hover {{ background: {pal.text}; }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
 """
@@ -395,7 +471,7 @@ FONT_CANDIDATES = [
     "Ubuntu", "Noto Sans", "Cantarell", "DejaVu Sans",
 ]
 
-INTER_FONT_PATH = str(Path(__file__).resolve().parent.parent.parent / "fonts" / "Inter-Regular.ttf")
+INTER_FONT_PATH = str(Path(__file__).resolve().parent.parent / "fonts" / "Inter-Regular.ttf")
 
 
 def _load_inter_font() -> bool:
@@ -485,3 +561,23 @@ class ThemeManager(QObject):
         if self._settings.mode == "system":
             self._palette = Palette(self._settings)
             self.changed.emit()
+
+    def export_theme(self) -> dict:
+        """Только оформление (без поведения) — для шаринга тем."""
+        data = self._settings.to_dict()
+        return {key: data[key] for key in (
+            "mode", "accent", "glass", "glass_tint", "density", "radius",
+            "motion", "font_scale", "orbs", "orbs_intensity") if key in data}
+
+    def import_theme(self, data: dict | None) -> bool:
+        """Применяет ранее экспортированную тему. True — что-то сменилось."""
+        if not isinstance(data, dict):
+            return False
+        allowed = {"mode", "accent", "glass", "glass_tint", "density",
+                   "radius", "motion", "font_scale", "orbs", "orbs_intensity"}
+        changes = {k: v for k, v in data.items() if k in allowed}
+        if not changes:
+            return False
+        before = self._settings.to_dict()
+        self.update(**changes)
+        return self._settings.to_dict() != before
