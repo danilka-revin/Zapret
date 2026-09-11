@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QLineEdit,
 
 from . import icons
 from .theme import ACCENTS, PRESETS
-from .widgets import (AccentPicker, Chip, ChoiceCard, GlassButton, LabeledSlider,
+from .widgets import (AccentPicker, Card, Chip, ChoiceCard, GlassButton, LabeledSlider,
                       LogView, SectionTitle, SegmentedControl, ServiceRow, SettingRow,
                       Sheet, SheetHeader, Switch, font)
 
@@ -462,27 +462,99 @@ class HelpSheet(Sheet):
 # Подбор стратегии под конкретный сайт или группу сайтов
 # ---------------------------------------------------------------------------
 
+class PresetCard(Card):
+    """Карточка пресета: домены и стратегия, подобранная именно под них."""
+
+    def __init__(self, theme, preset: dict, on_apply, on_check, on_remove, parent=None):
+        super().__init__(theme, preset["name"], "", "star", parent)
+        self.preset = preset
+        self.setToolTip(", ".join(preset["hosts"]))
+
+        self.apply_btn = GlassButton(theme, "Применить", "zap", "secondary", compact=True)
+        self.apply_btn.clicked.connect(lambda: on_apply(preset["name"]))
+        self.check_btn = GlassButton(theme, "", "refresh", "ghost", compact=True,
+                                     icon_only=True)
+        self.check_btn.setToolTip("Проверить пресет заново")
+        self.check_btn.clicked.connect(lambda: on_check(preset["name"]))
+        self.remove_btn = GlassButton(theme, "", "trash", "ghost", compact=True,
+                                      icon_only=True)
+        self.remove_btn.setToolTip("Удалить пресет")
+        self.remove_btn.clicked.connect(lambda: on_remove(preset["name"]))
+        if hasattr(self, "header_row"):
+            self.header_row.addSpacing(6)
+            self.header_row.addWidget(self.apply_btn)
+            self.header_row.addWidget(self.check_btn)
+            self.header_row.addWidget(self.remove_btn)
+
+        strategy = preset.get("strategy") or "стратегия ещё не подобрана"
+        ok, total = preset.get("ok", 0), preset.get("total", 0) or len(preset["hosts"])
+        state = "ok" if total and ok >= total else ("warn" if ok else "idle")
+        when = _ago(preset.get("checked_at") or 0)
+        if hasattr(self, "subtitle_label"):
+            self.subtitle_label.setText(f"{strategy} · сайтов ок {ok}/{total} · "
+                                        f"{preset.get('avg_ms', 0):.0f} мс" +
+                                        (f" · проверено {when}" if when else ""))
+            self.subtitle_label.setStyleSheet(
+                f"color:{theme.palette.ok if state == 'ok' else theme.palette.muted};"
+                "background:transparent;")
+        hosts = preset["hosts"]
+        shown = ", ".join(hosts[:3]) + (f" и ещё {len(hosts) - 3}" if len(hosts) > 3 else "")
+        self.hosts_label = QLabel(shown, self)
+        self.hosts_label.setWordWrap(True)
+        self.body.addWidget(self.hosts_label)
+        self._restyle_hosts()
+        theme.changed.connect(self._restyle_hosts)
+
+    def _restyle_hosts(self):
+        pal = self.theme.palette
+        self.hosts_label.setFont(font(self.theme.font_family, pal.font_xs))
+        self.hosts_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
+
+
+def _ago(stamp: float) -> str:
+    """«5 минут назад» — человеческое время последней проверки."""
+    if not stamp:
+        return ""
+    delta = max(0.0, time.time() - stamp)
+    if delta < 90:
+        return "только что"
+    if delta < 3600:
+        return f"{int(delta // 60)} мин назад"
+    if delta < 86400:
+        return f"{int(delta // 3600)} ч назад"
+    return f"{int(delta // 86400)} дн назад"
+
+
 class TargetSheet(Sheet):
     """
-    «Подбор под сайт»: пользователь вводит домен (или выбирает группу), приложение
-    перебирает все стратегии Flowseal и показывает, какая открывает именно этот сайт.
+    «Подбор под сайт»: стратегия под домен, под готовую группу сервисов
+    (YouTube, Discord, Telegram…) или сразу под несколько групп.
+
+    Найденный результат можно сохранить пресетом — тогда в следующий раз
+    достаточно нажать «Применить», без повторного перебора.
     """
 
     def __init__(self, theme, controller, parent=None):
-        super().__init__(theme, parent, width=470)
+        super().__init__(theme, parent, width=520)
         self.theme = theme
         self.controller = controller
         self.result_rows: list[ServiceRow] = []
         self.site_rows: list[ServiceRow] = []
+        self.preset_cards: list[PresetCard] = []
+        self.group_chips: dict[str, Chip] = {}
+        self.custom_rows: list[tuple[Chip, object]] = []
         self._running = False
+        self.last_report: dict | None = None
 
         self.set_header(SheetHeader(theme, "Подбор под сайт",
-                                    "какая стратегия открывает именно его", "target",
+                                    "стратегия под сайт или группу сервисов", "target",
                                     on_close=self.close))
         self._build()
         controller.targets_started.connect(self._on_started)
+        controller.targets_step.connect(self._on_step)
         controller.targets_done.connect(self._on_done)
         controller.finished.connect(self._on_finished)
+        controller.presets_changed.connect(lambda _items: self._rebuild_presets())
         theme.changed.connect(self._restyle)
 
     # -- сборка ------------------------------------------------------------
@@ -491,10 +563,12 @@ class TargetSheet(Sheet):
         theme = self.theme
 
         self.input = QLineEdit()
-        self.input.setPlaceholderText("rutracker.org, https://site.ru/page или несколько через запятую")
+        self.input.setPlaceholderText("rutracker.org, https://site.ru/page или несколько "
+                                      "через запятую")
         self.input.setClearButtonEnabled(True)
         self.input.returnPressed.connect(self._run)
         self.input.setMinimumHeight(40)
+        self.input.textChanged.connect(lambda _text: self._refresh_preset_name())
 
         self.run_btn = GlassButton(theme, "Проверить стратегии", "rocket", "primary")
         self.run_btn.clicked.connect(self._run)
@@ -502,17 +576,55 @@ class TargetSheet(Sheet):
         self.apply_switch = Switch(theme, True)
         self.apply_switch.setToolTip("Сразу применять лучшую найденную стратегию")
 
-        groups_label = QLabel("Готовые группы — один клик")
+        self.groups_label = QLabel("Готовые группы — выберите одну или несколько")
         self.groups_grid = QGridLayout()
         self.groups_grid.setSpacing(6)
-        self._build_groups()
 
-        self.history_grid = QGridLayout()
-        self.history_grid.setSpacing(6)
-        self.history_label = QLabel("Недавние запросы")
+        self.selection_label = QLabel("")
+        self.btn_run_groups = GlassButton(theme, "Проверить выбранные группы", "target",
+                                         "secondary")
+        self.btn_run_groups.setEnabled(False)
+        self.btn_run_groups.clicked.connect(self._run_groups)
 
-        self.status_label = QLabel("Введите сайт и нажмите «Проверить стратегии».")
+        # Своя группа: название + домены из поля ввода
+        self.group_name = QLineEdit()
+        self.group_name.setPlaceholderText("Название своей группы, например «Работа»")
+        self.group_name.setMinimumHeight(36)
+        self.group_name.returnPressed.connect(self._save_group)
+        self.btn_save_group = GlassButton(theme, "Сохранить группу", "star", "ghost",
+                                          compact=True)
+        self.btn_save_group.clicked.connect(self._save_group)
+        self.custom_box = QWidget()
+        self.custom_layout = QVBoxLayout(self.custom_box)
+        self.custom_layout.setContentsMargins(0, 0, 0, 0)
+        self.custom_layout.setSpacing(6)
+        self.my_groups_label = QLabel("Мои группы")
+        self.custom_title = SectionTitle(theme, "Мои группы", "свой список сайтов", "users")
+
+        self.status_label = QLabel("Введите сайт, выберите группу или несколько групп.")
         self.status_label.setWordWrap(True)
+
+        # Сохранение результата пресетом
+        self.preset_name = QLineEdit()
+        self.preset_name.setPlaceholderText("Название пресета, например «Видео и чат»")
+        self.preset_name.setMinimumHeight(36)
+        self.preset_name.returnPressed.connect(self._save_preset)
+        self._preset_auto = True
+        self.preset_name.textEdited.connect(lambda _text: setattr(self, "_preset_auto", False))
+        self.btn_save_preset = GlassButton(theme, "Сохранить пресет", "star", "secondary",
+                                           compact=True)
+        self.btn_save_preset.clicked.connect(self._save_preset)
+
+        self.presets_title = SectionTitle(theme, "Пресеты", "домены и стратегия под них",
+                                         "star")
+        self.presets_box = QWidget()
+        self.presets_layout = QVBoxLayout(self.presets_box)
+        self.presets_layout.setContentsMargins(0, 0, 0, 0)
+        self.presets_layout.setSpacing(8)
+        self.presets_empty = QLabel("Пока пусто: подберите стратегию и сохраните её "
+                                    "пресетом — вернуться к ней можно одним нажатием.")
+        self.presets_empty.setWordWrap(True)
+        self.presets_layout.addWidget(self.presets_empty)
 
         self.results_box = QWidget()
         self.results_layout = QVBoxLayout(self.results_box)
@@ -526,30 +638,117 @@ class TargetSheet(Sheet):
         self.sites_layout.setSpacing(6)
         self.sites_title = SectionTitle(theme, "Сайты", "что ответило и как быстро", "globe")
 
+        self.history_grid = QGridLayout()
+        self.history_grid.setSpacing(6)
+        self.history_label = QLabel("Недавние запросы")
+
+        group_holder = _label_holder(theme, self.groups_label, self.groups_grid)
         self.set_content([
             section(theme, "Что проверяем", "домен или группа сайтов", "compass",
                     [self.input,
                      SettingRow(theme, "Применять лучшую", "сразу переключить обход на неё",
                                 _switch_holder(theme, self.apply_switch)),
                      self.run_btn,
-                     _label_holder(theme, groups_label, self.groups_grid),
-                     _label_holder(theme, self.history_label, self.history_grid)]),
+                     group_holder,
+                     self.selection_label,
+                     self.btn_run_groups,
+                     _label_holder(theme, self.custom_title, self.custom_row_layout()),
+                     ]),
             self.status_label,
+            section(theme, "Свой пресет", "сохранить результат под своим именем", "star",
+                    [self.preset_name, self.btn_save_preset]),
+            self.presets_title,
+            self.presets_box,
             self.results_title,
             self.results_box,
             self.sites_title,
             self.sites_box,
+            _label_holder(theme, self.history_label, self.history_grid),
         ])
+        self._build_groups()
+        self._rebuild_presets()
         self._rebuild_history()
+        self._update_selection()
+
+    def custom_row_layout(self) -> QVBoxLayout:
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(self.group_name, 1)
+        row.addWidget(self.btn_save_group)
+        layout.addLayout(row)
+        layout.addWidget(self.custom_box)
+        return layout
 
     def _build_groups(self):
-        from ..checks import SITE_GROUPS
+        """Чипы групп: встроенные сервисы и группы пользователя."""
+        kept = {key for key, chip in self.group_chips.items() if chip.isChecked()}
+        while self.groups_grid.count():
+            item = self.groups_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+        self.group_chips = {}
+        self.custom_rows = []
+        while self.custom_layout.count():
+            item = self.custom_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
 
-        for index, (key, title, icon, hosts) in enumerate(SITE_GROUPS):
-            chip = Chip(self.theme, title, icon)
-            chip.setToolTip(", ".join(hosts[:3]) + ("…" if len(hosts) > 3 else ""))
-            chip.clicked.connect(lambda _checked=False, k=key: self._run_group(k))
+        groups = self.controller.groups()
+        builtin = [g for g in groups if not g.get("custom")]
+        custom = [g for g in groups if g.get("custom")]
+        for index, group in enumerate(builtin):
+            chip = self._make_group_chip(group)
             self.groups_grid.addWidget(chip, index // 2, index % 2)
+        for group in custom:
+            row = QWidget()
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(6)
+            chip = self._make_group_chip(group)
+            chip.clicked.connect(lambda _checked=False, k=group["key"]: self._update_selection())
+            trash = GlassButton(self.theme, "", "trash", "ghost", compact=True,
+                                icon_only=True)
+            trash.setToolTip("Удалить группу")
+            trash.clicked.connect(lambda _checked=False, k=group["key"]: self._remove_group(k))
+            layout.addWidget(chip)
+            layout.addStretch(1)
+            layout.addWidget(trash)
+            self.custom_layout.addWidget(row)
+            self.custom_rows.append((chip, trash))
+        # Отмеченные группы остаются выбранными после пересборки списка.
+        for key in kept:
+            chip = self.group_chips.get(key)
+            if chip is not None:
+                chip.setChecked(True)
+        self.custom_title.setVisible(bool(custom))
+
+    def _make_group_chip(self, group: dict) -> Chip:
+        chip = Chip(self.theme, group["title"], group["icon"], "ghost", checkable=True)
+        chip.setToolTip(", ".join(group["hosts"][:5])
+                        + ("…" if len(group["hosts"]) > 5 else ""))
+        chip.toggled.connect(lambda _checked: self._update_selection())
+        self.group_chips[group["key"]] = chip
+        return chip
+
+    def _rebuild_presets(self):
+        for card in self.preset_cards:
+            self.presets_layout.removeWidget(card)
+            card.setParent(None)
+        self.preset_cards = []
+        presets = self.controller.site_presets()
+        for preset in presets:
+            card = PresetCard(self.theme, preset,
+                              on_apply=self._apply_preset,
+                              on_check=self._check_preset,
+                              on_remove=self._remove_preset)
+            self.presets_layout.addWidget(card)
+            self.preset_cards.append(card)
+        self.presets_empty.setVisible(not presets)
 
     def _rebuild_history(self):
         while self.history_grid.count():
@@ -560,33 +759,160 @@ class TargetSheet(Sheet):
         history = self.controller.target_history()
         self.history_label.setVisible(bool(history))
         for index, query in enumerate(history[:6]):
-            chip = Chip(self.theme, query if len(query) <= 28 else query[:26] + "…", "clock")
+            chip = Chip(self.theme, query if len(query) <= 28 else query[:26] + "…",
+                        "clock")
             chip.setToolTip(query)
             chip.clicked.connect(lambda _checked=False, q=query: self._run_query(q))
             self.history_grid.addWidget(chip, index // 2, index % 2)
 
+    # -- выбор групп -------------------------------------------------------
+
+    def selected_groups(self) -> list[str]:
+        return [key for key, chip in self.group_chips.items() if chip.isChecked()]
+
+    def _update_selection(self):
+        keys = self.selected_groups()
+        hosts = self.controller.group_hosts(keys)
+        self.btn_run_groups.setEnabled(bool(hosts) and not self._running)
+        if keys:
+            titles = [chip.text() for chip in self.group_chips.values() if chip.isChecked()]
+            text = f"Выбрано: {' + '.join(titles)} · доменов: {len(hosts)}"
+        else:
+            text = "Можно выбрать сразу несколько групп — стратегия подберётся под все."
+        self.selection_label.setText(text)
+        self._refresh_preset_name()
+
+    def _refresh_preset_name(self):
+        """Подсказывает имя пресета, пока пользователь не ввёл своё."""
+        if not self._preset_auto:
+            return
+        keys = self.selected_groups()
+        hosts = self._targets_for_saving()
+        if not keys and not hosts:
+            self.preset_name.clear()
+            return
+        self.preset_name.setText(self._suggested_name(keys, hosts))
+
+    def _suggested_name(self, keys: list[str], hosts: list[str]) -> str:
+        from .. import presets as presets_mod
+
+        return presets_mod.suggested_preset_name(self.controller.cfg, keys, hosts)
+
+    def _typed_hosts(self) -> list[str]:
+        from .. import checks
+
+        return checks.parse_targets(self.input.text())
+
+    def _current_targets(self) -> list[str]:
+        """Домены из поля ввода + домены выбранных групп."""
+        hosts = list(self._typed_hosts())
+        for host in self.controller.group_hosts(self.selected_groups()):
+            if host not in hosts:
+                hosts.append(host)
+        return hosts
+
+    def _targets_for_saving(self) -> list[str]:
+        """Что положить в свою группу: введённые сайты, иначе — выбранные группы."""
+        typed = self._typed_hosts()
+        return typed or self.controller.group_hosts(self.selected_groups())
+
     # -- запуск ------------------------------------------------------------
-
-    def _run_group(self, key: str):
-        from ..checks import SITE_GROUPS_BY_KEY
-
-        hosts = SITE_GROUPS_BY_KEY[key][2]
-        self.input.setText(hosts[0])
-        self.controller.log_now(f"Группа «{SITE_GROUPS_BY_KEY[key][0]}»: "
-                                f"{len(hosts)} доменов", "info")
-        self._run_query(", ".join(hosts))
 
     def _run(self):
         self._run_query(self.input.text())
 
-    def _run_query(self, query: str):
+    def _run_groups(self):
+        keys = self.selected_groups()
+        if not keys:
+            self.status_label.setText("Сначала отметьте группу — например YouTube или Discord.")
+            return
+        self._run_query("", groups=keys)
+
+    def _run_query(self, query: str, groups: list[str] | None = None):
         if self._running:
             self.controller.log_now("Подбор уже идёт — дождитесь результата.", "warn")
             return
-        if not query.strip():
-            self.status_label.setText("Сначала введите сайт, например rutracker.org")
+        hosts = self._current_targets() if groups is None else (
+            self.controller.group_hosts(groups))
+        if not hosts:
+            self.status_label.setText("Сначала введите сайт, например rutracker.org, "
+                                      "или выберите группу.")
             return
-        self.controller.test_targets(query, apply_best=self.apply_switch.isChecked())
+        # Если для этих доменов уже есть пресет — проверяем его же стратегией
+        # и обновляем результат, а не начинаем перебор с нуля.
+        existing = self._matching_preset(hosts)
+        self.controller.test_targets(query, apply_best=self.apply_switch.isChecked(),
+                                     hosts=hosts if groups else None,
+                                     groups=groups,
+                                     prefer=existing["strategy"] if existing else "",
+                                     preset_name=existing["name"] if existing else "")
+
+    def _matching_preset(self, hosts: list[str]) -> dict | None:
+        wanted = set(hosts)
+        for preset in self.controller.site_presets():
+            if set(preset["hosts"]) == wanted:
+                return preset
+        return None
+
+    def _save_group(self):
+        title = self.group_name.text().strip()
+        hosts = self._targets_for_saving()
+        if not title:
+            self.status_label.setText("Введите название группы — например «Работа».")
+            self.group_name.setFocus()
+            return
+        if not hosts:
+            self.status_label.setText("Сначала введите домены для группы — хотя бы один.")
+            return
+        group = self.controller.add_group(title, hosts)
+        if group is None:
+            self.status_label.setText("Не удалось сохранить группу — смотрите журнал.")
+            return
+        self.group_name.clear()
+        self._build_groups()
+        self.status_label.setText(f"Группа «{group['title']}» сохранена: "
+                                  f"{len(group['hosts'])} домен(ов). "
+                                  f"Отметьте её чипом выше.")
+
+    def _remove_group(self, key: str):
+        if self.controller.remove_group(key):
+            self._build_groups()
+            self._update_selection()
+
+    def _save_preset(self):
+        name = self.preset_name.text().strip()
+        if not name:
+            self.status_label.setText("Введите название пресета, например «Видео и чат».")
+            self.preset_name.setFocus()
+            return
+        report = self.last_report or {}
+        hosts = self._targets_for_saving()
+        if report.get("results"):
+            hosts = [item.get("host", "") for item in report["results"]] or hosts
+        if not hosts:
+            self.status_label.setText("Нечего сохранять: сначала подберите стратегию "
+                                      "под сайты или группы.")
+            return
+        preset = self.controller.save_preset(
+            name, hosts, report.get("strategy", ""), report.get("ok", 0),
+            report.get("total", len(hosts)), report.get("avg_ms", 0.0))
+        if preset:
+            self.status_label.setText(f"Пресет «{preset['name']}» сохранён: "
+                                      f"{preset['strategy'] or 'без стратегии'}.")
+
+    def _apply_preset(self, name: str):
+        if self.controller.apply_preset(name):
+            self.status_label.setText(f"Пресет «{name}» применён.")
+
+    def _check_preset(self, name: str):
+        if self._running:
+            self.controller.log_now("Подбор уже идёт — дождитесь результата.", "warn")
+            return
+        self.controller.check_preset(name)
+
+    def _remove_preset(self, name: str):
+        if self.controller.remove_preset(name):
+            self.status_label.setText(f"Пресет «{name}» удалён.")
 
     # -- реакция контроллера -----------------------------------------------
 
@@ -594,6 +920,7 @@ class TargetSheet(Sheet):
         self._running = True
         self.run_btn.setEnabled(False)
         self.run_btn.setText("Подбираю…")
+        self.btn_run_groups.setEnabled(False)
         self.status_label.setText(
             f"Проверяю {len(hosts)} домен(ов): {', '.join(hosts[:4])}"
             + ("…" if len(hosts) > 4 else ""))
@@ -604,10 +931,17 @@ class TargetSheet(Sheet):
         self.results_title.setVisible(False)
         self.sites_title.setVisible(False)
 
+    def _on_step(self, step: dict):
+        self.status_label.setText(
+            f"Стратегия {step.get('index')} из {step.get('total')}: "
+            f"{step.get('strategy')} — проверяю сайты…")
+
     def _on_done(self, report: dict):
         self._running = False
+        self.last_report = report
         self.run_btn.setEnabled(True)
         self.run_btn.setText("Проверить стратегии")
+        self.btn_run_groups.setEnabled(bool(self.selected_groups()))
         best = report.get("strategy", "")
         self.status_label.setText(
             f"Лучшая стратегия: {best} · успешно {report.get('ok')} из "
@@ -637,6 +971,10 @@ class TargetSheet(Sheet):
             self.sites_layout.addWidget(row)
             self.site_rows.append(row)
         self._rebuild_history()
+        if not self.preset_name.text().strip() and report.get("what"):
+            self.preset_name.setText(report["what"])
+        if self.controller.site_presets():
+            self._rebuild_presets()
 
     def _on_finished(self, key: str, success: bool, message: str):
         if key != "targets":
@@ -644,8 +982,10 @@ class TargetSheet(Sheet):
         self._running = False
         self.run_btn.setEnabled(True)
         self.run_btn.setText("Проверить стратегии")
+        self.btn_run_groups.setEnabled(bool(self.selected_groups()))
         if not success:
             self.status_label.setText(message or "Подбор не удался — смотрите журнал.")
+        self.last_report = self.controller.target_report if success else None
 
     # -- вспомогательное ---------------------------------------------------
 
@@ -663,8 +1003,13 @@ class TargetSheet(Sheet):
         pal = self.theme.palette
         self.status_label.setFont(font(self.theme.font_family, pal.font_sm))
         self.status_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
+        self.selection_label.setFont(font(self.theme.font_family, pal.font_xs,
+                                          QFont.Weight.DemiBold))
+        self.selection_label.setStyleSheet(f"color:{pal.text};background:transparent;")
         self.history_label.setFont(font(self.theme.font_family, pal.font_xs))
         self.history_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
+        self.presets_empty.setFont(font(self.theme.font_family, pal.font_xs))
+        self.presets_empty.setStyleSheet(f"color:{pal.muted};background:transparent;")
 
 
 def _switch_holder(theme, switch: Switch) -> QWidget:

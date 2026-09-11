@@ -211,19 +211,21 @@ def main() -> int:
     pump(app, 400)
     check(sheet.isVisible(), "панель подбора под сайт открывается")
 
-    # Кликаем по группе сайтов
+    # Подменяем перебор стратегий: сеть в тесте не нужна
     from zapret import autopilot as ap_mod
+    from zapret.qt.widgets import Chip
 
     captured: dict = {}
 
     def fake_run_for_targets(cfg, hosts, progress_cb=None, stop_flag=None, on_step=None,
-                             timeout=5.0, limit=6, apply_best=True):
+                             timeout=5.0, limit=6, apply_best=True, prefer=""):
         captured["hosts"] = list(hosts)
         captured["apply_best"] = apply_best
+        captured["prefer"] = prefer
         if progress_cb:
             progress_cb("Проверяю " + ", ".join(hosts))
         if on_step:
-            on_step(1, 1, "general.bat")
+            on_step(1, 2, "general.bat")
         return {"strategy": "general.bat", "applied": apply_best, "ok": len(hosts),
                 "total": len(hosts), "avg_ms": 150.0, "tries": [
                     {"strategy": "general.bat", "ok": len(hosts), "avg_ms": 150.0,
@@ -238,23 +240,34 @@ def main() -> int:
 
     ap_mod.run_for_targets = fake_run_for_targets     # type: ignore[assignment]
 
-    # группа YouTube
-    from zapret.qt.widgets import Chip
-    chips = sheet.findChildren(Chip)
-    check(len(chips) >= 6, f"на панели есть чипы групп и истории ({len(chips)})")
-    youtube_chip = next((c for c in chips if c.text() == "YouTube"), None)
-    if youtube_chip is not None:
-        click(youtube_chip)
-        wait_idle(app, controller)
-        pump(app, 400)
-    check("googlevideo.com" in captured.get("hosts", []),
-          f"группа YouTube разворачивается в список доменов ({len(captured.get('hosts', []))})")
+    check(len(sheet.group_chips) >= 10,
+          f"готовые группы сервисов на месте ({len(sheet.group_chips)})")
+    check({"youtube", "discord", "telegram"} <= set(sheet.group_chips),
+          "есть готовые группы Discord, YouTube и Telegram")
+
+    # Мультивыбор: сразу несколько групп одной проверкой
+    sheet.group_chips["youtube"].setChecked(True)
+    sheet.group_chips["discord"].setChecked(True)
+    pump(app, 150)
+    check("YouTube" in sheet.selection_label.text()
+          and "Discord" in sheet.selection_label.text(),
+          f"выбор групп показывается подсказкой ({sheet.selection_label.text()[:40]}…)")
+    check(sheet.btn_run_groups.isEnabled(), "кнопка «Проверить выбранные группы» активна")
+
+    click(sheet.btn_run_groups)
+    wait_idle(app, controller)
+    pump(app, 400)
+    hosts = captured.get("hosts", [])
+    check("youtube.com" in hosts and "discord.com" in hosts and "googlevideo.com" in hosts,
+          f"стратегия подбирается сразу под несколько групп ({len(hosts)} доменов)")
     check(len(sheet.result_rows) == 2, "результаты по стратегиям показаны списком")
     check(any(row.badge == "ЛУЧШАЯ" for row in sheet.result_rows),
           "лучшая стратегия помечена бейджем «ЛУЧШАЯ»")
-    check(len(sheet.site_rows) >= 1, "по каждому сайту показан результат")
+    check(len(sheet.site_rows) >= 2, "по каждому сайту показан результат")
 
-    # свой сайт строкой
+    # Свой сайт строкой
+    sheet.group_chips["youtube"].setChecked(False)
+    sheet.group_chips["discord"].setChecked(False)
     sheet.input.setText("https://rutracker.org/forum/index.php")
     click(sheet.run_btn)
     wait_idle(app, controller)
@@ -264,15 +277,72 @@ def main() -> int:
     check(any(c.text() == "rutracker.org" for c in sheet.findChildren(Chip)),
           "запрос попал в историю недавних")
 
+    # Пресет: сохраняем результат и применяем одним нажатием
+    sheet.preset_name.setText("Рутрекер")
+    click(sheet.btn_save_preset)
+    pump(app, 200)
+    stored = controller.site_presets()
+    check(any(p["name"] == "Рутрекер" for p in stored),
+          f"пресет сохраняется ({[p['name'] for p in stored]})")
+    check(bool(sheet.preset_cards), "пресет показан карточкой на панели")
+    check(any(p["strategy"] == "general.bat" for p in stored),
+          "в пресете записана найденная стратегия")
+
+    controller.cfg["strategy"] = "general.bat"
+    click(sheet.preset_cards[0].apply_btn)
+    wait_idle(app, controller)
+    pump(app, 200)
+    check(controller.cfg.get("strategy") == "general.bat",
+          "кнопка «Применить» у пресета ставит его стратегию")
+
+    # Своя группа
+    sheet.input.setText("wiki.example.com, git.example.com")
+    sheet.group_name.setText("Работа")
+    click(sheet.btn_save_group)
+    pump(app, 250)
+    check(any(key.startswith("my:") for key in sheet.group_chips),
+          f"своя группа появляется среди чипов ({[k for k in sheet.group_chips if k.startswith('my:')]})")
+    check(any(g["title"] == "Работа" for g in controller.groups()),
+          "своя группа сохраняется в конфиг")
+    sheet.group_name.setText("Работа")
+    sheet.input.setText("git.example.com")
+    click(sheet.btn_save_group)
+    pump(app, 200)
+    check(len([g for g in controller.groups() if g["title"] == "Работа"]) == 1,
+          "повторное сохранение обновляет ту же группу, а не плодит дубли")
+
+    # Повторный подбор для тех же доменов идёт от стратегии пресета
+    sheet.input.setText("rutracker.org")
+    click(sheet.run_btn)
+    wait_idle(app, controller)
+    pump(app, 400)
+    check(captured.get("prefer") == "general.bat",
+          f"повторный подбор начинается со стратегии пресета ({captured.get('prefer')!r})")
+
+    # …и то же самое делает кнопка «Проверить» на карточке пресета
+    captured.pop("prefer", None)
+    click(sheet.preset_cards[0].check_btn)
+    wait_idle(app, controller)
+    pump(app, 400)
+    check(captured.get("prefer") == "general.bat",
+          f"карточку пресета можно перепроверить ({captured.get('prefer')!r})")
+    check(controller.site_presets()[0]["avg_ms"] == 150.0,
+          "перепроверка обновляет результат в пресете")
+
     # отключённое «применять лучшую»
     click(sheet.apply_switch)
     pump(app, 150)
-    sheet.input.setText("example.com")
+    sheet.input.setText("example.org")
     click(sheet.run_btn)
     wait_idle(app, controller)
     pump(app, 300)
     check(captured.get("apply_best") is False,
           "переключатель «применять лучшую» отключает автоприменение")
+
+    # удаление пресета
+    controller.remove_preset("Рутрекер")
+    pump(app, 300)
+    check(not controller.site_presets(), "пресет удаляется")
     sheet.close()
     pump(app, 300)
 

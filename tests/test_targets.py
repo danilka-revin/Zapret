@@ -165,6 +165,45 @@ def test_autopilot_reports_percent_for_multiple_sites(monkeypatch):
     assert steps == [(1, 1, "only.bat")]
 
 
+def test_saved_strategy_is_checked_first(monkeypatch):
+    """Пресет проверяется своей же стратегией — она идёт первой в переборе."""
+    _prepare(monkeypatch, {"general.bat": 0, "general_alt2.bat": 0})
+    monkeypatch.setattr(autopilot, "evaluate", _host_results(
+        monkeypatch, {"general.bat": 100.0, "general_alt2.bat": 450.0}))
+    seen: list[str] = []
+    original = autopilot.evaluate
+
+    def spy(cfg, strategy, timeout=5.0, prober=None):
+        seen.append(strategy)
+        return original(cfg, strategy, timeout, prober)
+
+    monkeypatch.setattr(autopilot, "evaluate", spy)
+    report = autopilot.run_for_targets({"strategy": "general.bat"}, ["a.ru"], timeout=1.0,
+                                       limit=2, apply_best=False,
+                                       prefer="general_alt2.bat")
+    assert seen[0] == "general_alt2.bat"          # сохранённая — первой
+    assert report["strategy"] == "general.bat"    # но выбрана лучшая по факту
+
+
+def test_working_saved_strategy_stops_the_search(monkeypatch):
+    _prepare(monkeypatch, {"general.bat": 0, "general_alt2.bat": 0})
+    monkeypatch.setattr(autopilot, "evaluate", _host_results(
+        monkeypatch, {"general.bat": 900.0, "general_alt2.bat": 120.0}))
+    seen: list[str] = []
+    original = autopilot.evaluate
+
+    def spy(cfg, strategy, timeout=5.0, prober=None):
+        seen.append(strategy)
+        return original(cfg, strategy, timeout, prober)
+
+    monkeypatch.setattr(autopilot, "evaluate", spy)
+    report = autopilot.run_for_targets({"strategy": "general.bat"}, ["a.ru"], timeout=1.0,
+                                       limit=2, apply_best=False,
+                                       prefer="general_alt2.bat")
+    assert seen == ["general_alt2.bat"]           # перебор закончился сразу
+    assert report["strategy"] == "general_alt2.bat"
+
+
 def test_run_for_targets_requires_hosts():
     try:
         autopilot.run_for_targets({}, ["мусор"])

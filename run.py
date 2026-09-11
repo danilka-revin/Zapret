@@ -297,8 +297,12 @@ def main() -> int:
     if cmd == "autopilot":
         from zapret import autopilot as autopilot_mod
         from zapret import config as config_mod
+        from zapret import presets as presets_mod
 
         sites = ""
+        groups = ""
+        preset_name = ""
+        save_as = ""
         apply_best = False
         limit = 6
         index = 1
@@ -307,6 +311,15 @@ def main() -> int:
             if item in ("--sites", "-s") and index + 1 < len(args):
                 sites = args[index + 1]
                 index += 2
+            elif item in ("--groups", "-g") and index + 1 < len(args):
+                groups = args[index + 1]
+                index += 2
+            elif item in ("--preset", "-p") and index + 1 < len(args):
+                preset_name = args[index + 1]
+                index += 2
+            elif item in ("--save-preset",) and index + 1 < len(args):
+                save_as = args[index + 1]
+                index += 2
             elif item in ("--limit", "-l") and index + 1 < len(args):
                 limit = int(args[index + 1])
                 index += 2
@@ -314,22 +327,55 @@ def main() -> int:
                 apply_best = True
                 index += 1
             elif item in ("--help", "-h"):
-                _log("python3 run.py autopilot --sites \"rutracker.org, youtube.com\" "
+                _log('python3 run.py autopilot --sites "rutracker.org, youtube.com" '
                      "[--apply] [--limit N]")
+                _log("  или по группам:  --groups youtube,discord")
+                _log("  или пресетом:    --preset \"Видео и чат\" "
+                     "[--save-preset \"Видео и чат\"]")
                 return 0
             else:
                 sites = (sites + " " + item).strip()
                 index += 1
 
-        hosts = checks.parse_targets(sites) if sites else []
-        if not hosts:
-            _log("Укажите сайты: python3 run.py autopilot --sites \"rutracker.org\"")
-            return 1
         cfg = config_mod.load()
-        _log(f"Проверяю {len(hosts)} сайт(ов): {', '.join(hosts)}")
+        hosts: list[str] = []
+        prefer = ""
+        if preset_name:
+            preset = presets_mod.preset_by_name(cfg, preset_name)
+            if not preset:
+                _log(f"Пресет «{preset_name}» не найден. Сохранённые: "
+                     + (", ".join(p["name"] for p in presets_mod.presets(cfg)) or "нет"))
+                return 1
+            hosts = list(preset["hosts"])
+            prefer = preset["strategy"]
+            save_as = save_as or preset["name"]
+            _log(f"Пресет «{preset['name']}»: {len(hosts)} домен(ов), "
+                 f"стратегия {prefer or 'ещё не подобрана'}")
+        if groups:
+            keys = [key.strip() for key in groups.split(",") if key.strip()]
+            known = {group["key"] for group in presets_mod.all_groups(cfg)}
+            unknown = [key for key in keys if key not in known]
+            if unknown:
+                _log("Не знаю такие группы: " + ", ".join(unknown))
+                _log("Доступные: " + ", ".join(sorted(known)))
+                return 1
+            for host in presets_mod.hosts_for_selection(cfg, keys):
+                if host not in hosts:
+                    hosts.append(host)
+        if sites:
+            for host in checks.parse_targets(sites):
+                if host not in hosts:
+                    hosts.append(host)
+        if not hosts:
+            _log('Укажите сайты или группы: python3 run.py autopilot --sites "rutracker.org" '
+                 "| --groups youtube,discord | --preset \"Видео и чат\"")
+            return 1
+        _log(f"Проверяю {len(hosts)} домен(ов): {', '.join(hosts[:6])}"
+             + ("…" if len(hosts) > 6 else ""))
         try:
             report = autopilot_mod.run_for_targets(
-                cfg, hosts, progress_cb=_log, limit=limit, apply_best=apply_best)
+                cfg, hosts, progress_cb=_log, limit=limit, apply_best=apply_best,
+                prefer=prefer)
         except Exception as exc:  # noqa: BLE001
             _log(f"Ошибка: {exc}")
             return 1
@@ -340,6 +386,12 @@ def main() -> int:
                  f"/{report.get('total')} · средняя задержка {item.get('avg_ms', 0):.0f} мс")
         _log(f"Лучшая стратегия: {report.get('strategy')}"
              + (" (применена)" if report.get("applied") else " (только измерение)"))
+        if save_as:
+            preset = presets_mod.save_preset(
+                cfg, save_as, hosts, report.get("strategy", ""),
+                ok=report.get("ok", 0), total=report.get("total", len(hosts)),
+                avg_ms=report.get("avg_ms", 0.0))
+            _log(f"Пресет «{preset['name']}» сохранён: {preset['strategy']}")
         return 0
 
     if cmd == "shortcut":

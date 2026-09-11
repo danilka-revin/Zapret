@@ -1104,14 +1104,21 @@ class Sparkline(QWidget):
 
 
 class Chip(QPushButton):
-    """Компактная кнопка-«чип»: группы сайтов, история запросов."""
+    """Компактная кнопка-«чип»: группы сайтов, история запросов.
+
+    С `checkable=True` работает как переключатель: так выбираются сразу
+    несколько групп сайтов для одного подбора.
+    """
 
     def __init__(self, theme, text: str, icon: str = "", kind: str = "ghost",
-                 parent=None):
+                 parent=None, checkable: bool = False):
         super().__init__(text, parent)
         self.theme = theme
         self.icon_name = icon
         self.kind = kind
+        if checkable:
+            self.setCheckable(True)
+            self.toggled.connect(lambda _value: self.update())
         self.hover = 0.0
         self.press = 0.0
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1125,7 +1132,9 @@ class Chip(QPushButton):
         pal = self.theme.palette
         self.setFont(font(self.theme.font_family, pal.font_xs, QFont.Weight.DemiBold))
         fm = QFontMetrics(self.font())
-        self.setMinimumWidth(fm.horizontalAdvance(self.text()) + (30 if self.icon_name else 22))
+        extra = 16 if self.isCheckable() else 0
+        self.setMinimumWidth(fm.horizontalAdvance(self.text())
+                             + (30 if self.icon_name else 22) + extra)
         self.update()
 
     def enterEvent(self, event):  # noqa: N802
@@ -1157,7 +1166,15 @@ class Chip(QPushButton):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         accent = self.kind == "accent"
-        if accent:
+        selected = self.isCheckable() and self.isChecked()
+        if selected:
+            # Выбранная группа: акцентная заливка, чтобы выбор был виден сразу.
+            # Текст и иконка — цветом on_accent: в тёмной теме accent_text совпадает
+            # с акцентом, и надпись исчезла бы на заливке.
+            bg = QColor(pal.accent)
+            border = _with_alpha(pal.on_accent, 0.25)
+            fg = QColor(pal.on_accent)
+        elif accent:
             bg = _with_alpha(pal.accent, 0.16 + 0.08 * self.hover)
             border = _with_alpha(pal.accent, 0.45)
             fg = QColor(pal.accent_text)
@@ -1165,12 +1182,16 @@ class Chip(QPushButton):
             bg = _with_alpha(pal.text, 0.05 + 0.05 * self.hover)
             border = _with_alpha(pal.text, 0.12)
             fg = QColor(pal.text)
-        if self.press:
+        if self.press and not selected:
             bg = _with_alpha(pal.text, 0.12)
         p.setBrush(bg)
         p.setPen(QPen(border, 1.0))
         p.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
         x = rect.left() + (12 if not self.icon_name else 9)
+        if selected:
+            pm = icons.icon_pixmap("check", 13, fg.name(), 2.2)
+            p.drawPixmap(QPointF(x, rect.center().y() - pm.height() / 2), pm)
+            x += 18
         if self.icon_name:
             pm = icons.icon_pixmap(self.icon_name, 14, fg.name(), 1.8)
             p.drawPixmap(QPointF(x, rect.center().y() - pm.height() / 2), pm)

@@ -69,21 +69,58 @@ SERVICES_BY_KEY = {s.key: s for s in SERVICES}
 # ---------------------------------------------------------------------------
 
 SITE_GROUPS: list[tuple[str, str, str, tuple[str, ...]]] = [
-    ("youtube", "YouTube", "play",
+    ("youtube", "YouTube", "youtube",
      ("youtube.com", "youtu.be", "www.youtube.com", "i.ytimg.com", "googlevideo.com")),
     ("discord", "Discord", "gamepad",
      ("discord.com", "discordapp.com", "cdn.discordapp.com", "gateway.discord.gg")),
     ("telegram", "Telegram", "send",
      ("web.telegram.org", "telegram.org", "t.me", "cdn-telegram.org")),
     ("ai", "Нейросети", "sparkles",
-     ("chatgpt.com", "claude.ai", "gemini.google.com", "perplexity.ai")),
-    ("social", "Соцсети", "globe",
-     ("instagram.com", "x.com", "www.facebook.com", "reddit.com")),
-    ("media", "Медиа", "play",
-     ("spotify.com", "twitch.tv", "soundcloud.com", "netflix.com")),
+     ("chatgpt.com", "claude.ai", "gemini.google.com", "perplexity.ai",
+      "copilot.microsoft.com")),
+    ("instagram", "Instagram", "instagram",
+     ("instagram.com", "www.instagram.com", "cdninstagram.com")),
+    ("tiktok", "TikTok", "music",
+     ("tiktok.com", "www.tiktok.com", "tiktokcdn.com", "tiktokv.com")),
+    ("twitter", "Twitter / X", "twitter",
+     ("x.com", "twitter.com", "t.co", "twimg.com")),
+    ("twitch", "Twitch", "twitch",
+     ("twitch.tv", "www.twitch.tv", "ttvnw.net", "jtvnw.net")),
+    ("whatsapp", "WhatsApp", "message-circle",
+     ("web.whatsapp.com", "whatsapp.com", "static.whatsapp.net", "mmg.whatsapp.net")),
+    ("music", "Музыка", "headphones",
+     ("spotify.com", "soundcloud.com", "deezer.com", "music.yandex.ru")),
+    ("netflix", "Кино", "film",
+     ("netflix.com", "nflxvideo.net", "hdrezka.ag", "kinopoisk.ru")),
+    ("google", "Google", "search",
+     ("google.com", "www.google.com", "gstatic.com", "googleusercontent.com")),
+    ("social", "Соцсети", "users",
+     ("vk.com", "ok.ru", "www.facebook.com", "reddit.com")),
+    ("games", "Игры", "box",
+     ("store.steampowered.com", "steamcommunity.com", "epicgames.com", "steamcontent.com")),
+    ("torrents", "Торренты", "download",
+     ("rutracker.org", "rutor.info", "nnmclub.to", "kinozal.tv")),
+    ("clouds", "Облака", "cloud",
+     ("drive.google.com", "dropbox.com", "mega.nz", "onedrive.live.com")),
 ]
-
 SITE_GROUPS_BY_KEY = {key: (title, icon, hosts) for key, title, icon, hosts in SITE_GROUPS}
+
+
+def hosts_for_groups(keys) -> list[str]:
+    """Домены выбранных групп: без повторов, в порядке выбора.
+
+    Используется, когда стратегия подбирается сразу под несколько сервисов —
+    например «YouTube + Discord».
+    """
+    hosts: list[str] = []
+    for key in keys:
+        info = SITE_GROUPS_BY_KEY.get(key)
+        if not info:
+            continue
+        for host in info[2]:
+            if host not in hosts:
+                hosts.append(host)
+    return hosts
 
 
 def clean_host(value: str) -> str:

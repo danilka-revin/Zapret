@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -105,7 +106,25 @@ def main() -> int:
                 if other_key != "targets":
                     other.hide()
                     other.overlay.hide()
+            # Демонстрационные данные: своя группа и сохранённые пресеты
+            now = time.time()
+            controller.cfg["site_groups"] = [
+                {"key": "work", "title": "Работа", "icon": "star",
+                 "hosts": ["wiki.example.com", "git.example.com"]}]
+            controller.cfg["site_presets"] = [
+                {"name": "Видео и чат", "strategy": "general_alt2.bat",
+                 "hosts": ["youtube.com", "youtu.be", "googlevideo.com", "discord.com",
+                           "discordapp.com"],
+                 "ok": 5, "total": 5, "avg_ms": 210.0, "checked_at": now - 240},
+                {"name": "Работа VPN", "strategy": "general.bat",
+                 "hosts": ["wiki.example.com", "git.example.com"],
+                 "ok": 2, "total": 2, "avg_ms": 140.0, "checked_at": now - 5400},
+            ]
             sheet = window.sheets["targets"]
+            sheet._build_groups()
+            sheet._rebuild_presets()
+            sheet.group_chips["youtube"].setChecked(True)
+            sheet.group_chips["discord"].setChecked(True)
             sheet.setGeometry(window.centralWidget().rect())
             sheet.input.setText("rutracker.org, youtube.com")
             sheet.open()

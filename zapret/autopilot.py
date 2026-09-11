@@ -71,7 +71,8 @@ def run(cfg: dict,
         prober: Callable[[], list[dict]] | None = None,
         ideal_ok: int | None = None,
         apply_best: bool = True,
-        what: str = "сервисы") -> dict:
+        what: str = "сервисы",
+        prefer: str = "") -> dict:
     """
     Перебирает стратегии и оставляет лучшую.
 
@@ -90,6 +91,10 @@ def run(cfg: dict,
         raise RuntimeError("Нет доступа в интернет. Проверьте подключение и повторите.")
 
     names = candidate_strategies(cfg, limit)
+    # Сохранённый пресет проверяем его же стратегией в первую очередь: если она
+    # по-прежнему работает, перебор заканчивается на первом шаге.
+    if prefer and prefer in names:
+        names = [prefer] + [name for name in names if name != prefer]
     if not names:
         raise RuntimeError("Не найдено ни одной стратегии. Обновите зависимости.")
 
@@ -175,7 +180,8 @@ def run_for_targets(cfg: dict,
                     on_step: Callable[[int, int, str], None] | None = None,
                     timeout: float = PROBE_TIMEOUT,
                     limit: int = MAX_CANDIDATES,
-                    apply_best: bool = True) -> dict:
+                    apply_best: bool = True,
+                    prefer: str = "") -> dict:
     """Подбирает лучшую стратегию под конкретные сайты (один или несколько).
 
     Пример: hosts=["rutracker.org"] — приложение переберёт стратегии и скажет,
@@ -189,4 +195,4 @@ def run_for_targets(cfg: dict,
     prober = lambda: checks.probe_hosts(hosts, timeout)  # noqa: E731
     return run(cfg, progress_cb=progress_cb, stop_flag=stop_flag, timeout=timeout,
                limit=limit, on_step=on_step, prober=prober, ideal_ok=len(hosts),
-               apply_best=apply_best, what=what)
+               apply_best=apply_best, what=what, prefer=prefer)

@@ -15,7 +15,7 @@ import time
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from .. import checks, config as config_mod, core, integration
-from .. import autopilot
+from .. import autopilot, presets as presets_mod
 
 OPERATION_LABELS = {
     "power_on": "Включение защиты",
@@ -47,6 +47,7 @@ class Controller(QObject):
     targets_started = Signal(list)          # сайты, для которых начат подбор
     targets_step = Signal(dict)             # промежуточный итог по стратегии
     targets_done = Signal(dict)             # итоговый отчёт подбора
+    presets_changed = Signal(list)          # сохранённые пресеты сайтов
 
     def __init__(self, theme, parent=None):
         super().__init__(parent)
@@ -272,6 +273,11 @@ class Controller(QObject):
         self.busy_detail = f"Стратегия {index} из {total}: {strategy}"
         self.changed.emit()
 
+    def _on_targets_step(self, index: int, total: int, strategy: str):
+        """Подбор под сайт переходит к следующей стратегии."""
+        self._on_autopilot_step(index, total, strategy)
+        self.targets_step.emit({"index": index, "total": total, "strategy": strategy})
+
     def _submit(self, key: str, work, success: str = "", failure: str = "Ошибка"):
         if self.busy_key:
             self.log.emit(f"Сейчас выполняется: "
@@ -404,9 +410,120 @@ class Controller(QObject):
         self.cfg["ui"] = ui
         config_mod.save(self.cfg)
 
-    def test_targets(self, raw_query: str, apply_best: bool = True):
-        """Перебирает стратегии под указанные сайты и выбирает лучшую."""
-        hosts = checks.parse_targets(raw_query)
+    # -- группы сайтов: готовые и свои ----------------------------------
+
+    def groups(self) -> list[dict]:
+        """Готовые группы сервисов (YouTube, Discord, Telegram…) и группы пользователя."""
+        return presets_mod.all_groups(self.cfg)
+
+    def group_hosts(self, keys: list[str]) -> list[str]:
+        return presets_mod.hosts_for_selection(self.cfg, keys)
+
+    def add_group(self, title: str, hosts: list[str]) -> dict | None:
+        try:
+            group = presets_mod.add_group(self.cfg, title, hosts)
+        except ValueError as exc:
+            self.log.emit(str(exc), "warn")
+            self.finished.emit("group", False, str(exc))
+            return None
+        self.log.emit(f"Группа «{group['title']}» сохранена: "
+                      f"{len(group['hosts'])} домен(ов).", "ok")
+        self.finished.emit("group", True, "")
+        return group
+
+    def remove_group(self, key: str) -> bool:
+        group = presets_mod.group_by_key(self.cfg, key)
+        if not presets_mod.remove_group(self.cfg, key):
+            return False
+        title = (group or {}).get("title", key)
+        self.log.emit(f"Группа «{title}» удалена.", "info")
+        self.finished.emit("group", True, "")
+        return True
+
+    # -- пресеты: домены + найденная стратегия --------------------------
+
+    def site_presets(self) -> list[dict]:
+        return presets_mod.presets(self.cfg)
+
+    def save_preset(self, name: str, hosts: list[str], strategy: str = "",
+                    ok: int = 0, total: int = 0, avg_ms: float = 0.0) -> dict | None:
+        try:
+            preset = presets_mod.save_preset(self.cfg, name, hosts, strategy,
+                                             ok=ok, total=total, avg_ms=avg_ms)
+        except ValueError as exc:
+            self.log.emit(str(exc), "warn")
+            self.finished.emit("preset", False, str(exc))
+            return None
+        self.presets_changed.emit(self.site_presets())
+        self.log.emit(f"Пресет «{preset['name']}» сохранён: {preset['strategy']} "
+                      f"для {len(preset['hosts'])} домен(ов).", "ok")
+        self.finished.emit("preset", True, "")
+        return preset
+
+    def remove_preset(self, name: str) -> bool:
+        if not presets_mod.remove_preset(self.cfg, name):
+            return False
+        self.presets_changed.emit(self.site_presets())
+        self.log.emit(f"Пресет «{name}» удалён.", "info")
+        self.finished.emit("preset", True, "")
+        return True
+
+    def check_preset(self, name: str):
+        """Перепроверяет сохранённый пресет: сначала его же стратегией."""
+        preset = presets_mod.preset_by_name(self.cfg, name)
+        if not preset:
+            self.log.emit(f"Пресет «{name}» не найден.", "warn")
+            self.finished.emit("targets", False, "пресет не найден")
+            return
+        self.log.emit(f"Проверяю пресет «{preset['name']}» "
+                      f"({len(preset['hosts'])} домен(ов)).", "info")
+        self.test_targets("", apply_best=True, prefer=preset["strategy"],
+                          preset_name=preset["name"], hosts=preset["hosts"])
+
+    def apply_preset(self, name: str) -> bool:
+        """Ставит стратегию из пресета — сразу, вместе с перезапуском обхода."""
+        preset = presets_mod.preset_by_name(self.cfg, name)
+        if not preset:
+            self.log.emit(f"Пресет «{name}» не найден.", "warn")
+            return False
+        if not preset["strategy"]:
+            self.log.emit(f"В пресете «{preset['name']}» ещё нет стратегии — "
+                          f"сначала проверьте его.", "warn")
+            return False
+        self.cfg["strategy"] = preset["strategy"]
+        config_mod.save(self.cfg)
+        self.log.emit(f"Пресет «{preset['name']}»: стратегия {preset['strategy']}.",
+                      "ok")
+        if core.nfqws_running():
+            self._submit(
+                "apply",
+                lambda: core.run_zapret(self.cfg),
+                f"Обход перезапущен со стратегией {preset['strategy']}.",
+                "Не удалось перезапустить обход")
+        else:
+            self.log.emit("Обход выключен — стратегия применится при включении.", "info")
+        self.notify.emit("Пресет применён", f"{preset['name']} → {preset['strategy']}")
+        self.changed.emit()
+        return True
+
+    # -- подбор ---------------------------------------------------------
+
+    def test_targets(self, raw_query: str, apply_best: bool = True,
+                     prefer: str = "", preset_name: str = "",
+                     hosts: list[str] | None = None, groups: list[str] | None = None):
+        """Перебирает стратегии под указанные сайты (или группы) и выбирает лучшую."""
+        targets: list[str] = []
+        if groups:
+            targets.extend(presets_mod.hosts_for_selection(self.cfg, groups))
+        if raw_query.strip():
+            targets.extend(checks.parse_targets(raw_query))
+        if hosts:
+            targets.extend(checks.clean_host(h) or h for h in hosts)
+        hosts = []
+        for host in targets:
+            if host and host not in hosts:
+                hosts.append(host)
+
         if not hosts:
             self.log.emit("Не понял, какие сайты проверять. Введите домен, например "
                           "rutracker.org, или выберите группу.", "warn")
@@ -423,7 +540,7 @@ class Controller(QObject):
 
         # В историю пишем уже разобранные домены — из ссылки вида
         # https://rutracker.org/forum/index.php остаётся понятное «rutracker.org».
-        self._remember_targets(", ".join(hosts))
+        self._remember_targets(", ".join(hosts[:3]) + ("…" if len(hosts) > 3 else ""))
         self.targets_started.emit(hosts)
         if self.busy_key:
             self.log.emit("Сейчас выполняется другая операция — дождитесь завершения.", "warn")
@@ -431,7 +548,12 @@ class Controller(QObject):
             return
 
         self._set_busy("targets")
-        what = hosts[0] if len(hosts) == 1 else f"{len(hosts)} сайтов"
+        if groups:
+            titles = [g["title"] for g in (presets_mod.group_by_key(self.cfg, key)
+                                           for key in groups) if g]
+            what = " + ".join(titles[:3]) if titles else f"{len(hosts)} сайтов"
+        else:
+            what = hosts[0] if len(hosts) == 1 else f"{len(hosts)} сайтов"
 
         def runner():
             try:
@@ -439,9 +561,10 @@ class Controller(QObject):
                     self.cfg, hosts,
                     progress_cb=lambda msg: self.log.emit(msg, "info"),
                     stop_flag=lambda: self._stop_flag,
-                    on_step=self._on_autopilot_step,
+                    on_step=self._on_targets_step,
                     apply_best=apply_best,
                     limit=8,
+                    prefer=prefer,
                 )
                 self.target_report = report
                 self.services = [
@@ -449,6 +572,27 @@ class Controller(QObject):
                     for result in report.get("results", [])
                 ]
                 self.targets_done.emit(report)
+
+                # Результат подбора сохраняем в пресет: в следующий раз его можно
+                # применить одним нажатием, не перебирая стратегии заново.
+                name = (preset_name or "").strip()
+                if name:
+                    saved = presets_mod.update_preset(
+                        self.cfg, name, strategy=report["strategy"], ok=report.get("ok", 0),
+                        total=report.get("total", len(hosts)),
+                        avg_ms=report.get("avg_ms", 0.0), hosts=hosts)
+                    if saved is None:
+                        saved = self.save_preset(name, hosts, report["strategy"],
+                                                 report.get("ok", 0),
+                                                 report.get("total", len(hosts)),
+                                                 report.get("avg_ms", 0.0))
+                    if saved:
+                        self.presets_changed.emit(self.site_presets())
+                        self.log.emit(f"Пресет «{name}» обновлён: "
+                                      f"{report['strategy']}, "
+                                      f"{report.get('ok')}/{report.get('total')} сайтов.",
+                                      "ok")
+
                 if report.get("applied"):
                     self.log.emit(f"Стратегия для «{what}»: {report['strategy']} — применена.",
                                   "ok")
@@ -468,6 +612,7 @@ class Controller(QObject):
                 self._set_busy("")
                 self.refresh_status()
 
+        self.busy_detail = "Подготовка"
         threading.Thread(target=runner, daemon=True, name="zapret-targets").start()
 
     def stop_autopilot(self):
