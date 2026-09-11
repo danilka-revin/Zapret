@@ -448,6 +448,25 @@ def has_display(env: dict[str, str] | None = None) -> bool:
     return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
 
 
+def qt_platform_fallbacks(env: dict[str, str] | None = None) -> list[str]:
+    """Порядок перебора Qt-платформ: текущая → xcb → wayland.
+
+    Пустая строка — «как есть» (выбор пользователя или автовыбор Qt).
+    На Wayland-сессии без wayland-плагина спасает xcb через XWayland
+    (в Ubuntu он всегда под рукой), и наоборот.
+    """
+    env = env if env is not None else os.environ
+    forced = (env.get("QT_QPA_PLATFORM") or "").strip().lower()
+    if forced in ("offscreen", "minimal"):
+        return [forced]       # тестовые платформы не перебираем
+    ordered = [forced] if forced else [""]
+    if forced != "xcb":
+        ordered.append("xcb")
+    if (env.get("WAYLAND_DISPLAY") or forced == "wayland") and forced != "wayland":
+        ordered.append("wayland")
+    return ordered
+
+
 # ---------------------------------------------------------------------------
 # Ярлыки пользователя
 # ---------------------------------------------------------------------------
@@ -598,11 +617,15 @@ def launch_gui(app_dir: str | Path, log_path: str | Path | None = None,
     if not (app_dir / "run.py").exists():
         result["message"] = f"Не найден {app_dir / 'run.py'} — установка не завершена."
         return result
-    if not has_display(env):
+    headless = (env.get("QT_QPA_PLATFORM") or "").strip().lower() in (
+        "offscreen", "minimal", "vnc")
+    if not has_display(env) and not headless:
         result["message"] = ("Графическая сессия не найдена (нет DISPLAY/WAYLAND_DISPLAY). "
                              f"Запустите из-под рабочего стола: python3 {app_dir / 'run.py'} gui")
         return result
 
+    picked_platform = ""
+    forced_platform = (env.get("QT_QPA_PLATFORM") or "").strip().lower()
     if probe:
         # os._exit(0) в конце: иначе PySide6 иногда падает с SIGSEGV при
         # завершении процесса — проверка «открывается ли окно» ложно краснела.
@@ -611,18 +634,36 @@ def launch_gui(app_dir: str | Path, log_path: str | Path | None = None,
                       "QApplication(sys.argv)\n"
                       "print('QT_OK', flush=True)\n"
                       "os._exit(0)\n")
-        try:
-            check = run_as_user([python, "-c", probe_code], user=user, env=env,
-                                cwd=app_dir, timeout=45)
-            output = (getattr(check, "stdout", "") or "").strip()
-            if check.returncode != 0 or "QT_OK" not in output:
-                result["message"] = "Qt не может открыть окно в этом окружении."
-                result["log"] = output[-1200:]
+        tried: list[str] = []
+        last_output = ""
+        give_up_checking = False
+        for candidate in qt_platform_fallbacks(env):
+            attempt_env = dict(env)
+            if candidate:
+                attempt_env["QT_QPA_PLATFORM"] = candidate
+            tried.append(candidate or "авто")
+            try:
+                check = run_as_user([python, "-c", probe_code], user=user,
+                                    env=attempt_env, cwd=app_dir, timeout=25)
+            except FileNotFoundError:
+                result["message"] = f"Не найден {python}."
                 return result
-        except FileNotFoundError:
-            result["message"] = f"Не найден {python}."
+            except subprocess.TimeoutExpired:
+                # Зависшая проверка — не приговор: запускаем как есть.
+                give_up_checking = True
+                break
+            output = (getattr(check, "stdout", "") or "").strip()
+            if check.returncode == 0 and "QT_OK" in output:
+                env = attempt_env
+                picked_platform = candidate
+                break
+            last_output = output
+        else:
+            result["message"] = ("Qt не может открыть окно в этом окружении "
+                                 f"(перебраны платформы: {', '.join(tried)}).")
+            result["log"] = last_output[-1200:]
             return result
-        except subprocess.TimeoutExpired:
+        if give_up_checking:
             result["message"] = "Проверка Qt зависла — пробуем запустить интерфейс как есть."
 
     try:
@@ -642,6 +683,8 @@ def launch_gui(app_dir: str | Path, log_path: str | Path | None = None,
     if code is None:
         result["ok"] = True
         result["message"] = f"Интерфейс запущен (pid {proc.pid})."
+        if picked_platform and picked_platform != forced_platform:
+            result["message"] += f" Qt-платформа: {picked_platform} (запасная)."
         return result
     result["message"] = (f"Интерфейс завершился сразу (код {code})."
                          if code is not None else "Интерфейс запущен.")

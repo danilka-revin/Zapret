@@ -82,6 +82,10 @@ class Backdrop(QWidget):
         super().__init__(parent)
         self.theme = theme
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        # Фон чисто декоративный: сквозь него обязаны проходить клики и колесо.
+        # Без этого флага любой сбой порядка слоёв превращает окно в «глухое»:
+        # кнопки видны, но не нажимаются, прокрутка не работает.
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._low: QPixmap | None = None
         self._low_size = QSize(0, 0)
         self._orbs = [(0.16, 0.06, 0.62), (0.86, 0.12, 0.70), (0.34, 1.02, 0.74)]
@@ -1465,11 +1469,21 @@ class WheelScrollGuard(QObject):
         bar = self.scroll.verticalScrollBar()
         if bar.maximum() <= bar.minimum():
             return False
-        delta = event.angleDelta().y() or -event.pixelDelta().y()
-        if not delta:
+        angle = event.angleDelta().y()
+        if angle:
+            # Классическое колесо: щелчок — фиксированный шаг.
+            step = max(30, bar.singleStep() * 3)
+            moved = int(angle / 120 * step) or (step if angle > 0 else -step)
+            bar.setValue(bar.value() - moved)
+            return True
+        # Тачпады (особенно под Wayland) присылают только пиксельную дельту
+        # с нулевым angleDelta. Знак у неё тот же, что у angleDelta
+        # (положительный — вверх), а масштаб уже пиксельный: двигаем 1:1,
+        # иначе прокрутка либо инвертированная, либо рваная.
+        pixel = event.pixelDelta().y()
+        if not pixel:
             return False
-        step = max(30, bar.singleStep() * 3)
-        bar.setValue(bar.value() - int(delta / 120 * step) or (-step if delta < 0 else step))
+        bar.setValue(bar.value() - pixel)
         return True
 
 
@@ -1483,6 +1497,17 @@ class _Overlay(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.on_click = None
+
+    def mousePressEvent(self, event):  # noqa: N802
+        # Нажатие остаётся на затемнении: клик мимо панели только закрывает её,
+        # а не проваливается в кнопки под ней.
+        event.accept()
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        if callable(self.on_click):
+            self.on_click()
+        event.accept()
 
     def paintEvent(self, event):  # noqa: N802
         p = QPainter(self)
@@ -1505,11 +1530,15 @@ class Sheet(QWidget):
         self.theme = theme
         self._width_target = width
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
-        self.hide()
+        # Затемнение создаём ДО первого hide(): hide() доставляет hideEvent
+        # сразу, а он прячет overlay — иначе конструктор падает с
+        # AttributeError и окно приложения не открывается вообще.
         self.offset = 0.0
         self.overlay = _Overlay(parent)
         self.overlay.hide()
-        self.overlay.mouseReleaseEvent = self._overlay_click  # type: ignore[assignment]
+        self.overlay.on_click = self.close
+        self._close_seq = 0
+        self.hide()
 
         self.inner = QWidget(self)
         self.inner.setObjectName("sheetBody")
@@ -1571,6 +1600,9 @@ class Sheet(QWidget):
         parent = self.parentWidget()
         if parent is None:
             return
+        # Отменяем отложенное закрытие: без этого быстрое «закрыть → открыть»
+        # прятало только что открытую панель по старому таймеру.
+        self._close_seq = getattr(self, "_close_seq", 0) + 1
         self.setGeometry(parent.width(), 0, self._width_target, parent.height())
         self.overlay.setGeometry(0, 0, parent.width(), parent.height())
         self.overlay.show()
@@ -1592,13 +1624,18 @@ class Sheet(QWidget):
             # отдельным виджетом и обязано уйти вместе с ней
             self.overlay.hide()
             return
+        self._close_seq = getattr(self, "_close_seq", 0) + 1
+        seq = self._close_seq
         self._animate_overlay(0.45, 0.0, hide=True)
         animate(self, "offset", self.offset, self._width_target,
                 self.theme.palette.anim_ms, self._apply_offset,
                 QEasingCurve.Type.InCubic)
-        QTimer.singleShot(max(1, self.theme.palette.anim_ms + 20), self._finish_close)
+        QTimer.singleShot(max(1, self.theme.palette.anim_ms + 20),
+                          lambda: self._finish_close(seq))
 
-    def _finish_close(self):
+    def _finish_close(self, seq: int | None = None):
+        if seq is not None and seq != getattr(self, "_close_seq", 0):
+            return      # панель уже успели открыть заново — не трогаем
         self.hide()
         self.closed.emit()
 
@@ -1627,9 +1664,6 @@ class Sheet(QWidget):
             animate(self, "overlay", start, end, self.theme.palette.anim_ms,
                     lambda v: effect.setOpacity(v))
 
-    def _overlay_click(self, event):
-        self.close()
-
     def hideEvent(self, event):  # noqa: N802
         """Прячем панель как угодно — затемнение не должно остаться поверх окна.
 
@@ -1637,7 +1671,9 @@ class Sheet(QWidget):
         глухим: клики и колесо уходят в прозрачный для глаза, но не для мыши слой.
         """
         super().hideEvent(event)
-        self.overlay.hide()
+        overlay = getattr(self, "overlay", None)
+        if overlay is not None:
+            overlay.hide()
 
     def keyPressEvent(self, event):  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:

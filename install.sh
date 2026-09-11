@@ -278,7 +278,7 @@ declare -A QT_CORE_PACKAGES=(
 # Ставятся «по возможности»: если у дистрибутива другое имя пакета, установка
 # не срывается, а пользователь получает точную подсказку из run.py doctor.
 declare -A QT_XCB_PACKAGES=(
-    [apt-get]="libxkbcommon-x11-0 libxcb1 libxcb-cursor0 libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libwayland-client0 libwayland-cursor0"
+    [apt-get]="libxkbcommon-x11-0 libxcb1 libxcb-cursor0 libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libwayland-client0 libwayland-cursor0 libwayland-egl1"
     [dnf]="libxkbcommon-x11 xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil"
     [pacman]="libxkbcommon-x11 xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil wayland"
     [zypper]="libxkbcommon-x11-0 xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil"

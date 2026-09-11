@@ -236,3 +236,26 @@ def test_chown_tree_skips_when_not_root(monkeypatch, tmp_path):
     monkeypatch.setattr(session, "uid_gid", lambda user: (4321, 4321))
     assert session.chown_tree(target, "tester") is False
     assert session.chown_tree(tmp_path / "missing", "tester") is False
+
+
+def test_qt_platform_fallbacks_respect_explicit_choice():
+    """Явно заданная платформа идёт первой, остальные — запасные."""
+    assert session.qt_platform_fallbacks({"QT_QPA_PLATFORM": "xcb"})[0] == "xcb"
+    assert "wayland" in session.qt_platform_fallbacks(
+        {"QT_QPA_PLATFORM": "xcb", "WAYLAND_DISPLAY": "wayland-0"})
+
+
+def test_qt_platform_fallbacks_default_order_wayland_session():
+    """Без явного выбора: авто → xcb (XWayland) → wayland."""
+    assert session.qt_platform_fallbacks(
+        {"WAYLAND_DISPLAY": "wayland-0"}) == ["", "xcb", "wayland"]
+
+
+def test_qt_platform_fallbacks_default_order_x11_session():
+    """В чисто X11-сессии wayland-кандидата нет (не к чему подключаться)."""
+    assert session.qt_platform_fallbacks({"DISPLAY": ":0"}) == ["", "xcb"]
+
+
+def test_qt_platform_fallbacks_test_platforms_not_rotated():
+    """Тестовые платформы не перебираем — иначе CI запускал бы не то."""
+    assert session.qt_platform_fallbacks({"QT_QPA_PLATFORM": "offscreen"}) == ["offscreen"]
