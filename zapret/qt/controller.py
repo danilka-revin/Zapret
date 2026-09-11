@@ -874,7 +874,7 @@ class Controller(QObject):
 
     def setup_permissions(self, open_terminal) -> None:
         """Настройка NOPASSWD: если есть графический терминал — запускаем в нём."""
-        if integration.permissions_ready() and not integration.service_installed():
+        if integration.permissions_ready():
             self.log.emit("Права sudo уже настроены.", "ok")
             self.changed.emit()
             return

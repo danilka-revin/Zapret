@@ -14,9 +14,9 @@ from typing import Callable
 
 from . import checks, config as config_mod, core
 
-MAX_CANDIDATES = 6
-PROBE_TIMEOUT = 5.0
-IDEAL_LATENCY_MS = 350.0
+MAX_CANDIDATES = 4
+PROBE_TIMEOUT = 2.5
+IDEAL_LATENCY_MS = 500.0
 
 
 def _natural_key(name: str):

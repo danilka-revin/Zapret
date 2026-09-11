@@ -31,9 +31,9 @@ from .widgets import (Backdrop, Card, GlassButton, IconButton, LogView, PowerSwi
                       ServiceRow, SettingRow, Sparkline, StatTile, StatusPill, Switch,
                       ToastHost, WheelScrollGuard, _Glass, font)
 
-WINDOW_MIN = QSize(380, 640)
-WINDOW_DEFAULT = QSize(420, 680)
-HERO_HEIGHT = 240
+WINDOW_MIN = QSize(1040, 680)
+WINDOW_DEFAULT = QSize(1300, 900)
+HERO_HEIGHT = 380
 
 
 def _human_speed(mbps: float) -> str:
@@ -103,10 +103,10 @@ class ZapretWindow(QMainWindow):
         screen = QApplication.primaryScreen()
         if screen is not None:
             avail = screen.availableGeometry()
-            width = min(width, max(WINDOW_MIN.width(), avail.width() - 60))
-            height = min(height, max(WINDOW_MIN.height(), avail.height() - 80))
-            min_w = min(WINDOW_MIN.width(), max(WINDOW_MIN.width(), avail.width() - 40))
-            min_h = min(WINDOW_MIN.height(), max(WINDOW_MIN.height(), avail.height() - 60))
+            width = min(width, max(880, avail.width() - 60))
+            height = min(height, max(560, avail.height() - 80))
+            min_w = min(min_w, max(860, avail.width() - 40))
+            min_h = min(min_h, max(520, avail.height() - 60))
         self.setMinimumSize(min_w, min_h)
         self.resize(width, height)
         if screen is not None:

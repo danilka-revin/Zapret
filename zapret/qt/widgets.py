@@ -518,7 +518,7 @@ class StatusPill(QFrame):
         self.text = text
         self.state = state
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
-        self.setFixedHeight(34)
+        self.setFixedHeight(26)
         theme.changed.connect(self.update)
 
     def set_status(self, text: str, state: str = "idle"):
@@ -526,8 +526,8 @@ class StatusPill(QFrame):
         self.state = state
         font_metrics = QFontMetrics(font(self.theme.font_family, self.theme.palette.font_sm,
                                          QFont.Weight.DemiBold))
-        self.setMinimumWidth(font_metrics.horizontalAdvance(text) + 46)
-        self.setFixedHeight(34)
+        self.setMinimumWidth(font_metrics.horizontalAdvance(text) + 36)
+        self.setFixedHeight(26)
         self.update()
 
     def _color(self) -> QColor:
@@ -1819,7 +1819,7 @@ class LogView(QPlainTextEdit):
 
     def _restyle(self):
         pal = self.theme.palette
-        self.setFont(font(self.theme.mono_family, pal.font_xs))
+        self.setFont(font(self.theme.mono_family, pal.font_sm))
         self.setStyleSheet(
             f"QPlainTextEdit{{background:transparent;color:{pal.muted};"
             f"border:none;padding:2px;}}"
