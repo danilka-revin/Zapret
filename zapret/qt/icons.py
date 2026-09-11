@@ -137,36 +137,56 @@ def icon_pixmap(name: str, size: int, color: str, width: float = 1.8) -> QPixmap
 
 
 def app_icon(size: int = 64, accent: str = "#d5ff45", dark: bool = True) -> QPixmap:
-    """Иконка приложения: щит с молнией на фирменном фоне."""
+    """Иконка приложения: щит с молнией на фирменной подложке."""
     from PySide6.QtGui import QColor, QLinearGradient, QPainterPath, QBrush, QPen
 
     pm = QPixmap(size, size)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing, True)
+    p.setRenderHint(QPainter.SmoothPixmapTransform, True)
 
+    # Подложка со скруглением
     bg = QLinearGradient(0, 0, size, size)
     if dark:
-        bg.setColorAt(0.0, QColor("#16241f"))
+        bg.setColorAt(0.0, QColor("#1b2a24"))
         bg.setColorAt(1.0, QColor("#0a100e"))
     else:
         bg.setColorAt(0.0, QColor("#ffffff"))
-        bg.setColorAt(1.0, QColor("#e8efeb"))
-    path = QPainterPath()
-    r = size * 0.28
-    path.addRoundedRect(QRectF(0, 0, size, size), r, r)
-    p.fillPath(path, QBrush(bg))
-    p.setPen(QPen(QColor(accent), max(1.0, size * 0.025)))
+        bg.setColorAt(1.0, QColor("#e6ece9"))
+    radius = size * 0.26
+    plate = QPainterPath()
+    plate.addRoundedRect(QRectF(0, 0, size, size), radius, radius)
+    p.fillPath(plate, QBrush(bg))
+    p.setPen(QPen(QColor(accent), max(1.0, size * 0.02)))
     p.setBrush(Qt.BrushStyle.NoBrush)
-    p.drawPath(path)
-    p.end()
+    p.drawPath(plate)
 
-    shield = icon_pixmap("shield-check", int(size * 0.52), accent, 1.7)
-    bolt = icon_pixmap("zap", int(size * 0.30), "#ffffff" if not dark else "#0c1310", 1.9)
-    p2 = QPainter(pm)
-    p2.setRenderHint(QPainter.Antialiasing, True)
-    off = (size - shield.width()) // 2
-    p2.drawPixmap(off, int(size * 0.16), shield)
-    p2.drawPixmap(int(size * 0.44), int(size * 0.36), bolt)
-    p2.end()
+    # Щит: контур акцентом
+    scale = size / 24.0
+    p.translate(size / 2, size / 2)
+    p.scale(scale, scale)
+    p.setPen(QPen(QColor(accent), 2.1, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                  Qt.PenJoinStyle.RoundJoin))
+    shield = QPainterPath()
+    shield.moveTo(0.6, -9.4)
+    shield.lineTo(-7.8, -6.7)
+    shield.lineTo(-7.8, 0.6)
+    shield.cubicTo(-7.8, 6.4, -3.6, 9.6, 0.6, 11.4)
+    shield.cubicTo(4.8, 9.6, 9.0, 6.4, 9.0, 0.6)
+    shield.lineTo(9.0, -6.7)
+    shield.closeSubpath()
+    p.drawPath(shield)
+
+    # Молния внутри щита
+    bolt = QPainterPath()
+    bolt.moveTo(2.4, -6.6)
+    bolt.lineTo(-3.4, 0.6)
+    bolt.lineTo(-0.1, 0.6)
+    bolt.lineTo(-1.6, 6.6)
+    bolt.lineTo(4.2, -1.0)
+    bolt.lineTo(0.7, -1.0)
+    bolt.closeSubpath()
+    p.fillPath(bolt, QBrush(QColor(accent)))
+    p.end()
     return pm

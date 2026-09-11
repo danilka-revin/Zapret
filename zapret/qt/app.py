@@ -461,14 +461,20 @@ class ZapretWindow(QMainWindow):
     def _quit_app(self):
         if self.tray_icon is not None:
             self.tray_icon.hide()
-        self.controller.log_now("Выход из приложения.", "info")
+        if self.controller.status.get("running"):
+            # Обход живёт в отдельном процессе (nfqws + правила файрвола), поэтому
+            # выход из приложения его не выключает.
+            self.controller.log_now("Выход из приложения. Защита остаётся включённой.",
+                                    "warn")
+        else:
+            self.controller.log_now("Выход из приложения.", "info")
         QApplication.quit()
 
     def closeEvent(self, event):  # noqa: N802
-        if self.tray_icon is not None and self.theme.settings.tray:
+        if (self.tray_icon is not None and self.theme.settings.tray
+                and self.tray_icon.isVisible()):
             event.ignore()
             self.hide()
-            self._apply_tray_visibility()
             if not self._hide_notice_shown and self.theme.settings.notifications:
                 self._hide_notice_shown = True
                 self.tray_icon.showMessage(
@@ -476,6 +482,7 @@ class ZapretWindow(QMainWindow):
                     QIcon(icons.app_icon(64, self.theme.palette.accent, True)), 4000)
             return
         event.accept()
+        self._quit_app()
 
     # ------------------------------------------------------------------
     # Сигналы контроллера
