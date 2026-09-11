@@ -13,12 +13,11 @@ import shlex
 import shutil
 import signal
 import subprocess
-import sys
 import tarfile
 import tempfile
 import time
 from pathlib import Path
-from urllib import request, error as urlerror
+from urllib import request
 
 from . import (
     APP_NAME,
@@ -110,12 +109,12 @@ def run_privileged(args, input_text=None, check=True, cwd=None, capture=False):
             stdout=subprocess.PIPE if capture else None,
             stderr=subprocess.PIPE if capture else None,
         )
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         if check:
             raise RuntimeError(
                 f"Не найдена утилита повышения привилегий (sudo/doas) "
                 f"или команда '{args[0]}'"
-            )
+            ) from exc
         return _RunResult()
 
 
@@ -162,12 +161,53 @@ def _http_get(url: str, timeout: int = 120) -> bytes:
         return resp.read()
 
 
-def _download_to(url: str, dest: Path, progress_cb=None) -> None:
+def _http_get_curl(url: str, timeout: int = 300) -> bytes:
+    """Загрузка через curl: сам идёт по редиректам и переживает обрывы."""
+    curl = shutil.which("curl")
+    if not curl:
+        raise RuntimeError("curl не найден")
+    proc = subprocess.run(
+        [curl, "-L", "-f", "-s", "-S", "--retry", "2", "--retry-delay", "1",
+         "--connect-timeout", "20", "--max-time", str(timeout), url],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip()
+                           or f"curl завершился с кодом {proc.returncode}")
+    if not proc.stdout:
+        raise RuntimeError("сервер вернул пустой ответ")
+    return proc.stdout
+
+
+def _download_to(url: str, dest: Path, progress_cb=None, attempts: int = 3) -> None:
+    """Скачивает файл: сначала curl, затем встроенный urllib, с повторами."""
     if progress_cb:
         progress_cb(f"Скачивание {url}")
-    data = _http_get(url)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(f"Нет доступа к каталогу {dest.parent}: {exc}") from exc
+
+    fetchers = []
+    if shutil.which("curl"):
+        fetchers.append(_http_get_curl)
+    fetchers.append(_http_get)
+    errors = []
+    for attempt in range(1, attempts + 1):
+        for fetcher in fetchers:
+            try:
+                data = fetcher(url)
+            except Exception as exc:  # noqa: BLE001 — пробуем следующий способ
+                errors.append(f"{fetcher.__name__}: {exc}")
+                continue
+            if data:
+                dest.write_bytes(data)
+                return
+        if attempt < attempts:
+            if progress_cb:
+                progress_cb(f"Повторная попытка {attempt + 1}/{attempts}…")
+            time.sleep(1.5 * attempt)
+    raise RuntimeError("Не удалось скачать " + url + " — " + "; ".join(errors[-3:]))
 
 
 def latest_release_tag(repo: str) -> str:
@@ -593,7 +633,8 @@ def firewall_clear() -> None:
 # ----------------------------------------------------------------------------
 
 def stop_nfqws() -> None:
-    run_privileged(["pkill", "-f", "nfqws"], check=False)
+    """Останавливает только сам процесс nfqws (по имени, а не по строке запуска)."""
+    run_privileged(["pkill", "-x", "nfqws"], check=False)
 
 
 def start_nfqws(blocks: list) -> None:
@@ -609,12 +650,33 @@ def start_nfqws(blocks: list) -> None:
 
 
 def nfqws_running() -> bool:
+    """Проверяет, запущен ли nfqws.
+
+    Важно: сравниваем именно имя процесса. Поиск по командной строке (`pgrep -f`)
+    ловил бы посторонние процессы, в аргументах которых встречается «nfqws».
+    """
     try:
-        r = subprocess.run(["pgrep", "-f", "nfqws"],
+        r = subprocess.run(["pgrep", "-x", "nfqws"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return r.returncode == 0
     except OSError:
+        pass
+    proc = Path("/proc")
+    if not proc.exists():
         return False
+    try:
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                name = (entry / "comm").read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                continue
+            if name == "nfqws":
+                return True
+    except OSError:
+        return False
+    return False
 
 
 def firewall_active() -> bool:
@@ -688,7 +750,7 @@ def daemon() -> None:
         run_zapret(cfg)
     except Exception as exc:  # noqa: BLE001
         print(f"[{APP_NAME}] Ошибка запуска: {exc}", flush=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from exc
     print(f"[{APP_NAME}] zapret запущен в режиме демона", flush=True)
 
     stop_flag = {}

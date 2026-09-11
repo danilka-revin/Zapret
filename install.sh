@@ -11,6 +11,9 @@
 #   update             обновить код и зависимости
 #   gui                только запустить интерфейс
 #   uninstall          полностью удалить (служба, ярлык, данные)
+#
+# Интерфейс написан на Qt6 (PySide6) — установщик сам ставит Qt-библиотеки
+# и модуль PySide6-Essentials, отдельных действий от пользователя не нужно.
 # =============================================================================
 
 set -euo pipefail
@@ -29,34 +32,68 @@ fail()  { echo -e "${C_R}[-]${C_N} $*"; exit 1; }
 
 if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi
 
+# Библиотеки, нужные Qt6 для запуска (модуль PySide6 ставится отдельно, через pip)
+# Обязательные библиотеки Qt6 (без них интерфейс не запустится вовсе)
+declare -A QT_CORE_PACKAGES=(
+    [apt-get]="libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1 libglib2.0-0 python3-pip"
+    [dnf]="mesa-libGL mesa-libEGL libxkbcommon dbus-libs fontconfig python3-pip"
+    [pacman]="libglvnd libxkbcommon dbus fontconfig python-pip"
+    [zypper]="libGL1 libxkbcommon0 libdbus-1-3 fontconfig python3-pip"
+    [apk]="mesa-gl libxkbcommon dbus-libs fontconfig py3-pip"
+    [xbps-install]="libglvnd libxkbcommon dbus fontconfig python3-pip"
+    [emerge]="virtual/opengl x11-libs/libxkbcommon dev-libs/dbus-glib"
+)
+
+# Дополнительные библиотеки для плагина xcb (окна X11) и Wayland.
+# Ставятся «по возможности»: если у дистрибутива другое имя пакета, установка
+# не срывается, а пользователь получает точную подсказку из run.py doctor.
+declare -A QT_XCB_PACKAGES=(
+    [apt-get]="libxkbcommon-x11-0 libxcb1 libxcb-cursor0 libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libwayland-client0 libwayland-cursor0"
+    [dnf]="libxkbcommon-x11 xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil"
+    [pacman]="libxkbcommon-x11 xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil wayland"
+    [zypper]="libxkbcommon-x11-0 xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil"
+    [apk]="libxcb xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil"
+    [xbps-install]="libxkbcommon-x11 libxcb xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil"
+    [emerge]="x11-libs/libxkbcommon-x11 x11-libs/xcb-util-cursor x11-libs/xcb-util-wm x11-libs/xcb-util-image x11-libs/xcb-util-keysyms x11-libs/xcb-util-renderutil"
+)
+
 is_source_tree() { [ -f "$SCRIPT_DIR/run.py" ]; }
 
 # --- установка недостающих системных пакетов ---------------------------------
 install_packages() {
     local missing=()
+    local qt_missing=0
     if command -v python3 >/dev/null 2>&1; then
-        python3 -c "import tkinter" >/dev/null 2>&1 || missing+=(python3-tk)
+        python3 -c "import PySide6" >/dev/null 2>&1 || qt_missing=1
     else
-        missing+=(python3 python3-tk)
+        missing+=(python3)
+        qt_missing=1
     fi
     command -v git  >/dev/null 2>&1 || missing+=(git)
     command -v curl >/dev/null 2>&1 || missing+=(curl)
     if ! command -v nft >/dev/null 2>&1 && ! command -v iptables >/dev/null 2>&1; then
         missing+=(nftables)
     fi
-    [ ${#missing[@]} -eq 0 ] && return 0
+    if [ ${#missing[@]} -eq 0 ] && [ "$qt_missing" -eq 0 ]; then
+        return 0
+    fi
 
-    info "Требуются пакеты: ${missing[*]}"
+    info "Требуются системные пакеты: ${missing[*]:-нет}"
     local pm=""
     for c in apt-get dnf pacman zypper apk xbps-install emerge; do
         command -v "$c" >/dev/null 2>&1 && { pm="$c"; break; }
     done
     [ -z "$pm" ] && fail "Не удалось определить пакетный менеджер. Установите вручную: ${missing[*]}"
 
+    if [ "$qt_missing" -eq 1 ] && [ -n "${QT_CORE_PACKAGES[$pm]:-}" ]; then
+        # shellcheck disable=SC2206 — список пакетов разбиваем по пробелам
+        missing+=(${QT_CORE_PACKAGES[$pm]})
+        info "Добавляю библиотеки Qt6: ${QT_CORE_PACKAGES[$pm]}"
+    fi
+
     local rc=0
     case "$pm" in
         apt-get)
-            # имена пакетов совпадают (python3-tk, nftables)
             $SUDO apt-get update -y >/dev/null 2>&1 || true
             $SUDO apt-get install -y "${missing[@]}" || rc=1
             ;;
@@ -64,36 +101,23 @@ install_packages() {
             local pkgs=()
             for p in "${missing[@]}"; do
                 case "$p" in
-                    python3-tk) pkgs+=(python3-tkinter) ;;
-                    python3)    pkgs+=(python3) ;;
-                    *)          pkgs+=("$p") ;;
+                    python3) pkgs+=(python3) ;;
+                    *)       pkgs+=("$p") ;;
                 esac
             done
             $SUDO dnf install -y "${pkgs[@]}" || rc=1
             ;;
         pacman)
-            local pkgs=()
-            for p in "${missing[@]}"; do
-                case "$p" in python3-tk) pkgs+=(tk) ;; *) pkgs+=("$p") ;; esac
-            done
-            $SUDO pacman -S --needed --noconfirm "${pkgs[@]}" || rc=1
+            $SUDO pacman -S --needed --noconfirm "${missing[@]}" || rc=1
             ;;
         zypper)
             $SUDO zypper --non-interactive install "${missing[@]}" || rc=1
             ;;
         apk)
-            local pkgs=()
-            for p in "${missing[@]}"; do
-                case "$p" in python3-tk) pkgs+=(py3-tkinter) ;; *) pkgs+=("$p") ;; esac
-            done
-            $SUDO apk add "${pkgs[@]}" || rc=1
+            $SUDO apk add "${missing[@]}" || rc=1
             ;;
         xbps-install)
-            local pkgs=()
-            for p in "${missing[@]}"; do
-                case "$p" in python3-tk) pkgs+=(python3-tkinter) ;; *) pkgs+=("$p") ;; esac
-            done
-            $SUDO xbps-install -y "${pkgs[@]}" || rc=1
+            $SUDO xbps-install -y "${missing[@]}" || rc=1
             ;;
         emerge)
             $SUDO emerge -av "${missing[@]}" || rc=1
@@ -103,6 +127,20 @@ install_packages() {
         ok "Системные пакеты установлены."
     else
         warn "Не удалось установить пакеты автоматически. Установите их вручную: ${missing[*]}"
+    fi
+
+    # Пакеты для плагина xcb — необязательный шаг, ошибки только предупреждаем
+    if [ "$qt_missing" -eq 1 ] && [ -n "${QT_XCB_PACKAGES[$pm]:-}" ]; then
+        info "Дополнительно ставлю библиотеки окон (xcb/Wayland)…"
+        case "$pm" in
+            apt-get)      $SUDO apt-get install -y ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+            dnf)          $SUDO dnf install -y ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+            pacman)       $SUDO pacman -S --needed --noconfirm ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+            zypper)       $SUDO zypper --non-interactive install ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+            apk)          $SUDO apk add ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+            xbps-install) $SUDO xbps-install -y ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+            emerge)       $SUDO emerge -n ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+        esac
     fi
 }
 
@@ -140,16 +178,52 @@ install_code() {
     fi
 }
 
+install_pyside() {
+    if python3 -c "import PySide6" >/dev/null 2>&1; then
+        ok "Qt6-интерфейс (PySide6) уже установлен."
+        return 0
+    fi
+    info "Устанавливаю Qt6-интерфейс (PySide6-Essentials)…"
+    local pip="python3 -m pip"
+    if ! python3 -m pip --version >/dev/null 2>&1; then
+        warn "pip недоступен — приложение поставит PySide6 само при первом запуске."
+        return 1
+    fi
+    local ok_install=0
+    for args in "--user" "--user --break-system-packages" "--break-system-packages"; do
+        if $pip install $args --quiet --disable-pip-version-check PySide6-Essentials; then
+            ok_install=1
+            break
+        fi
+    done
+    if [ "$ok_install" -eq 1 ] && python3 -c "import PySide6" >/dev/null 2>&1; then
+        ok "PySide6 установлен."
+        return 0
+    fi
+    warn "Не удалось поставить PySide6 автоматически. Интерфейс попробует сделать это при запуске."
+    warn "Вручную: python3 -m pip install --user PySide6-Essentials"
+    return 1
+}
+
 launch_gui() {
     cd "$APP_DIR"
-    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-        info "Запуск интерфейса…"
-        nohup python3 run.py gui >/dev/null 2>&1 &
-        ok "Zapret Control запущен."
-    else
+    if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
         warn "Графический сервер не обнаружен. Запустите вручную:"
         echo "    python3 $APP_DIR/run.py gui"
+        return 0
     fi
+    # Проверяем, что Qt действительно может открыть окно (плагин xcb на месте)
+    if ! python3 -c "from PySide6.QtWidgets import QApplication; QApplication([])" \
+            >/tmp/zc-qt-check.log 2>&1; then
+        warn "Qt не смог запуститься. Подробности:"
+        sed 's/^/    /' /tmp/zc-qt-check.log | head -5
+        warn "Выполните самодиагностику: python3 $APP_DIR/run.py doctor"
+        return 1
+    fi
+    info "Запуск интерфейса…"
+    nohup python3 run.py gui >/tmp/zapret-control.log 2>&1 &
+    ok "Zapret Control запущен."
+    info "Если окно не появилось, лог запуска: /tmp/zapret-control.log"
 }
 
 # --- основной сценарий --------------------------------------------------------
@@ -172,6 +246,7 @@ case "$CMD" in
     update)
         info "Обновление Zapret Control…"
         install_packages
+        install_pyside || true
         install_code
         (cd "$APP_DIR" && python3 run.py ensure-deps) \
             || warn "Обновление зависимостей не удалось — проверьте соединение."
@@ -181,6 +256,7 @@ case "$CMD" in
     install|*)
         info "Установка Zapret Control…"
         install_packages
+        install_pyside || true
         install_code
         info "Скачивание зависимостей (nfqws + стратегии)…"
         (cd "$APP_DIR" && python3 run.py ensure-deps) || warn "Скачивание зависимостей не удалось — сделайте это в приложении."

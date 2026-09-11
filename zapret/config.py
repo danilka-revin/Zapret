@@ -19,6 +19,11 @@ DEFAULTS = {
     "autostart": False,               # системная служба
     "nfqws_version": "latest",        # latest | vXX.Y
     "strategy_rev": "",               # пусто = рекомендованный коммит
+    # Оформление и автономика (см. zapret/qt/theme.py -> UISettings)
+    "ui": {},
+    # Группы сайтов и пресеты «домены + подобранная стратегия» (см. zapret/presets.py)
+    "site_groups": [],
+    "site_presets": [],
 }
 
 
