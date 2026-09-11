@@ -3,7 +3,7 @@
 Точка входа Zapret Control.
 
 Использование:
-  python3 run.py gui                     — запустить графический интерфейс
+  python3 run.py gui                     — запустить графический интерфейс (Qt6)
   python3 run.py daemon                  — демон (для systemd-службы)
   python3 run.py start | stop | restart  — запуск/остановка zapret
   python3 run.py status                  — вывести статус
@@ -24,21 +24,88 @@ def _log(msg: str) -> None:
     print(msg, flush=True)
 
 
+LIB_HINT = ("Установите системные библиотеки Qt6:\n"
+            "    Debian/Ubuntu: sudo apt install libgl1 libegl1 libxkbcommon0 libdbus-1-3\n"
+            "    Fedora:        sudo dnf install mesa-libGL mesa-libEGL libxkbcommon dbus-libs\n"
+            "    Arch:          sudo pacman -S libglvnd libxkbcommon")
+
+
+def _pyside_state() -> tuple[bool, str]:
+    """Возвращает (готов ли Qt, текст ошибки). Различает «нет модуля» и «нет библиотек»."""
+    try:
+        import PySide6  # noqa: F401
+        return True, ""
+    except ModuleNotFoundError:
+        return False, ""
+    except ImportError as exc:      # сам модуль есть, а системных библиотек нет
+        return False, f"PySide6 установлен, но не хватает системных библиотек: {exc}"
+
+
+def _ensure_pyside() -> bool:
+    """Проверяет наличие PySide6 и при отсутствии ставит его автоматически."""
+    ready, error = _pyside_state()
+    if ready:
+        return True
+    if error:
+        _log(error)
+        _log(LIB_HINT)
+        return False
+
+    _log("Интерфейс работает на Qt6 (PySide6) — устанавливаю его автоматически.")
+    import subprocess
+
+    attempts = [
+        [sys.executable, "-m", "pip", "install", "--user", "--quiet",
+         "PySide6-Essentials"],
+        [sys.executable, "-m", "pip", "install", "--user", "--quiet",
+         "--break-system-packages", "PySide6-Essentials"],
+    ]
+    for cmd in attempts:
+        try:
+            if subprocess.call(cmd) == 0:
+                break
+        except OSError:
+            continue
+
+    ready, error = _pyside_state()
+    if ready:
+        return True
+    if error:
+        _log(error)
+        _log(LIB_HINT)
+        return False
+
+    _log("Не удалось установить PySide6 автоматически. Установите вручную:")
+    _log("    python3 -m pip install --user PySide6-Essentials")
+    _log("    (Ubuntu/Debian: sudo apt install python3-pip libgl1 libegl1 libxkbcommon0)")
+    _log("    (Arch: sudo pacman -S pyside6  |  Fedora: sudo dnf install python3-pyside6)")
+    return False
+
+
+def _run_gui() -> int:
+    if not _ensure_pyside():
+        return 1
+    try:
+        from zapret.qt.app import run as qt_run
+    except ModuleNotFoundError as exc:
+        _log(f"Не удалось загрузить Qt-интерфейс: {exc}")
+        _log("Установите зависимости: python3 -m pip install --user PySide6-Essentials")
+        return 1
+    except ImportError as exc:
+        _log(f"Не удалось запустить Qt-интерфейс: {exc}")
+        _log(LIB_HINT)
+        return 1
+    return qt_run()
+
+
 def main() -> int:
     from zapret import core, integration
 
     args = sys.argv[1:]
     cmd = args[0] if args else "gui"
 
-    if cmd == "gui":
-        try:
-            from zapret import gui
-        except ModuleNotFoundError as exc:
-            if getattr(exc, "name", None) == "tkinter":
-                _log("Модуль tkinter не установлен. Выполните: sudo apt install python3-tk")
-                return 1
-            raise
-        return gui.main()
+    if cmd in ("gui", "qt"):
+        return _run_gui()
 
     if cmd == "daemon":
         core.daemon()

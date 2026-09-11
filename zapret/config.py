@@ -19,6 +19,8 @@ DEFAULTS = {
     "autostart": False,               # системная служба
     "nfqws_version": "latest",        # latest | vXX.Y
     "strategy_rev": "",               # пусто = рекомендованный коммит
+    # Оформление и автономика (см. zapret/qt/theme.py -> UISettings)
+    "ui": {},
 }
 
 
