@@ -100,9 +100,14 @@ def _qt_preflight() -> tuple[bool, str]:
                        "Запустите приложение из-под рабочего стола "
                        "(или выполните: python3 run.py doctor)")
 
-    probe = ("from PySide6.QtWidgets import QApplication;"
-             "app = QApplication([]);"
-             "print('QT_OK')")
+    # os._exit(0) в конце: иначе PySide6 иногда падает с SIGSEGV при завершении
+    # процесса (QApplication разрушается уже после статики Qt) — в диагностике
+    # это выглядело как «Ошибка сегментирования (core dumped)» без причины.
+    probe = ("import os, sys\n"
+             "from PySide6.QtWidgets import QApplication\n"
+             "QApplication(sys.argv)\n"
+             "print('QT_OK', flush=True)\n"
+             "os._exit(0)\n")
     try:
         proc = subprocess.run([sys.executable, "-c", probe], stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True, timeout=60)
