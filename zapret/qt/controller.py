@@ -52,6 +52,7 @@ class Controller(QObject):
         self.services: list[dict] = []
         self.metrics: dict = {}
         self.busy_key: str = ""
+        self.busy_detail: str = ""
         self.progress: float | None = None
         # Пользователь выключил защиту вручную: автовосстановление не должно
         # включать её обратно «за спиной»
@@ -128,6 +129,26 @@ class Controller(QObject):
         self.log.emit("Zapret Control запущен.", "accent")
         self.refresh_status()
         QTimer.singleShot(600, self._sample_traffic)
+        QTimer.singleShot(1500, self._log_environment)
+
+    def _log_environment(self):
+        """Проверка окружения при старте: сразу говорит, что мешает работе."""
+        problems: list[tuple[str, str]] = []
+        if not (core.which("nft") or core.which("iptables")):
+            problems.append(("Не найден nftables или iptables — без файрвола обход не "
+                             "включится. Установите: sudo apt install nftables", "error"))
+        if not core.deps_ready():
+            problems.append(("Зависимости (nfqws и стратегии) не скачаны — скачаю при "
+                             "первом включении автоматически.", "warn"))
+        if not self.status.get("sudo_ok"):
+            problems.append(("Права без пароля не настроены: нажмите «Настроить права "
+                             "(1 раз)» — иначе кнопка будет просить пароль.", "warn"))
+        if problems:
+            self.log.emit("Проверка окружения нашла замечания:", "accent")
+            for message, level in problems:
+                self.log.emit("  • " + message, level)
+        else:
+            self.log.emit("Проверка окружения: всё на месте.", "ok")
 
     def log_now(self, message: str, level: str = "info"):
         self.log.emit(message, level)
@@ -231,7 +252,19 @@ class Controller(QObject):
 
     def _set_busy(self, key: str):
         self.busy_key = key
+        if not key:
+            self.busy_detail = ""
         self.busy_changed.emit(key)
+        self.changed.emit()
+
+    def _on_autopilot_step(self, index: int, total: int, strategy: str):
+        """Автопилот переходит к следующей стратегии — обновляем прогресс.
+
+        Берём середину шага, чтобы на первой же стратегии кнопка показывала
+        движение, а не нулевой прогресс.
+        """
+        self.progress = (index - 0.5) / max(1, total)
+        self.busy_detail = f"Стратегия {index} из {total}: {strategy}"
         self.changed.emit()
 
     def _submit(self, key: str, work, success: str = "", failure: str = "Ошибка"):
@@ -311,6 +344,7 @@ class Controller(QObject):
                     progress_cb=lambda msg: self.log.emit(msg, "info"),
                     stop_flag=lambda: self._stop_flag,
                     limit=6,
+                    on_step=self._on_autopilot_step,
                 )
                 self.autopilot_report = report
             else:
@@ -340,6 +374,7 @@ class Controller(QObject):
                 progress_cb=lambda msg: self.log.emit(msg, "info"),
                 stop_flag=lambda: self._stop_flag,
                 limit=8,
+                on_step=self._on_autopilot_step,
             )
             self.services = self.autopilot_report.get("results") or []
             if self.services:
@@ -438,6 +473,7 @@ class Controller(QObject):
                     progress_cb=lambda msg: self.log.emit(msg, "info"),
                     stop_flag=lambda: self._stop_flag,
                     limit=5,
+                    on_step=self._on_autopilot_step,
                 )
             else:
                 core.run_zapret(self.cfg)

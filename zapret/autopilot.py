@@ -61,7 +61,8 @@ def run(cfg: dict,
         progress_cb: Callable[[str], None] | None = None,
         stop_flag: Callable[[], bool] | None = None,
         timeout: float = PROBE_TIMEOUT,
-        limit: int = MAX_CANDIDATES) -> dict:
+        limit: int = MAX_CANDIDATES,
+        on_step: Callable[[int, int, str], None] | None = None) -> dict:
     """
     Перебирает стратегии и оставляет лучшую.
 
@@ -93,6 +94,9 @@ def run(cfg: dict,
             log("Автоподбор остановлен пользователем.")
             break
         log(f"[{index}/{total}] стратегия {name}…")
+        if on_step is not None:
+            # Интерфейс показывает «Стратегия 2 из 5» прямо на большой кнопке
+            on_step(index, total, name)
         try:
             result = evaluate(cfg, name, timeout)
         except Exception as exc:  # noqa: BLE001 — одна стратегия не должна ломать подбор

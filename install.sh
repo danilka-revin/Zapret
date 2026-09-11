@@ -33,14 +33,28 @@ fail()  { echo -e "${C_R}[-]${C_N} $*"; exit 1; }
 if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi
 
 # Библиотеки, нужные Qt6 для запуска (модуль PySide6 ставится отдельно, через pip)
-declare -A QT_PACKAGES=(
+# Обязательные библиотеки Qt6 (без них интерфейс не запустится вовсе)
+declare -A QT_CORE_PACKAGES=(
     [apt-get]="libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1 libglib2.0-0 python3-pip"
     [dnf]="mesa-libGL mesa-libEGL libxkbcommon dbus-libs fontconfig python3-pip"
-    [pacman]="python-pip"
+    [pacman]="libglvnd libxkbcommon dbus fontconfig python-pip"
     [zypper]="libGL1 libxkbcommon0 libdbus-1-3 fontconfig python3-pip"
     [apk]="mesa-gl libxkbcommon dbus-libs fontconfig py3-pip"
     [xbps-install]="libglvnd libxkbcommon dbus fontconfig python3-pip"
     [emerge]="virtual/opengl x11-libs/libxkbcommon dev-libs/dbus-glib"
+)
+
+# Дополнительные библиотеки для плагина xcb (окна X11) и Wayland.
+# Ставятся «по возможности»: если у дистрибутива другое имя пакета, установка
+# не срывается, а пользователь получает точную подсказку из run.py doctor.
+declare -A QT_XCB_PACKAGES=(
+    [apt-get]="libxkbcommon-x11-0 libxcb1 libxcb-cursor0 libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libwayland-client0 libwayland-cursor0"
+    [dnf]="libxkbcommon-x11 xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil"
+    [pacman]="libxkbcommon-x11 xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil wayland"
+    [zypper]="libxkbcommon-x11-0 xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil"
+    [apk]="libxcb xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil"
+    [xbps-install]="libxkbcommon-x11 libxcb xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil"
+    [emerge]="x11-libs/libxkbcommon-x11 x11-libs/xcb-util-cursor x11-libs/xcb-util-wm x11-libs/xcb-util-image x11-libs/xcb-util-keysyms x11-libs/xcb-util-renderutil"
 )
 
 is_source_tree() { [ -f "$SCRIPT_DIR/run.py" ]; }
@@ -71,10 +85,10 @@ install_packages() {
     done
     [ -z "$pm" ] && fail "Не удалось определить пакетный менеджер. Установите вручную: ${missing[*]}"
 
-    if [ "$qt_missing" -eq 1 ] && [ -n "${QT_PACKAGES[$pm]:-}" ]; then
+    if [ "$qt_missing" -eq 1 ] && [ -n "${QT_CORE_PACKAGES[$pm]:-}" ]; then
         # shellcheck disable=SC2206 — список пакетов разбиваем по пробелам
-        missing+=(${QT_PACKAGES[$pm]})
-        info "Добавляю библиотеки Qt6: ${QT_PACKAGES[$pm]}"
+        missing+=(${QT_CORE_PACKAGES[$pm]})
+        info "Добавляю библиотеки Qt6: ${QT_CORE_PACKAGES[$pm]}"
     fi
 
     local rc=0
@@ -113,6 +127,20 @@ install_packages() {
         ok "Системные пакеты установлены."
     else
         warn "Не удалось установить пакеты автоматически. Установите их вручную: ${missing[*]}"
+    fi
+
+    # Пакеты для плагина xcb — необязательный шаг, ошибки только предупреждаем
+    if [ "$qt_missing" -eq 1 ] && [ -n "${QT_XCB_PACKAGES[$pm]:-}" ]; then
+        info "Дополнительно ставлю библиотеки окон (xcb/Wayland)…"
+        case "$pm" in
+            apt-get)      $SUDO apt-get install -y ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+            dnf)          $SUDO dnf install -y ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+            pacman)       $SUDO pacman -S --needed --noconfirm ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+            zypper)       $SUDO zypper --non-interactive install ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+            apk)          $SUDO apk add ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+            xbps-install) $SUDO xbps-install -y ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+            emerge)       $SUDO emerge -n ${QT_XCB_PACKAGES[$pm]} >/dev/null 2>&1 || true ;;
+        esac
     fi
 }
 
@@ -179,14 +207,23 @@ install_pyside() {
 
 launch_gui() {
     cd "$APP_DIR"
-    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-        info "Запуск интерфейса…"
-        nohup python3 run.py gui >/dev/null 2>&1 &
-        ok "Zapret Control запущен."
-    else
+    if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
         warn "Графический сервер не обнаружен. Запустите вручную:"
         echo "    python3 $APP_DIR/run.py gui"
+        return 0
     fi
+    # Проверяем, что Qt действительно может открыть окно (плагин xcb на месте)
+    if ! python3 -c "from PySide6.QtWidgets import QApplication; QApplication([])" \
+            >/tmp/zc-qt-check.log 2>&1; then
+        warn "Qt не смог запуститься. Подробности:"
+        sed 's/^/    /' /tmp/zc-qt-check.log | head -5
+        warn "Выполните самодиагностику: python3 $APP_DIR/run.py doctor"
+        return 1
+    fi
+    info "Запуск интерфейса…"
+    nohup python3 run.py gui >/tmp/zapret-control.log 2>&1 &
+    ok "Zapret Control запущен."
+    info "Если окно не появилось, лог запуска: /tmp/zapret-control.log"
 }
 
 # --- основной сценарий --------------------------------------------------------

@@ -67,8 +67,7 @@ class ZapretWindow(QMainWindow):
         self.theme = theme
         self.controller = controller
         self.setWindowTitle(f"{APP_NAME} — обход DPI")
-        self.setMinimumSize(WINDOW_MIN)
-        self.resize(WINDOW_DEFAULT)
+        self._fit_to_screen()
 
         self.log_history: list[tuple[float, str, str]] = []
         self._refresh_queued = False
@@ -95,6 +94,24 @@ class ZapretWindow(QMainWindow):
             QTimer.singleShot(700, self.controller.bootstrap)
         if self.theme.settings.start_minimized and self.tray_icon is not None:
             QTimer.singleShot(1200, self._maybe_start_hidden)
+
+    def _fit_to_screen(self):
+        """Подгоняет окно под экран: на ноутбуках 1366×768 ничего не обрежется."""
+        min_w, min_h = WINDOW_MIN.width(), WINDOW_MIN.height()
+        width, height = WINDOW_DEFAULT.width(), WINDOW_DEFAULT.height()
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            width = min(width, max(880, avail.width() - 60))
+            height = min(height, max(560, avail.height() - 80))
+            min_w = min(min_w, max(860, avail.width() - 40))
+            min_h = min(min_h, max(520, avail.height() - 60))
+        self.setMinimumSize(min_w, min_h)
+        self.resize(width, height)
+        if screen is not None:
+            avail = screen.availableGeometry()
+            self.move(avail.x() + max(0, (avail.width() - width) // 2),
+                      avail.y() + max(0, (avail.height() - height) // 3))
 
     # ------------------------------------------------------------------
     # Каркас окна
@@ -593,7 +610,14 @@ class ZapretWindow(QMainWindow):
         # Большая кнопка
         if state == "busy":
             key = c.busy_key or ""
-            self.power.set_state("busy", "ЖДИТЕ", OPERATION_LABELS.get(key, "Выполняю…"))
+            detail = c.busy_detail or OPERATION_LABELS.get(key, "Выполняю…")
+            if c.progress:
+                # Автопилот: показываем, сколько стратегий уже проверено
+                self.power.set_state("busy", f"ПОДБОР {int(c.progress * 100)}%", detail)
+                self.power.set_progress(c.progress)
+            else:
+                self.power.set_state("busy", "ЖДИТЕ", detail)
+                self.power.set_progress(0.0)
         elif state == "on":
             self.power.set_state("on", "ВКЛ", "Обход активен · нажмите, чтобы выключить")
             self.power.set_progress(1.0)

@@ -154,6 +154,49 @@ def main() -> int:
         check(controller.autopilot_report.get("strategy") in ("general.bat", "general_alt2.bat"),
               "автопилот выбрал стратегию и записал её в конфиг")
 
+    print("\n[2b] Прогресс автопилота виден на большой кнопке")
+    steps: list[tuple[int, int, str]] = []
+    snapshots: list[tuple[str, str, float | None]] = []
+    real_step = controller._on_autopilot_step
+
+    def fake_autopilot_run(cfg, progress_cb=None, stop_flag=None, timeout=5.0, limit=6,
+                           on_step=None):
+        """Имитация автопилота: два шага и мгновенный результат."""
+        for index, name in enumerate(["general.bat", "general_alt2.bat"], start=1):
+            if progress_cb:
+                progress_cb(f"[{index}/2] стратегия {name}…")
+            if on_step is not None:
+                on_step(index, 2, name)
+        return {"strategy": "general_alt2.bat", "ok": 3, "avg_ms": 120.0,
+                "tries": [], "results": []}
+
+    from zapret import autopilot as autopilot_mod
+    autopilot_mod.run = fake_autopilot_run          # type: ignore[assignment]
+
+    def watch_step(index, total, strategy):
+        real_step(index, total, strategy)           # проверяем настоящую логику
+        steps.append((index, total, strategy))
+        window._refresh_dashboard()                 # как это сделал бы таймер обновления
+        snapshots.append((window.power.caption, window.power.hint, controller.progress))
+
+    controller._on_autopilot_step = watch_step      # type: ignore[assignment]
+    click(window.autopilot_quick)
+    wait_idle(app, controller)
+    pump(app, 400)
+    controller._on_autopilot_step = real_step       # type: ignore[assignment]
+
+    check(len(steps) == 2, f"автопилот сообщает о каждом шаге ({len(steps)})")
+    check(steps and steps[0][:2] == (1, 2),
+          "в шаге есть номер и общее число стратегий")
+    check(all(caption.startswith("ПОДБОР") for caption, _hint, _p in snapshots),
+          f"кнопка показывает процент подбора ({[c for c, _h, _p in snapshots]})")
+    check(all("Стратегия" in hint for _c, hint, _p in snapshots),
+          f"под кнопкой видно, какая стратегия проверяется ({[h for _c, h, _p in snapshots]})")
+    check(snapshots and snapshots[0][2] and snapshots[0][2] > 0
+          and snapshots[1][2] > snapshots[0][2],
+          f"прогресс растёт по шагам и не равен нулю "
+          f"({[round(p, 2) for _c, _h, p in snapshots]})")
+
     print("\n[3] Панели (шторки)")
     for key, button in (("customizer", window.palette_btn), ("journal", window.journal_btn),
                         ("help", window.help_btn)):
