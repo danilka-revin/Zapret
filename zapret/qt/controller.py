@@ -23,6 +23,7 @@ OPERATION_LABELS = {
     "deps": "Скачивание зависимостей",
     "autopilot": "Автоподбор стратегии",
     "update": "Обновление приложения",
+    "repair": "Починка установки",
     "service_install": "Установка автозапуска",
     "service_remove": "Удаление автозапуска",
     "shortcut": "Создание ярлыка",
@@ -44,6 +45,8 @@ class Controller(QObject):
     busy_changed = Signal(str)             # ключ операции или ""
     finished = Signal(str, bool, str)      # операция, успех, сообщение
     notify = Signal(str, str)              # заголовок, текст (трей/уведомления)
+    update_info_ready = Signal(dict)       # результат проверки обновлений
+    restart_requested = Signal(str)        # интерфейс должен закрыться и запуститься заново
     targets_started = Signal(list)          # сайты, для которых начат подбор
     targets_step = Signal(dict)             # промежуточный итог по стратегии
     targets_done = Signal(dict)             # итоговый отчёт подбора
@@ -72,6 +75,14 @@ class Controller(QObject):
         self.hint = ""
         self.autopilot_report: dict | None = None
         self.target_report: dict | None = None
+        # Обновление приложения: результат проверки новой версии и итог обновления
+        self.update_info: dict = {}
+        self.update_result: dict = {}
+        self.repair_result: dict = {}
+        self._restart_after_update = False
+        self._relaunch_plan: dict | None = None
+        self._update_check_running = False
+        self.finished.connect(self._on_operation_finished)
 
         self._traffic = checks.TrafficMonitor(self.cfg.get("interface", "any")
                                               if self.cfg.get("interface") not in (None, "any") else None)
@@ -136,6 +147,9 @@ class Controller(QObject):
         self.refresh_status()
         QTimer.singleShot(600, self._sample_traffic)
         QTimer.singleShot(1500, self._log_environment)
+        if not self.demo:
+            # проверка обновлений в фоне: медленный GitHub не должен тормозить окно
+            QTimer.singleShot(4000, self.check_update)
 
     def _log_environment(self):
         """Проверка окружения при старте: сразу говорит, что мешает работе."""
@@ -149,6 +163,16 @@ class Controller(QObject):
         if not self.status.get("sudo_ok"):
             problems.append(("Права без пароля не настроены: нажмите «Настроить права "
                              "(1 раз)» — иначе кнопка будет просить пароль.", "warn"))
+        from .. import session
+
+        owner = session.desktop_user()
+        if session.is_root() and owner != "root":
+            problems.append((f"Приложение запущено от root, а рабочий стол у «{owner}»: "
+                             "ярлык и права могут лежать не там. Нажмите «Починить "
+                             "установку» — приложение разложит всё по местам.", "error"))
+        if not integration.shortcut_status().get("desktop"):
+            problems.append(("На рабочем столе нет значка Zapret Control — нажмите "
+                             "«Создать ярлык», чтобы он появился.", "warn"))
         if problems:
             self.log.emit("Проверка окружения нашла замечания:", "accent")
             for message, level in problems:
@@ -321,6 +345,10 @@ class Controller(QObject):
                     "попросит пароль sudo и больше не будет его спрашивать.")
         if "nfqws" in text or "зависимост" in text:
             return "Нажмите «Обновить зависимости» в карточке «Обслуживание»."
+        if "репозитори" in text or "github" in text or "обновить код" in text:
+            return ("Похоже, GitHub сейчас недоступен. Попробуйте позже или обновитесь "
+                    "вручную: curl -fsSL https://raw.githubusercontent.com/danilka-revin/"
+                    "Zapret/main/install.sh -o /tmp/zc-install.sh && bash /tmp/zc-install.sh")
         return "Попробуйте ещё раз или откройте журнал — там подробности."
 
     # ------------------------------------------------------------------
@@ -634,15 +662,106 @@ class Controller(QObject):
         self._submit("deps", work, "Зависимости готовы.", "Не удалось скачать зависимости")
 
     def update_app(self):
+        """Обновить код и зависимости, но интерфейс не трогать (старое поведение)."""
+        self.update_and_restart(restart=False)
+
+    def update_and_restart(self, restart: bool = True):
+        """«Обновить и перезапустить»: код + зависимости + ярлык + права, затем рестарт.
+
+        Обновлённый код подхватывается только новым процессом, поэтому после
+        успешного обновления приложение само отделяет от себя «ждущий» запуск и
+        закрывается — обход при этом не прерывается (nfqws живёт отдельно).
+        """
         from .. import update as update_mod
 
+        self._restart_after_update = bool(restart)
+
+        def step(message: str) -> None:
+            self.log.emit(message, "info")
+            self.busy_detail = message.strip().splitlines()[-1][:90] if message else ""
+            self.changed.emit()
+
         def work():
-            result = update_mod.update_app(lambda msg: self.log.emit(msg, "info"))
-            if not result.get("code_updated"):
-                self.log.emit("Код приложения не обновлялся (нет git-копии или нет изменений).",
-                              "warn")
+            result = update_mod.update_all(step, with_deps=True, with_shortcut=True)
+            self.update_result = result
+            code = result.get("steps", {}).get("code", {})
+            if code.get("changed"):
+                self.log.emit(f"Код обновлён: {code.get('version_before', '')} → "
+                              f"{code.get('version_after', '')}", "ok")
+            else:
+                self.log.emit("Код уже актуален.", "info")
+            for failed in result.get("failed_steps", []):
+                self.log.emit(f"Шаг «{failed}» не завершился — продолжил с остальным.", "warn")
+            if not result.get("ok"):
+                raise RuntimeError("Не удалось обновить код приложения: "
+                                   + str(code.get("error") or "репозиторий недоступен"))
+            if self._restart_after_update:
+                # «ждущий» процесс готовим здесь: relaunch смотрит на запущенные
+                # экземпляры через ps, а вешать на это GUI-поток нельзя — окно
+                # станет неживым на секунды.
+                self._relaunch_plan = update_mod.relaunch()
+            self.progress = 1.0
 
         self._submit("update", work, "Обновление завершено.", "Обновление не удалось")
+
+    def check_update(self, notify: bool = True) -> None:
+        """Проверяет доступность новой версии — в фоне, чтобы окно не подвисало."""
+        from .. import update as update_mod
+
+        if self._update_check_running:
+            return
+        self._update_check_running = True
+
+        def worker():
+            try:
+                info = update_mod.check_update()
+            except Exception as exc:  # noqa: BLE001 — проверка обновлений не должна пугать
+                info = {"available": None, "message": str(exc)}
+            self._update_check_running = False
+            self.update_info = info
+            self.update_info_ready.emit(info)
+            if info.get("available") and notify:
+                self.log.emit("Доступна новая версия Zapret Control — нажмите "
+                              "«Обновить и перезапустить».", "accent")
+                self.notify.emit("Zapret Control", "Доступно обновление приложения.")
+            elif notify and info.get("message"):
+                self.log.emit(str(info["message"]), "info")
+
+        threading.Thread(target=worker, daemon=True, name="zapret-update-check").start()
+
+    def repair_install(self):
+        """Чинит установку: права на каталог, ярлык на столе, NOPASSWD, перенос из /root."""
+        from .. import repair as repair_mod
+
+        def work():
+            result = repair_mod.repair(lambda message: self.log.emit(message, "info"),
+                                       launch=False, with_data=True)
+            self.repair_result = result
+            if not result.get("ok"):
+                raise RuntimeError("Починка помогла не полностью — подробности в журнале")
+
+        self._submit("repair", work, "Установка починена.", "Починка не удалась")
+
+    def _on_operation_finished(self, key: str, success: bool, _message: str) -> None:
+        """Перезапуск после обновления — уже в GUI-потоке, с таймером на закрытие."""
+        if key != "update":
+            return
+        from .. import update as update_mod
+
+        pending, self._restart_after_update = self._restart_after_update, False
+        relaunch, self._relaunch_plan = self._relaunch_plan, None
+        if not (pending and success):
+            return
+        if relaunch is None:
+            relaunch = update_mod.relaunch()
+        if relaunch.get("ok"):
+            self.log.emit("Перезапускаю интерфейс с новой версией — обход не отключается.",
+                          "accent")
+            self.restart_requested.emit("Обновление применено — перезапускаю Zapret Control.")
+        else:
+            self.log.emit("Самоперезапуск не удался (" + str(relaunch.get("error"))
+                          + "). Закройте окно и откройте заново: "
+                          + update_mod.restart_command(), "warn")
 
     def toggle_autostart(self):
         if integration.service_installed():
@@ -655,14 +774,27 @@ class Controller(QObject):
                          "Не удалось установить автозапуск")
 
     def toggle_shortcut(self):
-        def work():
-            if integration.shortcut_installed():
-                integration.remove_shortcut()
-            else:
-                integration.install_shortcut()
+        """Создать (или пересоздать) ярлык: в меню приложений + значок на рабочем столе.
 
-        self._submit("shortcut", work, "Ярлык в меню приложений обновлён.",
-                     "Не удалось изменить ярлык")
+        Раньше кнопка умела только «есть/нет», и если установщик положил ярлык
+        в чужой домашний каталог (sudo -i), на столе по-прежнему ничего не было.
+        Теперь ярлыки всегда пересоздаются для текущего пользователя.
+        """
+        def work():
+            integration.remove_shortcut()
+            placed = integration.install_shortcut()
+            if placed.get("menu"):
+                self.log.emit("Ярлык в меню приложений: " + str(placed["menu"]), "ok")
+            if placed.get("desktop"):
+                self.log.emit("Значок на рабочем столе: " + str(placed["desktop"]), "ok")
+                if not placed.get("trusted"):
+                    self.log.emit("GNOME может спросить разрешение: правый клик по "
+                                  "значку → «Разрешить запуск».", "warn")
+            else:
+                self.log.emit("Каталога «Рабочий стол» нет — ярлык только в меню "
+                              "приложений (наберите «Zapret» в поиске).", "warn")
+
+        self._submit("shortcut", work, "Ярлык создан.", "Не удалось создать ярлык")
 
     def setup_permissions(self, open_terminal) -> None:
         """Настройка NOPASSWD: если есть графический терминал — запускаем в нём."""

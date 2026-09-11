@@ -4,16 +4,21 @@
 
 Использование:
   python3 run.py gui                     — запустить графический интерфейс (Qt6)
+  python3 run.py launch                  — запустить интерфейс «как установщик»:
+                                           окружение рабочего стола + проверка окна
   python3 run.py daemon                  — демон (для systemd-службы)
   python3 run.py start | stop | restart  — запуск/остановка zapret
   python3 run.py status                  — вывести статус
   python3 run.py ensure-deps             — скачать nfqws и стратегии
   python3 run.py autopilot --sites a,b   — подобрать стратегию под сайты
                                            (--apply — сразу применить лучшую)
-  python3 run.py shortcut install|remove — ярлык приложения
+  python3 run.py shortcut install|remove — ярлык приложения (меню + рабочий стол)
   python3 run.py service install|remove|start|stop — системная служба
   python3 run.py permissions install|remove — NOPASSWD для nft/nfqws
-  python3 run.py update                  — самообновление
+  python3 run.py check-update            — есть ли новая версия
+  python3 run.py update [--restart]      — обновить код+зависимости и перезапуститься
+  python3 run.py repair [--no-deps]      — починить установку (root → пользователь,
+                                           ярлык на столе, права, запуск окна)
   python3 run.py doctor                  — самодиагностика (что мешает работать)
 """
 
@@ -25,6 +30,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def _log(msg: str) -> None:
     print(msg, flush=True)
+
+
+def _crash_log(message: str) -> None:
+    """Пишет в лог рядом с приложением — его видно и пользователю, и root."""
+    from pathlib import Path
+
+    from zapret import app_dir
+
+    for candidate in (app_dir() / "zapret-control.log", Path("/tmp/zapret-control.log")):
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            with open(candidate, "a", encoding="utf-8") as handle:
+                handle.write(message.rstrip() + "\n")
+            return
+        except OSError:
+            continue
 
 
 LIB_HINT = ("Установите системные библиотеки Qt6:\n"
@@ -204,34 +225,184 @@ def _doctor() -> int:
            else "нужен пароль sudo", integration.permissions_ready())
 
     print("\nСистемная интеграция")
-    report("служба автозапуска", "установлена" if integration.service_installed() else "нет")
-    report("ярлык в меню", "есть" if integration.shortcut_installed() else "нет")
+    # всё ниже — опционально: «нет» не считается неисправностью, поэтому ok=None
+    report("служба автозапуска", "установлена" if integration.service_installed() else "нет",
+           True if integration.service_installed() else None)
+    status = integration.shortcut_status()
+    report("ярлык в меню", ("есть: " + status["menu_path"]) if status["menu"] else "нет",
+           True if status["menu"] else None)
+    report("значок на рабочем столе",
+           ("есть: " + status["desktop_path"]) if status["desktop"]
+           else ("нет" + (" (каталога Рабочий стол нет)" if not status["desktop_shown"] else "")),
+           True if status["desktop"] else None)
     if PySide6 is not None:
         try:
             from PySide6.QtWidgets import QSystemTrayIcon
-            report("системный трей", "доступен" if QSystemTrayIcon.isSystemTrayAvailable()
-                   else "недоступен (окно просто не будет скрываться)")
+            available = QSystemTrayIcon.isSystemTrayAvailable()
+            report("системный трей", "доступен" if available
+                   else "недоступен (окно просто не будет скрываться)",
+                   True if available else None)
         except Exception:  # noqa: BLE001
             pass
+
+    print("\nКто и откуда запускает приложение")
+    from zapret import session
+
+    owner = session.desktop_user()
+    report("пользователь рабочего стола", owner, bool(owner))
+    report("этот процесс", f"uid={os.getuid()} ({session.current_user()})", True)
+    if session.is_root() and owner != "root":
+        report("запуск от root",
+               f"да — приложение, ярлык и права должны принадлежать {owner}", False)
+    if session.root_install_leftovers() is not None:
+        report("копия в /root", str(session.root_install_leftovers())
+               + " — перенести в домашний каталог пользователя", False)
+    try:
+        st = app_dir().stat()
+        owner_uid = session.uid_gid(owner)[0]
+        report("владелец каталога приложения",
+               f"uid {st.st_uid}" + ("" if st.st_uid == owner_uid else f" (нужен {owner_uid})"),
+               st.st_uid == owner_uid)
+    except OSError as exc:
+        report("каталог приложения", f"не читается: {exc}", False)
+    env = session.session_env(owner)
+    display = env.get("DISPLAY") or env.get("WAYLAND_DISPLAY") or "не найден"
+    report("дисплей", display + (f" (XAUTHORITY: {'есть' if env.get('XAUTHORITY') else 'нет'})"),
+           session.has_display(env))
 
     if problems:
         print("\nЧто мешает работе:")
         for item in problems:
             print(f"  · {item}")
-        print("\nЧаще всего кнопка не срабатывает без прав: сначала настройте их —")
+        print("\nБыстрый путь — починка одной командой (нужен пароль sudo):")
+        print("  python3 run.py repair")
+        print("Часто кнопка не срабатывает только из-за прав:")
         print("  python3 run.py permissions install   (один раз, спросит пароль)")
     else:
         print("\nВсё на месте: приложение должно запускаться и работать.")
     return 1 if problems else 0
 
 
+def _relaunch_as_user() -> int | None:
+    """GUI под root — типичная причина «окна нет»: перепускаем окно пользователю.
+
+    Возвращает код выхода, если перезапуск от имени пользователя состоялся
+    (или честно не удался), и None, если трогать ничего не нужно.
+    """
+    from pathlib import Path
+
+    from zapret import session
+
+    if not session.is_root():
+        return None
+    owner = session.desktop_user()
+    if not owner or owner == "root":
+        return None
+    _log(f"Запущено от root, а рабочий стол у пользователя «{owner}».")
+    _log("Окно от root на его дисплей обычно не выходит, а ярлык и права уезжают в /root.")
+    here = Path(__file__).resolve().parent
+    _log(f"Перезапускаю интерфейс от имени {owner}…")
+    result = session.launch_gui(here, probe=False, settle=3.0)
+    if result.get("ok"):
+        _log(f"[+] {result.get('message')}")
+        _log(f"    Лог: {result.get('log_path')}")
+        _log("    Если нужно перенести установку из /root и поправить права: "
+             f"python3 {here / 'run.py'} repair")
+        return 0
+    _log("[-] Не удалось запустить окно от имени пользователя: "
+         + str(result.get("message") or "неизвестная причина"))
+    if result.get("log"):
+        _log("  последние строки лога:")
+        for line in str(result["log"]).splitlines():
+            _log("    " + line)
+    _log(f"    Починка установки одной командой: python3 {here / 'run.py'} repair")
+    return 1
+
+
+def _launch_gui_from_cli() -> int:
+    """Запуск интерфейса с проверкой, что окно действительно живое."""
+    from pathlib import Path
+
+    from zapret import session
+
+    here = Path(__file__).resolve().parent
+    owner = session.desktop_user()
+    env = session.session_env(owner)
+    _log(f"Пользователь рабочего стола: {owner}")
+    display = env.get("DISPLAY") or env.get("WAYLAND_DISPLAY") or "не найден"
+    _log(f"Дисплей: {display}")
+    if not session.has_display(env):
+        _log("[-] Графической сессии не видно: нет DISPLAY и WAYLAND_DISPLAY.")
+        _log("    Запустите приложение из-под рабочего стола или выполните:")
+        _log(f"    python3 {here / 'run.py'} doctor")
+        return 1
+    result = session.launch_gui(here, log_path=here / "zapret-control.log", settle=3.5)
+    if result.get("ok"):
+        _log(f"[+] {result.get('message')}")
+        _log(f"    Лог: {result.get('log_path')}")
+        return 0
+    _log("[-] " + str(result.get("message") or "Окно не запустилось"))
+    if result.get("log"):
+        _log("  лог запуска:")
+        for line in str(result["log"]).splitlines():
+            _log("    " + line)
+    _log("  Самодиагностика: python3 run.py doctor   |   Починка: python3 run.py repair")
+    return 1
+
+
+def _relaunch_waiter(argv: list[str]) -> int:
+    """Служебная команда: дождаться выхода старого окна и поднять новое.
+
+    Так приложение перезапускается после обновления: дочерний процесс отделён
+    (setsid), поэтому переживает выход родителя и запускает уже новый код.
+    """
+    import argparse
+    import time
+
+    from zapret import session
+
+    parser = argparse.ArgumentParser(prog="run.py relaunch", add_help=False)
+    parser.add_argument("--pid", type=int, default=0)
+    parser.add_argument("--settle", type=float, default=0.6)
+    parser.add_argument("--timeout", type=float, default=25.0)
+    parser.add_argument("--args", default="gui")
+    options, _unknown = parser.parse_known_args(argv)
+
+    target = os.path.dirname(os.path.abspath(__file__))
+    deadline = time.time() + max(1.0, options.timeout)
+    if options.pid > 0:
+        while time.time() < deadline:
+            try:
+                os.kill(options.pid, 0)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                break
+            time.sleep(0.2)
+    time.sleep(max(0.0, options.settle))
+    extra = tuple(part for part in options.args.split(",") if part) or ("gui",)
+    result = session.launch_gui(target, log_path=os.path.join(target, "zapret-control.log"),
+                                settle=3.0, extra_args=extra)
+    if result.get("ok"):
+        _log("[+] " + str(result.get("message")))
+        return 0
+    _log("[-] " + str(result.get("message") or "окно не запустилось"))
+    if result.get("log"):
+        _log("  " + str(result["log"]).replace("\n", "\n  "))
+    return 1
+
+
 def _run_gui() -> int:
     if not _ensure_pyside():
         return 1
+    rerouted = _relaunch_as_user()
+    if rerouted is not None:
+        return rerouted
     ready, reason = _qt_preflight()
     if not ready:
         _log("Не удалось открыть графический интерфейс.")
         _log(reason)
+        _crash_log("[qt-preflight] " + reason)
         _log("Подробная диагностика: python3 run.py doctor")
         return 1
     try:
@@ -244,7 +415,18 @@ def _run_gui() -> int:
         _log(f"Не удалось запустить Qt-интерфейс: {exc}")
         _log(LIB_HINT)
         return 1
-    return qt_run()
+    try:
+        return qt_run()
+    except Exception:  # noqa: BLE001 — окно не должно исчезать без следа
+        import traceback
+
+        detail = traceback.format_exc()
+        _log("Интерфейс аварийно завершился:")
+        _log(detail.strip()[-1500:])
+        _crash_log("[gui-crash]\n" + detail)
+        _log("Полный лог: ~/.local/share/zapret-control/zapret-control.log")
+        return 1
+
 
 
 def main() -> int:
@@ -255,6 +437,22 @@ def main() -> int:
 
     if cmd in ("gui", "qt"):
         return _run_gui()
+
+    if cmd in ("launch", "start-gui", "open"):
+        return _launch_gui_from_cli()
+
+    if cmd == "relaunch":
+        return _relaunch_waiter(args[1:])
+
+    if cmd == "repair":
+        from zapret import repair as repair_mod
+
+        launch = "--no-launch" not in args
+        with_data = "--no-deps" not in args
+        result = repair_mod.repair(_log, launch=launch, with_data=with_data)
+        _log("")
+        _log(repair_mod.summary_text(result))
+        return 0 if result.get("ok") else 1
 
     if cmd == "daemon":
         core.daemon()
@@ -397,11 +595,21 @@ def main() -> int:
     if cmd == "shortcut":
         sub = args[1] if len(args) > 1 else "install"
         if sub == "install":
-            integration.install_shortcut()
-            _log("Ярлык приложения создан.")
+            placed = integration.install_shortcut()
+            _log("Ярлык в меню приложений: " + placed.get("menu", ""))
+            if placed.get("desktop"):
+                _log("Значок на рабочем столе: " + placed["desktop"])
+            else:
+                _log("Каталог «Рабочий стол» не найден — ярлык только в меню приложений.")
         elif sub == "remove":
-            integration.remove_shortcut()
-            _log("Ярлык приложения удалён.")
+            removed = integration.remove_shortcut()
+            _log(f"Удалено ярлыков: {len(removed)}" if removed else "Удалять нечего.")
+        elif sub == "status":
+            import json
+            _log(json.dumps(integration.shortcut_status(), ensure_ascii=False, indent=2))
+        else:
+            _log("Не знаю команду shortcut " + sub)
+            return 1
         return 0
 
     if cmd == "service":
@@ -425,8 +633,9 @@ def main() -> int:
         sub = args[1] if len(args) > 1 else "install"
         if sub == "install":
             try:
-                integration.setup_permissions()
-                _log("Права NOPASSWD настроены.")
+                user = integration.permissions_user()
+                integration.setup_permissions(user)
+                _log(f"Права NOPASSWD настроены для {user}.")
             except Exception as exc:  # noqa: BLE001
                 _log(f"Ошибка: {exc}")
                 return 1
@@ -434,11 +643,65 @@ def main() -> int:
             integration.remove_permissions()
         return 0
 
-    if cmd == "update":
-        from zapret import update
-        res = update.update_app(_log)
-        _log(f"Обновление: {res}")
+    if cmd in ("check-update", "updates"):
+        import json
+
+        from zapret import update as update_mod
+
+        info = update_mod.check_update()
+        if "--json" in args:
+            _log(json.dumps(info, ensure_ascii=False, indent=2))
+        else:
+            _log(f"Текущая версия: v{info.get('version')} "
+                 f"(код: {info.get('local') or info.get('known') or 'неизвестно'})")
+            if info.get("remote"):
+                _log(f"Версия в репозитории: {info['remote']}")
+            if info.get("message"):
+                _log(str(info["message"]))
+            if info.get("available"):
+                _log("Выполните: python3 run.py update --restart")
+        return 0 if info.get("remote") else 1
+
+    if cmd == "record-version":
+        from zapret import update as update_mod
+
+        state = update_mod.record_installed_version()
+        _log("Записана установленная версия: " + str(state.get("commit", ""))
+             + " (v" + str(state.get("version", "")) + ")")
         return 0
+
+    if cmd == "repair-gui":
+        # быстрый путь: только ярлык + запуск окна (без переноса установки)
+        from zapret import repair as repair_mod
+
+        repair_mod.ensure_launch_entry(_log)
+        return _launch_gui_from_cli()
+
+    if cmd == "update":
+        import json
+
+        from zapret import update as update_mod
+
+        with_deps = "--no-deps" not in args
+        restart = "--restart" in args or "--relaunch" in args
+        result = update_mod.update_all(
+            _log, with_deps=with_deps, with_shortcut="--no-shortcut" not in args)
+        if "--json" in args:
+            _log(json.dumps({key: value for key, value in result.items()
+                             if key != "messages"}, ensure_ascii=False, indent=2))
+        else:
+            _log("Обновление: код — %s, зависимости — %s, перезапуск нужен — %s"
+                 % ("изменён" if result["steps"]["code"].get("changed") else "без изменений",
+                    result["steps"]["deps"].get("ok"), bool(result.get("restart_required"))))
+            for message in result.get("messages", []):
+                _log("  · " + message)
+            if result.get("failed_steps"):
+                _log("  не удалось: " + ", ".join(result["failed_steps"]))
+        if restart:
+            relaunch = update_mod.relaunch(wait_for_exit=False)
+            _log("Интерфейс перезапущен с новым кодом." if relaunch.get("ok")
+                 else "Перезапустите интерфейс вручную: " + update_mod.restart_command())
+        return 0 if result.get("ok") else 1
 
     if cmd in ("doctor", "check", "diag"):
         return _doctor()

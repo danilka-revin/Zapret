@@ -83,6 +83,47 @@ def install_fakes(state: dict):
     checks_mod.internet_available = lambda timeout=4.0: True      # type: ignore[assignment]
     autopilot_mod.checks.probe_all = fake_probe_all               # type: ignore[attr-defined]
 
+    # Обслуживание: обновление, ярлык и починка не должны трогать систему и сеть
+    from zapret import integration as integration_mod
+    from zapret import repair as repair_mod
+    from zapret import update as update_mod
+
+    integration_mod.install_shortcut = lambda add_to_desktop=True: {
+        "menu": "/tmp/zapret-test/zapret-control.desktop",
+        "desktop": "/tmp/zapret-test/Desktop/zapret-control.desktop",
+        "trusted": True}
+    integration_mod.remove_shortcut = lambda: []
+    integration_mod.shortcut_status = lambda: {
+        "menu": True, "menu_path": "/tmp/zapret-test/zapret-control.desktop",
+        "desktop": True, "desktop_path": "/tmp/zapret-test/Desktop/zapret-control.desktop",
+        "desktop_shown": True}
+    integration_mod.permissions_ready = lambda: True
+    integration_mod.permissions_user = lambda: "tester"
+    integration_mod.setup_permissions = lambda user=None: state.__setitem__("permissions", user)
+
+    def fake_update_all(progress_cb=None, with_deps=True, with_shortcut=True, force=False):
+        state.setdefault("calls", []).append("update_all")
+        if progress_cb:
+            progress_cb("Тестовое обновление: код обновлён")
+        return {"ok": True, "restart_required": True, "failed_steps": [],
+                "messages": ["код обновлён"], "version_before": "0.0.0", "version_after": "9.9.9",
+                "steps": {"code": {"changed": True, "error": "", "version_before": "0.0.0",
+                                   "version_after": "9.9.9"},
+                          "deps": {"ok": True}, "shortcut": {"ok": True},
+                          "permissions": {"ok": True}, "ownership": {"ok": True}}}
+
+    update_mod.update_all = fake_update_all                        # type: ignore[assignment]
+    update_mod.update_app = fake_update_all                        # type: ignore[assignment]
+    update_mod.check_update = lambda progress_cb=None: {
+        "available": True, "local": "aaaaaaa", "remote": "bbbbbbbbcccc", "version": "0.0.0",
+        "source": "git", "message": "Доступно обновление"}
+    update_mod.relaunch = lambda wait_for_exit=True, extra_args=("gui",): (
+        state.__setitem__("relaunched", True) or {"ok": True, "error": "", "log": ""})
+    update_mod.restart_command = lambda: "python3 run.py gui"
+    repair_mod.repair = lambda log=None, launch=True, with_data=True: (
+        state.__setitem__("repaired", True)
+        or {"ok": True, "owner": "tester", "steps": {}})
+
 
 def click(widget, button=Qt.MouseButton.LeftButton):
     """Настоящий клик мышью по центру виджета."""
@@ -437,17 +478,78 @@ def main() -> int:
           "переключатель GameFilter пишет в конфиг")
 
     print("\n[6] Обслуживание и проверка сервисов")
-    for button in (window.btn_deps, window.btn_update, window.btn_shortcut,
-                   window.btn_diagnostics):
+    # при клике на «Обновить и перезапустить» окно не должно реально закрыться
+    state["calls"] = []
+    window._quit_app = lambda: state.__setitem__("quit", True)
+    for button in (window.btn_deps, window.btn_check_update, window.btn_repair,
+                   window.btn_shortcut, window.btn_diagnostics):
         click(button)
         wait_idle(app, controller)
         pump(app, 250)
     check(True, "кнопки обслуживания нажимаются без исключений")
+    check(controller.update_info.get("available"),
+          "«Проверить обновления» показывает наличие новой версии")
+    check("bbbbbbbb" in window.update_state_label.text(),
+          "подпись под кнопкой обновления содержит хеш новой версии")
+
+    print("\n[6b] Обновление одной кнопкой + перезапуск")
+    click(window.btn_update)
+    wait_idle(app, controller)
+    pump(app, 900)
+    check("update_all" in state.get("calls", []),
+          "кнопка «Обновить и перезапустить» запускает полное обновление")
+    check(controller.update_result.get("ok"), "обновление вернуло успешную сводку")
+    check(state.get("relaunched"), "после обновления приложение отделяет перезапуск")
+    check(state.get("quit"), "старое окно закрывается, чтобы открылось с новым кодом")
     controller.check_services()
     pump(app, 700)
     check(len(controller.services) == 3, "проверка сервисов вернула данные по трём сервисам")
     check(window.service_rows["youtube"].state in ("ok", "checking"),
           "строка YouTube показывает результат проверки")
+
+    print("\n[6c] Клик и колесо доходят до виджетов")
+    # Регресс на «ни одна кнопка не нажимается»: пустой central widget поверх
+    # содержимого ловит все события, и окна выглядят живыми, но глухими.
+    check(window.scroll.parentWidget() is window.centralWidget(),
+          "прокрутка лежит внутри central widget, а не под ним")
+
+    bar = window.scroll.verticalScrollBar()
+    if bar.maximum() > 0:
+        bar.setValue(bar.maximum())       # карточка «Обслуживание» — в самом низу
+        pump(app, 80)
+
+    def topmost(widget):
+        pos = widget.mapTo(window, QPoint(widget.rect().center().x(),
+                                           widget.rect().center().y()))
+        return window.childAt(pos.x(), pos.y())
+
+    for label, widget in (("большая кнопка", window.power),
+                          ("«Обновить и перезапустить»", window.btn_update),
+                          ("«Создать ярлык»", window.btn_shortcut),
+                          ("«Починить установку»", window.btn_repair)):
+        hit = topmost(widget)
+        name = hit.metaObject().className() if hit is not None else "ничего"
+        check(hit is widget or widget.isAncestorOf(hit),
+              f"{label}: сверху сам виджет, а не {name}")
+
+    check(getattr(window, "_wheel_guard", None) is not None,
+          "защита прокрутки колесом установлена")
+    try:
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QWheelEvent
+
+        viewport = window.scroll.viewport()
+        point = viewport.rect().center()
+        bar.setValue(0)
+        pump(app, 40)
+        event = QWheelEvent(QPointF(point), viewport.mapToGlobal(point), QPoint(0, 0),
+                            QPoint(0, -120), Qt.MouseButton.NoButton,
+                            Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.ScrollUpdate, False)
+        QApplication.sendEvent(viewport, event)
+        pump(app, 40)
+        check(bar.value() > 0, f"колесо вниз прокручивает окно (сдвиг {bar.value()} px)")
+    except (ImportError, AttributeError, TypeError) as exc:   # разные версии Qt
+        print(f"  skip· колесо: {exc}")
 
     print("\n[7] Иконки темы")
     check(len(icons.ICONS) > 40, f"набор иконок загружен ({len(icons.ICONS)})")
