@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "Zapret Control"
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.3.0"
 APP_SLUG = "zapret-control"
 
 # Репозитории-источники (загружаются автоматически при установке зависимостей)
