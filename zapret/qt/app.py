@@ -436,6 +436,7 @@ class ZapretWindow(QMainWindow):
         tools_layout = QHBoxLayout()
         tools_layout.setContentsMargins(0, 8, 0, 0)
         tools_layout.setSpacing(8)
+        pal = self.theme.palette
         self.custom_domain_input = QLineEdit()
         self.custom_domain_input.setPlaceholderText("Домен для проверки (например youtube.com)")
         self.custom_domain_input.setStyleSheet(
