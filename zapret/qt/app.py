@@ -25,7 +25,7 @@ from .. import APP_NAME, APP_VERSION, app_dir
 from . import icons
 from .controller import OPERATION_LABELS, Controller
 from .sheets import (CustomizerSheet, DiagnosticsSheet, HelpSheet, JournalSheet,
-                    TargetSheet)
+                    ResultsSheet, TargetSheet)
 from .theme import ThemeManager, apply_theme_to_app
 from .widgets import (Backdrop, Card, GlassButton, IconButton, LogView, PowerSwitch,
                       ServiceRow, SettingRow, Sparkline, StatTile, StatusPill, Switch,
@@ -521,6 +521,7 @@ class ZapretWindow(QMainWindow):
             "targets": TargetSheet(self.theme, self.controller, self),
             "diagnostics": DiagnosticsSheet(self.theme, self.controller, self),
             "help": HelpSheet(self.theme, self.controller, self),
+            "results": ResultsSheet(self.theme, self),
         }
         self.sheets["help"].set_actions(
             lambda: self.controller.setup_permissions(self._open_terminal),
@@ -689,6 +690,13 @@ class ZapretWindow(QMainWindow):
         self._set_buttons_enabled(not key)
 
     def _on_finished(self, key: str, success: bool, message: str):
+        if key == "autopilot" and success:
+            report = getattr(self.controller, "autopilot_report", None)
+            if report:
+                sheet = self.sheets.get("results")
+                if sheet is not None:
+                    sheet.fill_report(report)
+                    sheet.open()
         if success:
             if key in ("power_on", "bootstrap", "autopilot"):
                 self.toasts.show_toast("Готово: " + OPERATION_LABELS.get(key, "операция"),

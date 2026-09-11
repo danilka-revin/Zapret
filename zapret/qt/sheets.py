@@ -1052,3 +1052,106 @@ def _label_holder(theme, label: QLabel, grid: QGridLayout) -> QWidget:
     layout.addWidget(label)
     layout.addLayout(grid)
     return box
+
+
+# ---------------------------------------------------------------------------
+# Таблица результатов подбора
+# ---------------------------------------------------------------------------
+
+from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+
+class ResultsSheet(Sheet):
+    """Красивое окно-таблица с результатами автоподбора или подбора под сайт."""
+
+    def __init__(self, theme, parent=None):
+        super().__init__(theme, parent, width=640)
+        self.theme = theme
+        self.set_header(SheetHeader(theme, "Результаты подбора",
+                                    "что работает, что нет — в одной таблице", "layers",
+                                    on_close=self.close))
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["Стратегия", "ОК", "Всего", "Задержка", "Статус"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setMinimumHeight(340)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        for col in (1, 2, 3):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(1, 50)
+        self.table.setColumnWidth(2, 50)
+        self.table.setColumnWidth(3, 90)
+        self.table.setColumnWidth(4, 90)
+        self.set_content([self.table])
+        theme.changed.connect(self._restyle)
+
+    def fill_report(self, report: dict):
+        tries = [t for t in report.get("tries", []) if "error" not in t]
+        tries.sort(key=lambda t: (-t.get("ok", 0), t.get("avg_ms", 99999)))
+        best = report.get("strategy", "")
+        total = report.get("total", 0) or len(tries)
+        self.table.setRowCount(len(tries))
+        pal = self.theme.palette
+        for row_idx, item in enumerate(tries):
+            strategy = item.get("strategy", "—")
+            ok = item.get("ok", 0)
+            avg = item.get("avg_ms", 0.0)
+            status_text = "ОК" if ok == total else ("Частично" if ok > 0 else "Нет")
+            status_color = pal.good if ok == total else (pal.warn if ok > 0 else pal.bad)
+            # Стратегия
+            cell = QTableWidgetItem(strategy)
+            cell.setFont(font(self.theme.font_family, pal.font_sm,
+                              QFont.Weight.DemiBold))
+            cell.setForeground(QColor(pal.text))
+            if strategy == best:
+                cell.setBackground(QColor(pal.accent))
+                cell.setForeground(QColor(pal.on_accent))
+            self.table.setItem(row_idx, 0, cell)
+            # ОК
+            cell_ok = QTableWidgetItem(str(ok))
+            cell_ok.setFont(font(self.theme.font_family, pal.font_sm))
+            cell_ok.setForeground(QColor(pal.good))
+            cell_ok.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row_idx, 1, cell_ok)
+            # Всего
+            cell_total = QTableWidgetItem(str(total))
+            cell_total.setFont(font(self.theme.font_family, pal.font_sm))
+            cell_total.setForeground(QColor(pal.muted))
+            cell_total.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row_idx, 2, cell_total)
+            # Задержка
+            cell_avg = QTableWidgetItem(f"{avg:.0f} мс")
+            cell_avg.setFont(font(self.theme.mono_family, pal.font_sm))
+            cell_avg.setForeground(QColor(pal.accent_text))
+            cell_avg.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row_idx, 3, cell_avg)
+            # Статус
+            cell_status = QTableWidgetItem(status_text)
+            cell_status.setFont(font(self.theme.font_family, pal.font_sm, QFont.Weight.DemiBold))
+            cell_status.setForeground(status_color)
+            cell_status.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row_idx, 4, cell_status)
+        self.table.resizeRowsToContents()
+
+    def _restyle(self):
+        pal = self.theme.palette
+        self.table.setStyleSheet(
+            f"QTableWidget{{background:transparent;color:{pal.text};"
+            f"gridline-color:{pal.line_strong};border:none;border-radius:10px;}}"
+            f"QHeaderView::section{{background:{pal.surface_2};color:{pal.text};"
+            f"font-weight:bold;padding:8px;border:none;}}"
+            f"QTableWidget::item{{padding:6px;border-bottom:1px solid {pal.line_strong};}}"
+        )
+        self.table.setAlternatingRowColors(True)
+        alt = QColor(pal.surface_2).lighter(105) if not pal.dark else QColor(pal.surface_3).darker(105)
+        alt.setAlphaF(0.5)
+        self.table.setPalette(type(self.table)().palette())
+        # Для простоты не меняем палитру таблицы отдельно
+
+    def open(self):
+        super().open()
+        self.raise_()
