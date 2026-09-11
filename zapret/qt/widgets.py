@@ -432,7 +432,7 @@ class PowerSwitch(QWidget):
                       self._size - 32, self._size - 32)
 
         # Более выразительное свечение вокруг кнопки
-        glow_strength = (0.65 if on else 0.22) + 0.14 * self.pulse + 0.22 * self.hover
+        glow_strength = (0.95 if on else 0.35) + 0.20 * self.pulse + 0.30 * self.hover
         glow_radius = disc.width() * (0.85 + 0.06 * self.pulse)
         glow = QRadialGradient(QPointF(0, 0), glow_radius)
         glow.setColorAt(0.62, _with_alpha(accent.name(), 0.30 * glow_strength))
@@ -443,7 +443,7 @@ class PowerSwitch(QWidget):
         p.drawEllipse(QPointF(0, 0), glow_radius, glow_radius)
 
         # 2. Кольцо-трек и дуга прогресса
-        ring_w = max(8.0, self._size * 0.045)
+        ring_w = max(10.0, self._size * 0.055)
         ring_rect = disc.adjusted(-ring_w * 0.7, -ring_w * 0.7, ring_w * 0.7, ring_w * 0.7)
         track_color = _with_alpha(pal.text, 0.10 if pal.dark else 0.08)
         p.setBrush(Qt.BrushStyle.NoBrush)
@@ -489,19 +489,18 @@ class PowerSwitch(QWidget):
         pm = icons.icon_pixmap("power", icon_size, icon_color, 2.0)
         p.drawPixmap(QPointF(-pm.width() / 2, -pm.height() / 2 - self._size * 0.085), pm)
 
-        caption_color = QColor(pal.on_accent if on else pal.text)
-        p.setPen(caption_color)
-        p.setFont(font(self.theme.font_family, max(15.0, self._size * 0.090),
-                       QFont.Weight.Bold, letter_spacing=1.5))
-        cap_rect = QRectF(-disc.width() / 2, self._size * 0.055, disc.width(), self._size * 0.13)
-        p.drawText(cap_rect, Qt.AlignmentFlag.AlignCenter, self.caption)
 
-        # Подпись только «ВКЛ» / «ВЫКЛ» — без подсказки под кнопкой
-        caption_color = QColor(pal.on_accent if on else pal.text)
+        caption_color = QColor(pal.on_accent if on else pal.accent_text)
         p.setPen(caption_color)
-        p.setFont(font(self.theme.font_family, max(16.0, self._size * 0.095),
-                       QFont.Weight.Bold, letter_spacing=1.5))
-        cap_rect = QRectF(-disc.width() / 2, self._size * 0.055, disc.width(), self._size * 0.14)
+        p.setFont(font(self.theme.font_family, max(18.0, self._size * 0.105),
+                       QFont.Weight.Bold, letter_spacing=2.5))
+        cap_rect = QRectF(-disc.width() / 2, self._size * 0.07, disc.width(), self._size * 0.16)
+        # Лёгкая тень под текстом для объёма
+        shadow_color = QColor(pal.text if on else pal.accent_text)
+        shadow_color.setAlphaF(0.15)
+        p.setPen(shadow_color)
+        p.drawText(cap_rect.adjusted(2, 2, 2, 2), Qt.AlignmentFlag.AlignCenter, self.caption)
+        p.setPen(caption_color)
         p.drawText(cap_rect, Qt.AlignmentFlag.AlignCenter, self.caption)
         p.end()
 

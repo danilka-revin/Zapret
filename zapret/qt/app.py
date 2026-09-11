@@ -273,7 +273,7 @@ class ZapretWindow(QMainWindow):
         row.setContentsMargins(6, 0, 6, 0)
         row.setSpacing(22)
 
-        self.power = PowerSwitch(self.theme, 320)
+        self.power = PowerSwitch(self.theme, 340)
         self.power.clicked.connect(self.controller.toggle_power)
         row.addWidget(self.power, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -380,8 +380,8 @@ class ZapretWindow(QMainWindow):
         row1.addWidget(self.services_card, 3)
 
         self.traffic_card = Card(self.theme, "Трафик", "живая скорость соединения", "activity")
-        self.spark = Sparkline(self.theme)
-        self.spark.setMinimumHeight(160)
+        self.spark = Sparkline(self.theme, points=120)
+        self.spark.setMinimumHeight(200)
         self.traffic_card.body.addWidget(self.spark)
         stats = QHBoxLayout()
         stats.setSpacing(10)
@@ -408,7 +408,7 @@ class ZapretWindow(QMainWindow):
         self.btn_update.clicked.connect(lambda: self.controller.update_and_restart(True))
         self.btn_check_update = GlassButton(self.theme, "Проверить обновления", "search",
                                             "ghost", compact=True)
-        self.btn_check_update.clicked.connect(lambda: self.controller.check_update())
+        self.btn_check_update.clicked.connect(lambda: self.controller.update_and_restart(True))
         self.update_state_label = QLabel("")
         self.update_state_label.setWordWrap(True)
         self.maintenance_card.body.addWidget(self.btn_update)
