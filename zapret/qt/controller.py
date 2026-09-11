@@ -28,6 +28,7 @@ OPERATION_LABELS = {
     "shortcut": "Создание ярлыка",
     "bootstrap": "Первый запуск",
     "restart": "Перезапуск с новой стратегией",
+    "targets": "Подбор стратегии под сайт",
 }
 
 
@@ -43,6 +44,9 @@ class Controller(QObject):
     busy_changed = Signal(str)             # ключ операции или ""
     finished = Signal(str, bool, str)      # операция, успех, сообщение
     notify = Signal(str, str)              # заголовок, текст (трей/уведомления)
+    targets_started = Signal(list)          # сайты, для которых начат подбор
+    targets_step = Signal(dict)             # промежуточный итог по стратегии
+    targets_done = Signal(dict)             # итоговый отчёт подбора
 
     def __init__(self, theme, parent=None):
         super().__init__(parent)
@@ -66,6 +70,7 @@ class Controller(QObject):
         self.error_message = ""
         self.hint = ""
         self.autopilot_report: dict | None = None
+        self.target_report: dict | None = None
 
         self._traffic = checks.TrafficMonitor(self.cfg.get("interface", "any")
                                               if self.cfg.get("interface") not in (None, "any") else None)
@@ -382,6 +387,88 @@ class Controller(QObject):
                 self.last_check_at = time.time()
 
         self._submit("autopilot", work, "Автоподбор завершён.", "Автоподбор не удался")
+
+    # ------------------------------------------------------------------
+    # Подбор стратегии под конкретные сайты
+    # ------------------------------------------------------------------
+
+    def target_history(self) -> list[str]:
+        ui = self.cfg.get("ui") or {}
+        history = ui.get("target_history") or []
+        return [str(x) for x in history][:8]
+
+    def _remember_targets(self, query: str):
+        ui = dict(self.cfg.get("ui") or {})
+        history = [query] + [x for x in (ui.get("target_history") or []) if x != query]
+        ui["target_history"] = history[:8]
+        self.cfg["ui"] = ui
+        config_mod.save(self.cfg)
+
+    def test_targets(self, raw_query: str, apply_best: bool = True):
+        """Перебирает стратегии под указанные сайты и выбирает лучшую."""
+        hosts = checks.parse_targets(raw_query)
+        if not hosts:
+            self.log.emit("Не понял, какие сайты проверять. Введите домен, например "
+                          "rutracker.org, или выберите группу.", "warn")
+            self.finished.emit("targets", False, "не указаны сайты")
+            return
+        if not core.deps_ready():
+            self.log.emit("Сначала нужны зависимости: nfqws и стратегии.", "warn")
+            self._submit("deps", lambda: core.ensure_deps(
+                self.cfg.get("nfqws_version", "latest"), self.cfg.get("strategy_rev", ""),
+                lambda m: self.log.emit(m, "info")), "Зависимости готовы.",
+                "Не удалось скачать зависимости")
+            self.finished.emit("targets", False, "нет зависимостей")
+            return
+
+        # В историю пишем уже разобранные домены — из ссылки вида
+        # https://rutracker.org/forum/index.php остаётся понятное «rutracker.org».
+        self._remember_targets(", ".join(hosts))
+        self.targets_started.emit(hosts)
+        if self.busy_key:
+            self.log.emit("Сейчас выполняется другая операция — дождитесь завершения.", "warn")
+            self.finished.emit("targets", False, "занято")
+            return
+
+        self._set_busy("targets")
+        what = hosts[0] if len(hosts) == 1 else f"{len(hosts)} сайтов"
+
+        def runner():
+            try:
+                report = autopilot.run_for_targets(
+                    self.cfg, hosts,
+                    progress_cb=lambda msg: self.log.emit(msg, "info"),
+                    stop_flag=lambda: self._stop_flag,
+                    on_step=self._on_autopilot_step,
+                    apply_best=apply_best,
+                    limit=8,
+                )
+                self.target_report = report
+                self.services = [
+                    {**result, "key": result.get("host", ""), "icon": "globe"}
+                    for result in report.get("results", [])
+                ]
+                self.targets_done.emit(report)
+                if report.get("applied"):
+                    self.log.emit(f"Стратегия для «{what}»: {report['strategy']} — применена.",
+                                  "ok")
+                else:
+                    self.log.emit(f"Лучшая стратегия для «{what}»: {report['strategy']} "
+                                  f"(не применялась).", "accent")
+                self.finished.emit("targets", True, "")
+            except Exception as exc:  # noqa: BLE001
+                self.error_message = str(exc)
+                self.hint = self._hint_for(exc)
+                self.log.emit(f"Подбор под сайт не удался: {exc}", "error")
+                self.log.emit(self.hint, "warn")
+                self.finished.emit("targets", False, str(exc))
+            finally:
+                self.progress = None
+                self.busy_detail = ""
+                self._set_busy("")
+                self.refresh_status()
+
+        threading.Thread(target=runner, daemon=True, name="zapret-targets").start()
 
     def stop_autopilot(self):
         self._stop_flag = True

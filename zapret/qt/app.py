@@ -24,8 +24,9 @@ from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout,
 from .. import APP_NAME, APP_VERSION, app_dir
 from . import icons
 from .controller import OPERATION_LABELS, Controller
-from .sheets import CustomizerSheet, DiagnosticsSheet, HelpSheet, JournalSheet
-from .theme import ThemeManager
+from .sheets import (CustomizerSheet, DiagnosticsSheet, HelpSheet, JournalSheet,
+                    TargetSheet)
+from .theme import ThemeManager, apply_theme_to_app
 from .widgets import (Backdrop, Card, GlassButton, IconButton, LogView, PowerSwitch,
                       ServiceRow, SettingRow, Sparkline, StatTile, StatusPill, Switch,
                       ToastHost, _Glass, font)
@@ -126,12 +127,11 @@ class ZapretWindow(QMainWindow):
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll.viewport().setAutoFillBackground(False)
-        self.scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}"
-                                  "QScrollBar:vertical{background:transparent;width:10px;}"
-                                  "QScrollBar::handle:vertical{background:rgba(140,160,150,0.35);"
-                                  "border-radius:5px;min-height:40px;}"
-                                  "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
-                                  "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}")
+        self.scroll.setStyleSheet(
+            "QScrollArea, QScrollArea > QWidget#qt_scrollarea_viewport,"
+            "QScrollArea > QWidget > QWidget{background:transparent;border:none;}")
+        self.scroll.viewport().setAutoFillBackground(False)
+        self.scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         self.content = QWidget()
         self.content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
@@ -187,15 +187,22 @@ class ZapretWindow(QMainWindow):
         self.pill = StatusPill(self.theme, "Проверяю…", "idle")
         layout.addWidget(self.pill)
 
+        self.theme_toggle_btn = IconButton(self.theme, "sun", "Переключить тему "
+                                           "(тёмная / светлая)", 40)
+        self.theme_toggle_btn.clicked.connect(self._toggle_theme)
         self.autopilot_btn = IconButton(self.theme, "sparkles", "Автопилот: включён", 40)
         self.autopilot_btn.clicked.connect(self._toggle_autopilot)
+        self.target_btn = IconButton(self.theme, "target",
+                                     "Подбор стратегии под сайт (Ctrl+T)", 40)
+        self.target_btn.clicked.connect(lambda: self._toggle_sheet("targets"))
         self.palette_btn = IconButton(self.theme, "palette", "Оформление (Ctrl+,)", 40)
         self.palette_btn.clicked.connect(lambda: self._toggle_sheet("customizer"))
         self.journal_btn = IconButton(self.theme, "terminal", "Журнал (Ctrl+L)", 40)
         self.journal_btn.clicked.connect(lambda: self._toggle_sheet("journal"))
         self.help_btn = IconButton(self.theme, "help", "Справка", 40)
         self.help_btn.clicked.connect(lambda: self._toggle_sheet("help"))
-        for btn in (self.autopilot_btn, self.palette_btn, self.journal_btn, self.help_btn):
+        for btn in (self.theme_toggle_btn, self.autopilot_btn, self.target_btn,
+                    self.palette_btn, self.journal_btn, self.help_btn):
             layout.addWidget(btn)
 
         self.header_card = Card(self.theme)
@@ -246,11 +253,15 @@ class ZapretWindow(QMainWindow):
         self.autopilot_quick = GlassButton(self.theme, "Перебрать стратегии", "refresh",
                                            "accent-soft")
         self.autopilot_quick.clicked.connect(self.controller.run_autopilot)
+        self.btn_target_test = GlassButton(self.theme, "Подбор под сайт", "target",
+                                           "secondary")
+        self.btn_target_test.clicked.connect(lambda: self._toggle_sheet("targets"))
         self.btn_setup_rights = GlassButton(self.theme, "Настроить права (1 раз)", "key",
                                             "primary")
         self.btn_setup_rights.clicked.connect(
             lambda: self.controller.setup_permissions(self._open_terminal))
         hero_buttons.addWidget(self.autopilot_quick)
+        hero_buttons.addWidget(self.btn_target_test)
         hero_buttons.addWidget(self.btn_setup_rights)
         hero_buttons.addStretch(1)
         middle.addLayout(hero_buttons)
@@ -400,6 +411,7 @@ class ZapretWindow(QMainWindow):
         self.sheets = {
             "customizer": CustomizerSheet(self.theme, self),
             "journal": JournalSheet(self.theme, self),
+            "targets": TargetSheet(self.theme, self.controller, self),
             "diagnostics": DiagnosticsSheet(self.theme, self.controller, self),
             "help": HelpSheet(self.theme, self.controller, self),
         }
@@ -523,6 +535,7 @@ class ZapretWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+,"), self, activated=lambda: self._toggle_sheet("customizer"))
         QShortcut(QKeySequence("Ctrl+L"), self, activated=lambda: self._toggle_sheet("journal"))
         QShortcut(QKeySequence("Ctrl+D"), self, activated=lambda: self._toggle_sheet("diagnostics"))
+        QShortcut(QKeySequence("Ctrl+T"), self, activated=lambda: self._toggle_sheet("targets"))
         QShortcut(QKeySequence("Ctrl+Q"), self, activated=self._quit_app)
         QShortcut(QKeySequence("Escape"), self, activated=self._close_sheets)
 
@@ -601,6 +614,7 @@ class ZapretWindow(QMainWindow):
 
     def _refresh_dashboard(self):
         self._refresh_queued = False
+        pal = self.theme.palette
         c = self.controller
         status = c.status or {}
         state = c.power_state()
@@ -697,6 +711,9 @@ class ZapretWindow(QMainWindow):
         mode_text = "автопилот" if self.theme.settings.autopilot else "ручной режим"
         self.subtitle_label.setText(
             f"v{APP_VERSION} · {mode_text} · {c.last_check_text()}")
+        self.theme_toggle_btn.set_icon("sun" if pal.dark else "moon")
+        self.theme_toggle_btn.setToolTip("Переключить на светлую тему" if pal.dark
+                                         else "Переключить на тёмную тему")
         self.autopilot_btn.kind = "solid" if self.theme.settings.autopilot else "ghost"
         self.autopilot_btn.setToolTip("Автопилот: " +
                                       ("включён" if self.theme.settings.autopilot else "выключен"))
@@ -790,6 +807,12 @@ class ZapretWindow(QMainWindow):
     def _on_sheet_closed(self):
         self._refresh_dashboard()
 
+    def _toggle_theme(self):
+        """Один клик: полностью тёмная ↔ полностью светлая тема."""
+        current = self.theme.palette.dark
+        self.theme.update(mode="light" if current else "dark")
+        self.controller.log_now("Тема: " + ("светлая" if current else "тёмная"), "info")
+
     def _toggle_autopilot(self):
         value = not self.theme.settings.autopilot
         self.theme.update(autopilot=value)
@@ -809,7 +832,8 @@ class ZapretWindow(QMainWindow):
 
     def _set_buttons_enabled(self, enabled: bool):
         for btn in (self.autopilot_quick, self.btn_deps, self.btn_update,
-                    self.btn_autostart, self.recheck_btn, self.btn_setup_rights):
+                    self.btn_autostart, self.recheck_btn, self.btn_setup_rights,
+                    self.btn_target_test):
             btn.setEnabled(enabled)
 
     def _copy_log(self):
@@ -926,6 +950,9 @@ def _wrap(widget: QWidget) -> QWidget:
 def run() -> int:
     """Точка входа Qt-интерфейса."""
     app = QApplication.instance() or QApplication(sys.argv)
+    # Fusion одинаково выглядит во всех дистрибутивах и слушается нашей палитры —
+    # без него на GNOME/KDE в тёмной теме оставались светлые системные подложки.
+    app.setStyle("Fusion")
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setQuitOnLastWindowClosed(False if QSystemTrayIcon.isSystemTrayAvailable() else True)
@@ -936,6 +963,8 @@ def run() -> int:
     from .theme import UISettings
 
     theme = ThemeManager(UISettings.from_dict(cfg.get("ui")))
+    apply_theme_to_app(app, theme)
+    theme.changed.connect(lambda: apply_theme_to_app(app, theme))
     controller = Controller(theme)
 
     window = ZapretWindow(theme, controller, tray=bool(theme.settings.tray))

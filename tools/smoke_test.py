@@ -117,6 +117,13 @@ def main() -> int:
 
     cfg = config_mod.load()
     theme = ThemeManager(UISettings.from_dict(cfg.get("ui")))
+    # Как в run(): интерфейс целиком перекрашивается палитрой темы,
+    # иначе часть системных элементов остаётся светлой.
+    app.setStyle("Fusion")
+    from zapret.qt.theme import apply_theme_to_app
+
+    apply_theme_to_app(app, theme)
+    theme.changed.connect(lambda: apply_theme_to_app(app, theme))
     controller = Controller(theme)
     window = ZapretWindow(theme, controller, tray=False)
     window.resize(1200, 820)
@@ -197,6 +204,78 @@ def main() -> int:
           f"прогресс растёт по шагам и не равен нулю "
           f"({[round(p, 2) for _c, _h, p in snapshots]})")
 
+    print("\n[2c] Панель «Подбор под сайт»")
+    sheet = window.sheets["targets"]
+    sheet.setGeometry(window.centralWidget().rect())
+    sheet.open()
+    pump(app, 400)
+    check(sheet.isVisible(), "панель подбора под сайт открывается")
+
+    # Кликаем по группе сайтов
+    from zapret import autopilot as ap_mod
+
+    captured: dict = {}
+
+    def fake_run_for_targets(cfg, hosts, progress_cb=None, stop_flag=None, on_step=None,
+                             timeout=5.0, limit=6, apply_best=True):
+        captured["hosts"] = list(hosts)
+        captured["apply_best"] = apply_best
+        if progress_cb:
+            progress_cb("Проверяю " + ", ".join(hosts))
+        if on_step:
+            on_step(1, 1, "general.bat")
+        return {"strategy": "general.bat", "applied": apply_best, "ok": len(hosts),
+                "total": len(hosts), "avg_ms": 150.0, "tries": [
+                    {"strategy": "general.bat", "ok": len(hosts), "avg_ms": 150.0,
+                     "results": [{"host": h, "state": "ok", "latency_ms": 150,
+                                  "detail": "150 мс · открывается"} for h in hosts]},
+                    {"strategy": "general_alt.bat", "ok": 0, "avg_ms": 4000.0,
+                     "results": [{"host": h, "state": "bad", "latency_ms": 4000,
+                                  "detail": "нет ответа"} for h in hosts]},
+                ], "results": [{"host": h, "state": "ok", "latency_ms": 150,
+                               "detail": "150 мс · открывается"} for h in hosts],
+                "what": hosts[0]}
+
+    ap_mod.run_for_targets = fake_run_for_targets     # type: ignore[assignment]
+
+    # группа YouTube
+    from zapret.qt.widgets import Chip
+    chips = sheet.findChildren(Chip)
+    check(len(chips) >= 6, f"на панели есть чипы групп и истории ({len(chips)})")
+    youtube_chip = next((c for c in chips if c.text() == "YouTube"), None)
+    if youtube_chip is not None:
+        click(youtube_chip)
+        wait_idle(app, controller)
+        pump(app, 400)
+    check("googlevideo.com" in captured.get("hosts", []),
+          f"группа YouTube разворачивается в список доменов ({len(captured.get('hosts', []))})")
+    check(len(sheet.result_rows) == 2, "результаты по стратегиям показаны списком")
+    check(any(row.badge == "ЛУЧШАЯ" for row in sheet.result_rows),
+          "лучшая стратегия помечена бейджем «ЛУЧШАЯ»")
+    check(len(sheet.site_rows) >= 1, "по каждому сайту показан результат")
+
+    # свой сайт строкой
+    sheet.input.setText("https://rutracker.org/forum/index.php")
+    click(sheet.run_btn)
+    wait_idle(app, controller)
+    pump(app, 400)
+    check(captured.get("hosts") == ["rutracker.org"],
+          f"ввод ссылки превращается в домен ({captured.get('hosts')})")
+    check(any(c.text() == "rutracker.org" for c in sheet.findChildren(Chip)),
+          "запрос попал в историю недавних")
+
+    # отключённое «применять лучшую»
+    click(sheet.apply_switch)
+    pump(app, 150)
+    sheet.input.setText("example.com")
+    click(sheet.run_btn)
+    wait_idle(app, controller)
+    pump(app, 300)
+    check(captured.get("apply_best") is False,
+          "переключатель «применять лучшую» отключает автоприменение")
+    sheet.close()
+    pump(app, 300)
+
     print("\n[3] Панели (шторки)")
     for key, button in (("customizer", window.palette_btn), ("journal", window.journal_btn),
                         ("help", window.help_btn)):
@@ -213,6 +292,27 @@ def main() -> int:
     check(window.sheets["diagnostics"].isVisible(), "кнопка «Диагностика» открывает панель")
     window.sheets["diagnostics"].close()
     pump(app, 300)
+
+    print("\n[3b] Быстрое переключение темы")
+    was_dark = theme.palette.dark
+    click(window.theme_toggle_btn)
+    pump(app, 300)
+    check(theme.palette.dark != was_dark,
+          f"кнопка в шапке переключает тёмную и светлую тему (было dark={was_dark})")
+    from PySide6.QtGui import QPalette
+    window_palette = window.palette()
+    window_color = window_palette.color(QPalette.ColorRole.Window)
+    if theme.palette.dark:
+        check(window_color.lightness() < 90,
+              f"в тёмной теме фон окна тёмный ({window_color.name()})")
+    else:
+        check(window_color.lightness() > 180,
+              f"в светлой теме фон окна светлый ({window_color.name()})")
+    click(window.theme_toggle_btn)
+    pump(app, 300)
+    check(theme.palette.dark == was_dark, "повторный клик возвращает исходную тему")
+    check(window.palette().color(QPalette.ColorRole.Window).lightness() < 90,
+          f"палитра приложения следует за темой ({window.palette().color(QPalette.ColorRole.Window).name()})")
 
     print("\n[4] Кастомизация (тема, стекло, плотность)")
     sheet = window.sheets["customizer"]

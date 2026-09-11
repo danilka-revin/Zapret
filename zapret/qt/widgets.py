@@ -1103,8 +1103,87 @@ class Sparkline(QWidget):
         p.end()
 
 
+class Chip(QPushButton):
+    """Компактная кнопка-«чип»: группы сайтов, история запросов."""
+
+    def __init__(self, theme, text: str, icon: str = "", kind: str = "ghost",
+                 parent=None):
+        super().__init__(text, parent)
+        self.theme = theme
+        self.icon_name = icon
+        self.kind = kind
+        self.hover = 0.0
+        self.press = 0.0
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setFixedHeight(30)
+        self._restyle()
+        theme.changed.connect(self._restyle)
+
+    def _restyle(self):
+        pal = self.theme.palette
+        self.setFont(font(self.theme.font_family, pal.font_xs, QFont.Weight.DemiBold))
+        fm = QFontMetrics(self.font())
+        self.setMinimumWidth(fm.horizontalAdvance(self.text()) + (30 if self.icon_name else 22))
+        self.update()
+
+    def enterEvent(self, event):  # noqa: N802
+        animate(self, "hover", self.hover, 1.0, self.theme.palette.anim_ms, self._set_hover)
+
+    def leaveEvent(self, event):  # noqa: N802
+        animate(self, "hover", self.hover, 0.0, self.theme.palette.anim_ms, self._set_hover)
+
+    def _set_hover(self, value: float):
+        self.hover = value
+        self.update()
+
+    def _set_press(self, value: float):
+        self.press = value
+        self.update()
+
+    def mousePressEvent(self, event):  # noqa: N802
+        animate(self, "press", self.press, 1.0, 80, self._set_press, QEasingCurve.Type.OutQuad)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        animate(self, "press", self.press, 0.0, 160, self._set_press,
+                QEasingCurve.Type.OutQuad)
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):  # noqa: N802
+        pal = self.theme.palette
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        accent = self.kind == "accent"
+        if accent:
+            bg = _with_alpha(pal.accent, 0.16 + 0.08 * self.hover)
+            border = _with_alpha(pal.accent, 0.45)
+            fg = QColor(pal.accent_text)
+        else:
+            bg = _with_alpha(pal.text, 0.05 + 0.05 * self.hover)
+            border = _with_alpha(pal.text, 0.12)
+            fg = QColor(pal.text)
+        if self.press:
+            bg = _with_alpha(pal.text, 0.12)
+        p.setBrush(bg)
+        p.setPen(QPen(border, 1.0))
+        p.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
+        x = rect.left() + (12 if not self.icon_name else 9)
+        if self.icon_name:
+            pm = icons.icon_pixmap(self.icon_name, 14, fg.name(), 1.8)
+            p.drawPixmap(QPointF(x, rect.center().y() - pm.height() / 2), pm)
+            x += 19
+        p.setPen(fg)
+        p.setFont(self.font())
+        p.drawText(QRectF(x, rect.top(), rect.width() - x + rect.left() - 8, rect.height()),
+                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())
+        p.end()
+
+
 class ServiceRow(QWidget):
-    """Строка сервиса: иконка, название, задержка, статус-индикатор."""
+    """Строка сервиса или результата: иконка, название, детали, индикатор."""
 
     clicked = Signal(str)
 
@@ -1116,6 +1195,7 @@ class ServiceRow(QWidget):
         self.icon_name = icon
         self.state = "idle"       # idle | ok | warn | bad | checking
         self.detail = "не проверялось"
+        self.badge = ""
         self.hover = 0.0
         self.spin = 0.0
         self.setFixedHeight(52)
@@ -1127,6 +1207,10 @@ class ServiceRow(QWidget):
 
     def _tick(self):
         self.spin = (self.spin + 12) % 360
+        self.update()
+
+    def set_badge(self, badge: str):
+        self.badge = badge
         self.update()
 
     def set_status(self, state: str, detail: str):
@@ -1186,9 +1270,19 @@ class ServiceRow(QWidget):
         p.drawText(QRectF(icon_bg.right() + 10, rect.top() + 26, rect.width() - 150, 18),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.detail)
 
-        # индикатор справа
+        # индикатор справа (перед ним — необязательный бейдж «лучшая»)
         cx = rect.right() - 20
         cy = rect.center().y()
+        if self.badge:
+            fm = QFontMetrics(font(self.theme.font_family, pal.font_xs, QFont.Weight.Bold))
+            badge_w = fm.horizontalAdvance(self.badge) + 22
+            badge_rect = QRectF(cx - 16 - badge_w, cy - 11, badge_w, 22)
+            p.setBrush(_with_alpha(pal.accent, 0.18))
+            p.setPen(QPen(_with_alpha(pal.accent, 0.5), 1.0))
+            p.drawRoundedRect(badge_rect, 11, 11)
+            p.setPen(QColor(pal.accent_text))
+            p.setFont(font(self.theme.font_family, pal.font_xs, QFont.Weight.Bold))
+            p.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, self.badge)
         if self.state == "checking":
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.setPen(QPen(color, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
@@ -1371,7 +1465,8 @@ class Sheet(QWidget):
         self.scroll.viewport().setAutoFillBackground(False)
         self.scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.scroll.setStyleSheet(
-            "QScrollArea, QScrollArea > QWidget > QWidget{background:transparent;border:none;}"
+            "QScrollArea, QScrollArea > QWidget#qt_scrollarea_viewport,"
+            "QScrollArea > QWidget > QWidget{background:transparent;border:none;}"
             "QScrollBar:vertical{background:transparent;width:8px;}"
             "QScrollBar::handle:vertical{background:rgba(140,160,150,0.30);border-radius:4px;"
             "min-height:36px;}"
@@ -1574,6 +1669,7 @@ class LogView(QPlainTextEdit):
         self.setStyleSheet(
             f"QPlainTextEdit{{background:transparent;color:{pal.muted};"
             f"border:none;padding:2px;}}"
+            f"QPlainTextEdit > QWidget#qt_scrollarea_viewport{{background:transparent;}}"
         )
 
     def append(self, message: str, kind: str = "info"):

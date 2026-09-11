@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import time
@@ -62,6 +63,69 @@ SERVICES: tuple[Service, ...] = (
 )
 
 SERVICES_BY_KEY = {s.key: s for s in SERVICES}
+
+# ---------------------------------------------------------------------------
+# Готовые группы сайтов для подбора стратегии
+# ---------------------------------------------------------------------------
+
+SITE_GROUPS: list[tuple[str, str, str, tuple[str, ...]]] = [
+    ("youtube", "YouTube", "play",
+     ("youtube.com", "youtu.be", "www.youtube.com", "i.ytimg.com", "googlevideo.com")),
+    ("discord", "Discord", "gamepad",
+     ("discord.com", "discordapp.com", "cdn.discordapp.com", "gateway.discord.gg")),
+    ("telegram", "Telegram", "send",
+     ("web.telegram.org", "telegram.org", "t.me", "cdn-telegram.org")),
+    ("ai", "Нейросети", "sparkles",
+     ("chatgpt.com", "claude.ai", "gemini.google.com", "perplexity.ai")),
+    ("social", "Соцсети", "globe",
+     ("instagram.com", "x.com", "www.facebook.com", "reddit.com")),
+    ("media", "Медиа", "play",
+     ("spotify.com", "twitch.tv", "soundcloud.com", "netflix.com")),
+]
+
+SITE_GROUPS_BY_KEY = {key: (title, icon, hosts) for key, title, icon, hosts in SITE_GROUPS}
+
+
+def clean_host(value: str) -> str:
+    """Превращает любой ввод («https://site.ru/page?x=1», «site.ru») в домен."""
+    text = (value or "").strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"^[a-z][a-z0-9+.-]*://", "", text)   # схема
+    text = text.split("/")[0].split("?")[0].split("#")[0]
+    text = text.split("@")[-1]                          # логин:пароль@
+    text = text.split(":")[0]                           # порт
+    text = text.strip(".").strip()
+    if not text or " " in text:
+        return ""
+    # Простейшая проверка на правдоподобность домена: есть точка или localhost
+    if "." not in text and text != "localhost":
+        return ""
+    if not re.match(r"^[a-z0-9._-]+$", text):
+        return ""
+    return text
+
+
+def parse_targets(value: str) -> list[str]:
+    """Разбирает строку с сайтами: пробелы, запятые, группы (youtube, ai…)."""
+    if not value:
+        return []
+    result: list[str] = []
+    for token in re.split(r"[\s,;]+", value.strip()):
+        if not token:
+            continue
+        if token in SITE_GROUPS_BY_KEY:
+            result.extend(SITE_GROUPS_BY_KEY[token][2])
+            continue
+        host = clean_host(token)
+        if host and host not in result:
+            result.append(host)
+    return result
+
+
+# Порог «медленно» для конкретного сайта: выше — считаем, что обход не помог
+TARGET_SLOW_MS = 1200.0
+TARGET_TLS_SLOW_MS = 700.0
 
 # Коды, означающие «сервер ответил» (401/403 — авторизация, а не блокировка)
 REACHABLE_CODES = {200, 204, 206, 301, 302, 303, 307, 308, 401, 403, 405, 429}
@@ -155,6 +219,71 @@ def probe_all(timeout: float = 6.0, keys: list[str] | None = None) -> list[dict]
     wanted = SERVICES if not keys else tuple(SERVICES_BY_KEY[k] for k in keys
                                              if k in SERVICES_BY_KEY)
     return [probe_service(s, timeout) for s in wanted]
+
+
+def probe_host(host: str, timeout: float = 6.0, attempts: int = 2) -> dict:
+    """Проверяет конкретный сайт: отвечает ли и насколько быстро.
+
+    Меряет полное время ответа и время TLS-рукопожатия: у замедленных DPI сайтов
+    рукопожатие «залипает» задолго до загрузки страницы.
+    """
+    started = time.monotonic()
+    best: dict | None = None
+    for scheme in ("https", "http"):
+        url = f"{scheme}://{host}/"
+        for _ in range(max(1, attempts)):
+            code, total_ms, connect_ms = _probe_full(url, timeout)
+            if code and (best is None or total_ms < best["latency_ms"]):
+                best = {"host": host, "url": url, "code": code,
+                        "latency_ms": round(total_ms), "tls_ms": round(connect_ms)}
+            if best is not None and best["latency_ms"] < 400:
+                break
+        if best is not None:
+            break
+
+    if best is None:
+        return {"host": host, "url": f"https://{host}/", "state": "bad", "code": 0,
+                "latency_ms": round((time.monotonic() - started) * 1000), "tls_ms": 0,
+                "title": host, "detail": "нет ответа · заблокирован или недоступен"}
+
+    slow = (best["latency_ms"] > TARGET_SLOW_MS
+            or (best["tls_ms"] and best["tls_ms"] > TARGET_TLS_SLOW_MS))
+    state = "warn" if slow else "ok"
+    if state == "ok":
+        detail = f"{best['latency_ms']} мс · открывается"
+    else:
+        reason = "медленное TLS-рукопожатие" if (best["tls_ms"] or 0) > TARGET_TLS_SLOW_MS             else "долгий ответ"
+        detail = f"{best['latency_ms']} мс · {reason}"
+    best.update({"state": state, "detail": detail, "title": host})
+    return best
+
+
+def _probe_full(url: str, timeout: float) -> tuple[int, float, float]:
+    """Возвращает (http-код, общее время мс, время TLS/подключения мс)."""
+    if CURL:
+        cmd = [CURL, "-s", "-o", "/dev/null", "--max-time", f"{timeout:.1f}",
+               "-A", USER_AGENT, "-w", "%{http_code} %{time_total} %{time_appconnect}",
+               url]
+        started = time.monotonic()
+        try:
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                  text=True, timeout=timeout + 2)
+        except (OSError, subprocess.TimeoutExpired):
+            return 0, (time.monotonic() - started) * 1000, 0.0
+        parts = (proc.stdout or "").split()
+        if len(parts) < 3:
+            return 0, (time.monotonic() - started) * 1000, 0.0
+        try:
+            return int(parts[0]), max(1.0, float(parts[1]) * 1000), float(parts[2]) * 1000
+        except ValueError:
+            return 0, (time.monotonic() - started) * 1000, 0.0
+
+    code, ms = _probe_urllib(url, timeout)
+    return code, ms, 0.0
+
+
+def probe_hosts(hosts: list[str], timeout: float = 6.0) -> list[dict]:
+    return [probe_host(host, timeout) for host in hosts]
 
 
 def internet_available(timeout: float = 4.0) -> bool:

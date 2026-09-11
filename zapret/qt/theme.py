@@ -11,9 +11,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, field
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QColor, QFontDatabase
+from PySide6.QtGui import QColor, QFontDatabase, QPalette
+
+if TYPE_CHECKING:  # pragma: no cover
+    from PySide6.QtWidgets import QApplication
 
 # ---------------------------------------------------------------------------
 # Пресеты акцентов (как круглые свотчи в настройках zmk)
@@ -283,6 +287,101 @@ def _system_is_dark() -> bool:
     except Exception:  # noqa: BLE001
         pass
     return True
+
+
+# ---------------------------------------------------------------------------
+# Системная палитра Qt
+# ---------------------------------------------------------------------------
+
+def build_qpalette(pal: Palette) -> QPalette:
+    """Собирает QPalette из нашей темы.
+
+    Без этого стандартные элементы Qt (области прокрутки, всплывающие меню,
+    подсказки, диалоги) рисуются системными цветами — в тёмной теме вокруг
+    карточек оставался светлый фон.
+    """
+    qp = QPalette()
+    surface = QColor(pal.surface)
+    surface_2 = QColor(pal.surface_2)
+    surface_3 = QColor(pal.surface_3)
+    text = QColor(pal.text)
+    muted = QColor(pal.muted)
+    accent = QColor(pal.accent)
+    base = QColor(pal.page)
+    shadow = QColor(pal.shadow)
+
+    qp.setColor(QPalette.ColorRole.Window, base)
+    qp.setColor(QPalette.ColorRole.WindowText, text)
+    qp.setColor(QPalette.ColorRole.Base, surface)
+    qp.setColor(QPalette.ColorRole.AlternateBase, surface_2)
+    qp.setColor(QPalette.ColorRole.ToolTipBase, surface_3)
+    qp.setColor(QPalette.ColorRole.ToolTipText, text)
+    qp.setColor(QPalette.ColorRole.Text, text)
+    qp.setColor(QPalette.ColorRole.Button, surface_2)
+    qp.setColor(QPalette.ColorRole.ButtonText, text)
+    qp.setColor(QPalette.ColorRole.BrightText, QColor("#ffffff"))
+    qp.setColor(QPalette.ColorRole.Light, surface_3)
+    qp.setColor(QPalette.ColorRole.Midlight, surface_2)
+    qp.setColor(QPalette.ColorRole.Mid, surface)
+    qp.setColor(QPalette.ColorRole.Dark, surface_3)
+    qp.setColor(QPalette.ColorRole.Shadow, shadow)
+    qp.setColor(QPalette.ColorRole.Highlight, accent)
+    qp.setColor(QPalette.ColorRole.HighlightedText, QColor(pal.on_accent))
+    qp.setColor(QPalette.ColorRole.Link, accent)
+    qp.setColor(QPalette.ColorRole.LinkVisited, accent)
+    qp.setColor(QPalette.ColorRole.PlaceholderText, muted)
+    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text,
+                 QPalette.ColorRole.ButtonText):
+        qp.setColor(QPalette.ColorGroup.Disabled, role, muted)
+    return qp
+
+
+def style_sheet(pal: "Palette") -> str:
+    """Минимальный QSS: убирает системные светлые подложки у прокрутки и меню."""
+    return f"""
+QWidget {{ color: {pal.text}; }}
+QScrollArea, QScrollArea > QWidget#qt_scrollarea_viewport,
+QAbstractScrollArea, QAbstractScrollArea > QWidget#qt_scrollarea_viewport {{
+    background: transparent; border: none;
+}}
+QToolTip {{
+    background: {pal.surface_3}; color: {pal.text};
+    border: 1px solid {pal.line_strong}; padding: 6px 8px; border-radius: 8px;
+}}
+QMenu {{
+    background: {pal.surface}; color: {pal.text};
+    border: 1px solid {pal.line_strong}; border-radius: 10px; padding: 6px;
+}}
+QMenu::item {{ padding: 7px 14px; border-radius: 7px; }}
+QMenu::item:selected {{ background: {pal.surface_3}; color: {pal.text}; }}
+QMenu::separator {{ height: 1px; background: {pal.line}; margin: 5px 8px; }}
+QDialog, QMessageBox, QColorDialog {{ background: {pal.surface}; color: {pal.text}; }}
+QLineEdit {{
+    background: {pal.surface_2}; color: {pal.text};
+    border: 1px solid {pal.line_strong}; border-radius: 10px;
+    padding: 8px 12px; selection-background-color: {pal.accent};
+    selection-color: {pal.on_accent};
+}}
+QLineEdit:focus {{ border: 1px solid {pal.accent}; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+QScrollBar::handle:vertical {{
+    background: {pal.muted}; border-radius: 5px; min-height: 36px; opacity: .5;
+}}
+QScrollBar::handle:vertical:hover {{ background: {pal.text}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
+QScrollBar::handle:horizontal {{ background: {pal.muted}; border-radius: 5px; min-width: 36px; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
+"""
+
+
+def apply_theme_to_app(app: "QApplication", theme: ThemeManager) -> None:
+    """Применяет тему (палитра + QSS) ко всему приложению."""
+    pal = theme.palette
+    app.setPalette(build_qpalette(pal))
+    app.setStyleSheet(style_sheet(pal))
 
 
 # ---------------------------------------------------------------------------

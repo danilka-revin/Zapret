@@ -28,7 +28,37 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from zapret import config as config_mod  # noqa: E402
 from zapret.qt.app import ZapretWindow  # noqa: E402
 from zapret.qt.controller import Controller  # noqa: E402
-from zapret.qt.theme import PRESETS, ThemeManager, UISettings  # noqa: E402
+from zapret.qt.theme import (  # noqa: E402
+    PRESETS,
+    ThemeManager,
+    UISettings,
+    apply_theme_to_app,
+)
+
+TARGET_REPORT = {
+    "strategy": "general_alt2.bat",
+    "applied": True,
+    "ok": 2,
+    "total": 2,
+    "avg_ms": 210.0,
+    "what": "rutracker.org, youtube.com",
+    "tries": [
+        {"strategy": "general_alt2.bat", "ok": 2, "avg_ms": 210.0, "results": [
+            {"host": "rutracker.org", "state": "ok", "latency_ms": 180,
+             "detail": "180 мс · открывается"},
+            {"host": "youtube.com", "state": "ok", "latency_ms": 240,
+             "detail": "240 мс · открывается"},
+        ]},
+        {"strategy": "general.bat", "ok": 1, "avg_ms": 640.0, "results": []},
+        {"strategy": "general_alt.bat", "ok": 0, "avg_ms": 4200.0, "results": []},
+    ],
+    "results": [
+        {"host": "rutracker.org", "state": "ok", "latency_ms": 180,
+         "detail": "180 мс · открывается"},
+        {"host": "youtube.com", "state": "ok", "latency_ms": 240,
+         "detail": "240 мс · открывается"},
+    ],
+}
 
 
 def main() -> int:
@@ -49,6 +79,10 @@ def main() -> int:
     settings = UISettings.from_dict({**(cfg.get("ui") or {}), "mode": args.theme,
                                      "accent": args.accent, "glass": args.glass})
     theme = ThemeManager(settings)
+    # Красим и системные элементы (поля ввода, подсказки, меню) — как в run().
+    app.setStyle("Fusion")
+    apply_theme_to_app(app, theme)
+    theme.changed.connect(lambda: apply_theme_to_app(app, theme))
     controller = Controller(theme)
     window = ZapretWindow(theme, controller, tray=False)
     window.resize(width, height)
@@ -63,6 +97,23 @@ def main() -> int:
                     sheet.overlay.hide()
             window.grab().save(str(out / name))
             print("сохранено:", out / name)
+        return inner
+
+    def open_targets(name: str):
+        def inner():
+            for other_key, other in window.sheets.items():
+                if other_key != "targets":
+                    other.hide()
+                    other.overlay.hide()
+            sheet = window.sheets["targets"]
+            sheet.setGeometry(window.centralWidget().rect())
+            sheet.input.setText("rutracker.org, youtube.com")
+            sheet.open()
+            sheet.offset = 0.0
+            sheet._apply_offset(0.0)
+            controller.targets_started.emit(["rutracker.org", "youtube.com"])
+            controller.targets_done.emit(TARGET_REPORT)
+            QTimer.singleShot(200, shot(name))
         return inner
 
     def open_sheet(key: str, name: str):
@@ -87,20 +138,21 @@ def main() -> int:
         (1000, open_sheet("journal", "03-journal.png")),
         (1450, open_sheet("diagnostics", "04-diagnostics.png")),
         (1900, open_sheet("help", "05-help.png")),
-        (2400, lambda: theme.update(mode="light", glass="soft", accent="#69a7ff")),
-        (2800, shot("06-main-light.png", close_sheets=True)),
-        (3100, lambda: theme.update(mode="dark", accent="#ffad4d", glass="off",
+        (2250, open_targets("05b-targets.png")),
+        (2700, lambda: theme.update(mode="light", glass="soft", accent="#69a7ff")),
+        (3300, shot("06-main-light.png", close_sheets=True)),
+        (3700, lambda: theme.update(mode="dark", accent="#ffad4d", glass="off",
                                     density="compact", radius="square", motion="off")),
-        (3500, shot("07-main-compact-square.png")),
-        (3800, lambda: theme.update(accent="#34e0a1", glass="vivid", radius="soft",
+        (4100, shot("07-main-compact-square.png")),
+        (4500, lambda: theme.update(accent="#34e0a1", glass="vivid", radius="soft",
                                     density="comfortable", font_scale="large")),
-        (4200, shot("08-main-large-text.png")),
-        (4500, lambda: theme.update(font_scale="normal", **dict(PRESETS[1][2]))),
-        (4900, shot("09-preset-lime.png")),
+        (4900, shot("08-main-large-text.png")),
+        (5200, lambda: theme.update(font_scale="normal", **dict(PRESETS[1][2]))),
+        (5600, shot("09-preset-lime.png")),
     ]
     for delay, action in sequence:
         QTimer.singleShot(delay, action)
-    QTimer.singleShot(5400, app.quit)
+    QTimer.singleShot(6100, app.quit)
     app.exec()
     return 0
 

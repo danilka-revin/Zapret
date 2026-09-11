@@ -8,6 +8,8 @@
   python3 run.py start | stop | restart  — запуск/остановка zapret
   python3 run.py status                  — вывести статус
   python3 run.py ensure-deps             — скачать nfqws и стратегии
+  python3 run.py autopilot --sites a,b   — подобрать стратегию под сайты
+                                           (--apply — сразу применить лучшую)
   python3 run.py shortcut install|remove — ярлык приложения
   python3 run.py service install|remove|start|stop — системная служба
   python3 run.py permissions install|remove — NOPASSWD для nft/nfqws
@@ -246,7 +248,7 @@ def _run_gui() -> int:
 
 
 def main() -> int:
-    from zapret import core, integration
+    from zapret import checks, core, integration
 
     args = sys.argv[1:]
     cmd = args[0] if args else "gui"
@@ -291,6 +293,54 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             _log(f"Ошибка: {exc}")
             return 1
+
+    if cmd == "autopilot":
+        from zapret import autopilot as autopilot_mod
+        from zapret import config as config_mod
+
+        sites = ""
+        apply_best = False
+        limit = 6
+        index = 1
+        while index < len(args):
+            item = args[index]
+            if item in ("--sites", "-s") and index + 1 < len(args):
+                sites = args[index + 1]
+                index += 2
+            elif item in ("--limit", "-l") and index + 1 < len(args):
+                limit = int(args[index + 1])
+                index += 2
+            elif item in ("--apply", "-a"):
+                apply_best = True
+                index += 1
+            elif item in ("--help", "-h"):
+                _log("python3 run.py autopilot --sites \"rutracker.org, youtube.com\" "
+                     "[--apply] [--limit N]")
+                return 0
+            else:
+                sites = (sites + " " + item).strip()
+                index += 1
+
+        hosts = checks.parse_targets(sites) if sites else []
+        if not hosts:
+            _log("Укажите сайты: python3 run.py autopilot --sites \"rutracker.org\"")
+            return 1
+        cfg = config_mod.load()
+        _log(f"Проверяю {len(hosts)} сайт(ов): {', '.join(hosts)}")
+        try:
+            report = autopilot_mod.run_for_targets(
+                cfg, hosts, progress_cb=_log, limit=limit, apply_best=apply_best)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"Ошибка: {exc}")
+            return 1
+        for item in report.get("tries", []):
+            if "error" in item:
+                continue
+            _log(f"  {item['strategy']:<28} сайтов ок: {item.get('ok')}"
+                 f"/{report.get('total')} · средняя задержка {item.get('avg_ms', 0):.0f} мс")
+        _log(f"Лучшая стратегия: {report.get('strategy')}"
+             + (" (применена)" if report.get("applied") else " (только измерение)"))
+        return 0
 
     if cmd == "shortcut":
         sub = args[1] if len(args) > 1 else "install"

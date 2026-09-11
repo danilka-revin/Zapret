@@ -47,12 +47,17 @@ def candidate_strategies(cfg: dict, limit: int = MAX_CANDIDATES) -> list[str]:
     return ordered[:limit]
 
 
-def evaluate(cfg: dict, strategy: str, timeout: float = PROBE_TIMEOUT) -> dict:
-    """Включает стратегию и измеряет результат по трём сервисам."""
+def evaluate(cfg: dict, strategy: str, timeout: float = PROBE_TIMEOUT,
+             prober: Callable[[], list[dict]] | None = None) -> dict:
+    """Включает стратегию и измеряет результат на сервисах или заданных сайтах.
+
+    `prober` подменяет набор проверок: по умолчанию это три сервиса
+    (YouTube/Discord/Telegram), но можно передать проверку конкретных доменов.
+    """
     trial = dict(cfg)
     trial["strategy"] = strategy
     core.run_zapret(trial)
-    results = checks.probe_all(timeout)
+    results = (prober or (lambda: checks.probe_all(timeout)))()
     ok, avg = checks.score(results)
     return {"strategy": strategy, "results": results, "ok": ok, "avg_ms": avg}
 
@@ -62,12 +67,19 @@ def run(cfg: dict,
         stop_flag: Callable[[], bool] | None = None,
         timeout: float = PROBE_TIMEOUT,
         limit: int = MAX_CANDIDATES,
-        on_step: Callable[[int, int, str], None] | None = None) -> dict:
+        on_step: Callable[[int, int, str], None] | None = None,
+        prober: Callable[[], list[dict]] | None = None,
+        ideal_ok: int | None = None,
+        apply_best: bool = True,
+        what: str = "сервисы") -> dict:
     """
     Перебирает стратегии и оставляет лучшую.
 
-    Возвращает отчёт: выбранная стратегия, результаты по каждой попытке,
-    сохранён ли выбор в конфиг.
+    `prober` и `ideal_ok` позволяют проверять не сервисы, а произвольный набор
+    сайтов (см. run_for_targets). `apply_best=False` — только измерить, ничего не
+    менять в конфиге.
+
+    Возвращает отчёт: выбранная стратегия, результаты по каждой попытке.
     """
     log = progress_cb or (lambda _msg: None)
 
@@ -81,7 +93,8 @@ def run(cfg: dict,
     if not names:
         raise RuntimeError("Не найдено ни одной стратегии. Обновите зависимости.")
 
-    log(f"Автопилот: проверяю {len(names)} стратегий, это займёт около "
+    total_targets = ideal_ok if ideal_ok is not None else len(checks.SERVICES)
+    log(f"Автопилот: проверяю {len(names)} стратегий на «{what}», это займёт около "
         f"{int(len(names) * (timeout + 3))} с.")
 
     report: list[dict] = []
@@ -98,7 +111,7 @@ def run(cfg: dict,
             # Интерфейс показывает «Стратегия 2 из 5» прямо на большой кнопке
             on_step(index, total, name)
         try:
-            result = evaluate(cfg, name, timeout)
+            result = evaluate(cfg, name, timeout, prober)
         except Exception as exc:  # noqa: BLE001 — одна стратегия не должна ломать подбор
             message = str(exc)
             log(f"[{index}/{total}] {name}: ошибка — {message}")
@@ -121,7 +134,7 @@ def run(cfg: dict,
 
         if best is None or (result["ok"], -result["avg_ms"]) > (best["ok"], -best["avg_ms"]):
             best = result
-        if result["ok"] == len(checks.SERVICES) and result["avg_ms"] < IDEAL_LATENCY_MS:
+        if result["ok"] == total_targets and result["avg_ms"] < IDEAL_LATENCY_MS:
             log("Найдена отличная стратегия — прекращаю перебор.")
             break
     if best is None:
@@ -129,21 +142,51 @@ def run(cfg: dict,
             "Ни одна стратегия не дала результата. Проверьте права sudo и соединение."
         )
 
-    cfg["strategy"] = best["strategy"]
-    config_mod.save(cfg)
-    log(f"Автопилот выбрал {best['strategy']} "
-        f"(сервисов ок: {best['ok']}/3, средняя задержка {best['avg_ms']:.0f} мс).")
+    log(f"Лучшая стратегия для «{what}»: {best['strategy']} "
+        f"(успешно {best['ok']}/{total_targets}, средняя задержка {best['avg_ms']:.0f} мс).")
 
-    # Возвращаем систему в стабильное состояние с лучшей стратегией
-    try:
-        core.run_zapret(cfg)
-    except Exception as exc:  # noqa: BLE001
-        log(f"Не удалось применить выбранную стратегию: {exc}")
+    if apply_best:
+        cfg["strategy"] = best["strategy"]
+        config_mod.save(cfg)
+        # Возвращаем систему в стабильное состояние с лучшей стратегией
+        try:
+            core.run_zapret(cfg)
+        except Exception as exc:  # noqa: BLE001
+            log(f"Не удалось применить выбранную стратегию: {exc}")
+    else:
+        log("Стратегия не изменена — выбрано только измерение.")
 
     return {
         "strategy": best["strategy"],
+        "applied": apply_best,
         "ok": best["ok"],
+        "total": total_targets,
         "avg_ms": best["avg_ms"],
         "tries": report,
         "results": best["results"],
+        "what": what,
     }
+
+
+def run_for_targets(cfg: dict,
+                    hosts: list[str],
+                    progress_cb: Callable[[str], None] | None = None,
+                    stop_flag: Callable[[], bool] | None = None,
+                    on_step: Callable[[int, int, str], None] | None = None,
+                    timeout: float = PROBE_TIMEOUT,
+                    limit: int = MAX_CANDIDATES,
+                    apply_best: bool = True) -> dict:
+    """Подбирает лучшую стратегию под конкретные сайты (один или несколько).
+
+    Пример: hosts=["rutracker.org"] — приложение переберёт стратегии и скажет,
+    какая открывает именно этот сайт, и применит её.
+    """
+    hosts = [h for h in (checks.clean_host(x) or x for x in hosts) if h]
+    if not hosts:
+        raise RuntimeError("Не указано ни одного сайта для проверки.")
+
+    what = hosts[0] if len(hosts) == 1 else f"{len(hosts)} сайтов"
+    prober = lambda: checks.probe_hosts(hosts, timeout)  # noqa: E731
+    return run(cfg, progress_cb=progress_cb, stop_flag=stop_flag, timeout=timeout,
+               limit=limit, on_step=on_step, prober=prober, ideal_ok=len(hosts),
+               apply_best=apply_best, what=what)

@@ -84,7 +84,7 @@ def test_autopilot_stops_on_repeated_system_error(monkeypatch):
     monkeypatch.setattr(autopilot.checks, "internet_available", lambda timeout=4.0: True)
     monkeypatch.setattr(autopilot.core, "deps_ready", lambda: True)
 
-    def boom(cfg, strategy, timeout=5.0):
+    def boom(cfg, strategy, timeout=5.0, prober=None):
         raise RuntimeError("Не найден nftables или iptables. Установите один из них.")
 
     monkeypatch.setattr(autopilot, "evaluate", boom)
@@ -109,7 +109,7 @@ def test_autopilot_picks_best_and_saves(monkeypatch, tmp_path):
     monkeypatch.setattr(autopilot.core, "run_zapret", lambda cfg=None: None)
     monkeypatch.setattr(autopilot.config_mod, "save", lambda cfg: saved.update(cfg))
 
-    def fake_evaluate(cfg, strategy, timeout=5.0):
+    def fake_evaluate(cfg, strategy, timeout=5.0, prober=None):
         if strategy == "best.bat":
             return {"strategy": strategy, "results": [], "ok": 3, "avg_ms": 120.0}
         return {"strategy": strategy, "results": [], "ok": 1, "avg_ms": 900.0}

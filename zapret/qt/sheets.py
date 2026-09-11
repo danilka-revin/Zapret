@@ -11,13 +11,14 @@ import time
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+                               QVBoxLayout, QWidget)
 
 from . import icons
 from .theme import ACCENTS, PRESETS
-from .widgets import (AccentPicker, ChoiceCard, GlassButton, LabeledSlider,
-                      LogView, SectionTitle, SegmentedControl, SettingRow, Sheet,
-                      SheetHeader, Switch, font)
+from .widgets import (AccentPicker, Chip, ChoiceCard, GlassButton, LabeledSlider,
+                      LogView, SectionTitle, SegmentedControl, ServiceRow, SettingRow,
+                      Sheet, SheetHeader, Switch, font)
 
 
 class TextBlock(QWidget):
@@ -455,3 +456,233 @@ class HelpSheet(Sheet):
     def set_actions(self, on_permissions, on_readme):
         self.perm_btn.clicked.connect(on_permissions)
         self.open_btn.clicked.connect(on_readme)
+
+
+# ---------------------------------------------------------------------------
+# Подбор стратегии под конкретный сайт или группу сайтов
+# ---------------------------------------------------------------------------
+
+class TargetSheet(Sheet):
+    """
+    «Подбор под сайт»: пользователь вводит домен (или выбирает группу), приложение
+    перебирает все стратегии Flowseal и показывает, какая открывает именно этот сайт.
+    """
+
+    def __init__(self, theme, controller, parent=None):
+        super().__init__(theme, parent, width=470)
+        self.theme = theme
+        self.controller = controller
+        self.result_rows: list[ServiceRow] = []
+        self.site_rows: list[ServiceRow] = []
+        self._running = False
+
+        self.set_header(SheetHeader(theme, "Подбор под сайт",
+                                    "какая стратегия открывает именно его", "target",
+                                    on_close=self.close))
+        self._build()
+        controller.targets_started.connect(self._on_started)
+        controller.targets_done.connect(self._on_done)
+        controller.finished.connect(self._on_finished)
+        theme.changed.connect(self._restyle)
+
+    # -- сборка ------------------------------------------------------------
+
+    def _build(self):
+        theme = self.theme
+
+        self.input = QLineEdit()
+        self.input.setPlaceholderText("rutracker.org, https://site.ru/page или несколько через запятую")
+        self.input.setClearButtonEnabled(True)
+        self.input.returnPressed.connect(self._run)
+        self.input.setMinimumHeight(40)
+
+        self.run_btn = GlassButton(theme, "Проверить стратегии", "rocket", "primary")
+        self.run_btn.clicked.connect(self._run)
+
+        self.apply_switch = Switch(theme, True)
+        self.apply_switch.setToolTip("Сразу применять лучшую найденную стратегию")
+
+        groups_label = QLabel("Готовые группы — один клик")
+        self.groups_grid = QGridLayout()
+        self.groups_grid.setSpacing(6)
+        self._build_groups()
+
+        self.history_grid = QGridLayout()
+        self.history_grid.setSpacing(6)
+        self.history_label = QLabel("Недавние запросы")
+
+        self.status_label = QLabel("Введите сайт и нажмите «Проверить стратегии».")
+        self.status_label.setWordWrap(True)
+
+        self.results_box = QWidget()
+        self.results_layout = QVBoxLayout(self.results_box)
+        self.results_layout.setContentsMargins(0, 0, 0, 0)
+        self.results_layout.setSpacing(6)
+        self.results_title = SectionTitle(theme, "Стратегии", "от лучшей к худшей", "layers")
+
+        self.sites_box = QWidget()
+        self.sites_layout = QVBoxLayout(self.sites_box)
+        self.sites_layout.setContentsMargins(0, 0, 0, 0)
+        self.sites_layout.setSpacing(6)
+        self.sites_title = SectionTitle(theme, "Сайты", "что ответило и как быстро", "globe")
+
+        self.set_content([
+            section(theme, "Что проверяем", "домен или группа сайтов", "compass",
+                    [self.input,
+                     SettingRow(theme, "Применять лучшую", "сразу переключить обход на неё",
+                                _switch_holder(theme, self.apply_switch)),
+                     self.run_btn,
+                     _label_holder(theme, groups_label, self.groups_grid),
+                     _label_holder(theme, self.history_label, self.history_grid)]),
+            self.status_label,
+            self.results_title,
+            self.results_box,
+            self.sites_title,
+            self.sites_box,
+        ])
+        self._rebuild_history()
+
+    def _build_groups(self):
+        from ..checks import SITE_GROUPS
+
+        for index, (key, title, icon, hosts) in enumerate(SITE_GROUPS):
+            chip = Chip(self.theme, title, icon)
+            chip.setToolTip(", ".join(hosts[:3]) + ("…" if len(hosts) > 3 else ""))
+            chip.clicked.connect(lambda _checked=False, k=key: self._run_group(k))
+            self.groups_grid.addWidget(chip, index // 2, index % 2)
+
+    def _rebuild_history(self):
+        while self.history_grid.count():
+            item = self.history_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+        history = self.controller.target_history()
+        self.history_label.setVisible(bool(history))
+        for index, query in enumerate(history[:6]):
+            chip = Chip(self.theme, query if len(query) <= 28 else query[:26] + "…", "clock")
+            chip.setToolTip(query)
+            chip.clicked.connect(lambda _checked=False, q=query: self._run_query(q))
+            self.history_grid.addWidget(chip, index // 2, index % 2)
+
+    # -- запуск ------------------------------------------------------------
+
+    def _run_group(self, key: str):
+        from ..checks import SITE_GROUPS_BY_KEY
+
+        hosts = SITE_GROUPS_BY_KEY[key][2]
+        self.input.setText(hosts[0])
+        self.controller.log_now(f"Группа «{SITE_GROUPS_BY_KEY[key][0]}»: "
+                                f"{len(hosts)} доменов", "info")
+        self._run_query(", ".join(hosts))
+
+    def _run(self):
+        self._run_query(self.input.text())
+
+    def _run_query(self, query: str):
+        if self._running:
+            self.controller.log_now("Подбор уже идёт — дождитесь результата.", "warn")
+            return
+        if not query.strip():
+            self.status_label.setText("Сначала введите сайт, например rutracker.org")
+            return
+        self.controller.test_targets(query, apply_best=self.apply_switch.isChecked())
+
+    # -- реакция контроллера -----------------------------------------------
+
+    def _on_started(self, hosts: list):
+        self._running = True
+        self.run_btn.setEnabled(False)
+        self.run_btn.setText("Подбираю…")
+        self.status_label.setText(
+            f"Проверяю {len(hosts)} домен(ов): {', '.join(hosts[:4])}"
+            + ("…" if len(hosts) > 4 else ""))
+        self._clear_rows(self.results_layout, self.result_rows)
+        self.result_rows = []
+        self._clear_rows(self.sites_layout, self.site_rows)
+        self.site_rows = []
+        self.results_title.setVisible(False)
+        self.sites_title.setVisible(False)
+
+    def _on_done(self, report: dict):
+        self._running = False
+        self.run_btn.setEnabled(True)
+        self.run_btn.setText("Проверить стратегии")
+        best = report.get("strategy", "")
+        self.status_label.setText(
+            f"Лучшая стратегия: {best} · успешно {report.get('ok')} из "
+            f"{report.get('total')} · средняя задержка {report.get('avg_ms', 0):.0f} мс"
+            + (" · применена" if report.get("applied") else " · не применялась"))
+
+        tries = [t for t in report.get("tries", []) if "error" not in t]
+        tries.sort(key=lambda t: (-t.get("ok", 0), t.get("avg_ms", 99999)))
+        best_try = next((t for t in tries if t.get("strategy") == best), None)
+        self.results_title.setVisible(bool(tries))
+        for item in tries:
+            row = ServiceRow(self.theme, item["strategy"], item["strategy"], "layers")
+            state = "ok" if item.get("ok") == report.get("total") else (
+                "warn" if item.get("ok", 0) else "bad")
+            row.set_status(state, f"сайтов ок: {item.get('ok')}/{report.get('total')} · "
+                                  f"средняя задержка {item.get('avg_ms', 0):.0f} мс")
+            if item["strategy"] == best:
+                row.set_badge("ЛУЧШАЯ")
+            self.results_layout.addWidget(row)
+            self.result_rows.append(row)
+
+        sites = (best_try or {}).get("results") or report.get("results", [])
+        self.sites_title.setVisible(bool(sites))
+        for site in sites:
+            row = ServiceRow(self.theme, site.get("host", ""), site.get("host", ""), "globe")
+            row.set_status(site.get("state", "idle"), site.get("detail", ""))
+            self.sites_layout.addWidget(row)
+            self.site_rows.append(row)
+        self._rebuild_history()
+
+    def _on_finished(self, key: str, success: bool, message: str):
+        if key != "targets":
+            return
+        self._running = False
+        self.run_btn.setEnabled(True)
+        self.run_btn.setText("Проверить стратегии")
+        if not success:
+            self.status_label.setText(message or "Подбор не удался — смотрите журнал.")
+
+    # -- вспомогательное ---------------------------------------------------
+
+    def _clear_rows(self, layout, rows: list):
+        for row in rows:
+            layout.removeWidget(row)
+            row.setParent(None)
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+
+    def _restyle(self):
+        pal = self.theme.palette
+        self.status_label.setFont(font(self.theme.font_family, pal.font_sm))
+        self.status_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
+        self.history_label.setFont(font(self.theme.font_family, pal.font_xs))
+        self.history_label.setStyleSheet(f"color:{pal.muted};background:transparent;")
+
+
+def _switch_holder(theme, switch: Switch) -> QWidget:
+    holder = QWidget()
+    layout = QHBoxLayout(holder)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.addWidget(switch)
+    holder.setFixedSize(switch.sizeHint())
+    return holder
+
+
+def _label_holder(theme, label: QLabel, grid: QGridLayout) -> QWidget:
+    box = QWidget()
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(6)
+    label.setFont(font(theme.font_family, theme.palette.font_xs))
+    label.setStyleSheet(f"color:{theme.palette.muted};background:transparent;")
+    layout.addWidget(label)
+    layout.addLayout(grid)
+    return box
