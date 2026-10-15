@@ -54,12 +54,21 @@
   }
 
   function batteryPct(b) {
-    if (b && Number.isFinite(+b.soc)) return Math.max(0, Math.min(100, +b.soc));
+    if (b && b.soc != null && Number.isFinite(+b.soc)) return Math.max(0, Math.min(100, +b.soc));
     return null;
   }
 
   function renderBattery(d) {
-    const b = d.battery || {};
+    // A configured JBD BMS is authoritative; never fall back to simulated SOC
+    // when its USB link is lost. Range is not provided by the JBD registers.
+    const bms = window._kioskBms;
+    const useBms = Boolean(bms && bms.configured);
+    const measured = useBms && bms.connected && bms.data ? bms.data : {};
+    const b = useBms ? {
+      soc: measured.soc, volts: measured.volts, amps: measured.amps,
+      tempC: measured.temperatures && measured.temperatures.length ? Math.max(...measured.temperatures) : null,
+      rangeKm: null, state: bms.connected ? 'JBD BMS · ' + bms.reason : 'JBD BMS · нет свежих данных'
+    } : (d.battery || {});
     const pct = batteryPct(b);
     const socEl = $('k-soc');
     const bar = $('k-soc-bar');
@@ -76,7 +85,7 @@
 
     setText($('k-volts'), fmt(b.volts, 1));
     setText($('k-amps'), fmt(b.amps, 1));
-    setText($('k-power'), fmt(d.powerKw, 2));
+    setText($('k-power'), fmt(useBms ? (measured.watts == null ? null : measured.watts / 1000) : d.powerKw, 2));
     setText($('k-range'), fmt(b.rangeKm, 1));
     setText($('k-btemp'), fmt(b.tempC, 0));
     setText($('speed'), fmt(d.speedMps, 1));
@@ -1105,6 +1114,7 @@
     const closeBtn = $('swipe-close');
     const cameraView = $('swipe-cameras-view');
     const motorView = $('swipe-motors-view');
+    const batteryView = $('swipe-battery-view');
     const swipeTitle = $('swipe-title-text');
     const swipeTitleHint = $('swipe-title-hint');
     const kiosk = document.querySelector('.kiosk');
@@ -1134,15 +1144,20 @@
 
     function selectSwipeView(name) {
       const showMotors = name === 'motors';
-      activeSwipeView = showMotors ? 'motors' : 'cameras';
+      const showBattery = name === 'battery';
+      if (activeSwipeView === 'motors' && !showMotors) void stopDrive();
+      activeSwipeView = showMotors ? 'motors' : (showBattery ? 'battery' : 'cameras');
       activeSwipeDirection = showMotors ? 'right' : 'left';
       page.dataset.openDirection = activeSwipeDirection;
-      if (cameraView) cameraView.hidden = showMotors;
+      if (cameraView) cameraView.hidden = showMotors || showBattery;
       if (motorView) motorView.hidden = !showMotors;
-      if (swipeTitle) swipeTitle.textContent = showMotors ? 'Руление и тяга' : 'Камеры и логи';
-      if (swipeTitleHint) swipeTitleHint.textContent = showMotors
-        ? 'свайп влево — камеры и логи'
-        : 'свайп вправо — руление и тяга';
+      if (batteryView) batteryView.hidden = !showBattery;
+      if (swipeTitle) swipeTitle.textContent = showMotors ? 'Руление и тяга' : (showBattery ? '4 · Аккумулятор' : 'Камеры и логи');
+      if (swipeTitleHint) swipeTitleHint.textContent = showBattery
+        ? 'Все банки · свайп вправо — назад к статистике'
+        : (showMotors ? 'свайп влево — назад к статистике' : 'свайп вправо — назад к статистике');
+      if (!showBattery) setText($('swipe-live'), '● LIVE');
+      if (isOpen && activeSwipeView === 'cameras') { startCamLoops(); fetchLogs(); }
     }
 
     function openSwipe(view) {
@@ -1162,12 +1177,11 @@
       document.body.classList.add('swipe-open');
       page.setAttribute('aria-hidden', 'false');
       if (hintBar) hintBar.style.opacity = '0';
-      startCamLoops();
-      fetchLogs();
     }
     function closeSwipe() {
       if (!isOpen) return;
       isOpen = false;
+      if (activeSwipeView === 'motors') void stopDrive();
       page.classList.remove('is-open');
       document.body.classList.remove('swipe-open');
       page.setAttribute('aria-hidden', 'true');
@@ -1183,6 +1197,10 @@
       else selectSwipeView('motors');
     };
     selectSwipeView('cameras');
+    ['battery-open', 'swipe-battery-open'].forEach((id) => {
+      const button = $(id);
+      if (button) button.addEventListener('click', () => openSwipe('battery'));
+    });
 
     if (closeBtn) closeBtn.addEventListener('click', closeSwipe);
     if (backdrop) backdrop.addEventListener('click', closeSwipe);
@@ -1286,6 +1304,7 @@
         if (isOpen && !isClosingSwipe(dx)) { tTracking = false; return; }
         dragType = isOpen ? 'close' : 'open';
         tDragView = dragType === 'open' ? (dx > 0 ? 'motors' : 'cameras') : activeSwipeView;
+        if (dragType === 'open') selectSwipeView(tDragView);
         const direction = dragType === 'open' ? directionForView(tDragView) : activeSwipeDirection;
         beginDrag(direction);
         if (!isOpen) page.setAttribute('aria-hidden', 'false');
@@ -1376,6 +1395,7 @@
         if (isOpen && !isClosingSwipe(dx)) { mTracking = false; return; }
         mType = isOpen ? 'close' : 'open';
         mView = mType === 'open' ? (dx > 0 ? 'motors' : 'cameras') : activeSwipeView;
+        if (mType === 'open') selectSwipeView(mView);
         const direction = mType === 'open' ? directionForView(mView) : activeSwipeDirection;
         page.dataset.openDirection = direction;
         page.hidden = false;

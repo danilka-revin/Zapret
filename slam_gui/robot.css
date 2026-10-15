@@ -1555,3 +1555,30 @@ body.swipe-open .kiosk {
   .batt-cell b { font-size: 34px; }
   .batt-cell.big b { font-size: 38px; }
 }
+
+/* Fourth page: all JBD banks, scrollable even with large packs. */
+.battery-detail { height: 100%; overflow-y: auto; touch-action: pan-y; padding: 0 4px 24px; }
+.battery-detail h3 { margin: 0; font-size: clamp(20px, 2vw, 30px); }
+.battery-report-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; }
+.battery-report-head a { text-decoration: none; white-space: nowrap; }
+#bms-report[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+.bms-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.bms-summary > div { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+.bms-summary span { display: block; font-size: 14px; opacity: .7; margin-bottom: 8px; }
+.bms-summary b { font-size: clamp(18px, 1.7vw, 28px); overflow-wrap: anywhere; }
+.bms-table { border-collapse: collapse; width: 100%; font-size: clamp(16px, 1.5vw, 23px); font-variant-numeric: tabular-nums; }
+.bms-table th, .bms-table td { padding: 14px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+.bms-table th { font-size: 14px; opacity: .75; }
+.bms-extreme td:last-child { color: var(--accent); font-weight: 800; }
+.bms-warning { color: #e5a33d; font-weight: 800; }
+.bms-stale .bms-summary, .bms-stale .bms-table { opacity: .5; }
+#bms-status { font-weight: 800; }
+.bms-stale #bms-status { color: #e5a33d; }
+@media (max-width: 900px) {
+  .bms-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .battery-report-head { align-items: flex-start; flex-wrap: wrap; }
+  .bms-table th, .bms-table td { padding: 12px 5px; }
+  .swipe-head { flex-wrap: wrap; }
+  .top { flex-wrap: wrap; }
+  .top-right { flex-wrap: wrap; }
+}

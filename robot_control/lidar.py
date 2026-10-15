@@ -1652,7 +1652,8 @@ def discover_ports(
     symlink'у, и по имени tty, добавляется один раз (сравнение по realpath) —
     иначе перебор тратил бы на него двойное время.
     """
-    blocked = {p for p in excluded if p}
+    from .battery import reserved_ports
+    blocked = {p for p in excluded if p} | reserved_ports()
     blocked |= {os.path.realpath(p) for p in blocked}
     found: list[str] = []
     seen_real: set[str] = set()

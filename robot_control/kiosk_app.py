@@ -453,6 +453,20 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     # чтобы в журнал попало всё, включая неудачный старт источника данных.
     eventlog.install()
 
+    from .battery import BatteryManager, report_response
+    battery = BatteryManager(os.environ.get("RC_BMS_PORT", "").strip())
+    app.extensions["rc_battery"] = battery
+    if not config.testing:
+        battery.start()
+
+    @app.get("/api/battery")
+    def api_battery():
+        return jsonify({"ok": True, "battery": battery.snapshot()}), 200, {"Cache-Control": "no-store"}
+
+    @app.get("/api/battery/report.csv")
+    def api_battery_report():
+        return report_response(battery.snapshot())
+
     # Телеметрия открыта без логина; поворот модулей доступен только по PIN.
     try:
         state = build_state(
@@ -765,7 +779,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         })
 
     # статика (robot.css, robot.js и панель настроек лидара)
-    for filename in ("robot.css", "robot.js", "lidar_settings.css", "lidar_settings.js"):
+    for filename in ("robot.css", "robot.js", "battery.js", "lidar_settings.css", "lidar_settings.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
         def _view(name=filename):
             return _send(name)

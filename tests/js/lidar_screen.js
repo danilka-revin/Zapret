@@ -79,6 +79,7 @@ class El {
     this.dots = [];
     this.readyState = 'complete';
     this._innerHTML = '';
+    this.events = {};
   }
   /* Панель логов чистит список через `innerHTML = ''` — в браузере это
    * снимает прежние строки, поэтому и здесь они не должны накапливаться. */
@@ -87,7 +88,7 @@ class El {
     this._innerHTML = value;
     if (value === '') this.children = [];
   }
-  addEventListener() {}
+  addEventListener(name, listener) { (this.events[name] ||= []).push(listener); }
   removeEventListener() {}
   appendChild(child) { this.children.push(child); child.parentElement = this; return child; }
   querySelector() { return null; }
@@ -97,7 +98,7 @@ class El {
   setAttribute() {}
   getAttribute() { return null; }
   focus() {}
-  click() {}
+  click() { (this.events.click || []).forEach((listener) => listener({ target: this, preventDefault() {} })); }
   closest() { return null; }
   play() { return Promise.resolve(); }
 }
@@ -150,6 +151,7 @@ console.error = (...args) => {
 };
 global.window = global;
 global.self = global;
+global._kioskBms = payload.bms || null;
 // main.js вешает обработчики на window: в браузере это событие, здесь — заглушка.
 global.addEventListener = () => {};
 global.removeEventListener = () => {};
@@ -227,6 +229,23 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
     }
   }
 
+  const navigation = [];
+  if (screen === 'robot' && payload.batteryNavigation) {
+    byId('ctrl-overlay').hidden = true;
+    function state() {
+      return { battery: !byId('swipe-battery-view').hidden,
+               cameras: !byId('swipe-cameras-view').hidden,
+               motors: !byId('swipe-motors-view').hidden,
+               open: byId('swipe-page').classList.contains('is-open'),
+               title: byId('swipe-title-text').textContent };
+    }
+    byId('battery-open').click(); navigation.push(state());
+    global._openSwipe('motors'); navigation.push(state());
+    byId('swipe-battery-open').click(); navigation.push(state());
+    byId('swipe-close').click(); navigation.push(state());
+    global._openSwipe('cameras'); navigation.push(state());
+  }
+
   const meta = byId('lidar-meta');
   const count = byId('lidar-count');
   const near = byId('lidar-near');
@@ -246,6 +265,10 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
     .map((parts) => ({ time: parts[0], level: parts[1], msg: parts.slice(2).join(' ') }));
   console.log(JSON.stringify({
     screen,
+    navigation,
+    soc: byId('k-soc').textContent,
+    volts: byId('k-volts').textContent,
+    batteryState: byId('k-soc-state').textContent,
     meta: meta.textContent,
     count: count.textContent,
     near: near.textContent,
