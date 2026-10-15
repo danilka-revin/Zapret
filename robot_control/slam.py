@@ -161,6 +161,8 @@ COMMAND_REASON_TEXT = {
     "command_failed": "команда не выполнена",
     "pin_required": "нужен PIN руления",
     "request_header_required": "запрос без заголовка X-Robot-Control",
+    "module_busy": "модуль занят (поворачивается, калибруется или включена тяга)",
+    "not_homed": "у модуля нет нуля — откалибруйте по датчику или задайте 0°",
 }
 
 
@@ -186,6 +188,28 @@ def note_steering_zero(module: str) -> None:
         "info", "программный ноль %s выставлен вручную (без движения)" % module,
         source="руление",
     )
+
+
+def note_steering_calibration(module: str) -> None:
+    """Записать запуск калибровки по оптодатчику D18 (колесо будет двигаться)."""
+    target = "всех колёс" if module == "ALL" else module
+    eventlog.record(
+        "ok", "калибровка руля %s по оптодатчику запущена" % target, source="руление",
+    )
+
+
+#: Слова в сообщении прошивки, после которых запись в журнале — предупреждение.
+_MASTER_WARN_WORDS = ("ОШИБКА", "нет связи", "не доставлена", "нет команды", "отклонена",
+                      "заблокирован", "Неизв.")
+
+
+def note_master_message(text: str) -> None:
+    """Сообщение прошивки мастера («# FR: Калибровка ЗАВЕРШЕНА!») — в журнал экрана."""
+    text = str(text or "").strip()
+    if not text:
+        return
+    level = "warn" if any(word in text for word in _MASTER_WARN_WORDS) else "info"
+    eventlog.record(level, "прошивка " + text, source="мастер")
 
 
 def reset_journal_notes() -> None:
@@ -246,12 +270,19 @@ def note_lidar_status(status) -> None:
 
 
 def steering_control_info(source):
-    """Публичная возможность управления: мастер, адресные команды и ручной ноль."""
+    """Публичная возможность управления: мастер, адресные команды, ноль руля.
+
+    Ноль — калибровкой по оптодатчику D18 (прошивка v2, команда ``k``), ручной
+    «Задать 0°» остался запасным вариантом (например, датчик снят).
+    """
+    calibration = bool(getattr(source, "supports_calibration", False))
     return {
         "available": bool(getattr(source, "supports_individual_steer", False)),
         "source": getattr(source, "name", "unknown"),
-        "zeroMode": "manual",
-        "optoUsed": False,
+        "zeroMode": "opto" if calibration else "manual",
+        "optoUsed": calibration,
+        "calibration": calibration,
+        "manualZero": True,
         "limitDeg": STEERING_ANGLE_LIMIT_DEG,
     }
 
@@ -337,6 +368,41 @@ def _steering_zero(source, body):
         note_steering_zero(module)
         return {"ok": True, "queued": True, "module": module,
                 "zeroMode": "manual"}, 200
+    reason = result.get("reason", "command_failed")
+    status = 409
+    if reason in {"serial_unavailable", "module_offline"}:
+        status = 503
+    elif reason == "command_queue_full":
+        status = 429
+    elif reason == "invalid_module":
+        status = 400
+    return {"ok": False, "reason": reason}, status
+
+
+def dispatch_steering_calibration(source, body):
+    """Проверить payload и запустить калибровку по оптодатчику (модуль или ALL)."""
+    result, status = _steering_calibration(source, body)
+    if not result.get("ok"):
+        note_command_rejected("калибровка руля", str(result.get("reason", "")))
+    return result, status
+
+
+def _steering_calibration(source, body):
+    if not isinstance(body, dict) or set(body) != {"module"}:
+        return {"ok": False, "reason": "payload"}, 400
+    module = body.get("module")
+    if not isinstance(module, str) or module.upper() not in {"FL", "FR", "RL", "RR", "ALL"}:
+        return {"ok": False, "reason": "invalid_module"}, 400
+    module = module.upper()
+    command = getattr(source, "calibrate_module", None)
+    if not getattr(source, "supports_calibration", False) or not callable(command):
+        return {"ok": False, "reason": "control_not_supported",
+                "source": getattr(source, "name", "unknown")}, 409
+    result = command(module)
+    if result.get("ok"):
+        note_steering_calibration(module)
+        return {"ok": True, "queued": True, "module": module,
+                "offline": list(result.get("offline") or [])}, 200
     reason = result.get("reason", "command_failed")
     status = 409
     if reason in {"serial_unavailable", "module_offline"}:
@@ -570,7 +636,8 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
         if port in reserved_ports() or os.path.realpath(port) in reserved_ports():
             log.error("Шасси: RC_SLAM_PORT совпадает с RC_BMS_PORT — мастер отключён")
             return mod.NoSource()
-        return mod.MasterSource(port)
+        # Сообщения прошивки («# FR: Калибровка ЗАВЕРШЕНА!») — в журнал экрана.
+        return mod.MasterSource(port, on_message=note_master_message)
 
     if mode != "auto":
         log.warning("неизвестный RC_SLAM_SOURCE=%r — использую auto", mode)
@@ -748,6 +815,7 @@ def create_blueprint(state, guard=None) -> Blueprint:
             "source": snap.get("source"),
             "steeringControl": steering_control_info(state.source),
             "drive": snap.get("drive"),
+            "masterMessages": snap.get("masterMessages") or [],
         }
         return jsonify({"ok": True, "data": public})
 
@@ -816,6 +884,16 @@ def create_blueprint(state, guard=None) -> Blueprint:
             note_pin_required("программный ноль")
             return jsonify({"ok": False, "reason": "pin_required"}), 401
         result, status = dispatch_steering_zero(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
+    @bp.post("/api/kiosk_calibrate")
+    def api_kiosk_calibrate():
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        if not steering_access_valid():
+            note_pin_required("калибровка руля")
+            return jsonify({"ok": False, "reason": "pin_required"}), 401
+        result, status = dispatch_steering_calibration(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
     @bp.post("/api/kiosk_drive")

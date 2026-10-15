@@ -109,7 +109,7 @@ def test_telemetry_api_returns_only_public_values(kiosk_client):
         assert body["ok"] is True
         assert set(body["data"]) == {
             "battery", "motors", "lidar", "speedMps", "powerKw", "mode", "linkOk", "ts",
-            "source", "steeringControl", "drive", "lidarStatus", "lidarDemo",
+            "source", "steeringControl", "drive", "lidarStatus", "lidarDemo", "masterMessages",
         }
         # причина «нет скана» видна на экране, а не только в журнале
         status = body["data"]["lidarStatus"]
@@ -197,6 +197,48 @@ def test_manual_software_zero_requires_pin_and_targets_one_module(kiosk_app, kio
     for bad_body in ({"module": "FL", "angle": 0}, {"module": "drive"}, {}):
         assert kiosk_client.post("/api/kiosk_zero", json=bad_body, headers=headers).status_code == 400
     assert source.zeroed == ["RR"]
+
+
+def test_opto_calibration_requires_pin_and_accepts_module_or_all(kiosk_app, kiosk_client):
+    class FakeCalibrationSource:
+        name = "master"
+        supports_individual_steer = True
+        supports_calibration = True
+
+        def __init__(self):
+            self.calibrated = []
+
+        def calibrate_module(self, module):
+            self.calibrated.append(module)
+            return {"ok": True, "offline": []}
+
+    source = FakeCalibrationSource()
+    kiosk_app.extensions["rc_slam"].source = source
+    headers = {"X-Robot-Control": "steering"}
+
+    assert kiosk_client.post("/api/kiosk_calibrate", json={"module": "FR"}, headers=headers).status_code == 401
+    assert kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "7232"}).status_code == 200
+    assert kiosk_client.post("/api/kiosk_calibrate", json={"module": "FR"}).status_code == 400
+    response = kiosk_client.post("/api/kiosk_calibrate", json={"module": "fr"}, headers=headers)
+    assert response.status_code == 200 and response.get_json()["module"] == "FR"
+    response = kiosk_client.post("/api/kiosk_calibrate", json={"module": "all"}, headers=headers)
+    assert response.status_code == 200 and response.get_json()["module"] == "ALL"
+    for bad_body in ({"module": "XX"}, {"module": "FR", "angle": 0}, {}):
+        assert kiosk_client.post("/api/kiosk_calibrate", json=bad_body, headers=headers).status_code == 400
+    assert source.calibrated == ["FR", "ALL"]
+    entries = kiosk_client.get("/api/kiosk_logs?limit=50").get_json()["data"]["entries"]
+    text = "\n".join(entry["msg"] for entry in entries)
+    assert "калибровка руля FR по оптодатчику запущена" in text
+    assert "калибровка руля всех колёс по оптодатчику запущена" in text
+
+
+def test_opto_calibration_is_refused_by_sources_without_it(kiosk_client):
+    """Симулятор и пульт-наблюдатель не калибруют: честный отказ 409."""
+    assert kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "7232"}).status_code == 200
+    response = kiosk_client.post("/api/kiosk_calibrate", json={"module": "ALL"},
+                                 headers={"X-Robot-Control": "steering"})
+    assert response.status_code == 409
+    assert response.get_json()["reason"] == "control_not_supported"
 
 
 def test_kiosk_drive_requires_pin_and_accepts_only_bounded_percent(kiosk_app, kiosk_client):

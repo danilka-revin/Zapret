@@ -1488,7 +1488,45 @@ body.swipe-open .kiosk {
   touch-action: manipulation;
 }
 .steer-actions button.steer-send { background: var(--panel-2); border-color: var(--accent); color: var(--accent); }
-.steer-actions button.steer-origin { grid-column: 1 / -1; border-color: #8a6f32; color: #f4cd6c; }
+.steer-actions button.steer-calib { grid-column: span 2; border-color: #3f6f8c; background: #12222c; color: #9fd6f5; }
+.steer-actions button.steer-origin { grid-column: span 2; border-color: #8a6f32; color: #f4cd6c; }
+.steer-actions button.steer-calib[hidden] + button.steer-origin { grid-column: 1 / -1; }
+.steer-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: -4px; font-size: 11px; font-weight: 800; color: var(--muted); }
+.steer-meta span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.steer-meta [data-home="opto"] { color: #9fd6f5; }
+.steer-meta [data-home="manual"] { color: #f4cd6c; }
+.steer-meta [data-home="error"] { color: #ff9b94; }
+.steer-meta [data-opto="on"] { color: #b8f0c0; }
+.steer-calib-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 14px;
+  border: 1px solid #2c4a5c;
+  border-radius: 12px;
+  background: #0e1a21;
+}
+.steer-calib-bar > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.steer-calib-bar b { color: #9fd6f5; font-size: 14px; }
+.steer-calib-bar span { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.btn-steer--calib { flex: none; border-color: #4f8fb3; background: #1d3a4b; color: #d8f1ff; }
+.steer-messages {
+  list-style: none;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font: 11px/1.4 var(--mono);
+  color: var(--muted);
+}
+.steer-messages[hidden] { display: none; }
+.steer-messages time { color: var(--idle); }
+.steer-messages li[data-warn="true"] { color: #ff9b94; }
 .steer-actions button:disabled, .btn-steer:disabled { opacity: .4; cursor: not-allowed; }
 .steer-footnote { margin: 0; color: var(--muted); font-size: 11px; }
 
@@ -1532,6 +1570,7 @@ body.swipe-open .kiosk {
   .steer-access { justify-content: space-between; flex-wrap: wrap; }
   .steer-grid { grid-template-columns: 1fr; }
   .steer-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .steer-calib-bar { flex-direction: column; align-items: stretch; }
   .traction-controls { grid-template-columns: 1fr; }
   .traction-head { grid-column: auto; flex-direction: column; }
   .traction-warning { grid-column: auto; }

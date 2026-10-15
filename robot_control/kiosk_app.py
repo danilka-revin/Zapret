@@ -66,6 +66,7 @@ from robot_control.slam import (
     DRIVE_COMMAND_HEADER_VALUE,
     build_state,
     dispatch_drive_command,
+    dispatch_steering_calibration,
     dispatch_steering_command,
     dispatch_steering_zero,
     grant_steering_access,
@@ -549,6 +550,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "source": snap.get("source"),
             "steeringControl": steering_control_info(state.source),
             "drive": snap.get("drive"),
+            # Последние сообщения прошивки мастера («# FR: Калибровка ЗАВЕРШЕНА!»).
+            "masterMessages": snap.get("masterMessages") or [],
         }})
 
     @app.get("/api/lidar")
@@ -708,6 +711,19 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             note_pin_required("программный ноль")
             return jsonify({"ok": False, "reason": "pin_required"}), 401
         result, status = dispatch_steering_zero(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
+    @app.post("/api/kiosk_calibrate")
+    def api_kiosk_calibrate():
+        """Калибровка руля по оптодатчику D18: один модуль или ``ALL``, только по PIN."""
+        if state is None:
+            return jsonify({"ok": False, "error": "no source"}), 503
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        if not steering_access_valid():
+            note_pin_required("калибровка руля")
+            return jsonify({"ok": False, "reason": "pin_required"}), 401
+        result, status = dispatch_steering_calibration(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
     @app.post("/api/kiosk_drive")
