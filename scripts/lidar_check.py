@@ -295,7 +295,7 @@ def ros_report(as_json: bool) -> int:
         if info.get("available"):
             log("Итог: ROS 2 виден из приложения — запусти ./scripts/ros2_lidar.sh")
         else:
-            log("Итог: ROS 2 не виден из этого интерпретатора — ./scripts/ros2_setup.sh --install")
+            log("Итог: ROS 2 не виден из этого интерпретатора — ./scripts/ros2_setup.sh (поставит и соберёт сам)")
     return 0 if info.get("available") else 1
 
 
@@ -326,6 +326,9 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     if args.ros:
+        if argv is None:
+            # Как у приложений: rclpy нужен LD_LIBRARY_PATH с самого старта.
+            ros_env.reexec_with_ros_env()
         return ros_report(args.json)
 
     if not args.json:
@@ -424,7 +427,7 @@ def main(argv=None) -> int:
         log("  запусти ./scripts/ros2_lidar.sh и проверь .venv/bin/python scripts/lidar_check.py --ros;")
     else:
         log("• ROS 2 не найден: лидар читается напрямую по USB (RC_LIDAR_SOURCE=auto/serial),")
-        log("  а чтобы отдать его драйверу ROS 2 — ./scripts/ros2_setup.sh --install;")
+        log("  а чтобы отдать его драйверу ROS 2 — ./scripts/ros2_setup.sh (ставит ROS 2 сам);")
     log("• скорость зависит от модели: A1/A2M8 — 115200, A2M7/A2M12/A3/S1 — 256000,")
     log("  C1 — 460800, LD06/LD19 и LDS-01/LDS-02 (TurtleBot3) — 230400")
     log("  (у RPLIDAR A3 на адаптере есть переключатель 115200/256000);")

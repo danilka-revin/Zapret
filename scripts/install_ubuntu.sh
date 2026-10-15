@@ -6,8 +6,9 @@
 #   cd robot-control
 #   ./scripts/install_ubuntu.sh
 #
-# Скрипт сам ставит зависимости, создаёт .env и оператора, создаёт один
-# ярлык «Запустить робот» и запускает веб-пульт + бортовой экран.
+# Скрипт сам ставит зависимости, ROS 2 с драйверами лидаров (и компилирует
+# ros2_ws), создаёт .env и оператора, создаёт один ярлык «Запустить робот» и
+# запускает веб-пульт + бортовой экран.
 # В следующий раз — один двойной щелчок по этому ярлыку.
 # Автозапуск при загрузке по умолчанию выключен.
 #
@@ -18,11 +19,12 @@
 #   --systemd        то же, что --autostart (устаревшее имя флага)
 #   --ap             поднять на этой машине точку доступа Wi-Fi (робот сам раздаёт сеть)
 #   --ap-autostart   поднимать точку доступа и при каждой загрузке
-#   --ros2           ROS 2 для лидара: поставить ROS 2 и пакеты драйверов, собрать
-#                    ros2_ws, включить чтение лидара из /scan (RC_LIDAR_SOURCE=ros)
-#                    и поставить службу robot-lidar
-#   --no-ros2        не трогать ROS 2 даже если он уже установлен
-#                    (без флагов: если ROS 2 в системе есть — только собрать ros2_ws)
+#   --ros2           (по умолчанию) ROS 2 для лидара ставится сам: ROS 2, драйверы
+#                    лидаров, rosdep и сборка ros2_ws; где готовых пакетов нет —
+#                    ROS 2 компилируется из исходников в фоне. С --autostart ещё и
+#                    служба robot-lidar
+#   --no-ros2        не ставить ROS 2 (лидар читается напрямую по USB); запоминается
+#                    в .env (RC_ROS_AUTO=0), чтобы ярлык тоже не ставил ROS 2
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -31,7 +33,7 @@ RUN=1
 AUTOSTART=0
 AP=0
 AP_AUTOSTART=0
-ROS2="auto"                   # auto: ставить/собирать, если ROS 2 есть или просили --ros2
+ROS2="auto"                   # auto = ставить, если в .env не выключено (RC_ROS_AUTO=0)
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-run)       RUN=0; shift ;;
@@ -41,7 +43,7 @@ while [[ $# -gt 0 ]]; do
     --ap-autostart) AP=1; AP_AUTOSTART=1; shift ;;
     --ros2)         ROS2=1; shift ;;
     --no-ros2)      ROS2=0; shift ;;
-    -h|--help)      sed -n '2,25p' "$0"; exit 0 ;;
+    -h|--help)      awk 'NR==1{next} /^#/{print; next} {exit}' "$0"; exit 0 ;;
     *) echo "неизвестный аргумент: $1" >&2; exit 1 ;;
   esac
 done
@@ -112,27 +114,42 @@ log "проверяю записанные учётки…"
 # Зачем: приложение само подбирать протокол лидара по USB больше не нужно —
 # драйвер ROS 2 (hls_lfcd_lds_driver, rplidar_ros, ldlidar_stl_ros2,
 # turtlebot3_node) публикует sensor_msgs/LaserScan в /scan, а пульт и экран
-# читают топик. ROS 2 и его пакеты ставятся системно и собираются в ros2_ws;
-# сами приложения остаются в .venv и видят rclpy через PYTHONPATH
-# (robot_control/ros_env.py).
-if [[ "$ROS2" == "1" ]] || { [[ "$ROS2" == "auto" ]] && compgen -G "/opt/ros/*" >/dev/null; }; then
-  log "настраиваю ROS 2 для лидара…"
-  ROS2_ARGS=(--drivers)
-  [[ "$ROS2" == "1" ]] && ROS2_ARGS+=(--install)
-  [[ $AUTOSTART -eq 1 ]] && ROS2_ARGS+=(--service)
-  if ./scripts/ros2_setup.sh "${ROS2_ARGS[@]}"; then
-    if [[ $AUTOSTART -eq 1 ]]; then
-      log "служба robot-lidar включена (лидар поднимается до приложений)"
-    else
-      log "запускать лидар вручную: ./scripts/ros2_lidar.sh"
-    fi
+# читают топик. ROS 2 и драйверы ставятся сами (apt; чего в apt нет — клонируется
+# и компилируется), ros2_ws собирается colcon-ом; приложения из .venv видят
+# rclpy через окружение ROS 2 (robot_control/ros_env.py).
+set_env_flag() {
+  local key="$1" value="$2"
+  [[ -f .env ]] || return 0
+  if grep -qE "^${key}=" .env; then
+    sed -i "s|^${key}=.*|${key}=${value}|" .env
   else
-    log "ROS 2 не настроен — лидар останется на USB-пути (RC_LIDAR_SOURCE=auto)"
-    log "  повторить: ./scripts/ros2_setup.sh --install --drivers --service"
+    printf '%s=%s\n' "$key" "$value" >> .env
   fi
+}
+if [[ "$ROS2" == "0" ]]; then
+  set_env_flag RC_ROS_AUTO 0
+  log "ROS 2 не ставлю (--no-ros2, запомнено в .env: RC_ROS_AUTO=0) — лидар читается по USB"
+  log "  включить позже: ./scripts/install_ubuntu.sh --ros2 (или ./scripts/ros2_setup.sh)"
+elif [[ "$ROS2" == "auto" ]] && grep -qE '^RC_ROS_AUTO=0' .env 2>/dev/null; then
+  log "ROS 2 выключен в .env (RC_ROS_AUTO=0) — не ставлю; включить: ./scripts/install_ubuntu.sh --ros2"
 else
-  log "ROS 2 не найден — лидар читается напрямую по USB (как раньше)"
-  log "  включить ROS 2-путь: ./scripts/install_ubuntu.sh --ros2 (или ./scripts/ros2_setup.sh --install)"
+  [[ "$ROS2" == "1" ]] && grep -qE '^RC_ROS_AUTO=' .env 2>/dev/null && set_env_flag RC_ROS_AUTO 1
+  log "ROS 2 для лидара: ставлю и компилирую всё само (ROS 2, драйверы лидаров, ros2_ws)…"
+  ROS2_ARGS=(--background-build)
+  [[ $AUTOSTART -eq 1 ]] && ROS2_ARGS+=(--service)
+  ROS2_STATUS=0
+  bash scripts/ros2_setup.sh "${ROS2_ARGS[@]}" || ROS2_STATUS=$?
+  case "$ROS2_STATUS" in
+    0) if [[ $AUTOSTART -eq 1 ]]; then
+         log "ROS 2 готов; служба robot-lidar поставлена (лидар поднимается до приложений)"
+       else
+         log "ROS 2 готов; лидар запускается сам вместе с роботом (ярлык «Запустить робот»)"
+       fi ;;
+    4) log "ROS 2 компилируется из исходников в фоне — лидар пока читается по USB"
+       log "  ход сборки: ./scripts/ros2_setup.sh --status" ;;
+    *) log "ROS 2 настроен не до конца (код $ROS2_STATUS) — лидар пока на USB (RC_LIDAR_SOURCE=auto)"
+       log "  ярлык «Запустить робот» докачает и соберёт недостающее сам; журнал: var/ros2_setup.log" ;;
+  esac
 fi
 
 # --- 5. порт в фаерволе -------------------------------------------------------- #
@@ -163,6 +180,12 @@ if [[ $AUTOSTART -eq 1 ]]; then
   $SUDO systemctl daemon-reload
   $SUDO systemctl enable --now robot-control robot-kiosk
   log "службы robot-control и robot-kiosk запущены (автозапуск включён)"
+  # Лидар ROS 2 при автозапуске службами: ярлыка нет — супервизор поднимает
+  # служба robot-lidar (её поставил ros2_setup.sh --service выше).
+  if [[ -f /etc/systemd/system/robot-lidar.service ]]; then
+    $SUDO systemctl enable --now robot-lidar || log "служба robot-lidar не запустилась — см. journalctl -u robot-lidar"
+    log "служба robot-lidar включена: лидар ROS 2 поднимается при загрузке"
+  fi
 else
   log "автозапуск не ставлю: пульт и экран запускаются вручную"
   log "  включить: ./scripts/install_ubuntu.sh --autostart (или ./scripts/autostart.sh on)"

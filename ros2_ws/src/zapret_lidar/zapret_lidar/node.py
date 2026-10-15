@@ -154,7 +154,14 @@ class LidarSupervisor(Node):
         return seen
 
     def _ros_prefix(self) -> Optional[Path]:
-        for path in self._prefixes():
+        prefixes = self._prefixes()
+        # Сам ROS 2 — тот префикс, где есть rclpy: после source ros2_ws первыми в
+        # AMENT_PREFIX_PATH идут пакеты рабочего пространства (zapret_lidar и
+        # драйверы из исходников), и «дистрибутивом» оказывался zapret_lidar.
+        for path in prefixes:
+            if (path / "share" / "ament_index" / "resource_index" / "packages" / "rclpy").is_file():
+                return path
+        for path in prefixes:
             if (path / "setup.bash").is_file() or (path / "share").is_dir():
                 return path
         return None
@@ -217,6 +224,13 @@ class LidarSupervisor(Node):
         prefix = self._ros_prefix()
         install = self._install_prefix()
         executable = drv.find_executable(item.driver, prefix=prefix, install=install)
+        if executable is None:
+            # Драйвер, скомпилированный из исходников, лежит в своём каталоге
+            # ros2_ws/install/<пакет>: ищем во всех префиксах AMENT_PREFIX_PATH.
+            for base in self._prefixes():
+                executable = drv.find_executable(item.driver, install=base)
+                if executable is not None:
+                    break
         if executable is None and self.ros2_cli() is None:
             self.tried.append({"driver": item.driver.name, "port": item.port,
                                "note": "нет ни %s в lib/, ни команды ros2" % item.driver.executable})

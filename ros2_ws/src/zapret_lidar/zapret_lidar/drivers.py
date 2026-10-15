@@ -96,7 +96,8 @@ DRIVERS: dict[str, Driver] = {
             "frame_id": "{frame_id}",
             "angle_compensate": True,
         },
-        apt="ros-{d}-sllidar-ros2",
+        # В rosdistro sllidar_ros2 нет — пакета ros-<d>-sllidar-ros2 не существует.
+        apt="",
         source="https://github.com/Slamtec/sllidar_ros2",
         note="альтернативный драйвер Slamtec: полезен, если rplidar_ros не заводится",
     ),
@@ -165,8 +166,14 @@ DRIVERS: dict[str, Driver] = {
     ),
 }
 
-#: Пакеты, которых нет в apt: их собирают из исходников (см. scripts/ros2_setup.sh).
-SOURCE_ONLY: tuple[str, ...] = ("ldlidar_stl_ros2",)
+#: Пакеты, которых нет в apt: их собирают из исходников (scripts/ros2_setup.sh
+#: клонирует и компилирует их сам).
+SOURCE_ONLY: tuple[str, ...] = ("ldlidar_stl_ros2", "sllidar_ros2")
+
+#: Драйверы, которые scripts/ros2_setup.sh ставит без дополнительных настроек
+#: (остальные — по RC_ROS_DRIVERS или выбранной модели лидара).
+SETUP_DEFAULT: tuple[str, ...] = ("hls_lfcd_lds_driver", "rplidar_ros", "ldlidar_stl_ros2",
+                                  "turtlebot3_node")
 
 #: Синонимы протоколов из RC_LIDAR_PROTOCOL/--model → ключ драйвера.
 MODEL_ALIASES: dict[str, str] = {
@@ -480,6 +487,10 @@ def install_lines(driver: Driver, distro: str = "humble") -> list[str]:
     if driver.apt:
         lines.append("sudo apt install %s" % driver.apt.format(d=distro))
     elif driver.source:
-        lines.append("git clone %s ros2_ws/src/%s" % (driver.source, driver.package))
-        lines.append("colcon build --symlink-install --packages-select %s" % driver.package)
+        setup = "./scripts/ros2_setup.sh"
+        if driver.package not in SETUP_DEFAULT:
+            setup = "RC_ROS_DRIVERS=%s %s" % (driver.package, setup)
+        lines.append("%s (сам скачает %s и скомпилирует colcon-ом)" % (setup, driver.package))
+        lines.append("вручную: git clone %s ros2_ws/src/%s && colcon build --symlink-install "
+                     "--packages-select %s" % (driver.source, driver.package, driver.package))
     return lines

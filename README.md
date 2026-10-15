@@ -41,7 +41,8 @@
   `hls_lfcd_lds_driver`, лидар через плату OpenCR — `turtlebot3_node`):
   супервизор `zapret_lidar` сам подбирает драйвер, следит за свежестью `/scan`
   и пишет состояние в `/zapret/lidar/status`, а шлюзы берут скан из топика;
-  `./scripts/ros2_setup.sh && ./scripts/ros2_lidar.sh` — установка и запуск,
+  ROS 2, драйверы и `ros2_ws` **докачиваются и компилируются сами** при запуске
+  ярлыком (вручную — `./scripts/ros2_setup.sh`, ход — `--status`),
   `./scripts/ros2_lidar.sh --status` — проверка, причина «нет скана» пишется на
   экране и в `GET /api/lidar`; чтение USB-порта самим приложением сохранено как
   запасной путь (`RC_LIDAR_SOURCE=serial`), разовая проверка —
@@ -75,10 +76,23 @@ cd robot-control
 установщик добавил пользователя в группу `dialout`, выйдите из Ubuntu и войдите
 снова перед управлением Arduino по USB.
 
+**ROS 2 для лидара ставится сам** — и установщиком, и ярлыком «Запустить
+робот»: официальный репозиторий, `ros-<дистрибутив>-ros-base`, драйверы
+лидаров (из apt, а чего там нет — клонируется и компилируется), `rosdep` и
+`colcon build` рабочего пространства `ros2_ws`. Первый раз — несколько минут и
+один вопрос пароля sudo в окне терминала, дальше — секунды (повторно
+компилируется только то, что изменилось). Где готовых пакетов ROS 2 нет
+(Debian, Raspberry Pi OS, не-LTS Ubuntu), ROS 2 компилируется из исходников в
+фоне, а лидар пока читается по USB. Не нужен ROS 2 — `--no-ros2` (запомнится в
+`.env` как `RC_ROS_AUTO=0`). Подробности — `docs/ROS2_LIDAR.md`.
+
 > **Интернет не нужен.** Все пакеты (Flask, gunicorn, pip) лежат колёсами в
 > `vendor/`. Если сети нет, установка идёт офлайн через
 > `--no-index --find-links vendor`. Робот сам раздаёт Wi-Fi, поэтому у машины
-> обычно нет интернета — это нормально, запуск всё равно работает.
+> обычно нет интернета — это нормально, запуск всё равно работает. Интернет
+> нужен один раз — чтобы докачать ROS 2 и драйверы лидара; без сети робот
+> запускается как обычно (лидар по USB), а установка повторится при следующем
+> запуске ярлыком.
 
 ### Если не открывается с другого устройства
 
@@ -381,8 +395,13 @@ python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 `/zapret/lidar/status` — оно видно в `GET /api/lidar` → `ros.supervisor` и в
 панели «Лидар».
 
+ROS 2, пакеты драйверов и сборка `ros2_ws` делаются **сами** при запуске
+ярлыком «Запустить робот» (он же поднимает супервизор лидара до пульта и
+экрана). Вручную и для проверки:
+
 ```bash
-./scripts/ros2_setup.sh            # ROS 2, пакеты драйверов, сборка ros2_ws, RC_LIDAR_SOURCE=ros
+./scripts/ros2_setup.sh            # всё само: ROS 2, драйверы (apt/исходники), rosdep, colcon build
+./scripts/ros2_setup.sh --status   # идёт ли установка, чем закончилась, конец журнала
 ./scripts/ros2_lidar.sh            # запустить драйвер лидара (или --service для автозапуска)
 ./scripts/ros2_lidar.sh --status   # топик /scan, частота, состояние драйвера
 .venv/bin/python scripts/lidar_check.py --ros   # дистрибутив, rclpy, пакеты драйверов
@@ -516,9 +535,11 @@ dmesg | tail                                       # видит ли лидар 
 
 | Причина в статусе | Что делать |
 | --- | --- |
-| `ROS 2 не установлен (нет /opt/ros/…)` | `./scripts/ros2_setup.sh --install --drivers`, затем перезапустить приложения (или оставить USB-путь: `RC_LIDAR_SOURCE=serial`) |
-| `ROS 2 есть, но /scan никто не публикует` | драйвер лидара не запущен: `./scripts/ros2_lidar.sh`, автозапуск — `./scripts/ros2_setup.sh --service` |
-| `нет ROS 2-пакетов драйверов лидара` | `./scripts/ros2_setup.sh --drivers` (для LD06/LD19 — ещё `--ldlidar`) |
+| `ROS 2 не установлен (нет /opt/ros/…)` | запустить робота ярлыком «Запустить робот» — ROS 2 докачается и скомпилируется сам (вручную: `./scripts/ros2_setup.sh`; или оставить USB-путь: `RC_LIDAR_SOURCE=serial`) |
+| `… нужен пароль администратора …` | ярлык открывает терминал — ввести там пароль sudo один раз |
+| `… сейчас идёт автоустановка ROS 2 …` | подождать; ход — `./scripts/ros2_setup.sh --status` |
+| `ROS 2 есть, но /scan никто не публикует` | драйвер лидара не запущен: ярлык запускает его сам; вручную — `./scripts/ros2_lidar.sh`, автозапуск — `./scripts/ros2_setup.sh --service` |
+| `нет ROS 2-пакетов драйверов лидара` | `./scripts/ros2_setup.sh` (поставит из apt или скомпилирует из исходников) |
 | `ни один драйвер не отдал /scan (…)` | `./scripts/ros2_lidar.sh --status`, права на порт (`dialout`), правильный порт; подробнее — `docs/ROS2_LIDAR.md` |
 | `нет библиотеки pyserial` | `.venv/bin/pip install pyserial` (или `./scripts/ensure_deps.sh`) — пакет уже лежит в `vendor/` |
 | `порт лидара не найден` | система не видит ни одного USB-порта: проверить кабель, `ls /dev/ttyUSB*`, `dmesg \| tail` |
@@ -761,6 +782,12 @@ watchdog, потеря слейва). Строки `@TLM` этой симуля�
 (таблица драйверов и план запуска, опознание кадров LDS-01/LD06/RPLIDAR на
 настоящем pty, `--print-plan`, package.xml/launch/config, `ros2_setup.sh --check`
 на фальшивом префиксе ROS 2, `ros2_lidar.sh --print`, служба `robot-lidar`).
+Автоустановка — `tests/test_ros2_autosetup.py`: `ros2_setup.sh` прогоняется на
+фальшивой системе (подменены `apt-get`, `sudo`, `dpkg`, `curl`, `git`,
+`colcon`, `rosdep`, `vcs`) — чистая Ubuntu, Linux Mint, Debian со сборкой ROS 2
+из исходников в фоне, драйвер не из apt, нет пароля sudo, повторный запуск без
+пересборки; плюс перезапуск приложений с окружением ROS 2, `--keep-alive`
+супервизора и сборка `ros2_ws` настоящим colcon (если он установлен).
 
 Путь «порт лидара → API → экран» покрыт тремя файлами: `tests/test_lidar_web.py`
 (порт не отбирают друг у друга пульт и борт, скан берётся у второго процесса по
@@ -812,8 +839,9 @@ scripts/
                               (--save-env — записать найденное в .env,
                                --ros — дистрибутив ROS 2, rclpy и пакеты драйверов)
   lidar_web_check.py          проверка, что скан дошёл до пульта и бортового экрана
-  ros2_setup.sh               ROS 2 для лидара: пакеты драйверов, сборка ros2_ws, служба
-  ros2_lidar.sh               запуск лидара через ROS 2 (--status, --print, --model)
+  ros2_setup.sh               ROS 2 для лидара сам: установка (apt или исходники), драйверы,
+                              rosdep, colcon build ros2_ws, служба (--check, --status)
+  ros2_lidar.sh               запуск лидара через ROS 2 (--status, --print, --model, --keep-alive)
   robot-lidar.service         systemd: драйвер лидара поднимается до приложений
   create_default_operator.sh  учётка без вопросов (admin/1234)
   ensure_deps.sh              установка зависимостей, работает офлайн
@@ -862,6 +890,8 @@ tests/                        pytest: приложение, лидар, ROS 2, �
 | `RC_LIDAR_ROS_TOPIC` | `/scan` | топик `sensor_msgs/LaserScan`, который слушают оба экрана |
 | `RC_LIDAR_ROS_STATUS_TOPIC` | `/zapret/lidar/status` | топик состояния супервизора ROS 2 (JSON) — оттуда панель «Лидар» берёт драйвер, порт и частоту |
 | `RC_ROS_PREFIX` | `/opt/ros/<дистрибутив>` | где искать ROS 2, если он установлен не в `/opt/ros` |
+| `RC_ROS_AUTO` | `1` | `0` — ярлык и `ros2_lidar.sh` не ставят и не компилируют ROS 2 сами |
+| `RC_ROS_DRIVERS` | пусто | свой набор драйверов лидаров для `ros2_setup.sh` (по умолчанию `hls_lfcd_lds_driver rplidar_ros ldlidar_stl_ros2 turtlebot3_node`) |
 | `RC_LIDAR_PORT` | автопоиск | порт лидара: один, список через запятую или glob (`/dev/ttyUSB1`, `/dev/serial/by-id/*lidar*`). В ROS 2-режиме это порт драйвера, в USB-режиме — **первый** порт в очереди, остальные USB всё равно перебираются |
 | `RC_LIDAR_BAUD` | автоподбор | скорость порта: `115200` (A1/A2M8), `256000` (A2M7/A2M12/A3/S1), `460800` (C1), `230400` (LD06/LD19, LDS-01/LDS-02) |
 | `RC_LIDAR_PROTOCOL` | `auto` | модель лидара (она же протокол для USB-режима): `auto` \| `rplidar` \| `ld06` \| `lds01` (лидар TurtleBot3 Burger; синонимы `lds-01`, `hls-lfcd2`, `turtlebot3`). В ROS 2-режиме `auto` подбирает драйвер сам, а явное значение запускает соответствующий пакет (`turtlebot3`/`opencr` — лидар через плату OpenCR) |

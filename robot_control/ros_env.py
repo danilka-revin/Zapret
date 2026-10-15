@@ -12,24 +12,37 @@
 ``sys.path`` и переменные окружения процесса, после чего ``rclpy`` импортируется
 как обычно.
 
+Но ``sys.path`` — только половина: ``rclpy`` — C-расширение, его библиотеки
+(``librcl.so`` и др.) загрузчик ищет по ``LD_LIBRARY_PATH``, а его glibc читает
+лишь при старте процесса. Поэтому точки входа (``run.py``, ``run_kiosk.py``)
+в самом начале зовут :func:`reexec_with_ros_env`: если ROS 2 установлен, а
+процесс запущен без его окружения, он перезапускается с ``source setup.bash``
+(ровно как в терминале оператора) — и ``import rclpy`` работает по-настоящему.
+
 Второе назначение — диагностика. ``GET /api/lidar`` отдаёт блок ``ros``
 (:func:`describe`): какой дистрибутив найден, доступен ли ``rclpy``, какие
-пакеты драйверов лидара установлены и что делать, если нужного нет. Оператор
-видит не «скана нет», а причину с командой.
+пакеты драйверов лидара установлены, идёт ли сейчас автоустановка ROS 2
+(``scripts/ros2_setup.sh`` пишет ``var/ros2_setup.json``) и что делать, если
+чего-то нет. Оператор видит не «скана нет», а причину с командой.
 
 Настройки (``.env``):
 
   * ``RC_LIDAR_SOURCE`` — ``auto`` (по умолчанию), ``ros`` или ``serial``;
   * ``RC_LIDAR_ROS_TOPIC`` — топик скана, по умолчанию ``/scan``;
   * ``RC_ROS_PREFIX`` — префикс ROS 2, если он не в ``/opt/ros/<distro>``;
+  * ``RC_ROS_REEXEC=0`` — не перезапускать процесс с окружением ROS 2;
   * ``ROS_DISTRO`` — обычная переменная ROS 2, читается как есть.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
+import sysconfig
 import threading
 import time
 from pathlib import Path
@@ -38,7 +51,7 @@ from typing import Any, Optional
 log = logging.getLogger("robot_control.ros_env")
 
 #: Дистрибутивы ROS 2, которые имеет смысл искать на роботе (от новых к старым).
-ROS_DISTROS = ("kilted", "jazzy", "iron", "humble", "rolling", "galactic", "foxy")
+ROS_DISTROS = ("lyrical", "kilted", "jazzy", "iron", "humble", "rolling", "galactic", "foxy")
 
 #: Где обычно лежит ROS 2, если он поставлен пакетами Ubuntu.
 DEFAULT_PREFIX = Path("/opt/ros")
@@ -51,6 +64,17 @@ DEFAULT_SCAN_TOPIC = "/scan"
 
 #: Топик со состоянием супервизора драйверов (пакет ``zapret_lidar``).
 SUPERVISOR_STATUS_TOPIC = "/zapret/lidar/status"
+
+#: Состояние автоустановки ROS 2: его пишет ``scripts/ros2_setup.sh``.
+SETUP_STATE_FILE = WORKSPACE.parent / "var" / "ros2_setup.json"
+
+#: Метка «ROS 2 из исходников ещё компилируется» в префиксе (ros2_setup.sh):
+#: colcon кладёт setup.bash и при неудачной сборке, такой префикс — не ROS 2.
+INCOMPLETE_MARK = ".zapret_build_incomplete"
+
+#: Процесс уже запущен с окружением этого префикса ROS 2 (защита от
+#: бесконечного перезапуска в :func:`reexec_with_ros_env`).
+ENV_READY_FLAG = "RC_ROS_ENV_READY"
 
 #: ROS-пакеты, которые умеют отдавать ``/scan`` для конкретного лидара.
 #: Порядок = порядок предпочтения. Значения сверяются с таблицей драйверов
@@ -65,16 +89,18 @@ LIDAR_DRIVER_PACKAGES: dict[str, tuple[str, ...]] = {
 }
 
 #: apt-имена пакетов драйверов (``{d}`` — дистрибутив: humble, jazzy, …).
+#: sllidar_ros2 в apt нет ни для одного дистрибутива (его нет в rosdistro).
 APT_PACKAGES: dict[str, str] = {
     "hls_lfcd_lds_driver": "ros-{d}-hls-lfcd-lds-driver",
     "rplidar_ros": "ros-{d}-rplidar-ros",
-    "sllidar_ros2": "ros-{d}-sllidar-ros2",
     "turtlebot3_node": "ros-{d}-turtlebot3-node",
 }
 
-#: Пакеты, которых нет в apt: их собирают из исходников в ``ros2_ws/src``.
+#: Пакеты, которых нет в apt: их собирают из исходников в ``ros2_ws/src``
+#: (``scripts/ros2_setup.sh`` клонирует и компилирует их сам).
 GIT_SOURCES: dict[str, str] = {
     "ldlidar_stl_ros2": "https://github.com/ldrobotSensorTeam/ldlidar_stl_ros2",
+    "sllidar_ros2": "https://github.com/Slamtec/sllidar_ros2",
 }
 
 #: Подсказка оператору: чем поднять драйвер, если скана нет.
@@ -106,7 +132,7 @@ class RosUnavailable(RuntimeError):
 def _is_prefix(path: Path) -> bool:
     """Похож ли каталог на префикс ROS 2 (есть setup.bash или библиотеки)."""
     try:
-        if not path.is_dir():
+        if not path.is_dir() or (path / INCOMPLETE_MARK).exists():
             return False
     except OSError:
         return False
@@ -144,7 +170,18 @@ def candidate_prefixes() -> list[Path]:
         pass
     for entry in (os.environ.get("AMENT_PREFIX_PATH") or "").split(os.pathsep):
         add(entry)
-    return out
+    # Собранный ros2_ws — не ROS 2: ensure_python_path() добавляет его в
+    # AMENT_PREFIX_PATH, и без этого фильтра он «находился» как префикс ROS 2
+    # (дистрибутив «install»), когда самого ROS 2 ещё нет.
+    return [path for path in out if not _inside_workspace(path)]
+
+
+def _inside_workspace(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(WORKSPACE.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
 
 
 def prefix() -> Optional[Path]:
@@ -205,6 +242,23 @@ def python_path_entries(root: Optional[Path] = None) -> list[str]:
     return entries
 
 
+def library_dirs(base: Optional[Path]) -> list[str]:
+    """Каталоги библиотек префикса: ``lib`` и ``lib/<multiarch>`` (x86_64, aarch64…)."""
+    if base is None:
+        return []
+    tails = ["lib"]
+    multiarch = sysconfig.get_config_var("MULTIARCH") or ""
+    for name in (multiarch, "x86_64-linux-gnu", "aarch64-linux-gnu", "arm-linux-gnueabihf"):
+        if name and "lib/" + name not in tails:
+            tails.append("lib/" + name)
+    out: list[str] = []
+    for tail in tails:
+        path = base / tail
+        if path.is_dir() and str(path) not in out:
+            out.append(str(path))
+    return out
+
+
 def _prepend_env(name: str, values: list[str]) -> None:
     """Добавляет значения в переменную окружения, не дублируя существующие."""
     if not values:
@@ -241,12 +295,7 @@ def ensure_python_path(root: Optional[Path] = None) -> bool:
         _prepend_env("AMENT_PREFIX_PATH", prefixes)
         libs: list[str] = []
         for item in (base, install_prefix()):
-            if item is None:
-                continue
-            for tail in ("lib", "lib/x86_64-linux-gnu"):
-                path = item / tail
-                if path.is_dir():
-                    libs.append(str(path))
+            libs.extend(path for path in library_dirs(item) if path not in libs)
         _prepend_env("LD_LIBRARY_PATH", libs)
         if base is not None and not os.environ.get("ROS_DISTRO"):
             os.environ["ROS_DISTRO"] = base.name
@@ -254,6 +303,178 @@ def ensure_python_path(root: Optional[Path] = None) -> bool:
         _prepared_prefix = base
         changed = True
     return changed
+
+
+# --------------------------------------------------------------------------- #
+# Окружение ROS 2 для нового процесса (LD_LIBRARY_PATH читается только при старте)
+# --------------------------------------------------------------------------- #
+
+
+def sourced_environment(base: Optional[Path] = None, *,
+                        timeout: float = 20.0) -> Optional[dict[str, str]]:
+    """Окружение после ``source <префикс>/setup.bash`` (и ``ros2_ws``, если собран).
+
+    Ровно то, что делает оператор в терминале: переменные ROS 2 выставляют его
+    же скрипты (``PYTHONPATH``, ``LD_LIBRARY_PATH``, ``AMENT_PREFIX_PATH``,
+    ``ROS_DISTRO``…), угадывать их по каталогам не нужно. ``set +u`` обязателен:
+    скрипты colcon читают неопределённые переменные. ``None`` — нет bash или
+    скриптов, либо source не удался.
+    """
+    base = base or prefix()
+    if base is None:
+        return None
+    install = install_prefix()
+    scripts = [path for path in (base / "setup.bash",
+                                 (install / "setup.bash") if install else None)
+               if path is not None and path.is_file()]
+    bash = shutil.which("bash")
+    if not scripts or not bash:
+        return None
+    command = 'set +u; for f in "$@"; do . "$f" >/dev/null 2>&1 || true; done; exec env -0'
+    try:
+        result = subprocess.run(
+            [bash, "-c", command, "ros_env", *[str(path) for path in scripts]],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=timeout, env=dict(os.environ), check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.info("ROS 2: source %s не выполнился: %s", scripts[0], exc)
+        return None
+    if result.returncode != 0 or not result.stdout:
+        return None
+    env: dict[str, str] = {}
+    for chunk in result.stdout.split(b"\0"):
+        key, sep, value = chunk.partition(b"=")
+        if not sep or not key:
+            continue
+        name = key.decode("utf-8", "replace")
+        if name in ("_", "SHLVL", "PWD", "OLDPWD") or name.startswith("BASH_FUNC_"):
+            continue
+        env[name] = value.decode("utf-8", "replace")
+    return env or None
+
+
+def _computed_environment(base: Path) -> dict[str, str]:
+    """Запасной путь без bash: те же пути, что выставил бы setup.bash."""
+    env = dict(os.environ)
+
+    def prepend(name: str, values: list[str]) -> None:
+        current = [item for item in (env.get(name) or "").split(os.pathsep) if item]
+        merged = [item for item in values if item] + [item for item in current if item not in values]
+        if merged:
+            env[name] = os.pathsep.join(merged)
+
+    install = install_prefix()
+    prepend("PYTHONPATH", python_path_entries(base))
+    prepend("AMENT_PREFIX_PATH", [str(item) for item in (install, base) if item is not None])
+    libs: list[str] = []
+    for item in (install, base):
+        libs.extend(path for path in library_dirs(item) if path not in libs)
+    prepend("LD_LIBRARY_PATH", libs)
+    if (base / "bin").is_dir():
+        prepend("PATH", [str(base / "bin")])
+    env.setdefault("ROS_DISTRO", base.name)
+    env.setdefault("ROS_VERSION", "2")
+    env.setdefault("ROS_PYTHON_VERSION", "3")
+    return env
+
+
+def process_env(base: Optional[Path] = None) -> Optional[dict[str, str]]:
+    """Окружение для нового процесса приложения с ROS 2 (``None`` — ROS 2 нет)."""
+    base = base or prefix()
+    if base is None:
+        return None
+    env = sourced_environment(base) or _computed_environment(base)
+    env[ENV_READY_FLAG] = str(base)
+    return env
+
+
+def reexec_needed() -> bool:
+    """Нужно ли перезапустить этот процесс с окружением ROS 2."""
+    if (os.environ.get("RC_ROS_REEXEC") or "1").strip().lower() in ("0", "no", "false", "off"):
+        return False
+    base = prefix()
+    if base is None:
+        return False
+    return os.environ.get(ENV_READY_FLAG) != str(base)
+
+
+def reexec_with_ros_env(argv: Optional[list[str]] = None) -> bool:
+    """Перезапускает текущий процесс Python с окружением ROS 2 — один раз.
+
+    Зовут точки входа (``run.py``, ``run_kiosk.py``) в самом начале, до
+    тяжёлых импортов. ROS 2 нет, окружение уже готово или ``RC_ROS_REEXEC=0``
+    — ничего не происходит (``False``). Иначе процесс заменяется копией себя
+    (``os.execve``) и сюда управление не возвращается. Ошибка перезапуска не
+    фатальна: приложение работает дальше, лидар — по USB.
+    """
+    if not reexec_needed():
+        return False
+    env = process_env()
+    if env is None:
+        return False
+    args = [sys.executable, *(argv if argv is not None else sys.argv)]
+    log.info("ROS 2: перезапускаю процесс с окружением %s", env.get(ENV_READY_FLAG))
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execve(sys.executable, args, env)
+    except OSError as exc:  # pragma: no cover — execve почти не падает
+        log.warning("ROS 2: перезапуск с окружением не удался: %s", exc)
+    return False
+
+
+# --------------------------------------------------------------------------- #
+# Автоустановка (scripts/ros2_setup.sh)
+# --------------------------------------------------------------------------- #
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def setup_state() -> dict[str, Any]:
+    """Что делает (или чем закончилась) автоустановка ROS 2.
+
+    Читает ``var/ros2_setup.json`` (``RC_ROS_SETUP_STATE`` — другой путь).
+    Пустой словарь — установка ещё не запускалась. ``running`` с мёртвым
+    процессом превращается в ``interrupted``: установку прервали.
+    """
+    path = Path(os.environ.get("RC_ROS_SETUP_STATE") or SETUP_STATE_FILE)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    pid = data.get("pid")
+    if data.get("state") == "running" and isinstance(pid, int) and pid > 0 and not _pid_alive(pid):
+        data["state"] = "interrupted"
+    return data
+
+
+def setup_note(state: Optional[dict[str, Any]] = None) -> str:
+    """Одна фраза об автоустановке для подсказки оператору (пусто — нечего сказать)."""
+    state = setup_state() if state is None else state
+    kind = str(state.get("state") or "")
+    text = str(state.get("message") or state.get("phase") or "").strip()
+    if kind in ("running", "background"):
+        return "сейчас идёт автоустановка ROS 2: %s (ход: %s --status)" % (text or "работает", SETUP_COMMAND)
+    if kind == "need_root":
+        return ("автоустановке ROS 2 нужен пароль администратора: запусти ярлык "
+                "«Запустить робот» (откроет терминал) или %s" % SETUP_COMMAND)
+    if kind == "failed":
+        return "прошлая автоустановка ROS 2 не удалась: %s" % (text or "см. var/ros2_setup.log")
+    if kind == "interrupted":
+        return "прошлую автоустановку ROS 2 прервали — она продолжится при следующем запуске робота"
+    return ""
 
 
 def workspace_scripts_dir() -> Optional[Path]:
@@ -323,15 +544,24 @@ def rclpy_error() -> str:
 def missing_reason(root: Optional[Path] = None) -> str:
     """Подсказка, почему ROS 2 недоступен и что с этим делать."""
     base = root if root is not None else prefix()
+    note = setup_note()
     if base is None:
-        return ("ROS 2 не установлен (нет /opt/ros/<дистрибутив>): поставь его и "
-                "пакеты драйвера лидара командой %s, затем перезапусти приложения"
-                % SETUP_COMMAND)
+        text = ("ROS 2 не установлен (нет /opt/ros/<дистрибутив>): он докачается и "
+                "скомпилируется сам при запуске робота ярлыком «Запустить робот» "
+                "или командой %s; лидар пока читается по USB" % SETUP_COMMAND)
+        return text + ("; " + note if note else "")
     where = site_packages_dirs(base)
     if not where:
         return ("в префиксе ROS 2 %s нет python-пакетов (lib/python3.*/site-packages): "
                 "похоже, поставлен только C++-часть — нужен пакет ros-%s-rclpy "
                 "или полный ros-base (%s)" % (base, base.name, SETUP_COMMAND))
+    if os.environ.get(ENV_READY_FLAG) != str(base) and _rclpy_error:
+        # Процесс стартовал без окружения ROS 2 (например, ROS 2 поставили уже
+        # после запуска): библиотеки rclpy загрузчик здесь не найдёт.
+        return ("ROS 2 %s есть, но это приложение запущено без его окружения "
+                "(LD_LIBRARY_PATH): перезапусти робота ярлыком «Запустить робот» "
+                "или ./scripts/stop.sh и снова; последняя ошибка: %s (%s)"
+                % (base, _rclpy_error, SETUP_COMMAND))
     return ("rclpy не импортируется из %s (python %s): проверь поставку ROS 2 "
             "(%s%s)" % (base, "%d.%d" % sys.version_info[:2], SETUP_COMMAND,
                         ("; последняя ошибка: " + _rclpy_error) if _rclpy_error else ""))
@@ -458,6 +688,7 @@ def describe(topic: Optional[str] = None) -> dict[str, Any]:
         "launch": launch_command(),
         "error": rclpy_error() or None,
         "hint": hint,
+        "setup": setup_state(),
     }
     _describe_cache = (time.time(), scan_topic, dict(info))
     return info

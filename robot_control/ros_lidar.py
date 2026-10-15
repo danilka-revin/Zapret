@@ -225,7 +225,8 @@ class RosLidar:
             return ("драйвер публикует топик, но без точек: проверь порт лидара "
                     "(права dialout, занятость порта) и запусти %s"
                     % ros_env.LAUNCH_COMMAND)
-        return ("запусти драйвер лидара: %s (пакеты ROS 2 — %s)"
+        return ("драйвер лидара не запущен: он стартует сам с ярлыком «Запустить робот»; "
+                "вручную — %s (пакеты ROS 2 — %s)"
                 % (ros_env.LAUNCH_COMMAND, ros_env.SETUP_COMMAND))
 
     def status(self) -> dict[str, Any]:
@@ -285,9 +286,11 @@ class RosLidar:
         """Создаёт узел, подписки и крутит spin до остановки процесса."""
         try:
             rclpy = ros_env.import_rclpy()
-            node = self._build_node(rclpy)
+            # Сначала init, потом узел: Node() без инициализированного контекста
+            # падает («context is invalid») — подписка не поднималась никогда.
             if not rclpy.ok():
                 rclpy.init(args=None)
+            node = self._build_node(rclpy)
             self._node = node
             self.started = True
             log.info("Лидар: подписан на ROS 2 %s (состояние драйвера — %s)",
