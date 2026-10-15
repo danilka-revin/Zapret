@@ -342,6 +342,18 @@ class NoSource:
 TLM_PREFIX = "@TLM "
 
 
+#: Откуда у модуля ноль (поле home= прошивки v2): датчик D18, вручную или нет.
+HOME_SOURCES = ("opto", "manual", "none")
+#: Коды ошибок калибровки прошивки (поле err=) → текст для экрана и журнала.
+CALIB_ERRORS = {
+    1: "датчик не сработал: вправо 100° и влево 200° пусто",
+    2: "датчик не освобождается (залип или флажок шире 30°)",
+    3: "кромка не найдена при медленном подходе",
+    4: "калибровка прервана командой стоп",
+    5: "калибровка не уложилась по времени",
+}
+
+
 def parse_master_line(line):
     """Строка монитора мастера "@TLM mod=FL deg=-9.25 moving=1 ..." → dict.
 
@@ -361,24 +373,36 @@ def parse_master_line(line):
         target = float(fields.get("tgt", "0"))
         rpm = float(fields["rpm"]) if "rpm" in fields else None
         drive_percent = int(fields["drive"]) if "drive" in fields else None
+        firmware = int(fields["fw"]) if "fw" in fields else None
+        calib_error = int(fields["err"]) if "err" in fields else None
+        home = fields.get("home")
         if (module not in MODULE_TITLES or not math.isfinite(angle) or
                 not math.isfinite(target) or (rpm is not None and (not math.isfinite(rpm) or rpm < 0)) or
-                (drive_percent is not None and abs(drive_percent) > MAX_DRIVE_PERCENT)):
+                (drive_percent is not None and abs(drive_percent) > MAX_DRIVE_PERCENT) or
+                (calib_error is not None and not 0 <= calib_error <= 15) or
+                (home is not None and home not in HOME_SOURCES)):
             return None
+        zeroed = fields.get("cal") == "1"
+        if home is None:
+            # Прошивка без поля home= знала только ручной программный ноль.
+            home = "manual" if zeroed else "none"
         return {
             "mod": module,
             "deg": angle,
             "tgt": target,
             "moving": fields.get("moving") == "1",
-            # В прошивке без оптодатчика cal означает только вручную заданный
-            # программный ноль, который сбрасывается при перезапуске платы.
-            "cal": fields.get("cal") == "1",
-            "manualZero": fields.get("cal") == "1",
+            # cal — у модуля есть ноль: по оптодатчику D18 (k / «Калибровка»)
+            # или вручную («Задать 0°»). После перезапуска платы ноля нет.
+            "cal": zeroed,
+            "home": home if zeroed else "none",
+            "manualZero": zeroed and home == "manual",
             "rpm": rpm,
             "drivePercent": drive_percent,
             "cycle": fields.get("cycle") == "1",
             "calib": fields.get("calib") == "1",
             "opto": fields.get("opto") == "1",
+            "calibError": calib_error,
+            "firmware": firmware,
         }
     except (KeyError, ValueError):
         return None
@@ -387,20 +411,24 @@ def parse_master_line(line):
 class MasterSource:
     """Мастер-Arduino по одному UART: руление и низкоскоростная тяга.
 
-    Тяга — только удерживаемая команда ±20%, разрешённая при свежей телеметрии,
-    ручном нуле всех четырёх модулей и одинаковом направлении колёс. Плата сама
-    отключает PWM и включает тормоз через 650 мс без heartbeat.
+    Ноль руля — калибровка по оптодатчику D18 (``w FL calib`` / ``k`` для всех)
+    или ручной ``w FL zero``. Тяга — только удерживаемая команда ±20% (``t N``),
+    разрешённая при свежей телеметрии, заданном нуле всех четырёх модулей и
+    одинаковом направлении колёс. Плата сама отключает PWM и включает тормоз
+    через 650 мс без heartbeat.
     """
 
     name = "master"
     supports_individual_steer = True
     supports_drive = True
+    supports_calibration = True
     STALE_S = 1.0
     DRIVE_STALE_S = 0.75
     MAX_STEER_DEG = 32.0
     MAX_DRIVE_PERCENT = 20
+    MESSAGE_LIMIT = 40
 
-    def __init__(self, port, baud=115200):
+    def __init__(self, port, baud=115200, on_message=None):
         self.port = port
         self.baud = baud
         self.lock = threading.Lock()
@@ -409,17 +437,81 @@ class MasterSource:
         self.drive_last_command = 0.0
         self.commands = queue.Queue(maxsize=16)
         self.serial_ready = threading.Event()
+        self.messages = []               # строки «# FL: …» прошивки: (время, текст)
+        self.on_message = on_message     # их же — в журнал экрана
         self._stop = False
         threading.Thread(target=self._reader, daemon=True).start()
 
     def feed(self, line, now=None):
-        """Принимает строку монитора; True, если это телеметрия."""
+        """Принимает строку монитора; True, если это телеметрия.
+
+        Строки «# FL: …» — сообщения прошивки для человека (калибровка, ошибки
+        датчика, потеря связи по I2C): они сохраняются и уходят в журнал.
+        """
+        now = time.time() if now is None else now
         frame = parse_master_line(line)
         if frame is None:
+            text = (line or "").strip()
+            if text.startswith("# ") and len(text) > 2:
+                self._note_message(text[2:], now)
             return False
         with self.lock:
-            self.frames[frame["mod"]] = (frame, time.time() if now is None else now)
+            self.frames[frame["mod"]] = (frame, now)
         return True
+
+    def _note_message(self, text, now):
+        messages = getattr(self, "messages", None)
+        if messages is None:
+            return
+        with self.lock:
+            messages.append((now, text))
+            del messages[:-self.MESSAGE_LIMIT]
+        callback = getattr(self, "on_message", None)
+        if callback is not None:
+            try:
+                callback(text)
+            except Exception:                 # noqa: BLE001 — журнал не ломает чтение порта
+                pass
+
+    def recent_messages(self, limit=10):
+        with self.lock:
+            items = list(getattr(self, "messages", None) or [])[-limit:]
+        return [{"ts": round(ts, 3), "text": text} for ts, text in items]
+
+    def calibrate_module(self, module, now=None):
+        """Калибровка по оптодатчику одного модуля (FL/FR/RL/RR) или всех (ALL).
+
+        Колесо проходит до 100° вправо и 200° влево, поэтому команда принимается
+        только при выключенной тяге и стоящем модуле.
+        """
+        module = str(module or "").upper()
+        if module not in MODULE_TITLES and module != "ALL":
+            return {"ok": False, "reason": "invalid_module"}
+        if not self.serial_ready.is_set():
+            return {"ok": False, "reason": "serial_unavailable"}
+        now = time.time() if now is None else now
+        with self.lock:
+            frames = dict(self.frames)
+            drive_active = self.drive_percent != 0
+        if drive_active:
+            return {"ok": False, "reason": "module_busy"}
+        targets = list(MODULE_TITLES) if module == "ALL" else [module]
+        fresh = {mid: frames[mid][0] for mid in targets
+                 if mid in frames and now - frames[mid][1] < self.STALE_S}
+        if not fresh:
+            return {"ok": False, "reason": "module_offline"}
+        if module != "ALL" and module not in fresh:
+            return {"ok": False, "reason": "module_offline"}
+        if any(frame.get("calib") or frame.get("moving") or frame.get("cycle")
+               or (frame.get("drivePercent") or 0) != 0 for frame in fresh.values()):
+            return {"ok": False, "reason": "module_busy"}
+        command = b"k\n" if module == "ALL" else ("w %s calib\n" % module).encode("ascii")
+        try:
+            self.commands.put_nowait(command)
+        except queue.Full:
+            return {"ok": False, "reason": "command_queue_full"}
+        return {"ok": True, "queued": True, "module": module,
+                "offline": sorted(set(targets) - set(fresh))}
 
     def steer_module(self, module, angle, now=None):
         """Поставить в очередь только поворот одного откалиброванного модуля."""
@@ -546,7 +638,8 @@ class MasterSource:
             status = self.drive_status(now)
             if not status["canDrive"]:
                 return {"ok": False, "reason": status["reason"] or "drive_not_ready"}
-            command = ("d %d\n" % target).encode("ascii")
+            # «t» — тяга; «d» в прошивке — поворот на угол, как в проверенном скетче.
+            command = ("t %d\n" % target).encode("ascii")
         if target == 0:
             # STOP always jumps ahead of queued steering/heartbeat commands,
             # not only when the bounded queue is already full.
@@ -634,14 +727,21 @@ class MasterSource:
             if fresh:
                 link = True
                 frame = entry[0]
+                error = frame.get("calibError")
                 motors.append({"id": mid, "title": MODULE_TITLES[mid],
                                "angle": round(frame["deg"], 2),
                                "targetAngle": round(frame["tgt"], 2),
                                "rpm": frame.get("rpm"), "temp": None,
                                "drivePercent": frame.get("drivePercent"),
                                "homed": frame["cal"], "manualZero": frame.get("manualZero", frame["cal"]),
+                               "homeSource": frame.get("home") or ("manual" if frame["cal"] else "none"),
+                               "opto": frame.get("opto"),
+                               "calibError": error or 0,
+                               "calibErrorText": CALIB_ERRORS.get(error) if error else None,
+                               "firmware": frame.get("firmware"),
                                "online": True, "fault": None,
-                               "moving": frame["moving"], "calibrating": frame["calib"]})
+                               "moving": frame["moving"], "calibrating": frame["calib"],
+                               "cycling": frame.get("cycle", False)})
             else:
                 motors.append({"id": mid, "title": MODULE_TITLES[mid], "angle": None,
                                "targetAngle": None, "rpm": None, "temp": None,
@@ -652,6 +752,7 @@ class MasterSource:
         out["drive"] = self.drive_status(now)
         out["mode"] = "МАСТЕР НА СВЯЗИ" if link else None
         out["linkOk"] = link
+        out["masterMessages"] = self.recent_messages(8) if hasattr(self, "messages") else []
         return out
 
 
@@ -713,6 +814,7 @@ class MasterPeerSource:
             return out
         out["motors"] = data.get("motors") or out["motors"]
         out["drive"] = data.get("drive") or out["drive"]
+        out["masterMessages"] = data.get("masterMessages") or []
         out["linkOk"] = bool(data.get("linkOk"))
         out["mode"] = data.get("mode")
         out["peer"] = {"url": self.peer_url, "error": ""}
@@ -722,6 +824,9 @@ class MasterPeerSource:
         return {"ok": False, "reason": "control_not_supported"}
 
     def zero_module(self, module, now=None):
+        return {"ok": False, "reason": "control_not_supported"}
+
+    def calibrate_module(self, module, now=None):
         return {"ok": False, "reason": "control_not_supported"}
 
     def drive(self, percent, now=None):

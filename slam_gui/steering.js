@@ -36,7 +36,7 @@
             <p>Рулевые шаговые моторы + удерживаемое низкоскоростное движение BLDC</p></div>
           <button type="button" class="rc-steering-close" aria-label="Закрыть">×</button>
         </header>
-        <div class="rc-steering-safety" role="note"><b>Без оптодатчика:</b> сначала физически выставьте колесо прямо и назначьте программный ноль. Ноль теряется после перезапуска Arduino.</div>
+        <div class="rc-steering-safety" role="note"><b>Ноль руля — по оптодатчику D18:</b> «Калибровка» поворачивает колесо (до 100° вправо и 200° влево) и ставит его в середину флажка. «Задать 0°» — запасной ручной вариант без датчика. Ноль теряется после перезапуска Arduino.</div>
         <div class="rc-steering-toolbar">
           <span id="rc-steering-auth">Нужен PIN</span>
           <button type="button" class="rc-steering-btn" id="rc-steering-unlock">Разблокировать</button>
@@ -45,7 +45,7 @@
         </div>
         <section class="rc-drive-panel" aria-label="Тяговые моторы">
           <div class="rc-drive-top"><div><b>Тяга BLDC</b><small>Зажмите направление; отпустите для торможения</small></div>
-            <span id="rc-drive-status" role="status">Нужен ручной ноль всех колёс</span></div>
+            <span id="rc-drive-status" role="status">Нужен ноль всех колёс (калибровка)</span></div>
           <label class="rc-drive-speed">Ограничение скорости <b><span id="rc-drive-speed-value">8</span>%</b>
             <input id="rc-drive-speed" type="range" min="1" max="20" value="8" disabled></label>
           <div class="rc-drive-actions">
@@ -61,6 +61,7 @@
             <div class="rc-steering-values"><span>Сейчас <b data-current>—</b></span><span>Цель <b data-target>0°</b></span></div>
             <input data-range type="range" min="-32" max="32" step="1" value="0" aria-label="${id}, целевой угол" disabled>
             <div class="rc-steering-actions">
+              <button type="button" data-calib disabled>Калибровка</button>
               <button type="button" data-origin disabled>Задать 0°</button>
               <button type="button" data-step="-5" disabled>−5°</button>
               <button type="button" data-center disabled>0°</button>
@@ -128,7 +129,9 @@
         ? 'Управление доступно при RC_SLAM_SOURCE=master и подключённом USB мастера.'
         : snapshot.linkOk === false
           ? 'Мастер выбран, но свежей телеметрии пока нет.'
-          : 'Мастер на связи · задайте ручной ноль перед рулением и тягой.';
+          : control.calibration
+            ? 'Мастер на связи · откалибруйте колёса по датчику перед рулением и тягой.'
+            : 'Мастер на связи · задайте ручной ноль перед рулением и тягой.';
       IDS.forEach((id) => renderCard(id));
       renderDrive();
     } catch (error) {
@@ -146,13 +149,17 @@
     const control = (snapshot && snapshot.steeringControl) || {};
     const online = !!(motor && motor.online === true && Number.isFinite(+motor.angle));
     const zeroed = !!(motor && motor.homed === true);
+    const calibrating = !!(motor && motor.calibrating);
     const moving = !!(motor && (motor.moving || motor.calibrating));
+    const homeSource = motor && motor.homeSource ? String(motor.homeSource) : (zeroed ? 'manual' : 'none');
     const drive = (snapshot && snapshot.drive) || {};
     const tractionActive = !!drive.active || Number(drive.commandedPercent || 0) !== 0;
     const current = online ? Number(motor.angle) : null;
     const target = online && Number.isFinite(+motor.targetAngle) ? Number(motor.targetAngle) : current;
     const entry = pending[id];
-    if (entry && ((entry.zero && zeroed) || (!entry.zero && current != null &&
+    if (entry && entry.calib && calibrating) entry.started = true;
+    if (entry && ((entry.zero && zeroed) || (entry.calib && entry.started && !calibrating) ||
+        (!entry.zero && !entry.calib && current != null &&
         Math.abs(current - Number(entry.angle)) <= 1 && !moving))) delete pending[id];
     const activePending = pending[id] && Date.now() - pending[id].at < 15000;
     if (pending[id] && !activePending) delete pending[id];
@@ -166,10 +173,16 @@
     card.querySelectorAll('[data-step], [data-center]').forEach((button) => { button.disabled = !ready; });
     card.querySelector('[data-send]').disabled = !ready || !card.dataset.dirty;
     card.querySelector('[data-origin]').disabled = !canZero;
+    const calibButton = card.querySelector('[data-calib]');
+    calibButton.disabled = !canZero || !control.calibration;
+    calibButton.hidden = !!control.available && !control.calibration;
     const status = card.querySelector('[data-status]');
     status.textContent = !control.available ? 'нет master' : !authorized ? 'нужен PIN'
-      : !online ? 'нет связи' : moving ? 'движется' : tractionActive ? 'тяга включена · стоп'
-        : activePending ? 'команда в очереди' : !zeroed ? 'нужен ручной ноль' : 'готов · ноль ручной';
+      : !online ? 'нет связи' : calibrating ? 'калибровка по датчику…' : moving ? 'движется'
+        : tractionActive ? 'тяга включена · стоп' : activePending ? 'команда в очереди'
+          : !zeroed ? (motor && motor.calibErrorText ? 'ошибка калибровки: ' + motor.calibErrorText
+            : control.calibration ? 'нужна калибровка' : 'нужен ручной ноль')
+            : homeSource === 'opto' ? 'готов · ноль по датчику' : 'готов · ноль вручную';
     const msg = feedback[id];
     card.querySelector('[data-message]').textContent = msg && msg.until > Date.now() ? msg.text : '';
     card.classList.toggle('error', !!(msg && msg.error && msg.until > Date.now()));
@@ -179,7 +192,7 @@
     serial_unavailable: 'Нет связи с USB-мастером.',
     module_offline: 'Нет свежей телеметрии всех четырёх модулей.',
     drive_firmware_required: 'Обновите прошивку всех четырёх плат для тяги и watchdog.',
-    not_homed: 'Сначала физически выставьте прямо и задайте 0° каждому колесу.',
+    not_homed: 'Сначала откалибруйте колёса по датчику (или задайте 0° вручную).',
     module_busy: 'Дождитесь остановки рулевых модулей.',
     steering_misaligned: 'Для тяги колёса должны смотреть в одном направлении (±2,5°).',
     drive_limit: 'Скорость превышает безопасный предел 20%.',
@@ -342,6 +355,7 @@
     });
     card.querySelector('[data-send]').addEventListener('click', () => void sendAngle(id));
     card.querySelector('[data-origin]').addEventListener('click', () => void setZero(id));
+    card.querySelector('[data-calib]').addEventListener('click', () => void calibrate(id));
   }
 
   async function unlock() {
@@ -402,7 +416,7 @@
 
   async function setZero(id) {
     if (!authorized) return unlock();
-    if (!window.confirm('Физически выставьте колесо ' + id + ' прямо. Команда не двигает мотор; она назначает текущую позицию за программный 0°. После перезапуска Arduino ноль нужно задать заново. Продолжить?')) return;
+    if (!window.confirm('Запасной вариант без датчика. Физически выставьте колесо ' + id + ' прямо. Команда не двигает мотор; она назначает текущую позицию за программный 0°. После перезапуска Arduino ноль нужно задать заново. Продолжить?')) return;
     try {
       const { response, body } = await json('api/kiosk_zero', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
@@ -421,10 +435,31 @@
     await refresh();
   }
 
+  async function calibrate(id) {
+    if (!authorized) return unlock();
+    if (!window.confirm('Колесо ' + id + ' повернётся вправо до 100°, затем влево до 200°, пока не найдёт оптодатчик D18, и встанет в ноль. Колесо не должно упираться, рядом не должно быть людей. Начать?')) return;
+    try {
+      const { response, body } = await json('api/kiosk_calibrate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
+        body: JSON.stringify({ module: id })
+      });
+      if (!response.ok || !body.ok) {
+        if (response.status === 401) authorized = false;
+        feedback[id] = { text: reasonText(body.reason), error: true, until: Date.now() + 6000 };
+      } else {
+        pending[id] = { at: Date.now(), calib: true, started: false };
+        feedback[id] = { text: 'калибровка запущена', error: false, until: Date.now() + 6000 };
+      }
+    } catch (error) {
+      feedback[id] = { text: 'сервер не отвечает', error: true, until: Date.now() + 6000 };
+    }
+    await refresh();
+  }
+
   function reasonText(reason) {
     return ({
       pin_required: 'PIN истёк · разблокируйте', module_offline: 'модуль не отвечает',
-      serial_unavailable: 'USB-порт мастера недоступен', not_homed: 'сначала задайте ручной ноль',
+      serial_unavailable: 'USB-порт мастера недоступен', not_homed: 'сначала калибровка или 0° вручную',
       module_busy: 'дождитесь остановки модуля', angle_limit: 'предел ±32°',
       command_queue_full: 'очередь команд занята', control_not_supported: 'источник не поддерживает поворот'
     })[reason] || 'команда не принята';

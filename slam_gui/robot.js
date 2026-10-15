@@ -30,6 +30,7 @@
   let driveFlush = Promise.resolve();
   const pendingSteer = Object.create(null);
   const pendingZero = Object.create(null);
+  const pendingCalib = Object.create(null);
   const steerResult = Object.create(null);
 
   async function fetchState() {
@@ -82,6 +83,17 @@
       else if (pct < 20) { stateText = 'Низкий заряд'; document.body.classList.add('soc-low'); }
     }
     setText($('k-soc-state'), stateText);
+
+    // Подсказка на главном экране: панель АКБ — вход на страницу 4 (все банки).
+    const more = $('battery-more');
+    if (more) {
+      let hint = 'Подробно: все банки и защиты →';
+      if (bms && bms.configured === false) hint = 'BMS не подключена · настроить →';
+      else if (useBms && !bms.connected) hint = 'BMS не отвечает · проверить →';
+      else if (useBms && measured.cellCount) hint = 'Подробно: ' + measured.cellCount + ' банок и защиты →';
+      more.textContent = hint;
+      more.dataset.tone = bms && (bms.configured === false || (useBms && !bms.connected)) ? 'warn' : '';
+    }
 
     setText($('k-volts'), fmt(b.volts, 1));
     setText($('k-amps'), fmt(b.amps, 1));
@@ -522,6 +534,7 @@
       setSteeringAuthorized(false);
       Object.keys(pendingSteer).forEach((id) => delete pendingSteer[id]);
       Object.keys(pendingZero).forEach((id) => delete pendingZero[id]);
+      Object.keys(pendingCalib).forEach((id) => delete pendingCalib[id]);
       Object.keys(steerResult).forEach((id) => delete steerResult[id]);
       fetch('api/kiosk_lock/session/end', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', keepalive: true
@@ -1201,6 +1214,27 @@
       const button = $(id);
       if (button) button.addEventListener('click', () => openSwipe('battery'));
     });
+    // Вся панель АКБ на главном экране открывает страницу 4 — её не нужно искать.
+    const batteryPanel = $('battery-panel');
+    if (batteryPanel) {
+      // Свайп, начатый на панели, — это жест страниц, а не нажатие.
+      let panelDown = null;
+      batteryPanel.addEventListener('pointerdown', (event) => {
+        panelDown = { x: event.clientX, y: event.clientY };
+      });
+      batteryPanel.addEventListener('click', (event) => {
+        const moved = panelDown && Number.isFinite(event.clientX) &&
+          (Math.abs(event.clientX - panelDown.x) > 12 || Math.abs(event.clientY - panelDown.y) > 12);
+        panelDown = null;
+        if (!moved) openSwipe('battery');
+      });
+      batteryPanel.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openSwipe('battery');
+        }
+      });
+    }
 
     if (closeBtn) closeBtn.addEventListener('click', closeSwipe);
     if (backdrop) backdrop.addEventListener('click', closeSwipe);
@@ -1973,8 +2007,10 @@
         sourceStatus.textContent = 'Ручной поворот доступен только при RC_SLAM_SOURCE=master и подключённом UART мастера.';
       } else if (d.linkOk === false) {
         sourceStatus.textContent = 'Мастер выбран, но свежей связи с рулевыми модулями пока нет.';
+      } else if (control.calibration) {
+        sourceStatus.textContent = 'Мастер подключён · ноль руля — «Калибровка» по оптодатчику D18; «0° вручную» — если датчика нет.';
       } else {
-        sourceStatus.textContent = 'Мастер подключён · перед поворотом задайте ручной программный ноль каждому модулю. Оптодатчик не используется.';
+        sourceStatus.textContent = 'Мастер подключён · перед поворотом задайте ручной программный ноль каждому модулю.';
       }
     }
     if (authStatus) authStatus.textContent = steeringAuthorized ? 'PIN подтверждён' : 'управление закрыто';
@@ -1990,6 +2026,7 @@
       const stateEl = $('steer-state-' + id);
       const sendButton = panel.querySelector('[data-steer-send="' + id + '"]');
       const originButton = panel.querySelector('[data-steer-origin="' + id + '"]');
+      const calibButton = panel.querySelector('[data-steer-calib="' + id + '"]');
       if (!card || !slider) return;
 
       const motor = motors.find((m) => m && m.id === id) || null;
@@ -2002,6 +2039,10 @@
       const busy = moving || calibrating;
       let pending = pendingSteer[id] || null;
       let zeroPending = pendingZero[id] || null;
+      let calibPending = pendingCalib[id] || null;
+      const homeSource = motor && motor.homeSource ? String(motor.homeSource) : (homed ? 'manual' : 'none');
+      const calibError = motor && Number(motor.calibError) > 0 ? Number(motor.calibError) : 0;
+      const calibErrorText = (motor && motor.calibErrorText) || (calibError ? 'код ' + calibError : '');
 
       if (pending && current != null && !busy && Math.abs(current - pending.angle) <= 1) {
         delete pendingSteer[id];
@@ -2017,21 +2058,57 @@
         delete pendingZero[id];
         zeroPending = null;
       }
+      // Калибровка: ждём, что модуль начал её (calibrating), и показываем итог.
+      if (calibPending && calibrating) {
+        calibPending.started = true;
+      } else if (calibPending && calibPending.started && !calibrating) {
+        delete pendingCalib[id];
+        calibPending = null;
+        steerResult[id] = homed && homeSource === 'opto'
+          ? { text: 'ноль найден по датчику', error: false, until: now + 8000 }
+          : { text: 'ошибка калибровки: ' + (calibErrorText || 'ноль не найден'), error: true, until: now + 15000 };
+      } else if (calibPending && !calibPending.started && now - calibPending.sentAt > 8000) {
+        delete pendingCalib[id];
+        calibPending = null;
+        steerResult[id] = { text: 'калибровка не началась · проверьте прошивку v2', error: true, until: now + 8000 };
+      }
 
       let value = pending ? pending.angle : (moving && target != null ? target : (current == null ? 0 : current));
       value = Math.max(-32, Math.min(32, Math.round(value)));
       const dirty = card.dataset.steerDirty === 'true';
       if (!dirty) slider.value = String(value);
       if (currentEl) currentEl.textContent = current == null ? '—' : Math.round(current) + '°';
-      if (targetEl) targetEl.textContent = Math.round(+slider.value || 0) + '°';
+      // Ползунок ограничен ±32°, а при калибровке цель — до ±200°: показываем настоящую.
+      if (targetEl) targetEl.textContent = (!dirty && busy && target != null ? Math.round(target) : Math.round(+slider.value || 0)) + '°';
 
-      const ready = available && steeringAuthorized && online && homed && !busy && !pending && !zeroPending && !tractionActive;
-      const canSetZero = available && steeringAuthorized && online && !busy && !pending && !zeroPending && !tractionActive;
+      const ready = available && steeringAuthorized && online && homed && !busy && !pending && !zeroPending && !calibPending && !tractionActive;
+      const canSetZero = available && steeringAuthorized && online && !busy && !pending && !zeroPending && !calibPending && !tractionActive;
+      const canCalibrate = canSetZero && !!control.calibration;
       slider.disabled = !ready;
       card.querySelectorAll('[data-steer-adjust="' + id + '"], [data-steer-zero="' + id + '"]').forEach((button) => {
         button.disabled = !ready;
       });
       if (originButton) originButton.disabled = !canSetZero;
+      if (calibButton) {
+        calibButton.disabled = !canCalibrate;
+        calibButton.hidden = !control.calibration && available;
+      }
+      const homeEl = $('steer-home-' + id);
+      if (homeEl) {
+        homeEl.dataset.home = !online ? 'none' : (calibError && !homed ? 'error' : homeSource);
+        homeEl.textContent = !online ? 'ноль: —'
+          : homeSource === 'opto' && homed ? 'ноль: по датчику'
+          : homeSource === 'manual' && homed ? 'ноль: вручную'
+          : calibError ? 'ноль: нет · ' + calibErrorText
+          : 'ноль: не задан';
+        homeEl.title = homeEl.textContent;
+      }
+      const optoEl = $('steer-opto-' + id);
+      if (optoEl) {
+        const opto = online && motor && typeof motor.opto === 'boolean' ? motor.opto : null;
+        optoEl.dataset.opto = opto === null ? 'unknown' : (opto ? 'on' : 'off');
+        optoEl.textContent = opto === null ? 'датчик: —' : (opto ? 'датчик: закрыт' : 'датчик: свободен');
+      }
       if (sendButton) sendButton.disabled = !ready || !dirty;
       card.dataset.ready = String(ready);
 
@@ -2039,13 +2116,15 @@
       if (!available) label = 'нет управления';
       else if (!steeringAuthorized) label = 'нужен PIN';
       else if (!online) label = 'нет связи';
-      else if (calibrating) label = 'занят';
+      else if (calibrating) label = 'калибровка по датчику…';
+      else if (calibPending) label = 'калибровка в очереди';
       else if (moving) label = 'поворачивается';
       else if (tractionActive) label = 'тяга включена · сначала стоп';
       else if (zeroPending) label = 'ноль в очереди';
       else if (pending) label = 'команда отправлена';
-      else if (!homed) label = 'нужен ручной ноль';
-      else label = 'готов · ноль ручной';
+      else if (!homed && calibError) label = 'ошибка калибровки';
+      else if (!homed) label = control.calibration ? 'нужна калибровка' : 'нужен ручной ноль';
+      else label = homeSource === 'opto' ? 'готов · ноль по датчику' : 'готов · ноль вручную';
 
       const message = steerResult[id];
       if (message && message.until > now) {
@@ -2057,14 +2136,48 @@
       }
       if (stateEl) stateEl.textContent = label;
     });
+
+    const calibAll = $('steer-calib-all');
+    if (calibAll) {
+      const online = motors.filter((m) => m && m.online === true);
+      const anyBusy = online.some((m) => m.moving || m.calibrating || m.cycling);
+      const anyPending = Object.keys(pendingCalib).length > 0;
+      calibAll.disabled = !(available && control.calibration && steeringAuthorized && online.length > 0 &&
+        !anyBusy && !anyPending && !tractionActive);
+      calibAll.textContent = online.some((m) => m.calibrating) ? 'Калибровка идёт…' : 'Калибровать все колёса';
+    }
+    renderMasterMessages(d.masterMessages);
     renderDriveControls(d);
+  }
+
+  function renderMasterMessages(list) {
+    const box = $('steer-messages');
+    if (!box) return;
+    const items = Array.isArray(list) ? list.slice(-4) : [];
+    box.hidden = items.length === 0;
+    const html = items.map((item) => {
+      const text = String((item && item.text) || '');
+      const warn = /ОШИБКА|нет связи|не доставлена|нет команды|отклонена|заблокирован/.test(text);
+      const time = item && item.ts ? clockText(new Date(item.ts * 1000)) : '';
+      return '<li' + (warn ? ' data-warn="true"' : '') + '><time>' + escapeHtml(time) + '</time> ' + escapeHtml(text) + '</li>';
+    }).join('');
+    if (box.dataset.html !== html) {
+      box.innerHTML = html;
+      box.dataset.html = html;
+    }
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
   }
 
   const DRIVE_REASON_TEXT = {
     serial_unavailable: 'Нет связи с USB-мастером.',
     module_offline: 'Нет свежей телеметрии всех четырёх модулей.',
     drive_firmware_required: 'Обновите прошивку всех четырёх плат для тяги и watchdog.',
-    not_homed: 'Сначала выставьте прямо и задайте 0° каждому колесу.',
+    not_homed: 'Сначала откалибруйте колёса по датчику (или задайте 0° вручную).',
     module_busy: 'Дождитесь остановки рулевых модулей.',
     steering_misaligned: 'Колёса должны смотреть в одном направлении (±2,5°).',
     control_not_supported: 'Тяга доступна только в режиме master.',
@@ -2249,8 +2362,8 @@
         control_not_supported: 'управление только на бортовом экране',
         module_offline: 'нет свежей связи',
         serial_unavailable: 'порт мастера недоступен',
-        not_homed: 'сначала задайте ручной ноль',
-        module_busy: 'дождитесь остановки модуля',
+        not_homed: 'сначала калибровка или 0° вручную',
+        module_busy: 'дождитесь остановки модуля / выключите тягу',
         angle_limit: 'угол за пределами ±32°',
         command_queue_full: 'очередь команд занята',
         invalid_module: 'неизвестный модуль',
@@ -2302,7 +2415,7 @@
         return;
       }
       const confirmed = window.confirm(
-        'Сначала физически выставьте колесо ' + id + ' прямо. Команда не двигает мотор — она назначит текущую позицию за 0°. Ноль потеряется после перезапуска Arduino. Продолжить?'
+        'Запасной вариант без датчика: сначала физически выставьте колесо ' + id + ' прямо. Команда не двигает мотор — она назначит текущую позицию за 0°. Ноль потеряется после перезапуска Arduino. Продолжить?'
       );
       if (!confirmed) return;
       const button = panel.querySelector('[data-steer-origin="' + id + '"]');
@@ -2329,9 +2442,61 @@
       }
     }
 
+    async function startCalibration(id) {
+      if (!steeringAuthorized) {
+        if (window._openSteeringAuth) window._openSteeringAuth();
+        return;
+      }
+      const all = id === 'ALL';
+      const confirmed = window.confirm(
+        (all ? 'Все четыре колеса' : 'Колесо ' + id) +
+        ' повернётся: вправо до 100°, затем влево до 200°, пока не найдёт оптодатчик D18, и встанет в ноль. ' +
+        'Колёса не должны упираться, рядом не должно быть людей. Тяга во время калибровки запрещена. Начать?'
+      );
+      if (!confirmed) return;
+      const targets = all ? ids : [id];
+      const button = all ? $('steer-calib-all') : panel.querySelector('[data-steer-calib="' + id + '"]');
+      if (button) button.disabled = true;
+      try {
+        const response = await fetch('api/kiosk_calibrate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
+          body: JSON.stringify({ module: id })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result || !result.ok) {
+          if (response.status === 401 || (result && result.reason === 'pin_required')) setSteeringAuthorized(false);
+          targets.forEach((target) => {
+            steerResult[target] = { text: errorText(result && result.reason), error: true, until: Date.now() + 6000 };
+          });
+          if (response.status === 401 && window._openSteeringAuth) window._openSteeringAuth();
+          return;
+        }
+        const offline = Array.isArray(result.offline) ? result.offline : [];
+        targets.filter((target) => !offline.includes(target)).forEach((target) => {
+          pendingCalib[target] = { sentAt: Date.now(), started: false };
+          delete steerResult[target];
+        });
+        offline.forEach((target) => {
+          steerResult[target] = { text: 'нет связи · не калибруется', error: true, until: Date.now() + 6000 };
+        });
+      } catch (error) {
+        targets.forEach((target) => {
+          steerResult[target] = { text: 'нет связи с сервером', error: true, until: Date.now() + 6000 };
+        });
+      } finally {
+        renderSteeringControls(lastData || {});
+      }
+    }
+
+    const calibAllButton = $('steer-calib-all');
+    if (calibAllButton) calibAllButton.addEventListener('click', () => { void startCalibration('ALL'); });
+
     ids.forEach((id) => {
       const slider = $('steer-slider-' + id);
       const card = panel.querySelector('[data-steer-card="' + id + '"]');
+      const calib = panel.querySelector('[data-steer-calib="' + id + '"]');
+      if (calib) calib.addEventListener('click', () => { void startCalibration(id); });
       // Ползунок двигает цель на экране; команда уходит, когда палец отпущен
       // (change), — одна команда на жест, а не поток при каждом шаге.
       if (slider) {
@@ -2364,7 +2529,7 @@
         });
       } catch (error) {}
       setSteeringAuthorized(false);
-      ids.forEach((id) => { delete pendingSteer[id]; delete pendingZero[id]; delete steerResult[id]; });
+      ids.forEach((id) => { delete pendingSteer[id]; delete pendingZero[id]; delete pendingCalib[id]; delete steerResult[id]; });
       renderSteeringControls(lastData || {});
     });
     renderSteeringControls(lastData || {});

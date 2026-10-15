@@ -89,7 +89,9 @@
   min-height: 34px; padding: 4px 6px; border: 1px solid #344037; border-radius: 7px;
   background: #1d2820; color: #e8f0ea; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer;
 }
-.rc-steering-actions button[data-origin] { grid-column: 1 / -1; color: #f2d47d; border-color: #66572e; }
+.rc-steering-actions button[data-calib] { grid-column: span 2; color: #9fd6f5; border-color: #3f6f8c; }
+.rc-steering-actions button[data-origin] { grid-column: span 2; color: #f2d47d; border-color: #66572e; }
+.rc-steering-actions button[data-calib][hidden] + button[data-origin] { grid-column: 1 / -1; }
 .rc-steering-actions button.primary { border-color: #558663; background: #203d29; color: #dff5e4; }
 .rc-steering-actions button:disabled, .rc-steering-btn:disabled { opacity: .4; cursor: not-allowed; }
 .rc-steering-card small { display: block; min-height: 14px; margin-top: 7px; }
