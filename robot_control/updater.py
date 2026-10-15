@@ -39,6 +39,7 @@ class UpdateManager:
         on_restart: Callable[[], None] | None = None,
         dependency_installer: Callable[[Path], tuple[int, str]] | None = None,
         build_runner: Callable[[Path], tuple[int, str]] | None = None,
+        ros_builder: Callable[[Path], tuple[int, str]] | None = None,
     ) -> None:
         self.root = Path(root).resolve()
         self.remote = remote.strip() or "origin"
@@ -46,6 +47,7 @@ class UpdateManager:
         self.on_restart = on_restart
         self.dependency_installer = dependency_installer
         self.build_runner = build_runner
+        self.ros_builder = ros_builder
         self.state_path = self.root / "var" / "update-state.json"
         self.lock_path = self.root / "var" / "update.lock"
         self._state_lock = threading.RLock()
@@ -326,6 +328,39 @@ class UpdateManager:
             text=True, timeout=120, check=False)
         return check.returncode, (output + check.stdout[-2000:]).strip()
 
+    def _build_ros_workspace(self) -> tuple[int, str]:
+        """ROS 2: докомпилировать ros2_ws новой версии (лидар через /scan).
+
+        Без sudo и без установки пакетов — из службы/панели пароль спросить
+        негде: только ``colcon build`` изменившихся исходников (и докачка
+        драйверов из исходников). Сам ROS 2 ставит ярлык «Запустить робот».
+        Ошибка здесь обновление не откатывает: приложения работают и без ROS 2
+        (лидар по USB), а причина остаётся в журнале обновления.
+        """
+        if self.ros_builder:
+            return self.ros_builder(self.root)
+        script = self.root / "scripts" / "ros2_setup.sh"
+        if not script.is_file():
+            return 0, "Скрипт ROS 2 не найден — шаг пропущен."
+        if (os.environ.get("RC_ROS_AUTO") or "1").strip() == "0" or \
+                (os.environ.get("RC_LIDAR_SOURCE") or "").strip().lower() == "serial":
+            return 0, "ROS 2 для лидара выключен (RC_ROS_AUTO=0 или RC_LIDAR_SOURCE=serial) — шаг пропущен."
+        try:
+            from . import ros_env  # noqa: PLC0415 — нужен только здесь
+            if ros_env.prefix() is None:
+                return 0, ("ROS 2 ещё не установлен — его поставит и скомпилирует ярлык "
+                           "«Запустить робот» (или ./scripts/ros2_setup.sh).")
+        except Exception:  # noqa: BLE001 — проверка не должна ломать обновление
+            pass
+        try:
+            result = subprocess.run(
+                ["bash", str(script), "--no-install", "--no-env", "--no-wait", "--quiet"],
+                cwd=self.root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, timeout=1800, check=False)
+        except subprocess.TimeoutExpired:
+            return 124, "сборка ros2_ws не уложилась в 30 минут — продолжится при следующем запуске робота"
+        return result.returncode, result.stdout[-4000:]
+
     def _run_update(self, lock_file) -> None:
         old_sha = ""
         merged = False
@@ -437,6 +472,16 @@ class UpdateManager:
                 if rollback.returncode != 0:
                     raise UpdateError("Новая версия не собралась и откатить код не удалось; требуется ручная проверка. " + detail[:180])
                 raise UpdateError("Новая версия не собралась (проверка кода); исходный код откатан. " + detail[:200])
+            # ROS 2: пакет zapret_lidar и драйверы из исходников компилируются
+            # сами, если их исходники изменились (секунды, если менять нечего).
+            self._set(phase="Компилирую ROS 2 (ros2_ws)…", stage="build", pct=88)
+            ros_code, ros_output = self._build_ros_workspace()
+            for line in ros_output.strip().splitlines()[-10:]:
+                self._write_state({}, log=line)
+            if ros_code not in (0, 75):
+                self._write_state({}, log="ROS 2: ros2_ws не собран (код %s) — приложение работает, "
+                                          "лидар по USB; ярлык «Запустить робот» докачает и "
+                                          "соберёт недостающее сам." % ros_code)
             self._set(phase="Сборка прошла — перезапускаю пульт и экран…",
                       stage="build", pct=92)
 
@@ -550,6 +595,27 @@ def _restart_kiosk(root: Path) -> None:
             continue
 
 
+def _restart_lidar(root: Path) -> None:
+    """Перезапуск супервизора лидара ROS 2 с новым кодом (если его поднял ярлык).
+
+    Цикл ``ros2_lidar.sh --keep-alive`` по SIGUSR1 останавливает супервизор
+    (тот гасит драйвер) и сразу запускает заново — уже из обновлённого ros2_ws.
+    """
+    pid_path = root / "var" / "lidar.pid"
+    try:
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return
+    if pid <= 0 or not _process_running(pid):
+        return
+    if not any("ros2_lidar.sh" in part for part in _read_cmdline(pid)):
+        return
+    try:
+        os.kill(pid, signal.SIGUSR1)
+    except OSError:
+        pass
+
+
 def schedule_restart(root: Path | str) -> None:
     """Gracefully reload Gunicorn and re-exec the separate kiosk process."""
     if os.environ.get("PYTEST_CURRENT_TEST"):
@@ -559,6 +625,7 @@ def schedule_restart(root: Path | str) -> None:
     def restart() -> None:
         time.sleep(1.4)  # let POST /run and the terminal update state reach the browser
         _restart_kiosk(project_root)
+        _restart_lidar(project_root)
         parent = os.getppid()
         parent_cmd = " ".join(_read_cmdline(parent)).lower()
         try:

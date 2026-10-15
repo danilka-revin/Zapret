@@ -41,11 +41,22 @@ ROS 2, но их больше десятка, и для конкретного �
 
 ## Установка и запуск на роботе
 
+Руками — ничего: ярлык «Запустить робот» (`scripts/start_robot.sh`) сам
+докачивает ROS 2 и драйверы, компилирует это рабочее пространство и запускает
+супервизор. То же по шагам:
+
 ```bash
-./scripts/ros2_setup.sh         # проверит ROS 2, поставит пакеты драйверов, соберёт ws
-./scripts/ros2_lidar.sh         # запустит супервизор (модель и порт — из .env)
+./scripts/ros2_setup.sh         # поставит ROS 2 и драйверы (apt или исходники), rosdep, colcon build
+./scripts/ros2_lidar.sh         # запустит супервизор (модель и порт — из .env); сам пересоберёт ws,
+                                # если исходники изменились
 ./scripts/ros2_lidar.sh --status   # что видно: топик /scan, частоту, статус
+./scripts/ros2_setup.sh --status   # как прошла последняя установка/сборка (журнал var/ros2_setup.log)
 ```
+
+Сборка повторяется, только когда исходники в `src/` изменились (отпечаток —
+`install/.zapret_build_stamp`); `./scripts/ros2_setup.sh --rebuild` — с нуля.
+Пакеты драйверов, склонированные из исходников, в git не попадают (`.gitignore`
+игнорирует всё в `src/`, кроме `zapret_lidar`).
 
 Вручную, без наших скриптов:
 
@@ -77,8 +88,14 @@ python3 ros2_ws/src/zapret_lidar/zapret_lidar/supervisor.py --list-drivers
 | STL-27L | `ldlidar_stl_ros2` | `ldlidar_stl_ros2_node` | 921600 |
 | LDS-01 через плату OpenCR (заводская сборка Burger) | `turtlebot3_node` | `turtlebot3_ros` | `/dev/ttyACM0` (OpenCR), параметры — `param/burger.yaml` |
 
-`ldlidar_stl_ros2` не публикуется в apt: `scripts/ros2_setup.sh --drivers`
-клонирует его в `ros2_ws/src` и собирает вместе с нашим пакетом.
+`ldlidar_stl_ros2` и `sllidar_ros2` не публикуются в apt: `scripts/ros2_setup.sh`
+клонирует их в `ros2_ws/src` и собирает вместе с нашим пакетом (у
+`ldlidar_stl_ros2` заодно правится известная ошибка сборки на Ubuntu 24.04+ —
+нет `#include <pthread.h>`). Драйверы из apt (`hls_lfcd_lds_driver`,
+`rplidar_ros`, `turtlebot3_node`), если для дистрибутива пакета нет или он не
+ставится, тоже клонируются и компилируются здесь; `sllidar_ros2` — по
+`RC_ROS_DRIVERS=sllidar_ros2` или модели `sllidar`, `turtlebot3_node` из
+исходников — только при модели `opencr`.
 
 Если драйвер производителя уже запускается сам (например, через свой
 `turtlebot3_bringup` или чужой launch), наш супервизор не нужен вовсе: веб-

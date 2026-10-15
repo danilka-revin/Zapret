@@ -16,10 +16,10 @@ cd robot-control
 из терминала: `./scripts/start_robot.sh`; для остановки: `./scripts/stop.sh`.
 По умолчанию источник — USB-мастер `RC_SLAM_SOURCE=master`, порт
 `/dev/ttyACM0`; поменяйте `RC_SLAM_PORT` в `.env`, если Linux назначил другой.
-Лидар настраивается отдельно: `./scripts/install_ubuntu.sh --ros2` ставит ROS 2
-и пакеты драйверов лидара, собирает `ros2_ws` и включает чтение скана из
-`/scan` (см. раздел 4b). Без флага `--ros2` установщик сам соберёт `ros2_ws`,
-если ROS 2 в системе уже есть.
+ROS 2 для лидара ставится **сам** — флаги не нужны: установщик (и потом каждый
+запуск ярлыком) докачивает ROS 2 и пакеты драйверов лидара, компилирует
+`ros2_ws` и включает чтение скана из `/scan` (см. раздел 4b). Не нужен ROS 2 —
+`./scripts/install_ubuntu.sh --no-ros2`.
 Если установщик добавил пользователя в `dialout`, выйдите из Ubuntu и войдите
 снова, чтобы группа USB-портов вступила в силу.
 
@@ -106,27 +106,33 @@ journalctl -u robot-kiosk -f
 лидар TurtleBot3 Burger, `rplidar_ros` для RPLIDAR, `ldlidar_stl_ros2` для
 LD06/LD19, `turtlebot3_node` — если лидар подключён к плате OpenCR). Пульт (8080)
 и бортовой экран (8090) подписываются на `/scan`; порт занимает драйвер, поэтому
-приложения больше не спорят за USB-устройство. Установка и запуск:
+приложения больше не спорят за USB-устройство.
+
+Ставить ничего не нужно: `install_ubuntu.sh` и ярлык «Запустить робот» сами
+вызывают `./scripts/ros2_setup.sh`, а он подключает официальный репозиторий
+ROS 2 (пакет `ros2-apt-source`), ставит `ros-<дистрибутив>-ros-base` и
+`ros-dev-tools` (дистрибутив — по `UBUNTU_CODENAME`: 22.04 → `humble`,
+24.04 → `jazzy`, 26.04 → `lyrical`; Linux Mint тоже), драйверы лидаров из apt,
+а чего в apt нет (`ldlidar_stl_ros2` и др.) — клонирует и компилирует;
+зависимости исходников ставит `rosdep`, рабочее пространство компилирует
+`colcon`. Первый раз — несколько минут и один вопрос пароля sudo, потом —
+секунды. На Debian/Raspberry Pi OS/не-LTS Ubuntu готовых пакетов ROS 2 нет —
+он компилируется из исходников в фоне. Вручную и для проверки:
 
 ```bash
-./scripts/ros2_setup.sh --install --drivers   # ROS 2 (apt), пакеты драйверов, сборка ros2_ws
+./scripts/ros2_setup.sh                       # всё само: ROS 2, драйверы, rosdep, colcon build
+./scripts/ros2_setup.sh --status              # идёт ли установка и чем закончилась
 ./scripts/ros2_setup.sh --service             # служба robot-lidar: драйвер до приложений
 ./scripts/ros2_lidar.sh --status              # топик /scan, частота, состояние драйвера
 .venv/bin/python scripts/lidar_check.py --ros # дистрибутив ROS 2, rclpy, пакеты драйверов
 ```
 
-`ros2_setup.sh --install` подключает официальный репозиторий ROS 2 и ставит
-`ros-<дистрибутив>-ros-base` (дистрибутив угадывается по версии Ubuntu:
-22.04 → `humble`, 24.04 → `jazzy`), `colcon` и `python3-serial`.
-`--drivers` добавляет пакеты лидаров (для LD06/LD19 — `--ldlidar`: этот пакет
-собирается из исходников). `ros2_setup.sh` без флагов просто собирает `ros2_ws`
-и пишет в `.env` `RC_LIDAR_SOURCE=ros`.
-
 Почему это работает из `.venv`: ROS 2 стоит системно в `/opt/ros`, а приложения
-работают интерпретатором из `.venv`; пути и переменные окружения для `rclpy`
-добавляет `robot_control/ros_env.py`, поэтому `import rclpy` в приложении
-срабатывает без `source /opt/ros/.../setup.bash`. Проверить: `.venv/bin/python
-scripts/lidar_check.py --ros`.
+работают интерпретатором из `.venv`. `run.py` и `run_kiosk.py` при старте один
+раз перезапускаются с окружением `source /opt/ros/<дистрибутив>/setup.bash`
+(`LD_LIBRARY_PATH` для `rclpy` загрузчик читает только при запуске процесса),
+поэтому `import rclpy` в приложении работает без ручного `source`. Проверить:
+`.venv/bin/python scripts/lidar_check.py --ros`.
 
 Кто именно запустит драйвер, решает супервизор `zapret_lidar`
 (`ros2_ws/src/zapret_lidar`): он перебирает только те пакеты, что реально

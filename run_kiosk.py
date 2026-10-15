@@ -16,6 +16,16 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+if __name__ == "__main__":
+    # ROS 2 для лидара и экрана: окружение (LD_LIBRARY_PATH для rclpy) должно
+    # быть у процесса с самого старта — перезапускаемся с ним один раз, до
+    # тяжёлых импортов. .env читаем заранее: там может быть RC_ROS_PREFIX.
+    from robot_control.config import PROJECT_ROOT, _load_dotenv
+    from robot_control import ros_env
+
+    _load_dotenv(PROJECT_ROOT / ".env")
+    ros_env.reexec_with_ros_env([os.path.abspath(__file__), *sys.argv[1:]])
+
 from robot_control.kiosk_app import main
 
 

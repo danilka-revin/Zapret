@@ -4,6 +4,8 @@
 #   * пульт оператора (8080) и бортовой экран (8090) — по pid-файлам из var/
 #     (их пишут start.sh и kiosk.sh; гасится вся группа процессов, поэтому
 #     закрывается и окно браузера);
+#   * супервизор лидара ROS 2, запущенный ярлыком «Запустить робот»
+#     (var/lidar.pid; он сам гасит драйвер лидара и освобождает USB-порт);
 #   * службы systemd robot-control, robot-kiosk и robot-lidar (лидар через ROS 2),
 #     если они сейчас запущены;
 #   * оставшиеся окна киоск-браузера (профиль robot-kiosk-browser).
@@ -27,7 +29,7 @@ ONLY_SERVERS=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --servers)  ONLY_SERVERS=1; shift ;;
-    -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "неизвестный аргумент: $1 (см. --help)" >&2; exit 1 ;;
   esac
 done
@@ -118,6 +120,9 @@ stop_browsers() {
 # должен дойти до конца и отчитаться по всем пунктам (set -e → || true).
 stop_server "$VAR_DIR/run.pid" "пульт оператора (8080)" || true
 stop_server "$VAR_DIR/kiosk.pid" "бортовой экран (8090)" || true
+# Супервизор лидара в своей группе процессов: TERM получает цикл перезапуска,
+# а он — супервизор, который останавливает драйвер и освобождает порт.
+stop_server "$VAR_DIR/lidar.pid" "лидар ROS 2 (супервизор ярлыка)" || true
 
 if [[ $ONLY_SERVERS -eq 0 ]]; then
   stop_service robot-control "пульт оператора, служба systemd" || true

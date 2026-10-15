@@ -40,7 +40,7 @@ def _vendor_launch(context):
         share = get_package_share_directory(package)
     except Exception as exc:  # noqa: BLE001 — пакет не поставлен
         return [LogInfo(msg="драйвер %s не найден (%s): поставь его командой "
-                            "./scripts/ros2_setup.sh --drivers или убери driver_launch"
+                            "./scripts/ros2_setup.sh (поставит драйверы сам) или убери driver_launch"
                             % (package, exc))]
     return [LogInfo(msg="запускаю драйвер вендора %s/%s" % (package, name)),
             IncludeLaunchDescription(
