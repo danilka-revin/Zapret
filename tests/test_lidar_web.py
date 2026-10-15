@@ -523,22 +523,20 @@ def test_peer_urls_skip_own_port(monkeypatch, self_ports, manager):
 # ---------------------------------------------------------------------------
 
 
-def test_console_api_marks_demo_scan(client, operator, manager):
-    """Стенд без железа: /api/state и /api/lidar честно говорят «демо»."""
+def test_console_api_without_robot_has_no_scan(client, operator, manager):
+    """Робота нет: /api/state и /api/lidar не выдумывают точки и не помечают демо."""
     from conftest import login
 
     assert login(client).status_code in (302, 303)
     state = client.get("/api/state").get_json()["data"]
-    assert state["lidar"], "симуляция должна отдавать точки для стенда"
-    assert state["lidarDemo"] is True
-    assert state["lidarStatus"]["demo"] is True
+    assert not state.get("lidar")
+    assert state["lidarDemo"] is False
+    assert state["lidarStatus"]["demo"] is False
     assert state["lidarStatus"]["connected"] is False
-    assert state["lidarStatus"]["reason"].startswith("демо-скан источника данных")
 
     status = client.get("/api/lidar").get_json()
-    assert status["demo"] is True
+    assert status["demo"] is False
     assert status["connected"] is False
-    assert status["reason"] == state["lidarStatus"]["reason"]
 
 
 def test_console_api_serves_real_scan_without_demo_flag(client, operator, manager):

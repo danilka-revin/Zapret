@@ -306,7 +306,6 @@
           <span class="csl-chip csl-chip-open" id="csl-tb-light">светофор: зелёный</span>
           <canvas id="csl-tb-ring" width="34" height="34" title="SOC АКБ"></canvas>
           <span class="csl-tb-text" id="csl-tb-sign">знаки: —</span>
-          <span class="csl-tb-text" id="csl-tb-trip">рейсы: 0</span>
           <span class="csl-chip csl-chip-open hidden" id="csl-tb-peer">второе окно пульта активно</span>
           <span class="csl-tb-spacer"></span>
           <button type="button" id="csl-tb-stop" class="csl-danger" title="Alt+X">Стоп все</button>
@@ -426,51 +425,6 @@
             </div>
           </div>
 
-          <!-- 4. Статистика и журнал -->
-          <div class="panel csl-panel csl-wide">
-            <div class="pt">
-              <div>
-                <h3>Статистика работы</h3>
-                <p>рейсы · энергия · события · выгрузка отчёта</p>
-              </div>
-              <span class="csl-note" id="csl-stats-updated">—</span>
-            </div>
-            <div class="csl-body">
-              <div class="csl-kpi" id="csl-kpi"></div>
-              <div class="csl-stats-cols">
-                <div>
-                  <h4>Энергия по последним рейсам</h4>
-                  <canvas id="csl-trip-chart" width="560" height="120"></canvas>
-                  <div class="csl-lock-actions">
-                    <button type="button" data-csl="csv">Отчёт CSV</button>
-                    <button type="button" data-csl="json">Отчёт JSON</button>
-                    <button type="button" class="primary" data-csl="print">Отчёт (печать)</button>
-                    <button type="button" class="csl-danger" data-csl="reset">Сбросить статистику</button>
-                  </div>
-                </div>
-                <div>
-                  <h4>Последние рейсы</h4>
-                  <table class="csl-table">
-                    <thead><tr><th>№</th><th>Начало</th><th>Маршрут</th><th>Путь</th><th>Вт·ч</th><th>Движение</th><th>Груз</th><th>Итог</th></tr></thead>
-                    <tbody id="csl-trips"></tbody>
-                  </table>
-                </div>
-              </div>
-
-              <!-- И-8. Журнал сервисных действий -->
-              <h4 class="csl-jh">Журнал сервисных действий</h4>
-              <div class="csl-jtools">
-                <button type="button" data-jfilter="all" class="on">Все</button>
-                <button type="button" data-jfilter="ok">Успех</button>
-                <button type="button" data-jfilter="warn">Внимание</button>
-                <button type="button" data-jfilter="err">Ошибки</button>
-                <input id="csl-journal-q" type="search" placeholder="поиск по журналу…" />
-                <button type="button" id="csl-copy-frame" title="Скопировать последний кадр UART">Копировать кадр</button>
-                <button type="button" id="csl-journal-clear">Очистить</button>
-              </div>
-              <div class="csl-journal" id="csl-journal-rows" role="log" aria-live="polite"></div>
-            </div>
-          </div>
         </div>
       </section>
     </main>
@@ -480,7 +434,7 @@
   <!-- И-2. Палитра команд (Ctrl+K / «/») -->
   <div class="csl-overlay hidden" id="csl-palette" role="dialog" aria-modal="true" aria-label="Палитра команд">
     <div class="csl-palette-card">
-      <input id="csl-palette-input" type="text" placeholder="Введите команду: вкладка, стоп, отчёт, стенд…" autocomplete="off" />
+      <input id="csl-palette-input" type="text" placeholder="Введите команду: вкладка, стоп, стенд…" autocomplete="off" />
       <div class="csl-palette-list" id="csl-palette-list"></div>
       <div class="csl-palette-foot">↑↓ выбор · Enter выполнить · Esc закрыть</div>
     </div>

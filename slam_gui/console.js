@@ -9,7 +9,8 @@
  *   2) Двигатели — 4 модуля × 2 канала (руль/тяга): поле ввода + кнопка «Ввод»,
  *      джоги, «мёртвая рука» для тяги, факт телеметрии, HEX кадра UART;
  *   3) АКБ 12S3P LiFePO4 — напряжение, SOC, ток, мощность, ячейки, запас хода;
- *   4) Статистика и журнал сервисных действий — KPI, рейсы, экспорт, фильтры.
+ *   Статистика работы и журнал переехали на вкладку «Сводка» основного экрана
+ *   (main.html, summary.js) и считаются по реальной телеметрии на сервере.
  *
  * Улучшения интерфейса (И-1…И-10):
  *   И-1  Панель быстрых действий (sticky) с живыми состояниями;
@@ -45,10 +46,6 @@
   /* --------------------------------------------------------------------- */
   /* Состояние слоя                                                        */
   /* --------------------------------------------------------------------- */
-  const stats = new RS.StatsStore(storage, { tripCapacity: 200 });
-  stats.flush();
-  RS._onTripStart = (trip) => { try { event('nav', 'рейс №' + trip.id + ' начат: ' + trip.route); } catch (e) {} };
-  RS._onTripEnd = (trip) => { try { event('ok', 'рейс №' + trip.id + ' завершён: ' + F.km(trip.distanceM) + ', ' + F.wh(trip.energyWh)); } catch (e) {} };
 
   /* Замок. Единственный источник правды — борт (`gui/backend.py`): тот же
      PIN и тот же журнал, что у основного экрана. Если борт недоступен
@@ -60,10 +57,6 @@
     lockMs: 30000,
     defaultPin: '7232',
     onEvent: (action, ok) => {
-      try {
-        if (action === 'unlock') stats.noteLock(ok ? 'open' : 'denied');
-        else if (action === 'pin_change') stats.noteLock('changed');
-      } catch (e) { /* статистика не должна ломать замок */ }
       if (action === 'unlock') say(ok ? 'ok' : 'warn', ok ? 'замок ячейки: доступ разрешён' : 'замок ячейки: отказ в доступе');
       else if (action === 'pin_change') say('warn', 'замок ячейки: PIN изменён');
     },
@@ -275,16 +268,6 @@
     }
   }
 
-  function printReport() {
-    const html = stats.reportHTML();
-    const w = window.open('', '_blank');
-    if (!w) { tip('Разрешите всплывающие окна для отчёта'); return; }
-    w.document.open();
-    w.document.write(html);
-    w.document.close();
-    setTimeout(() => { try { w.print(); } catch (e) {} }, 300);
-  }
-
   /* --------------------------------------------------------------------- */
   /* И-6. Звуковая обратная связь (Web Audio)                              */
   /* --------------------------------------------------------------------- */
@@ -352,6 +335,8 @@
   }
 
   function renderJournal() {
+    // Журнал пульта выведен на вкладку «Сводка» (main.html), здесь только память.
+    if (!$('csl-journal-rows')) return;
     const rows = journal.items.filter(journalMatch).slice(0, 80).map((it) => {
       const hex = /(?:[0-9A-F]{2} ){9}[0-9A-F]{2}/.exec(it.msg);
       return `<div class="csl-jrow ${it.level}">
@@ -478,17 +463,6 @@
     });
   }
 
-  function previewReport() {
-    openModal({
-      title: 'Предпросмотр отчёта смены',
-      body: '<div class="csl-report">' + stats.reportHTML() + '</div>',
-      okText: 'Печать',
-      cancelText: 'Закрыть',
-      wide: true,
-      onOk: printReport,
-    });
-  }
-
   function showHelp() {
     openModal({
       title: 'Горячие клавиши и подсказки',
@@ -538,10 +512,6 @@
       { title: 'Стоп всех модулей', hint: 'Alt+X', run: allStop },
       { title: 'Хоминг всех модулей', hint: '', run: homeAll },
       { title: 'Задать всем угол', hint: '', run: syncSteerAll },
-      { title: 'Экспорт статистики: CSV', hint: '', run: () => exportStats('csv') },
-      { title: 'Экспорт статистики: JSON', hint: '', run: () => exportStats('json') },
-      { title: 'Предпросмотр и печать отчёта', hint: '', run: previewReport },
-      { title: 'Сбросить статистику', hint: '', run: () => resetStats() },
       { title: 'Светлая / тёмная тема', hint: '', run: () => { const b = $('btn-theme'); if (b) b.click(); } },
       { title: (settings.sound ? 'Выключить' : 'Включить') + ' звук', hint: 'Alt+Z', run: () => setSound(!settings.sound) },
       { title: (settings.large ? 'Обычный' : 'Крупный') + ' интерфейс', hint: 'Alt+A', run: () => setLarge(!settings.large) },
@@ -669,18 +639,10 @@
           if (m.id === peer.id) return;
           if (m.type === 'lock') applyRemoteLock(m.payload, 'канал');
           else if (m.type === 'hello' || m.type === 'here') { peer.seenAt = Date.now(); if (m.type === 'hello') peer.channel.postMessage({ type: 'here', id: peer.id }); renderToolbar(); }
-          else if (m.type === 'stats') { reloadStats(); }
         };
         peer.channel.postMessage({ type: 'hello', id: peer.id });
       }
     } catch (e) { peer.channel = null; }
-  }
-
-  function reloadStats() {
-    try {
-      stats.data = stats._load();
-      render();
-    } catch (e) { /* ignore */ }
   }
 
   function renderToolbar() {
@@ -707,7 +669,6 @@
       light.className = 'csl-chip ' + (green ? 'csl-chip-open' : 'csl-chip-locked');
     }
     setText('csl-tb-sign', lastSeen.sign === '—' ? 'знаки: —' : 'знак: ' + lastSeen.sign + ' (' + F.time(lastSeen.signAt) + ')');
-    setText('csl-tb-trip', 'рейсы: ' + stats.summary().trips + ' · смена ' + F.dur((Date.now() - stats.session.startedAt) / 1000));
     const soundBtn = $('csl-tb-sound');
     if (soundBtn) {
       soundBtn.textContent = settings.sound ? '🔊 звук' : '🔇 звук';
@@ -1103,7 +1064,6 @@
     m.cmdAt = Date.now();
     if (home) m.homed = true;
 
-    stats.noteManual(1);
     say('ok', 'UART → ' + id + ' (#' + MODULES[MOD_INDEX[id]].num + '): ' + hex);
     event('nav', 'сервис: ' + id + ' ' + (ch === 'traction' ? cmd[id].pwm + ' %' : ch === 'home' ? 'хоминг' : cmd[id].steer + '°'));
     beep('tick');
@@ -1213,7 +1173,6 @@
       if (mm) mm.homed = false;
       frames[m.id] = F.hex(RS.uart.buildCommand({ moduleId: m.num, steerCdeg: 0, pwm: 0, enable: false, home: true }));
     });
-    stats.noteManual(1);
     say('warn', 'сервис: хоминг всех модулей');
     beep('warn');
     renderModules();
@@ -1233,9 +1192,9 @@
     const current = typeof state !== 'undefined' ? state.current : 0;
     const charging = typeof state !== 'undefined' ? state.charging : false;
     return P.packSnapshot({
-      soc, current: charging ? -current : current, charging, whPerKm: stats.whPerKm(),
+      soc, current: charging ? -current : current, charging, whPerKm: null,
       tempC: 28 + Math.abs(current) * 0.12,
-      cycles: stats.summary().chargeCycles,
+      cycles: null,
     });
   }
 
@@ -1280,9 +1239,9 @@
     setText('csl-bat-soc', F.num(p.soc, 0) + ' %');
     setText('csl-bat-i', (charge ? '−' : '+') + F.num(Math.abs(p.current), 1) + ' А');
     setText('csl-bat-p', F.num(Math.abs(p.power), 0) + ' Вт · ' + F.num(p.remainingWh, 0) + ' Вт·ч');
-    setText('csl-bat-range', 'запас хода ≈ ' + F.num(p.rangeKm, 1) + ' км');
+    setText('csl-bat-range', p.rangeKm === null ? 'запас хода — нет данных о расходе' : 'запас хода ≈ ' + F.num(p.rangeKm, 1) + ' км');
     setText('csl-bat-temp', F.num(p.tempC, 0) + ' °C');
-    setText('csl-bat-cycles', String(p.cycles));
+    setText('csl-bat-cycles', p.cycles === null ? '—' : String(p.cycles));
 
     const bar = $('csl-bat-bar');
     if (bar) {
@@ -1326,72 +1285,6 @@
   }
 
   /* --------------------------------------------------------------------- */
-  /* 4. Статистика                                                         */
-  /* --------------------------------------------------------------------- */
-  function kpi(label, value, sub) {
-    return `<article class="csl-kpi"><span>${label}</span><b>${value}</b><small>${sub || ''}</small></article>`;
-  }
-
-  function exportStats(kind) {
-    if (kind === 'csv') {
-      if (download('rus_slam_stats.csv', stats.toCSV(), 'text/csv;charset=utf-8')) say('ok', 'статистика выгружена в CSV');
-    } else {
-      const text = typeof stats.toJSON === 'string' ? stats.toJSON() : JSON.stringify(stats.toJSON(), null, 2);
-      if (download('rus_slam_stats.json', text, 'application/json')) say('ok', 'статистика выгружена в JSON');
-    }
-    try { peer.channel && peer.channel.postMessage({ type: 'stats', id: peer.id }); } catch (e) {}
-  }
-
-  function resetStats() {
-    confirmModal('Сброс статистики',
-      'Обнулить накопленные показатели (рейсы, пробег, энергию, события)? Журнал доступа замка сохранится.',
-      { okText: 'Сбросить', danger: true }).then((ok) => {
-      if (!ok) return;
-      stats.reset();
-      history.soc.length = 0;
-      history.speed.length = 0;
-      event('warn', 'статистика сброшена');
-      say('warn', 'статистика сброшена оператором');
-      beep('warn');
-      render();
-    });
-  }
-
-  function renderStats() {
-    const s = stats.summary();
-    const sess = s.session;
-    setHTML('csl-kpi', [
-      kpi('Рейсы (сессия)', String(s.trips), 'грузовых: ' + s.cargoTrips),
-      kpi('Пробег', F.km(s.distanceM), 'сессия: ' + F.km(sess.distanceM)),
-      kpi('Энергия', F.wh(s.energyWh), 'сессия: ' + F.wh(sess.energyWh)),
-      kpi('Расход', (s.whPerKm ? F.num(s.whPerKm, 1) : '—') + ' Вт·ч/км', 'по рейсам'),
-      kpi('Время в движении', F.dur(s.movingSec), 'ср. скорость ' + F.num(s.avgSpeedKmh, 1) + ' км/ч'),
-      kpi('Макс. скорость', F.num(s.maxSpeed, 2) + ' м/с', 'лимит 1,2 м/с'),
-      kpi('Перевезено груза', F.kg(s.cargoKg), 'за ' + s.cargoTrips + ' рейсов'),
-      kpi('Объезды препятствий', String(s.obstacles), 'знаки: СТОП ' + s.signs.stop + ' · переход ' + s.signs.pedestrian_crossing + ' · неровность ' + s.signs.speed_bump),
-      kpi('Светофор', 'красный ' + s.lights.red + ' / зелёный ' + s.lights.green, 'цикл светофора стенда'),
-      kpi('Замок ячейки', 'открыт ' + s.locks.open + ' · отказ ' + s.locks.denied, 'смен PIN: ' + s.locks.changed),
-      kpi('Ручные команды', String(s.manualOps), 'сервисный стенд'),
-      kpi('Сбои и аварии', String(s.faults), 'циклов заряда: ' + s.chargeCycles),
-    ].join(''));
-
-    const rows = (s.recentTrips || []).map((t) => `
-      <tr>
-        <td>№${t.id}</td>
-        <td>${F.time(t.startedAt)}</td>
-        <td>${t.route}</td>
-        <td>${F.km(t.distanceM)}</td>
-        <td>${F.wh(t.energyWh)}</td>
-        <td>${F.durShort(t.movingSec)}</td>
-        <td>${t.cargoKg || 0}</td>
-        <td class="${t.result === 'ok' ? 'ok' : 'err'}">${t.result === 'ok' ? 'доставлено' : t.result === 'aborted' ? 'прерван' : t.result}</td>
-      </tr>`).join('');
-    setHTML('csl-trips', rows || '<tr><td colspan="8" class="muted">Рейсы ещё не зафиксированы — стартуйте миссию</td></tr>');
-
-    spark($('csl-trip-chart'), (stats.trips || []).slice(-20).map((t) => t.energyWh), { min: 0, color: '#7ddc52' });
-    setText('csl-stats-updated', 'обновлено ' + F.time(stats.data.updatedAt));
-  }
-
   /* --------------------------------------------------------------------- */
   /* Рендер и жизненный цикл                                               */
   /* --------------------------------------------------------------------- */
@@ -1401,7 +1294,6 @@
     renderLock();
     renderModules();
     renderBattery();
-    renderStats();
   }
 
   function tick(now) {
@@ -1465,44 +1357,12 @@
         if (a === 'stop-all') allStop();
         else if (a === 'home-all') homeAll();
         else if (a === 'sync-steer') syncSteerAll();
-        else if (a === 'csv') exportStats('csv');
-        else if (a === 'json') exportStats('json');
-        else if (a === 'print') previewReport();
-        else if (a === 'reset') resetStats();
         else if (a === 'help') showHelp();
         else if (a === 'palette') openPalette();
         else if (a === 'charge') { const btn = $('btn-charge'); if (btn) btn.click(); }
         else if (a === 'cargo-out') closeLock('груз сдан');
       });
     });
-
-    /* --- журнал сервисных действий (И-8) --- */
-    document.querySelectorAll('[data-jfilter]').forEach((b) => {
-      b.addEventListener('click', () => { journal.filter = b.dataset.jfilter; renderJournal(); });
-    });
-    if ($('csl-journal-q')) {
-      $('csl-journal-q').addEventListener('input', (e) => { journal.q = e.target.value; renderJournal(); });
-    }
-    if ($('csl-journal-clear')) $('csl-journal-clear').addEventListener('click', () => {
-      journal.items.length = 0;
-      journal.q = '';
-      if ($('csl-journal-q')) $('csl-journal-q').value = '';
-      renderJournal();
-    });
-    const jrows = $('csl-journal-rows');
-    if (jrows) {
-      jrows.addEventListener('click', (e) => {
-        const b = e.target.closest ? e.target.closest('[data-copy]') : null;
-        if (b) copyText(b.dataset.copy, 'Кадр UART');
-      });
-    }
-    if ($('csl-copy-frame')) {
-      $('csl-copy-frame').addEventListener('click', () => {
-        const last = Object.keys(frames).pop();
-        if (!last) { tip('Кадров ещё нет'); return; }
-        copyText(frames[last], 'Кадр UART ' + last);
-      });
-    }
 
     /* --- модальное окно (И-7) --- */
     if ($('csl-modal-ok')) $('csl-modal-ok').addEventListener('click', () => closeModal(true));
@@ -1548,17 +1408,13 @@
     /* --- «мёртвая рука»: отпускание где угодно останавливает тягу (И-5) --- */
     ['pointerup', 'pointercancel', 'blur'].forEach((ev) => window.addEventListener(ev, () => allHoldStop()));
     document.addEventListener('visibilitychange', () => { if (document.hidden) allHoldStop('вкладка скрыта'); });
-    if (jrows) jrows.addEventListener('pointerup', () => allHoldStop());
 
     /* --- синхронизация между окнами (И-10) --- */
     initChannel();
     window.addEventListener('storage', (e) => {
       if (e.key === LOCK_STATE_KEY) applyRemoteLock(e.newValue, 'окно');
-      else if (e.key === 'rus_slam_stats_v1') reloadStats();
     });
 
-    window.addEventListener('beforeunload', () => { stats.flush(); });
-    document.addEventListener('visibilitychange', () => { if (document.hidden) stats.flush(); });
 
     Promise.resolve(vault.init()).then(() => {
       renderLock();
@@ -1574,23 +1430,17 @@
   /* Публичный API для app.js (интеграция симуляции)                       */
   /* --------------------------------------------------------------------- */
   window.RSConsole = {
-    stats,
     vault,
     cmd,
     journal,
     settings,
     beep,
-    noteManual: (n) => stats.noteManual(n),
+    /** Знак дорожного движения: только подпись в панели быстрых действий. */
     noteSign: (kind) => {
       const names = { stop: 'Стоп', cross: 'Пешеходный переход', bump: 'Искусственная неровность', light: 'светофор' };
-      stats.noteSign(kind);
       lastSeen.sign = names[kind] || kind;
       lastSeen.signAt = Date.now();
     },
-    noteLight: (kind) => stats.noteLight(kind),
-    noteObstacle: (n) => stats.noteObstacle(n),
-    noteFault: (n) => stats.noteFault(n),
-    noteChargeCycle: (n) => stats.noteChargeCycle(n),
     isLockOpen: () => lock.open,
     closeLock,
     openPalette,
@@ -1598,23 +1448,6 @@
     confirmModal,
     render,
     render1: () => { try { render(); } catch (e) {} },
-    /** Интеграция метрик в главный цикл симуляции. */
-    onSimTick(dt, st, extra) {
-      if (!st) return;
-      const speed = Math.hypot(st.spdVx || 0, st.spdVy || 0);
-      stats.tick(dt, {
-        distanceM: extra && extra.distanceM !== undefined ? extra.distanceM : speed * dt,
-        voltage: st.bat,
-        current: st.charging ? Math.max(2, st.current) : st.current,
-        speed,
-        auto: !!st.auto && !st.serviceStand,
-        estop: !!st.estop,
-        cargo: !!st.cargo,
-        payload: st.payload,
-        origin: st.origin || 'база',
-        mission: st.mission,
-      });
-    },
   };
 
   if (document.readyState === 'loading') {

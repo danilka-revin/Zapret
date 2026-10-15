@@ -13,7 +13,6 @@ from robot_control.camera import CameraManager
 from robot_control.lidar import (
     LIDAR_MAX_AGE_S,
     LidarManager,
-    generate_demo_scan,
     normalize_angle,
     parse_ld06_packet,
     parse_rplidar_point,
@@ -79,14 +78,6 @@ def kiosk_client(config):
     application = create_kiosk_app(config)
     application.config.update(TESTING=True)
     return application.test_client()
-
-
-def test_generate_demo_scan():
-    pts = generate_demo_scan()
-    assert len(pts) == 180
-    assert all("a" in p and "r" in p for p in pts)
-    assert all(-math.pi - 1e-3 <= p["a"] <= math.pi + 1e-3 for p in pts)
-    assert all(0.1 <= p["r"] <= 12.0 for p in pts)
 
 
 def test_lidar_manager_feed_and_expiration():

@@ -64,13 +64,14 @@ def test_api_state_shape(client, operator):
     body = client.get("/api/state").get_json()
     assert body["ok"] is True
     data = body["data"]
-    assert data["source"] == "sim"
+    assert data["source"] == "none"
     assert len(data["motors"]) == 4
     for motor in data["motors"]:
         assert {"id", "title", "angle", "rpm", "temp", "homed"} <= set(motor)
     battery = data["battery"]
     assert {"soc", "volts", "amps", "rangeKm", "thresholds"} <= set(battery)
-    assert 0 <= battery["soc"] <= 100
+    # без робота значения честно пустые (null), а не выдуманные проценты
+    assert battery["soc"] is None or 0 <= battery["soc"] <= 100
     assert data["cargo"]["closed"] is True
     assert data["lock"]["open"] is False
 
@@ -130,14 +131,14 @@ def test_api_health_reports_source(client, operator):
     login(client)
     body = client.get("/api/health").get_json()
     assert body["ok"] is True
-    assert body["source"] == "sim"
+    assert body["source"] == "none"
     assert body["uptimeSec"] >= 0
 
 
 def test_healthz_reports_interface(app):
     body = app.test_client().get("/healthz").get_json()
     assert body["panel"] == "rus_slam"
-    assert body["source"] == "sim"
+    assert body["source"] == "none"
 
 
 # --------------------------- грузовой отсек ------------------------------ #
@@ -323,11 +324,14 @@ def test_main_screen_polls_state_with_relative_url(client, operator):
     assert "'/api/state'" not in js
 
 
-def test_main_screen_demo_only_on_request(client, operator):
-    """Выдуманные данные не подменяют отказ сервера: демо только при ?demo=1."""
+def test_main_screen_has_no_demo_mode(client, operator):
+    """Демо-режима нет: без робота экран показывает «нет данных», а не выдуманные значения."""
     login(client)
     js = client.get("/main.js").get_data(as_text=True)
-    assert "get('demo') === '1'" in js
+    assert "get('demo')" not in js
+    assert "demoData" not in js
+    assert "demoLidar" not in js
+    assert "drawDemoCamera" not in js
 
 
 def test_main_screen_keeps_session_token_for_console(client, operator):

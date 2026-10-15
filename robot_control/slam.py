@@ -466,6 +466,9 @@ ASSETS = {
     "console.js": "console_js",
     "console-core.js": "console_core_js",
     "vision.js": "vision_js",
+    # вкладка «Сводка» основного экрана (рейсы, энергия, замок — с сервера)
+    "summary.js": "summary_js",
+    "summary.css": "summary_css",
     # наш скрипт: пробрасывает токен сессии в подзапросы (нужен в iframe без cookie)
     "slam_auth.js": "slam_auth_js",
     # страница киоска на борту робота (без авторизации)
@@ -625,8 +628,9 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
     mod = load_backend()
     mode = (mode or "auto").strip().lower()
 
-    if mode == "sim":
-        return mod.SimSource()
+    if mode == "none":
+        # Робот не подключён: значения пустые, демо-физики нет.
+        return mod.NoSource()
     if mode == "serial":
         # Явно заданные RC_SLAM_PORTS — воля оператора: их лидар и так не
         # трогает (они попадают в excluded_ports()). Если список пуст, ищем
@@ -661,7 +665,7 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
         log.info("источник данных: UART-модули %s", ", ".join(live))
         return chassis_source(mod, live)
 
-    log.info("источник данных: робот не подключён — значения пустые (симуляция только по RC_SLAM_SOURCE=sim)")
+    log.info("источник данных: робот не подключён — значения пустые (демо-режима нет)")
     return mod.NoSource()
 
 
@@ -690,21 +694,17 @@ def _send(name: str):
 
 
 def lidar_for_screen(manager, snap):
-    """Точки лидара для экрана и признак, что это демо.
+    """Точки лидара для экрана. Демо-скана нет: только реальные данные менеджера.
 
-    Реальные точки приходят только из менеджера лидара: USB-порт (RPLIDAR,
-    LD06/LD19, LDS-01/LDS-02), ROS 2 ``/scan``, HTTP ``POST /api/lidar`` или
-    соседний процесс робота. Всё, что лежит в ``snap["lidar"]`` сверх этого, —
-    данные источника-симуляции (``RC_SLAM_SOURCE=sim``): без пометки они
-    выглядели бы на экране как «в реальном времени · 180 точек», то есть демо
-    выдавалось бы за работающий лидар.
+    Точки приходят из USB-порта (RPLIDAR, LD06/LD19, LDS-01/LDS-02), ROS 2
+    ``/scan``, HTTP ``POST /api/lidar`` или соседнего процесса робота. Без них
+    возвращается ``None`` — экран покажет «нет данных».
+    Второе значение (признак демо) всегда ``False``; оно сохранено для формата ответа.
     """
+    del snap  # раньше сюда подставлялся выдуманный скан; теперь не используется
     scan = manager.get_scan()
     if scan:
         return scan, False
-    fallback = snap.get("lidar") if isinstance(snap, dict) else None
-    if isinstance(fallback, list) and fallback:
-        return fallback, True
     return None, False
 
 
@@ -712,8 +712,8 @@ def lidar_status_payload(manager, points, demo):
     """Единый статус лидара для ``/api/lidar``, ``/api/state`` и киоска.
 
     Одинаковый во всех ответах: соседний процесс робота берёт по нему скан, а
-    экран — причину «скана нет». Флаг ``demo`` не даёт выдуманному скану
-    разъехаться по обоим экранам как реальному.
+    экран — причину «скана нет». Флаг ``demo`` всегда ``False``: выдуманного
+    скана в системе нет.
     """
     status = manager.get_status()
     status["demo"] = bool(demo)
@@ -958,8 +958,7 @@ def create_blueprint(state, guard=None) -> Blueprint:
 
         Ответ открыт без авторизации намеренно: по нему второй процесс робота
         (пульт 8080 ↔ бортовой экран 8090) берёт скан, когда USB-порт занят
-        соседом. Точки источника-симуляции отдаются только с флагом ``demo`` —
-        сосед их не принимает, а экран показывает как демо.
+        соседом. Демо-точек в системе нет, флаг ``demo`` всегда ``False``.
         """
         mgr = LidarManager.get_instance()
         scan = mgr.get_scan()
@@ -967,8 +966,7 @@ def create_blueprint(state, guard=None) -> Blueprint:
         if scan is None and hasattr(state, "source"):
             try:
                 src_data = getattr(state.source, "read", lambda: {})()
-                scan = src_data.get("lidar")
-                demo = bool(scan)
+                scan = src_data.get("lidar")  # реальный скан источника; демо-режима нет
             except Exception:  # noqa: BLE001 — источник может не уметь read()
                 scan = None
         return jsonify(lidar_status_payload(mgr, scan, demo))

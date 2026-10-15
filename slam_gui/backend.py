@@ -17,7 +17,7 @@ backend.py — сервер борта RUS SLAM: отдаёт экраны и д
     /api/health           → проверка живости
 
 Источники данных (выбираются автоматически или флагом):
-    --source sim      демонстрационная физика (стенд без робота) — по умолчанию;
+    --source none     робот не подключён: все значения пустые (null), без демо;
     --source serial   реальные модули: кадры телеметрии 16 Б по /dev/ttyUSB*
                       (протокол: docs/SERIAL_PROTOCOL.md, CRC16/Modbus);
     --source master   мастер по одному UART: @TLM и адресный поворот модулей;
@@ -221,103 +221,6 @@ def pack_state(pack_v, pack_a, soc=None, temp_c=28.0):
 # ============================================================================
 # 3. Источники данных
 # ============================================================================
-class SimSource:
-    """Демонстрационная физика: робот едет по маршруту, модули рулят."""
-
-    name = "sim"
-
-    # Сценарий склада, цикл 120 с: разгон, ход прямо, поворот, торможение, стоянка, ход.
-    V_CRUISE = 0.7          # м/с, потолок скорости
-    STEER_LIMIT = 30.0      # градусы, предел рулевого угла модуля
-    STEER_RATE = 35.0       # градусы в секунду: скорость рулевого привода (NEMA 23 с редуктором)
-
-    def __init__(self):
-        self.t0 = time.time()
-        self.soc = 78.0
-        self.last = time.time()
-        self.steer = 0.0            # текущий угол колёс (передние), градусы
-        self.bat_temp = 26.0
-        self.motors = [{"id": mid, "title": MODULE_TITLES[mid], "angle": 0.0,
-                        "rpm": 0.0, "temp": 32.0, "homed": True} for mid in MODULE_NAMES.values()]
-
-    @classmethod
-    def _plan(cls, t):
-        """Условный сценарий: (скорость м/с, целевой угол колёс, градусы)."""
-        seg = t % 120.0
-        if seg < 8:
-            v = cls.V_CRUISE * seg / 8.0                      # разгон
-        elif seg < 40:
-            v = cls.V_CRUISE                                  # ход прямо
-        elif seg < 48:
-            v = cls.V_CRUISE * (48.0 - seg) / 8.0             # торможение
-        elif seg < 58:
-            v = 0.0                                           # стоянка у стеллажа
-        elif seg < 110:
-            v = 0.5                                           # ход к выгрузке
-        else:
-            v = 0.5 * (120.0 - seg) / 10.0                    # подход и остановка
-        if 20.0 <= seg < 26.0:
-            target = -24.0                                    # поворот влево
-        elif 60.0 <= seg < 68.0:
-            target = 30.0                                     # поворот вправо
-        else:
-            target = 0.0
-        return max(0.0, v), target
-
-    def read(self):
-        now = time.time()
-        dt = max(0.001, min(0.5, now - self.last))
-        self.last = now
-        t = now - self.t0
-
-        v, target = self._plan(t)
-        # рулевой привод: угол догоняет цель с ограниченной скоростью
-        step = self.STEER_RATE * dt
-        self.steer += max(-step, min(step, target - self.steer))
-        self.steer = max(-self.STEER_LIMIT, min(self.STEER_LIMIT, self.steer))
-
-        wheel_rpm = v / (2.0 * math.pi * WHEEL_R_M) * 60.0    # обороты колеса по скорости
-        turn = abs(self.steer) / self.STEER_LIMIT
-        amps = 0.9 + 5.0 * (v / self.V_CRUISE) + 1.5 * turn + 0.15 * math.sin(t * 3.1)
-        amps = max(0.5, amps)
-
-        for i, m in enumerate(self.motors):
-            front = m["id"][0] == "F"
-            m["angle"] = round((self.steer if front else -self.steer) + 0.3 * math.sin(t / 3 + i), 1)
-            m["rpm"] = round(max(0.0, wheel_rpm + 1.2 * math.sin(t * 2 + i)), 1)
-            target_temp = 30.0 + 18.0 * (v / self.V_CRUISE) + 4.0 * turn
-            m["temp"] = round(m["temp"] + (target_temp - m["temp"]) * dt / 150.0, 1)
-
-        self.soc = max(4.0, self.soc - amps * dt / 3600.0 * 100.0 / PACK["capacityAh"])
-        bat_target = 24.0 + 6.0 * (amps / 12.0)
-        self.bat_temp += (bat_target - self.bat_temp) * dt / 300.0
-        volts = voltage_from_soc(self.soc) - amps * PACK["internalR"]
-        return self._payload(self.motors, volts, amps, round(v, 2))
-
-    def _payload(self, motors, volts, amps, speed):
-        battery = pack_state(volts, amps, self.soc, temp_c=self.bat_temp)
-        payload = {
-            "motors": motors,
-            "battery": battery,
-            "cargo": {"kg": 80, "closed": True},
-            "mode": "АВТОНОМНЫЙ РЕЖИМ",
-            "route": "склад → зона выгрузки",
-            "speedMps": round(speed, 2),
-            "powerKw": round(battery["watts"] / 1000.0, 2),
-            "linkOk": True,
-        }
-        try:
-            from robot_control.lidar import generate_demo_scan
-            payload["lidar"] = generate_demo_scan(t=time.time(), speed=speed)
-            # Пометка обязательна: экран обязан показывать такие точки как демо,
-            # а не как «в реальном времени» (и соседний процесс робота не должен
-            # принимать их за настоящий скан с USB-лидара).
-            payload["lidarDemo"] = True
-        except Exception:
-            pass
-        return payload
-
-
 class NoSource:
     """Робот не подключён: ни одного выдуманного значения, все поля пустые (null)."""
 
@@ -1100,8 +1003,7 @@ class RosSource:
     Пути к системному ROS 2 добавляются сами (``robot_control/ros_env.py``):
     экран работает из ``.venv`` и без этого не видел ``rclpy`` вовсе. Если ROS 2
     нет — источник не выдумывает данные: ``linkOk`` остаётся ложным, а причина
-    видна в ``self.reason`` (симуляция включается только явно,
-    ``RC_SLAM_SOURCE=sim``).
+    видна в ``self.reason``. Демо-симуляции в приложении нет.
     """
 
     name = "ros"
@@ -1396,7 +1298,8 @@ class App:
         lock_state = self.vault.state(self.lock_open)
         cargo = dict(data.get("cargo") or {})
         cargo["closed"] = not self.lock_open
-        cargo.setdefault("kg", self.cargo_nominal_kg)
+        # Вес груза — только если источник его реально передал (датчика пока нет):
+        # номинальные 80 кг раньше подменяли отсутствующее значение.
         out = dict(data)
         out["cargo"] = cargo
         out["lock"] = lock_state
@@ -1411,7 +1314,7 @@ class App:
             pass
         if mgr_scan is not None:
             out["lidar"] = mgr_scan
-            # Реальный скан (USB, ROS 2, HTTP) заменяет демо источника-симуляции.
+            # Реальный скан (USB, ROS 2, HTTP). Демо-скана в системе нет.
             out["lidarDemo"] = False
         return out
 
@@ -1548,8 +1451,6 @@ def make_source(kind, ports):
         return SerialSource(ports or ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2", "/dev/ttyUSB3"])
     if kind == "ros":
         return RosSource()
-    if kind == "sim":
-        return SimSource()
     if kind == "auto":
         return RosSource()
     return NoSource()
@@ -1566,8 +1467,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="RUS SLAM: основной экран робота и API")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8080)
-    ap.add_argument("--source", choices=["sim", "serial", "ros", "auto"], default="auto",
-                    help="источник данных (по умолчанию sim — стенд)")
+    ap.add_argument("--source", choices=["none", "serial", "ros", "auto"], default="auto",
+                    help="источник данных; без робота значения пустые (демо-режима нет)")
     ap.add_argument("--ports", default="", help="UART-порты для --source serial, через запятую")
     ap.add_argument("--pin", default=DEFAULT_PIN, help="заводской PIN отсека (по умолчанию 7232)")
     ap.add_argument("--lock-file", default="", help="файл состояния замка (по умолчанию gui/state/lock.json)")

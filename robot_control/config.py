@@ -56,6 +56,8 @@ class Config:
     slam_pin: str = ""                 # пусто → заводской PIN из backend.py
     slam_max_attempts: int = 5
     slam_lock_seconds: int = 30
+    # --- сводка работы робота (рейсы, энергия, замок) ---
+    stats_file: Path = PROJECT_ROOT / "data" / "stats.json"
     _loaded_from: str = field(default="", repr=False)
 
     @classmethod
@@ -91,5 +93,10 @@ class Config:
             slam_pin=(os.environ.get("RC_SLAM_PIN") or "").strip(),
             slam_max_attempts=int(os.environ.get("RC_SLAM_MAX_ATTEMPTS", "5")),
             slam_lock_seconds=int(os.environ.get("RC_SLAM_LOCK_SEC", "30")),
+            stats_file=(
+                Path(os.environ["RC_STATS_FILE"])
+                if os.environ.get("RC_STATS_FILE")
+                else project_root / "data" / "stats.json"
+            ),
             _loaded_from=str(project_root / ".env"),
         )

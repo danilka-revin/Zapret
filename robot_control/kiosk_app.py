@@ -618,7 +618,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         """Скан и статус лидара бортового экрана.
 
         По этому адресу пульт (8080) берёт скан, когда порт лидара держит
-        бортовой экран, — поэтому демо-скан отдаётся только с флагом ``demo``.
+        бортовой экран. Демо-скана в системе нет, флаг ``demo`` всегда ``False``.
         """
         mgr = LidarManager.get_instance()
         scan = mgr.get_scan()
@@ -626,8 +626,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if scan is None and state and hasattr(state, "source"):
             try:
                 src_data = getattr(state.source, "read", lambda: {})()
-                scan = src_data.get("lidar")
-                demo = bool(scan)
+                scan = src_data.get("lidar")  # реальный скан источника; демо-режима нет
             except Exception:  # noqa: BLE001 — источник может не уметь read()
                 scan = None
         return jsonify(lidar_status_payload(mgr, scan, demo))
@@ -1077,7 +1076,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="адрес прослушивания (по умолчанию RC_BIND_HOST или 0.0.0.0)")
     parser.add_argument("--port", type=int, default=None,
                         help=f"порт экрана (по умолчанию RC_KIOSK_PORT или {DEFAULT_PORT})")
-    parser.add_argument("--source", choices=["auto", "sim", "serial", "ros", "master"], default=None,
+    parser.add_argument("--source", choices=["auto", "none", "serial", "ros", "master"], default=None,
                         help="источник данных: master (по умолчанию), auto, sim, serial или ros")
     parser.add_argument("--open", dest="open_screen", action="store_true", default=None,
                         help="открыть экран в браузере (по умолчанию — если есть дисплей)")
@@ -1099,7 +1098,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Настройки (заодно подхватываем .env — например RC_KIOSK_OPEN).
     # По умолчанию используется USB-мастер четырёх I2C-плат; стенд включается
-    # явно: RC_SLAM_SOURCE=sim ./run_kiosk.py
+    # явно: RC_SLAM_SOURCE=none ./run_kiosk.py
     cfg = Config.from_env()
     if args.source:
         cfg = replace(cfg, slam_source=args.source)

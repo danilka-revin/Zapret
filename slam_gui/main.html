@@ -9,13 +9,14 @@
   <link rel="stylesheet" href="steering.css" />
   <link rel="stylesheet" href="update.css" />
   <link rel="stylesheet" href="lidar_settings.css" />
+  <link rel="stylesheet" href="summary.css" />
 </head>
 <!--
   Основной экран робота (киоск). Только отображение состояния: управления здесь нет.
 
   Данные: GET api/state раз в 300 мс (gui/backend.py). Если сервер не отвечает,
   экран не выдумывает значения: показывает последние полученные, помечает их
-  «устарели» и выводит тревогу. Демо-данные включаются только адресом с ?demo=1.
+  «устарели» и выводит тревогу. Без робота показывается «нет данных», демо-значений нет.
 
   Раскладка: слева меню в стиле инженерного пульта — пункт «Пульт» (наверх экрана),
   журнал событий, связь с бортом, оператор смены. «Сервис» открывает инженерный
@@ -48,6 +49,10 @@
         <a class="active" href="#" aria-current="true">
           <svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
           <span class="nav-text">Пульт</span>
+        </a>
+        <a href="#summary" id="nav-summary">
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+          <span class="nav-text">Сводка</span>
         </a>
         <a id="console-link" href="/console">
           <svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 9h4M7 13h7M15 9h2"/><path d="M8 21h8"/></svg>
@@ -213,7 +218,7 @@
         <section class="panel camera" id="camera" aria-labelledby="cam-title">
           <header class="panel-head">
             <h2 id="cam-title">Камеры</h2>
-            <span class="panel-meta" id="cam-meta">демо · 30 fps</span>
+            <span class="panel-meta" id="cam-meta">нет сигнала</span>
           </header>
           <div class="cam-grid">
             <div class="cam-viewport" id="cam-viewport-front">
@@ -258,12 +263,84 @@
         </section>
       </div>
 
+      <!-- Вкладка «Сводка»: рейсы, пробег, энергия, замок — только реальные данные робота.
+           Открывается пунктом меню «Сводка» (#summary); summary.js прячет экран пульта. -->
+      <section class="summary" id="summary" aria-labelledby="sum-title" hidden>
+        <header class="summary-head">
+          <div class="summary-title">
+            <h2 id="sum-title">Сводка работы</h2>
+            <p class="summary-sub">по данным робота · с <span id="sum-since">—</span></p>
+          </div>
+          <div class="summary-actions">
+            <button type="button" class="btn btn-ghost" id="sum-csv">Скачать CSV</button>
+            <button type="button" class="btn btn-ghost" id="sum-json">Скачать JSON</button>
+            <button type="button" class="btn btn-ghost" id="sum-print">Печать отчёта</button>
+            <button type="button" class="btn btn-ghost btn-danger" id="sum-reset">Сбросить сводку</button>
+          </div>
+        </header>
+
+        <p class="summary-state" id="sum-state" role="status">загрузка сводки…</p>
+
+        <div class="summary-live panel">
+          <div class="summary-live-item"><span>Связь с бортом</span><b id="sum-link">—</b></div>
+          <div class="summary-live-item"><span>Текущий рейс</span><b id="sum-trip-now">—</b></div>
+          <div class="summary-live-item"><span>Последний снимок</span><b id="sum-sample">—</b></div>
+        </div>
+
+        <div class="summary-kpis" id="sum-kpis">
+          <article class="sum-kpi"><span>Рейсы</span><b id="k-trips">—</b><small id="k-trips-sub">—</small></article>
+          <article class="sum-kpi"><span>Пробег</span><b id="k-dist">—</b><small>км</small></article>
+          <article class="sum-kpi"><span>Энергия на разряд</span><b id="k-energy">—</b><small>Вт·ч</small></article>
+          <article class="sum-kpi"><span>Расход</span><b id="k-whkm">—</b><small>Вт·ч/км</small></article>
+          <article class="sum-kpi"><span>Время в движении</span><b id="k-moving">—</b><small id="k-avg-sub">—</small></article>
+          <article class="sum-kpi"><span>Макс. скорость</span><b id="k-maxv">—</b><small>м/с</small></article>
+          <article class="sum-kpi"><span>Энергия на заряд</span><b id="k-charged">—</b><small>Вт·ч</small></article>
+          <article class="sum-kpi"><span>Циклы заряда</span><b id="k-cycles">—</b><small>раз</small></article>
+          <article class="sum-kpi"><span>Неисправности модулей</span><b id="k-faults">—</b><small>раз</small></article>
+          <article class="sum-kpi"><span>Замок ячейки</span><b id="k-lock">—</b><small id="k-lock-sub">—</small></article>
+        </div>
+
+        <div class="summary-grid">
+          <section class="panel summary-panel" aria-labelledby="sum-chart-title">
+            <header class="panel-head"><h2 id="sum-chart-title">Энергия по рейсам</h2><span class="panel-meta">последние 20, Вт·ч на разряд</span></header>
+            <canvas id="sum-chart" class="sum-chart" aria-label="Энергия по рейсам"></canvas>
+            <p class="summary-empty" id="sum-chart-empty" hidden>рейсов ещё нет — диаграмма появится после первого движения</p>
+          </section>
+
+          <section class="panel summary-panel summary-wide" aria-labelledby="sum-trips-title">
+            <header class="panel-head"><h2 id="sum-trips-title">Последние рейсы</h2><span class="panel-meta">новые сверху</span></header>
+            <div class="summary-table-wrap">
+              <table class="summary-table">
+                <thead><tr><th>№</th><th>Начало</th><th>Маршрут</th><th>Путь, км</th><th>Вт·ч</th><th>Движение</th><th>Ср., м/с</th><th>Итог</th></tr></thead>
+                <tbody id="sum-trips"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel summary-panel" aria-labelledby="sum-access-title">
+            <header class="panel-head"><h2 id="sum-access-title">Доступ к замку</h2><span class="panel-meta" id="sum-audit-meta">аудит</span></header>
+            <ul class="summary-list" id="sum-audit"></ul>
+          </section>
+
+          <section class="panel summary-panel" aria-labelledby="sum-log-title">
+            <header class="panel-head"><h2 id="sum-log-title">Журнал событий</h2><span class="panel-meta" id="sum-log-meta">журнал процесса</span></header>
+            <ul class="summary-list" id="sum-log"></ul>
+          </section>
+
+          <section class="panel summary-panel summary-wide" aria-labelledby="sum-na-title">
+            <header class="panel-head"><h2 id="sum-na-title">Нет источника в телеметрии</h2><span class="panel-meta">не выдумано — не показывается цифрой</span></header>
+            <ul class="summary-list" id="sum-unavailable"></ul>
+          </section>
+        </div>
+      </section>
+
       <p class="specs">рулевые NEMA 23 · тяговые BLDC 260 Вт · АКБ LiFePO4 12S3P, 714 Вт·ч</p>
     </main>
   </div>
 
   <script src="/slam_auth.js"></script>
   <script src="main.js"></script>
+  <script src="summary.js"></script>
   <script>
   // темы как на киоске 8090 — чёрно-белый дизайн по умолчанию
   (function(){

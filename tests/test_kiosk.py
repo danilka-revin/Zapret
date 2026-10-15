@@ -353,8 +353,8 @@ def test_screen_has_no_demo_log_stream(kiosk_client):
     js = kiosk_client.get("/robot.js").get_data(as_text=True)
     assert "api/kiosk_logs" in js
     assert "api/audit" not in js
-    assert "demoMsgs" in js                      # демо-строки остались…
-    assert "demoLogsOn" in js                    # …но включаются только явно
+    assert "demoMsgs" not in js                  # демо-строк нет
+    assert "demoLogsOn" not in js
     html = kiosk_client.get("/kiosk").get_data(as_text=True)
     assert "/api/kiosk_logs" in html
     assert "/api/audit" not in html
@@ -805,8 +805,8 @@ def test_default_flags_mean_open_the_screen():
 def test_flags_disable_and_force_opening():
     assert parse_args(["--no-open"]).open_screen is False
     assert parse_args(["--open"]).open_screen is True
-    args = parse_args(["--open", "--port", "8091", "--source", "sim", "--no-watch"])
-    assert (args.port, args.source, args.watch) == (8091, "sim", False)
+    args = parse_args(["--open", "--port", "8091", "--source", "none", "--no-watch"])
+    assert (args.port, args.source, args.watch) == (8091, "none", False)
 
 
 @pytest.mark.parametrize("name", ["kiosk.sh", "robot-kiosk.service"])

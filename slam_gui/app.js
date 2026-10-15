@@ -1121,13 +1121,8 @@ function sim(dt) {
       state.soc = ((state.bat - 44) / (54.6 - 44)) * 100;
     }
   }
-  // Метрики сервисного пульта: пробег, энергия, рейсы, события.
-  if (window.RSConsole) {
-    try { window.RSConsole.onSimTick(dt, state, { distanceM: distStep }); } catch (e) { console.error(e); }
-  }
   // Препятствие: фиксируем каждый эпизод объезда (spinClear false → true).
   if (state.spinClear && !state._wasSpin) {
-    if (window.RSConsole) window.RSConsole.noteObstacle(1);
     emit("warn", "препятствие: объезд");
   }
   state._wasSpin = !!state.spinClear;
@@ -1143,7 +1138,6 @@ function sim(dt) {
   state.lightAmber = lightCycle >= 6 && lightCycle < 7.5;
   if (state.lightGreen !== state._lastLight) {
     state._lastLight = state.lightGreen;
-    if (window.RSConsole && !state._lightInit) window.RSConsole.noteLight(state.lightGreen ? "green" : "red");
     state._lightInit = true;
   }
   const lightSign = (WORLD.signs || []).find((sg) => sg.kind === "light");
@@ -1183,7 +1177,6 @@ function sim(dt) {
         state.soc = state.chargeTo || 80;
         state.bat = RSP ? RSP.voltageFromSoc(state.soc) : 44 + (state.soc / 100) * (54.6 - 44);
         state.charging = false;
-        if (window.RSConsole) window.RSConsole.noteChargeCycle(1);
         state.bubble = "заряд готов";
         emit("ok", "заряжен до " + state.soc.toFixed(0) + "%");
         toast("Зарядка завершена");
@@ -1518,7 +1511,4 @@ log("ok", "пульт RUS SLAM онлайн");
 log("warn", "CAM-01 нет сигнала — perception выключен");
 log("ok", "знаки СТОП/переход/светофор · маяк · груз до 250 кг");
 seedStationPads();
-window.addEventListener("beforeunload", () => {
-  if (window.RSConsole && window.RSConsole.stats) window.RSConsole.stats.flush();
-});
 requestAnimationFrame(loop);

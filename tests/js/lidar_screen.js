@@ -157,9 +157,8 @@ global._kioskBms = payload.bms || null;
 global.addEventListener = () => {};
 global.removeEventListener = () => {};
 global.dispatchEvent = () => true;
-/* HARNESS_DEMO=1 — экран с явно включённым демо-режимом (`?demo=1`). */
 global.location = {
-  search: process.env.HARNESS_DEMO === '1' ? '?demo=1' : '',
+  search: '',
   hash: '',
   href: 'http://127.0.0.1:8090/kiosk',
   protocol: 'http:',

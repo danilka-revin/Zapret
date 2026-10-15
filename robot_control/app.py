@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 from flask import (
     Flask,
+    Response,
     g,
     jsonify,
     redirect,
@@ -45,6 +46,7 @@ from .config import Config, PROJECT_ROOT
 from .lidar import LidarManager
 from .lidar_settings import apply_lidar_settings, settings_payload
 from .slam import build_state, create_blueprint, start_lidar
+from .stats import RobotStats, StatsSampler
 from .updater import UpdateManager, schedule_restart
 
 log = logging.getLogger("robot_control")
@@ -328,6 +330,27 @@ def create_app(config: Config | None = None) -> Flask:
                 503,
             )
 
+    # Сводка работы: накопитель живёт всегда (файл data/stats.json), а фоновый
+    # снимок телеметрии раз в секунду — только когда интерфейс робота подключён
+    # и мы не в тестах. Без робота сводка честно показывает нули и «нет связи».
+    stats_store = RobotStats(config.stats_file)
+    app.extensions["rc_stats"] = stats_store
+    slam_for_stats = app.extensions.get("rc_slam")
+    if (
+        slam_for_stats is not None
+        and not (config.testing or os.environ.get("PYTEST_CURRENT_TEST"))
+        and (os.environ.get("RC_STATS_SAMPLER") or "1").strip().lower() not in {"0", "false", "no", "off"}
+    ):
+        sampler = StatsSampler(
+            stats_store,
+            snapshot=slam_for_stats.snapshot,
+            audit=lambda: slam_for_stats.vault.audit(200),
+        ).start()
+        app.extensions["rc_stats_sampler"] = sampler
+        import atexit
+
+        atexit.register(stats_store.flush)
+
     # Лидар поднимается сразу после чтения .env (Config.from_env), а не по
     # первому запросу браузера: так USB-порт читает один процесс, а второй
     # (бортовой экран на 8090) берёт готовый скан по HTTP. Свой порт (8080)
@@ -384,6 +407,50 @@ def create_app(config: Config | None = None) -> Flask:
         except Exception as exc:  # noqa: BLE001 — диагностический endpoint
             return jsonify({"ok": False, "error": str(exc)[:300],
                             "buildSha": APP_BUILD_SHA}), 503
+
+    # ------------------------- Сводка работы ---------------------------- #
+    # Оператор видит её на главном экране (вкладка «Сводка»). Все цифры — из
+    # реальной телеметрии (см. robot_control/stats.py), сброс — с CSRF-токеном.
+    @app.get("/api/stats")
+    @login_required
+    def api_stats():
+        return jsonify(
+            {
+                "ok": True,
+                "data": stats_store.summary(),
+                "csrfToken": csrf_signer.dumps("csrf"),
+            }
+        )
+
+    @app.get("/api/stats/report.csv")
+    @login_required
+    def api_stats_csv():
+        body = stats_store.to_csv().encode("utf-8-sig")
+        return Response(
+            body,
+            mimetype="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="rus_slam_stats.csv"'},
+        )
+
+    @app.get("/api/stats/report.json")
+    @login_required
+    def api_stats_json():
+        body = stats_store.to_json().encode("utf-8")
+        return Response(
+            body,
+            mimetype="application/json",
+            headers={"Content-Disposition": 'attachment; filename="rus_slam_stats.json"'},
+        )
+
+    @app.post("/api/stats/reset")
+    @login_required
+    def api_stats_reset():
+        if not csrf_header_ok():
+            return jsonify({"ok": False, "error": "Недействительный CSRF-токен."}), 400
+        user, _via = current_user()
+        stats_store.reset()
+        log.info("сводка работы сброшена оператором %s", user)
+        return jsonify({"ok": True, "data": stats_store.summary()})
 
     # ------------------------- Настройки лидара ------------------------- #
     # Панель «Лидар» на экранах пульта: порт/протокол/скорость/линия мотора

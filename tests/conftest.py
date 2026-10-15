@@ -46,9 +46,10 @@ def config(tmp_path: Path) -> Config:
         lockout_seconds=300,
         pbkdf2_iterations=FAST_ITERATIONS,
         testing=True,
-        # интерфейс робота: детерминированная симуляция, файл замка — во временной папке
-        slam_source="sim",
+        # интерфейс робота без железа: значения пустые (демо-режима нет), файл замка — во временной папке
+        slam_source="none",
         slam_lock_file=tmp_path / "lock.json",
+        stats_file=tmp_path / "stats.json",
     )
 
 

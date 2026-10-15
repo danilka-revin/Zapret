@@ -1,0 +1,197 @@
+/* ============================================================================
+ * summary.css — вкладка «Сводка» основного экрана (summary.js).
+ * Цвета берутся из тех же переменных тем, что и main.css (20 тем).
+ * ========================================================================== */
+
+.summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 4px;
+}
+
+.summary[hidden] { display: none !important; }
+
+.summary-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.summary-title h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  color: var(--text);
+}
+
+.summary-sub {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.summary-actions .btn { min-height: 36px; }
+
+.btn-danger { color: var(--err); border-color: var(--err); }
+.btn-danger:hover { background: rgba(255, 90, 90, .08); }
+
+.summary-state {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.summary-state[data-tone="ok"] { color: var(--text); }
+.summary-state[data-tone="warn"] { color: var(--warn); }
+.summary-state[data-tone="bad"] { color: var(--err); }
+
+.summary-live {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 10px 14px;
+}
+
+.summary-live-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 150px;
+}
+.summary-live-item span {
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+}
+.summary-live-item b {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.summary-live-item b.bad { color: var(--err); }
+
+.summary-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--gap);
+}
+
+.sum-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.sum-kpi > span {
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+}
+.sum-kpi > b {
+  font-size: clamp(20px, 2vw, 28px);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.sum-kpi > small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gap);
+}
+
+.summary-panel { min-width: 0; }
+.summary-wide { grid-column: 1 / -1; }
+
+.sum-chart {
+  display: block;
+  width: 100%;
+  height: 180px;
+}
+
+.summary-empty {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.summary-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.summary-table th,
+.summary-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+  color: var(--text);
+}
+.summary-table th {
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+}
+.summary-table td.ok { color: var(--ok); }
+.summary-table td.bad { color: var(--err); }
+.summary-table td.summary-empty { white-space: normal; padding: 10px 8px; }
+
+.summary-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow: auto;
+}
+.summary-list li {
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text);
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--line);
+  overflow-wrap: anywhere;
+}
+.summary-list li.bad { color: var(--err); }
+.summary-list li.warn { color: var(--warn); }
+
+@media (max-width: 900px) {
+  .summary-grid { grid-template-columns: minmax(0, 1fr); }
+  .summary-wide { grid-column: auto; }
+}
