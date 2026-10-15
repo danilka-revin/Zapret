@@ -1741,18 +1741,67 @@
       });
     }
 
-    // --- ЛОГИ: /api/audit + локальные демо-события ---
+    // --- ЛОГИ: настоящий журнал робота (/api/kiosk_logs) ---
+    // Панель показывает события этого процесса: подключение и потеря лидара,
+    // ошибки портов, проверки PIN, команды руления и тяги. Выдуманных строк
+    // здесь нет: если событий не было, панель так и пишет. Демо-поток для
+    // проверки экрана включается только явно — «?demo=1» в адресе или
+    // localStorage.kiosk_demo = '1' — и подписывается как демо.
+    const KNOWN_LEVELS = ['info', 'ok', 'warn', 'err', 'debug'];
+    const LOG_STATUS_BASE = 'журнал робота · /api/kiosk_logs';
+    const demoLogsOn = new URLSearchParams(window.location.search).get('demo') === '1'
+      || localStorage.getItem('kiosk_demo') === '1';
     let logs = [];
-    let logSeq = 0;
+    let logIndex = new Map();
 
-    function pushLog(level, msg) {
-      const ts = new Date();
-      const hh = String(ts.getHours()).padStart(2,'0');
-      const mm = String(ts.getMinutes()).padStart(2,'0');
-      const ss = String(ts.getSeconds()).padStart(2,'0');
-      logs.push({ts: hh+':'+mm+':'+ss, level, msg});
+    function clockLabel(entry) {
+      const label = entry && entry.time;
+      if (typeof label === 'string' && label) return label;
+      const ts = Number(entry && entry.ts);
+      const d = Number.isFinite(ts) ? new Date(ts * 1000) : new Date();
+      return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0')
+        + ':' + String(d.getSeconds()).padStart(2,'0');
+    }
+
+    function setLogStatus(text) {
+      if (logStatus) logStatus.textContent = text;
+    }
+
+    // Строка, рождённая самим экраном (очистка списка, копирование). Это тоже
+    // настоящее действие оператора, поэтому подписываем его «экран:».
+    function pushLocalLog(level, msg) {
+      const now = new Date();
+      const ts = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0')
+        + ':' + String(now.getSeconds()).padStart(2,'0');
+      logs.push({key: null, ts, level, msg, repeat: 1, local: true});
       if (logs.length > 220) logs.shift();
       renderLogs();
+    }
+
+    // Запись журнала с сервера. Повторяющиеся события (лидар, удержание тяги)
+    // сервер сворачивает в счётчик «×N» — обновляем ту же строку, а не плодим.
+    function addJournalEntry(entry) {
+      if (!entry || typeof entry !== 'object') return;
+      const seq = Number(entry.seq);
+      const msg = String(entry.msg || '');
+      if (!Number.isFinite(seq) || !msg) return;
+      const key = seq + '|' + String(entry.ts || '') + '|' + msg;
+      const known = logIndex.get(key);
+      if (known) {
+        known.repeat = Number(entry.repeat) > 0 ? Number(entry.repeat) : known.repeat;
+        known.ts = clockLabel(entry);
+        return;
+      }
+      const level = KNOWN_LEVELS.indexOf(String(entry.level)) >= 0 ? String(entry.level) : 'info';
+      const row = {key, ts: clockLabel(entry), level, msg,
+                   repeat: Number(entry.repeat) > 0 ? Number(entry.repeat) : 1,
+                   source: String(entry.source || ''), local: false};
+      logIndex.set(key, row);
+      logs.push(row);
+      if (logs.length > 220) {
+        const dropped = logs.shift();
+        if (dropped && dropped.key) logIndex.delete(dropped.key);
+      }
     }
 
     function renderLogs() {
@@ -1764,10 +1813,13 @@
         const row = document.createElement('div');
         row.className = 'log-line';
         row.setAttribute('data-level', l.level);
+        if (l.local) row.setAttribute('data-local', '1');
         const ts = document.createElement('span'); ts.className='log-ts'; ts.textContent = l.ts;
         const lvl = document.createElement('span'); lvl.className='log-lvl '+l.level; lvl.textContent = l.level;
-        const msg = document.createElement('span'); msg.className='log-msg'; msg.textContent = l.msg;
+        const msg = document.createElement('span'); msg.className='log-msg';
+        msg.textContent = l.repeat > 1 ? l.msg + '  ×' + l.repeat : l.msg;
         row.appendChild(ts); row.appendChild(lvl); row.appendChild(msg);
+        if (l.source) row.title = 'источник: ' + l.source;
         frag.appendChild(row);
       });
       logList.appendChild(frag);
@@ -1776,73 +1828,98 @@
     }
 
     async function fetchLogs() {
+      let data = null;
+      let problem = '';
       try {
-        const r = await fetch('api/audit?limit=40', {cache:'no-store'});
-        const j = await r.json();
-        if (j && j.ok && Array.isArray(j.audit) && j.audit.length) {
-          // преобразуем аудит в логи
-          const mapped = j.audit.slice().reverse().map(a => {
-            const d = new Date(a.ts*1000);
-            const ts = String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
-            let lvl = 'info';
-            if (a.action === 'unlock' && a.ok) lvl = 'ok';
-            else if (!a.ok) lvl = 'err';
-            else if (a.action === 'pin_change') lvl = 'warn';
-            return {ts, level:lvl, msg: '['+a.action+'] '+(a.detail|| (a.ok?'ok':'fail'))};
-          });
-          // если новые — добавляем
-          mapped.forEach(m => {
-            const key = m.ts+m.msg;
-            if (!logs.some(x=> x.ts===m.ts && x.msg===m.msg)) logs.push(m);
-          });
-          if (logs.length>220) logs.splice(0, logs.length-220);
-          if (logStatus) logStatus.textContent = 'аудит · ' + j.audit.length + ' записей · ' + (j.integrity && j.integrity.ok ? 'целостность ok' : 'проверь цепь');
-          renderLogs();
+        const r = await fetch('api/kiosk_logs?limit=120', {cache:'no-store'});
+        if (r.status === 401 || r.status === 403) {
+          setLogStatus('журнал робота · нужен вход оператора (8090 — без входа)');
           return;
         }
-        if (logStatus) logStatus.textContent = 'журнал аудита · пусто — демо';
-      } catch(e) {
-        if (logStatus) logStatus.textContent = 'нет связи с /api/audit — демо';
+        if (!r.ok) {
+          setLogStatus('журнал робота · экран отвечает ' + r.status);
+          return;
+        }
+        // На пульте (8080) журнал закрыт входом: вместо JSON приезжает
+        // страница входа — так и говорим, а не «нет связи».
+        const j = await r.json().catch(() => null);
+        if (!j) {
+          setLogStatus('журнал робота · ответ не JSON — на пульте нужен вход оператора');
+          return;
+        }
+        data = (j.ok && j.data) ? j.data : null;
+      } catch (e) {
+        problem = 'нет связи с /api/kiosk_logs';
       }
-      // если аудит пуст — держим демо-логи
-      if (!logs.length) {
-        pushLog('info','система готова · ожидание данных');
+      if (problem) {
+        setLogStatus('журнал робота · ' + problem);
+        return;
       }
+      if (!data || !Array.isArray(data.entries)) {
+        setLogStatus('журнал робота · ответ без записей');
+        return;
+      }
+      data.entries.forEach(addJournalEntry);
+      renderLogs();
+      describeJournal(data);
     }
 
-    // демо-поток логов каждые 1.2-2.5 сек
+    // Русские окончания: «1 запись · 2 записи · 5 записей».
+    function ruCount(n, forms) {
+      const abs = Math.abs(Number(n) || 0) % 100;
+      const last = abs % 10;
+      if (abs > 10 && abs < 20) return forms[2];
+      if (last === 1) return forms[0];
+      if (last >= 2 && last <= 4) return forms[1];
+      return forms[2];
+    }
+
+    // Подпись под журналом: сколько настоящих записей, сколько ошибок, откуда
+    // данные и не потерялись ли старые строки из-за размера буфера.
+    function describeJournal(data) {
+      const levels = data.levels || {};
+      const errors = Number(levels.err) || 0;
+      const count = Number(data.count) || 0;
+      if (!count && !logs.length) {
+        setLogStatus(LOG_STATUS_BASE + ' · событий ещё не было');
+        return;
+      }
+      const parts = ['журнал робота',
+                     count + ' ' + ruCount(count, ['запись', 'записи', 'записей'])];
+      if (errors) parts.push(errors + ' ' + ruCount(errors, ['ошибка', 'ошибки', 'ошибок']));
+      if (Number(data.dropped)) parts.push('вытеснено ' + data.dropped);
+      if (data.source) parts.push('источник: ' + data.source);
+      if (demoLogsOn) parts.push('демо-строки включены');
+      setLogStatus(parts.join(' · '));
+    }
+
+    // Демо-поток: только по явному запросу и всегда с пометкой «демо».
     const demoMsgs = [
       ['info','SLAM: скан лидара 360° — 412 точек'],
       ['info','мотор FL: 12.4° · 42 об/мин'],
-      ['info','мотор FR: -8.1° · 41 об/мин'],
       ['info','АКБ: 77.8% · 39.2В · 1.1А · запас 17.3 км'],
-      ['info','маршрут: склад → зона выгрузки · 0.6 м/с'],
       ['ok','связь с модулями: ок (4/4)'],
       ['warn','лидар: ближайшая точка 0.84 м — замедление'],
-      ['info','навигация: коррекция курса -3.2°'],
       ['info','камера 1: кадр захвачен 1920×1080'],
-      ['info','камера 2: кадр захвачен 1920×1080'],
-      ['info','телеметрия: отправка /api/state'],
     ];
-    setInterval(() => {
-      const pick = demoMsgs[Math.floor(Math.random()*demoMsgs.length)];
-      // немного рандома времени
-      if (Math.random() < 0.55) pushLog(pick[0], pick[1]);
-    }, 1400);
+    if (demoLogsOn) {
+      pushLocalLog('warn','демо-режим: строки ниже выдуманы для проверки экрана');
+      setInterval(() => {
+        const pick = demoMsgs[Math.floor(Math.random()*demoMsgs.length)];
+        pushLocalLog(pick[0], 'демо: ' + pick[1]);
+      }, 1400);
+    }
     setInterval(fetchLogs, 2500);
-    // первичная загрузка
     fetchLogs();
-    // начальные логи
-    pushLog('ok','бортовой экран RUS SLAM запущен');
-    pushLog('info','свайп вправо → поворот модулей · влево → камеры и логи');
-    pushLog('info','управление рулевыми модулями защищено PIN-кодом');
-    setTimeout(() => pushLog('info','лидар: инициализация · дальность 10 м'), 600);
 
-    if (logClear) logClear.addEventListener('click', () => { logs = []; renderLogs(); pushLog('info','логи очищены'); });
+    if (logClear) logClear.addEventListener('click', () => {
+      logs = []; logIndex = new Map(); renderLogs();
+      pushLocalLog('info','экран: список очищен, журнал на роботе не тронут');
+    });
     if (logCopy) logCopy.addEventListener('click', async () => {
       const txt = logs.map(l => l.ts+' ['+l.level.toUpperCase()+'] '+l.msg).join('\n');
-      try { await navigator.clipboard.writeText(txt); pushLog('ok','логи скопированы в буфер'); }
-      catch(e) { pushLog('warn','не удалось скопировать — выдели вручную'); }
+      try { await navigator.clipboard.writeText(txt); pushLocalLog('ok','экран: список скопирован в буфер'); }
+      catch(e) { pushLocalLog('warn','экран: не удалось скопировать — выдели вручную'); }
     });
 
     // также свайп индикатор — при первом посещении подмигнуть

@@ -247,6 +247,74 @@ def test_healthz_reports_kiosk_mode(kiosk_client):
     assert body["mode"] == "kiosk"
 
 
+# ---------------------- журнал событий на борту ----------------------- #
+def test_journal_endpoint_is_empty_and_honest_on_a_fresh_screen(kiosk_client):
+    """Событий не было — так и написано; выдуманных строк в журнале нет."""
+    body = kiosk_client.get("/api/kiosk_logs").get_json()
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["demo"] is False              # это не демо-поток
+    assert data["entries"] == []
+    assert data["count"] == 0
+    assert data["levels"]["warn"] == 0
+
+
+def test_journal_records_real_pin_and_command_events(kiosk_app, kiosk_client):
+    """Настоящие события робота: неудачный PIN, принятый PIN, команда руления."""
+    class FakeSteeringSource:
+        name = "master"
+        supports_individual_steer = True
+
+        def steer_module(self, module, angle):
+            return {"ok": True, "angle": angle}
+
+    kiosk_app.extensions["rc_slam"].source = FakeSteeringSource()
+    kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "0000"})
+    kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "7232"})
+    kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 12.5},
+                      headers={"X-Robot-Control": "steering"})
+    kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 99},
+                      headers={"X-Robot-Control": "steering"})
+
+    entries = kiosk_client.get("/api/kiosk_logs?limit=50").get_json()["data"]["entries"]
+    text = "\n".join(entry["msg"] for entry in entries)
+    assert "PIN не принят" in text and "неверный PIN" in text
+    assert "PIN принят" in text
+    assert "руление FL → +12.5°" in text
+    assert "отклонено: угол вне допуска" in text
+    # Сам код PIN в журнал не попадает ни в каком виде.
+    assert "7232" not in text and "0000" not in text
+    # Демо-строк прежней панели здесь больше нет.
+    for fake in ("маршрут: склад", "навигация: коррекция курса", "SLAM: скан лидара 360°"):
+        assert fake not in text
+
+
+def test_journal_shows_why_the_scan_is_missing(kiosk_client):
+    """Причина «скана нет» попадает в журнал — без неё экран молчит о лидаре."""
+    kiosk_client.get("/api/kiosk_state")
+    entries = kiosk_client.get("/api/kiosk_logs").get_json()["data"]["entries"]
+    assert any(entry["source"] == "лидар" for entry in entries), entries
+
+
+def test_journal_limit_is_bounded(kiosk_client):
+    for bad in ("0", "abc", "100000"):
+        body = kiosk_client.get(f"/api/kiosk_logs?limit={bad}").get_json()
+        assert body["ok"] is True
+        assert isinstance(body["data"]["entries"], list)
+
+
+def test_screen_has_no_demo_log_stream(kiosk_client):
+    """Панель «Логи» берёт журнал робота, а не выдуманный поток строк."""
+    js = kiosk_client.get("/robot.js").get_data(as_text=True)
+    assert "api/kiosk_logs" in js
+    assert "api/audit" not in js
+    assert "demoMsgs" in js                      # демо-строки остались…
+    assert "demoLogsOn" in js                    # …но включаются только явно
+    html = kiosk_client.get("/kiosk").get_data(as_text=True)
+    assert "/api/kiosk_logs" in html
+    assert "/api/audit" not in html
+
+
 def test_screen_can_be_embedded_in_preview(kiosk_client):
     """Экран показывают во встроенном предпросмотре — запрет iframe не ставим."""
     response = kiosk_client.get("/kiosk")
