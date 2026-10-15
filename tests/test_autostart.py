@@ -132,6 +132,9 @@ def test_autostart_off_disables_services_session_entry_and_access_point(fake_hos
     calls = fake_host.calls.read_text(encoding="utf-8")
     assert "disable --now robot-control.service" in calls
     assert "disable --now robot-kiosk.service" in calls
+    # Драйвер лидара ROS 2 держит USB-порт: он тоже должен гаснуть вместе с
+    # приложениями, иначе следующий запуск остаётся без скана.
+    assert "disable --now robot-lidar.service" in calls
     assert "connection.autoconnect no" in calls
     assert not entry.exists(), "ярлык автозапуска сеанса должен быть удалён"
     assert "вручную" in result.stdout
@@ -149,7 +152,11 @@ def test_autostart_status_shows_what_starts_itself(fake_host, monkeypatch):
     result = run("autostart.sh", "status")
     assert result.returncode == 0, result.stderr
     out = result.stdout
-    assert out.count("автозапуск ВКЛЮЧЁН") == 2      # пульт и экран
+    # Пульт, бортовой экран и служба лидара ROS 2: последняя попадает в список
+    # только если она установлена на этой машине (фальшивый systemctl отвечает
+    # «установлена» на любой вызов `cat`).
+    assert out.count("автозапуск ВКЛЮЧЁН") == 3
+    assert "лидар ROS 2" in out
     assert "ВКЛЮЧЁН" in out and str(entry) in out
     assert "автоподъём ВКЛЮЧЁН" in out
     assert "autostart.sh off" in out

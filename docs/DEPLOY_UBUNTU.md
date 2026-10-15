@@ -16,6 +16,10 @@ cd robot-control
 из терминала: `./scripts/start_robot.sh`; для остановки: `./scripts/stop.sh`.
 По умолчанию источник — USB-мастер `RC_SLAM_SOURCE=master`, порт
 `/dev/ttyACM0`; поменяйте `RC_SLAM_PORT` в `.env`, если Linux назначил другой.
+Лидар настраивается отдельно: `./scripts/install_ubuntu.sh --ros2` ставит ROS 2
+и пакеты драйверов лидара, собирает `ros2_ws` и включает чтение скана из
+`/scan` (см. раздел 4b). Без флага `--ros2` установщик сам соберёт `ros2_ws`,
+если ROS 2 в системе уже есть.
 Если установщик добавил пользователя в `dialout`, выйдите из Ubuntu и войдите
 снова, чтобы группа USB-портов вступила в силу.
 
@@ -96,10 +100,54 @@ journalctl -u robot-kiosk -f
 Полностью погасить приложение, не трогая автозапуск, — `./scripts/stop.sh`
 (серверы по pid-файлам, службы, окно киоска).
 
-## 4b. Лидар (USB/UART)
+## 4b. Лидар: ROS 2 (рекомендуемый путь) и USB
 
-Лидар читает само приложение (`robot_control/lidar.py`): порт, протокол и
-скорость подбираются перебором, мотор RPLIDAR включается линией USB-переходника.
+Скан 360° отдаёт **драйвер ROS 2** (`hls_lfcd_lds_driver` для LDS-01/LDS-02 —
+лидар TurtleBot3 Burger, `rplidar_ros` для RPLIDAR, `ldlidar_stl_ros2` для
+LD06/LD19, `turtlebot3_node` — если лидар подключён к плате OpenCR). Пульт (8080)
+и бортовой экран (8090) подписываются на `/scan`; порт занимает драйвер, поэтому
+приложения больше не спорят за USB-устройство. Установка и запуск:
+
+```bash
+./scripts/ros2_setup.sh --install --drivers   # ROS 2 (apt), пакеты драйверов, сборка ros2_ws
+./scripts/ros2_setup.sh --service             # служба robot-lidar: драйвер до приложений
+./scripts/ros2_lidar.sh --status              # топик /scan, частота, состояние драйвера
+.venv/bin/python scripts/lidar_check.py --ros # дистрибутив ROS 2, rclpy, пакеты драйверов
+```
+
+`ros2_setup.sh --install` подключает официальный репозиторий ROS 2 и ставит
+`ros-<дистрибутив>-ros-base` (дистрибутив угадывается по версии Ubuntu:
+22.04 → `humble`, 24.04 → `jazzy`), `colcon` и `python3-serial`.
+`--drivers` добавляет пакеты лидаров (для LD06/LD19 — `--ldlidar`: этот пакет
+собирается из исходников). `ros2_setup.sh` без флагов просто собирает `ros2_ws`
+и пишет в `.env` `RC_LIDAR_SOURCE=ros`.
+
+Почему это работает из `.venv`: ROS 2 стоит системно в `/opt/ros`, а приложения
+работают интерпретатором из `.venv`; пути и переменные окружения для `rclpy`
+добавляет `robot_control/ros_env.py`, поэтому `import rclpy` в приложении
+срабатывает без `source /opt/ros/.../setup.bash`. Проверить: `.venv/bin/python
+scripts/lidar_check.py --ros`.
+
+Кто именно запустит драйвер, решает супервизор `zapret_lidar`
+(`ros2_ws/src/zapret_lidar`): он перебирает только те пакеты, что реально
+установлены, при `model:=auto` опознаёт лидар по кадрам на порту, следит за
+свежестью `/scan` и публикует состояние в `/zapret/lidar/status` — оно видно в
+панели «Лидар» обоих экранов и в `GET /api/lidar` → `ros.supervisor`. Полный
+разбор — `docs/ROS2_LIDAR.md`.
+
+Если ROS 2 не нужен (стенд, отладка), лидар по-прежнему читается напрямую:
+
+```bash
+RC_LIDAR_SOURCE=serial        # в .env: только USB-порт, без ROS 2
+```
+
+Тогда работает всё описанное ниже (перебор портов и протоколов самим приложением).
+
+### Лидар на USB-порту (режим `serial`)
+
+В режиме `serial` лидар читает само приложение (`robot_control/lidar.py`): порт,
+протокол и скорость подбираются перебором, мотор RPLIDAR включается линией
+USB-переходника.
 Перебор идёт по **всем** USB-портам (`/dev/serial/by-id/*`, `/dev/ttyUSB*`,
 `/dev/ttyACM*`), каждый круг начинается со следующего порта; порт из
 `RC_LIDAR_PORT` — только первый в очереди, а не единственный. Ход перебора виден
@@ -194,6 +242,11 @@ USB-порт лидара один, а приложений два, поэтом
 киоска). Выключить ещё и автозапуск, чтобы робот больше не поднимал приложение
 сам, — `./scripts/autostart.sh off`.
 
+Служба лидара: `sudo systemctl status robot-lidar`, журнал —
+`journalctl -u robot-lidar -f`. Если лидар не нужен вовсе (или подключён не к
+ROS 2-драйверу), службу можно не ставить, а лидар читать напрямую
+(`RC_LIDAR_SOURCE=serial`).
+
 Если вместо экрана Firefox пишет «Your Firefox profile cannot be loaded.
 It may be missing or inaccessible» — это snap-сборка: ей нельзя отдать
 профиль в `~/.cache` или `/tmp`. Запуск сам создаёт каталог в
@@ -272,7 +325,7 @@ sudo apt install -y python3-certbot-apache   # или сгенерировать
 | На экране «скана лидара нет» | под картой написана причина; подробнее — `scripts/lidar_check.py`, `GET /api/lidar` (поле `tried` — какие порты проверены), группа `dialout`, скорость под модель (см. раздел 4b) |
 | Приложение запускается само, а не нужно | `./scripts/autostart.sh status`, затем `./scripts/autostart.sh off` |
 | Лидар отвечает, но точек нет | мотор: перебрать `RC_LIDAR_MOTOR` (`dtr-low`, `rts-low`, …) или проверить питание лидара |
-| Лидар TurtleBot3 (LDS-01) не найден | проверьте `scripts/lidar_check.py --protocol lds01`; если лидар подключён через OpenCR, напрямую он недоступен (см. раздел 4b) |
+| Лидар TurtleBot3 (LDS-01) не найден | проверьте `.venv/bin/python scripts/lidar_check.py --ros` и `./scripts/ros2_lidar.sh --status`: скан должен отдавать драйвер ROS 2 (`hls_lfcd_lds_driver`, а через плату OpenCR — `turtlebot3_node`, `--model opencr`). Для USB-режима — `scripts/lidar_check.py --protocol lds01` (см. раздел 4b) |
 | Карта лидара пустая, хотя `lidar_check.py` лидар находит | веб-приложение запущено не из `.venv` (нет pyserial) или `.env` не перечитан: `./scripts/ensure_deps.sh`, `.venv/bin/python scripts/lidar_check.py --save-env`, перезапуск; проверка — `.venv/bin/python scripts/lidar_web_check.py` |
 | Экран показывает `демо · N точек (не лидар)` | реального скана нет: причина написана под картой, подробности — `GET /api/lidar` (поля `reason`, `usb_diagnostics`) |
 | Бортовой экран без скана, пульт со сканом | второй процесс берёт скан у первого по HTTP: `source: peer` — норма. Если `peer` не работает, проверьте `RC_LIDAR_PEER_URLS` и что оба приложения на одной машине |

@@ -52,13 +52,20 @@
         </header>
         <div class="rc-lidar-status" id="rc-lidar-status" role="status" aria-live="polite">Загружаю статус…</div>
         <form id="rc-lidar-form" class="rc-lidar-form">
+          <label>Откуда берётся скан
+            <select id="rc-lidar-source">
+              <option value="auto">auto — ROS 2, если он есть, иначе USB-порт</option>
+              <option value="ros">ros — ROS 2 (топик /scan, драйвер пакетом)</option>
+              <option value="serial">serial — USB-порт читает само приложение</option>
+            </select>
+          </label>
           <label>Порт (пусто — автопоиск)
             <input id="rc-lidar-port" list="rc-lidar-ports" placeholder="/dev/serial/by-id/… или /dev/ttyUSB0" autocomplete="off" />
             <datalist id="rc-lidar-ports"></datalist>
           </label>
           <label>Протокол
             <select id="rc-lidar-protocol">
-              <option value="auto">auto — подобрать самому</option>
+              <option value="auto">auto — подобрать самому (в ROS 2 — драйвер сам)</option>
               <option value="rplidar">rplidar — RPLIDAR A1/A2/A3/S1/C1</option>
               <option value="ld06">ld06 — LD06/LD19</option>
               <option value="lds01">lds01 — LDS-01/LDS-02 (TurtleBot3)</option>
@@ -136,6 +143,30 @@
     element.dataset.bad = bad ? '1' : '';
   }
 
+  // Строка про ROS 2: драйвер, порт, частота и состояние супервизора. Оператор
+  // должен видеть, что лидар отдаёт именно пакет ROS 2 (а не подбор портов), и
+  // что делать, если скана нет.
+  function rosLine(status) {
+    const ros = status && status.ros;
+    if (!ros) return '';
+    const parts = [];
+    if (ros.supervisor && ros.supervisor.driver) {
+      const driver = ros.supervisor.driver_title || ros.supervisor.driver;
+      const port = ros.supervisor.port ? ' · ' + String(ros.supervisor.port).split('/').pop() : '';
+      parts.push('драйвер ROS 2: ' + String(driver) + port);
+    }
+    if (ros.connected) {
+      parts.push(String(ros.points || 0) + ' точек · ' + String(ros.hz || 0) + ' Гц');
+    } else if (ros.publishers) {
+      parts.push('топик ' + String(ros.topic) + ' публикуют: ' + String(ros.publishers));
+    }
+    if (ros.distro) parts.push('ROS 2 ' + String(ros.distro));
+    const text = parts.length
+      ? `ROS 2: ${parts.join(' · ')}`
+      : (ros.available === false ? 'ROS 2: не подключён к процессу' : 'ROS 2: состояние неизвестно');
+    return esc(text);
+  }
+
   function renderStatus(status) {
     const element = $('rc-lidar-status');
     if (!element || !status) return;
@@ -148,15 +179,18 @@
       ? status.usb_diagnostics.summary : '';
     const source = status.source === 'peer' ? ' · скан от второго экрана' : '';
     const reason = [status.reason, status.hint].filter(Boolean).join(' — ');
+    const ros = rosLine(status);
     element.innerHTML = `<b>${status.connected ? 'Лидар подключён' : 'Скана пока нет'}</b>` +
       `${source} · точек: ${esc(status.points_count || 0)}<br>` +
-      `<span>устройство: ${esc(found)}${reason ? ' · ' + esc(reason) : ''}${usb ? '<br>' + esc(usb) : ''}</span>`;
+      `<span>устройство: ${esc(found)}${reason ? ' · ' + esc(reason) : ''}` +
+      `${ros ? '<br>' + ros : ''}${usb ? '<br>' + esc(usb) : ''}</span>`;
     const launch = $('rc-lidar-launch');
     if (launch) launch.dataset.state = status.connected ? 'ok' : 'bad';
   }
 
   function populateSettings(settings) {
     const value = settings || {};
+    $('rc-lidar-source').value = value.source || 'auto';
     $('rc-lidar-port').value = value.port || '';
     $('rc-lidar-protocol').value = value.protocol || 'auto';
     $('rc-lidar-baud').value = value.baud || '';
@@ -202,6 +236,7 @@
 
   function payload() {
     return {
+      source: $('rc-lidar-source').value,
       port: $('rc-lidar-port').value.trim(),
       protocol: $('rc-lidar-protocol').value,
       baud: $('rc-lidar-baud').value,
@@ -237,7 +272,7 @@
   }
 
   async function rescan() {
-    msg('Пересканирую порты…');
+    msg('Перезапускаю поиск лидара…');
     const rescanButton = $('rc-lidar-rescan');
     if (rescanButton) rescanButton.disabled = true;
     try {
@@ -247,7 +282,11 @@
         return;
       }
       renderStatus(body.status);
-      msg('Поиск запущен заново с текущими настройками.');
+      // При источнике ros «пересканировать» значит перезапустить драйвер через
+      // супервизор ROS 2 — сервер отвечает, что именно произошло.
+      msg(body.ros_rescan
+        ? 'ROS 2: ' + body.ros_rescan
+        : 'Поиск запущен заново с текущими настройками.');
     } catch (error) {
       msg('Сервер не отвечает при пересканировании.', true);
     } finally {

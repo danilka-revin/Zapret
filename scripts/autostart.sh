@@ -20,7 +20,8 @@
 #   ./scripts/autostart.sh on               # вернуть автозапуск
 #
 # Что проверяет и меняет:
-#   * службы systemd: robot-control (пульт), robot-kiosk (экран);
+#   * службы systemd: robot-control (пульт), robot-kiosk (экран) и robot-lidar
+#     (лидар через ROS 2 — если эта служба установлена);
 #   * единый ярлык пульта + экрана в автозапуске сеанса: ~/.config/autostart/robot-control.desktop;
 #   * автоподъём точки доступа Wi-Fi robot-ap (connection.autoconnect);
 #   * строки автозапуска в cron, если кто-то прописал их руками (о них
@@ -72,6 +73,15 @@ have_systemd() {
   command -v systemctl >/dev/null 2>&1 || return 1
   $SUDO systemctl list-unit-files --no-pager >/dev/null 2>&1
 }
+
+# Лидар через ROS 2 (robot-lidar) — отдельная служба: драйвер лидара занимает
+# USB-порт и должен подниматься раньше приложений (см. ros2_setup.sh --service).
+# Добавляем её в общий список только если она установлена: иначе в status у
+# каждой установки без ROS 2 висело бы «служба не установлена».
+if have_systemd && $SUDO systemctl cat robot-lidar.service >/dev/null 2>&1; then
+  UNITS+=(robot-lidar)
+  UNIT_TITLES+=("лидар ROS 2 (драйвер 360°)")
+fi
 
 unit_installed() {
   have_systemd && $SUDO systemctl cat "$1.service" >/dev/null 2>&1

@@ -1,0 +1,8 @@
+# Сборка рабочего пространства: в git попадает только src/
+build/
+install/
+log/
+# Пакеты драйверов, склонированные из исходников (например ldlidar_stl_ros2)
+src/ldlidar_stl_ros2/
+src/*_ros2/
+src/m-explore*/

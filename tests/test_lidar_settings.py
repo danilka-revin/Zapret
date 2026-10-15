@@ -56,16 +56,18 @@ def test_settings_are_validated_and_saved_without_touching_other_env(tmp_path):
     env.write_text("RC_SECRET_KEY=secret\nRC_SLAM_PORT=/dev/ttyACM0\n"
                    "RC_LIDAR_PORT=/dev/old\n", encoding="utf-8")
     saved = save_lidar_settings({
-        "port": "/dev/serial/by-id/usb-lidar", "protocol": "lds-01",
+        "source": "ros", "port": "/dev/serial/by-id/usb-lidar", "protocol": "lds-01",
         "baud": "230400", "motor": "none", "autoprobe": False,
     }, env_path=env)
-    assert saved == {"port": "/dev/serial/by-id/usb-lidar", "protocol": "lds01",
-                     "baud": "230400", "motor": "none", "autoprobe": False}
+    assert saved == {"source": "ros", "port": "/dev/serial/by-id/usb-lidar",
+                     "protocol": "lds01", "baud": "230400", "motor": "none",
+                     "autoprobe": False}
     text = env.read_text(encoding="utf-8")
     assert "RC_SECRET_KEY=secret" in text
     assert "RC_SLAM_PORT=/dev/ttyACM0" in text
     assert "RC_LIDAR_PORT=/dev/serial/by-id/usb-lidar" in text
     assert text.count("RC_LIDAR_PORT=") == 1
+    assert "RC_LIDAR_SOURCE=ros" in text
 
 
 @pytest.mark.parametrize("payload,field", [
@@ -82,11 +84,12 @@ def test_bad_settings_are_refused(payload, field):
 
 def test_manager_reconfigure_changes_search_parameters(manager):
     applied = manager.reconfigure({
-        "port": "/dev/ttyUSB9", "protocol": "rplidar", "baud": "256000",
-        "motor": "dtr-low", "autoprobe": False,
+        "source": "serial", "port": "/dev/ttyUSB9", "protocol": "rplidar",
+        "baud": "256000", "motor": "dtr-low", "autoprobe": False,
     })
-    assert applied == {"port": "/dev/ttyUSB9", "protocol": "rplidar",
-                       "baud": "256000", "motor": "dtr-low", "autoprobe": False}
+    assert applied == {"source": "serial", "port": "/dev/ttyUSB9",
+                       "protocol": "rplidar", "baud": "256000",
+                       "motor": "dtr-low", "autoprobe": False}
     assert manager.get_status()["settings"] == applied
     assert manager.get_scan() is None
 
@@ -153,14 +156,14 @@ def test_kiosk_lidar_settings_and_rescan_are_available_without_pin(config, monke
 def test_external_env_change_interrupts_active_serial_read(manager, monkeypatch, tmp_path):
     """Новый .env должен отпустить уже найденный порт, а не ждать обрыва лидара."""
     env = tmp_path / ".env"
-    old = {"port": "/dev/ttyUSB0", "protocol": "auto", "baud": "",
+    old = {"source": "serial", "port": "/dev/ttyUSB0", "protocol": "auto", "baud": "",
            "motor": "auto", "autoprobe": True}
-    new = {"port": "/dev/ttyUSB1", "protocol": "lds01", "baud": "230400",
-           "motor": "none", "autoprobe": False}
+    new = {"source": "serial", "port": "/dev/ttyUSB1", "protocol": "lds01",
+           "baud": "230400", "motor": "none", "autoprobe": False}
     manager._apply_settings(old)
-    env.write_text("RC_LIDAR_PORT=/dev/ttyUSB1\nRC_LIDAR_PROTOCOL=lds01\n"
-                   "RC_LIDAR_BAUD=230400\nRC_LIDAR_MOTOR=none\n"
-                   "RC_LIDAR_AUTOPROBE=0\n", encoding="utf-8")
+    env.write_text("RC_LIDAR_SOURCE=serial\nRC_LIDAR_PORT=/dev/ttyUSB1\n"
+                   "RC_LIDAR_PROTOCOL=lds01\nRC_LIDAR_BAUD=230400\n"
+                   "RC_LIDAR_MOTOR=none\nRC_LIDAR_AUTOPROBE=0\n", encoding="utf-8")
     manager._env_file = env
     manager._env_mtime = 0.0
     manager._env_checked = 0.0
@@ -196,13 +199,14 @@ def test_external_env_change_interrupts_active_serial_read(manager, monkeypatch,
 
 def test_worker_starts_new_port_immediately_after_env_change(manager, monkeypatch, tmp_path):
     """Новая конфигурация прерывает не только порт, но и остаток старого круга."""
-    old = {"port": "/dev/ttyUSB0", "protocol": "auto", "baud": "",
+    old = {"source": "serial", "port": "/dev/ttyUSB0", "protocol": "auto", "baud": "",
            "motor": "auto", "autoprobe": True}
-    new = {"port": "/dev/ttyUSB1", "protocol": "lds01", "baud": "230400",
-           "motor": "none", "autoprobe": False}
+    new = {"source": "serial", "port": "/dev/ttyUSB1", "protocol": "lds01",
+           "baud": "230400", "motor": "none", "autoprobe": False}
 
     def env_text(settings):
-        return (f"RC_LIDAR_PORT={settings['port']}\n"
+        return (f"RC_LIDAR_SOURCE={settings['source']}\n"
+                f"RC_LIDAR_PORT={settings['port']}\n"
                 f"RC_LIDAR_PROTOCOL={settings['protocol']}\n"
                 f"RC_LIDAR_BAUD={settings['baud']}\n"
                 f"RC_LIDAR_MOTOR={settings['motor']}\n"
@@ -271,7 +275,7 @@ def test_env_file_change_is_picked_up_by_other_process(manager, tmp_path):
     manager._env_checked = 0.0
     assert manager._sync_settings_from_env_file() is True
     assert manager.current_settings() == {
-        "port": "/dev/ttyUSB7", "protocol": "lds01", "baud": "230400",
-        "motor": "none", "autoprobe": False,
+        "source": "auto", "port": "/dev/ttyUSB7", "protocol": "lds01",
+        "baud": "230400", "motor": "none", "autoprobe": False,
     }
     assert manager._sync_settings_from_env_file() is False

@@ -116,6 +116,35 @@ def demo_payload(points_count: int = 180) -> dict:
     return state_payload(scan_points(points_count, radius=3.0), status)
 
 
+def ros_payload(points_count: int = 360, **ros_over) -> dict:
+    """Скан идёт из ROS 2: драйвер публикует /scan, USB-порт приложения нет."""
+    ros = {
+        "available": True,
+        "connected": True,
+        "topic": "/scan",
+        "points": points_count,
+        "hz": 9.4,
+        "age_s": 0.05,
+        "publishers": 1,
+        "publisher_names": ["lidar_supervisor"],
+        "supervisor": {"backend": "zapret_lidar", "state": "running",
+                       "driver": "lds01", "driver_package": "hls_lfcd_lds_driver",
+                       "driver_title": "LDS-01/LDS-02 (TurtleBot3 Burger, HLS-LFCD2)",
+                       "port": "/dev/ttyUSB0", "baud": 230400, "points": points_count},
+        "reason": "скан идёт из ROS 2 /scan: 360 точек, 9.4 Гц",
+        "hint": "",
+    }
+    ros.update(ros_over)
+    status = lidar_status(
+        source="ros", points_count=points_count,
+        detected=None, python="/home/robot/you/.venv/bin/python",
+        reason=ros["reason"], hint=ros["hint"],
+    )
+    status["ros"] = ros
+    status["source_mode"] = "ros"
+    return state_payload(scan_points(points_count), status)
+
+
 def empty_payload() -> dict:
     """Скана нет совсем: ни реального, ни демо."""
     status = lidar_status(
@@ -185,6 +214,51 @@ def test_kiosk_map_does_not_clamp_far_points_to_outer_ring(tmp_path):
     assert report["count"] == "2"  # полный скан остаётся виден в счётчике
     assert report["dots"] == 1     # на карту попала только точка в пределах 10 м
     assert "на карте: 1/2" in report["meta"]
+
+
+@pytest.mark.parametrize("screen", SCREENS)
+def test_scan_from_ros_is_drawn_and_signed_as_ros(screen, tmp_path):
+    """Скан из ROS 2 рисуется, а подпись говорит «ROS 2», топик и драйвер.
+
+    Раньше в подписи был только USB-порт, поэтому на роботе (где скан отдаёт
+    драйвер ROS 2) выглядело так, будто лидар читает само приложение, и в
+    диагностике искали не то.
+    """
+    report = render(screen, ros_payload(360), tmp_path)
+    assert report["dots"] > 0, report
+    assert report["count"] == "360"
+    assert report["emptyHidden"] is True
+    assert report["renderErrors"] == [], report["renderErrors"]
+    meta = report["meta"]
+    assert "ROS 2" in meta, meta
+    assert "/scan" in meta
+    assert "hls_lfcd_lds_driver" in meta
+    assert "9.4" in meta
+
+
+def test_ros_without_scan_shows_the_driver_reason_on_the_console(tmp_path):
+    """ROS 2 есть, драйвер не отдал скан — на пульте причина и команда запуска.
+
+    Бортовой экран намеренно держит статичную плашку (диагностика живёт в панели
+    «Лидар» и на пульте), поэтому проверяем пульт: там оператор и должен увидеть,
+    что дело не в кабеле, а в незапущенном драйвере ROS 2.
+    """
+    ros = {"available": True, "connected": False, "points": 0, "hz": 0.0, "age_s": None,
+           "publishers": 0, "supervisor": {"backend": "zapret_lidar", "state": "failed",
+                                           "reason": "ни один драйвер не отдал /scan",
+                                           "driver": "lds01", "port": "/dev/ttyUSB0"},
+           "reason": "ROS 2 есть, но /scan никто не публикует — драйвер лидара не запущен",
+           "hint": "запусти драйвер лидара: ./scripts/ros2_lidar.sh"}
+    status = lidar_status(connected=False, source="no_signal", points_count=0, age_s=None,
+                          detected=None, reason=ros["reason"], hint=ros["hint"])
+    status["ros"] = ros
+    status["source_mode"] = "ros"
+    report = render("main", state_payload([], status), tmp_path)
+    assert report["dots"] == 0
+    assert report["emptyHidden"] is False
+    text = (report.get("emptyText") or "") + " " + (report.get("title") or "")
+    assert "ros2_lidar.sh" in text, report
+    assert "ROS 2" in text, report
 
 
 @pytest.mark.parametrize("screen", SCREENS)
