@@ -19,6 +19,7 @@ DOM, скрипт выполняется как в странице, ``fetch`` �
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -138,14 +139,21 @@ def empty_payload() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def render(screen: str, payload: dict, tmp_path: Path) -> dict:
-    """Прогоняет ``slam_gui/<screen>.js`` на заготовленном ответе API."""
+def render(screen: str, payload: dict, tmp_path: Path, *, demo: bool = False) -> dict:
+    """Прогоняет ``slam_gui/<screen>.js`` на заготовленном ответе API.
+
+    ``demo=True`` — тот же экран с явно включённым демо-режимом (``?demo=1``):
+    только в нём панель логов имеет право рисовать выдуманные строки.
+    """
     assert screen in SCREENS
     payload_file = tmp_path / ("payload_%s.json" % screen)
     payload_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    env = dict(os.environ)
+    if demo:
+        env["HARNESS_DEMO"] = "1"
     result = subprocess.run(
         [NODE, str(HARNESS), screen, str(payload_file)],
-        cwd=str(ROOT), capture_output=True, text=True, timeout=120,
+        cwd=str(ROOT), capture_output=True, text=True, timeout=120, env=env,
     )
     assert result.returncode == 0, \
         "экран %s упал:\n%s\n%s" % (screen, result.stdout, result.stderr)
@@ -272,6 +280,84 @@ def test_missing_scan_shows_reason_and_usb_diagnostics(screen, tmp_path):
 def test_missing_scan_meta_text(screen, tmp_path):
     report = render(screen, empty_payload(), tmp_path)
     assert report["meta"] == ("лидар: нет данных" if screen == "main" else "нет скана")
+
+
+# ---------------------------------------------------------------------------
+# Панель «Логи»: настоящий журнал робота, а не выдуманный поток
+# ---------------------------------------------------------------------------
+
+
+def journal_payload(entries: list[dict]) -> dict:
+    """Ответ /api/kiosk_logs: записи настоящего журнала процесса."""
+    levels = {"info": 0, "ok": 0, "warn": 0, "err": 0, "debug": 0}
+    for entry in entries:
+        levels[entry["level"]] = levels.get(entry["level"], 0) + 1
+    return {
+        "ok": True,
+        "data": {
+            "entries": entries,
+            "count": len(entries),
+            "shown": len(entries),
+            "dropped": 3,
+            "limit": 400,
+            "levels": levels,
+            "uptimeSec": 128,
+            "source": "master",
+            "demo": False,
+            "journal": "robot",
+        },
+    }
+
+
+def journal_entry(seq: int, level: str, msg: str, *, source: str = "",
+                  ts: float = 1_800_000_000.0, repeat: int = 1) -> dict:
+    return {"seq": seq, "ts": ts + seq, "time": "12:00:%02d" % seq, "level": level,
+            "source": source, "msg": msg, "repeat": repeat}
+
+
+def test_log_panel_shows_real_journal_lines(tmp_path):
+    """Оператор видит настоящие события робота: лидар, отказ команды, PIN."""
+    payload = real_payload()
+    payload["logs"] = journal_payload([
+        journal_entry(1, "ok", "лидар на связи (serial:ttyUSB1, 360 точек)", source="лидар"),
+        journal_entry(2, "warn", "руление отклонено: угол вне допуска ±32°", source="управление"),
+        journal_entry(3, "warn", "PIN не принят (бортовой экран): неверный PIN",
+                      source="pin", repeat=4),
+    ])
+    report = render("robot", payload, tmp_path)
+    lines = report["logLines"]
+    assert report["renderErrors"] == [], report["renderErrors"]
+    assert [line["msg"].split("  ×")[0] for line in lines] == [
+        "лидар на связи (serial:ttyUSB1, 360 точек)",
+        "руление отклонено: угол вне допуска ±32°",
+        "PIN не принят (бортовой экран): неверный PIN",
+    ]
+    assert [line["level"] for line in lines] == ["ok", "warn", "warn"]
+    assert lines[0]["time"] == "12:00:01"
+    # повторяющееся событие подписано счётчиком, а не размножено строками
+    assert lines[2]["msg"].endswith("×4")
+    # подпись под журналом — про настоящий журнал, с числом записей и ошибок
+    status = report["logStatus"]
+    assert "журнал робота" in status and "3 записи" in status
+    assert "вытеснено 3" in status and "источник: master" in status
+
+
+def test_log_panel_does_not_invent_lines(tmp_path):
+    """Журнал пуст — панель молчит о событиях, а не рисует демо-поток."""
+    report = render("robot", real_payload(), tmp_path)
+    assert report["logLines"] == [], report["logLines"]
+    assert "журнал робота" in report["logStatus"]
+    assert "демо" not in report["logStatus"]
+    assert report["renderErrors"] == []
+
+
+def test_demo_logs_only_when_explicitly_asked(tmp_path):
+    """Демо-строки появляются только по явному «?demo=1» и подписаны как демо."""
+    report = render("robot", real_payload(), tmp_path, demo=True)
+    assert report["logLines"], "демо-режим не показал ни одной строки"
+    assert "демо-строки включены" in report["logStatus"]
+    assert all("демо" in line["msg"] for line in report["logLines"]), report["logLines"]
+    assert report["renderErrors"] == []
 
 
 def test_screen_survives_payload_without_lidar(tmp_path):

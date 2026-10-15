@@ -181,6 +181,29 @@ def test_audit_records_attempts(client, operator):
     assert body["integrity"]["ok"] is True  # хеш-цепочка не повреждена
 
 
+def test_kiosk_logs_are_real_and_need_login(client, operator):
+    """Журнал событий для панели «Логи»: настоящие записи и только после входа.
+
+    На борту (8090) панель публична вместе с телеметрией, а на пульте журнал
+    процесса закрыт входом оператора — как и остальные служебные данные.
+    """
+    assert client.get("/api/kiosk_logs").status_code in (302, 401)
+
+    login(client)
+    body = client.get("/api/kiosk_logs?limit=20").get_json()
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["demo"] is False           # выдуманных строк в журнале нет
+
+    # Настоящее событие робота: неверный PIN отсечён — в журнале это видно.
+    client.post("/api/lock/open", json={"pin": "0000"})
+    client.post("/api/kiosk_lock/verify", json={"pin": "0000"})
+    entries = client.get("/api/kiosk_logs?limit=50").get_json()["data"]["entries"]
+    text = "\n".join(entry["msg"] for entry in entries)
+    assert "PIN" in text and "неверный PIN" in text
+    assert "0000" not in text
+
+
 # -------------------------------- статика -------------------------------- #
 def test_assets_are_served(client, operator):
     login(client)

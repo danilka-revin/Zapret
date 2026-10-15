@@ -78,6 +78,14 @@ class El {
     this.height = 320;
     this.dots = [];
     this.readyState = 'complete';
+    this._innerHTML = '';
+  }
+  /* Панель логов чистит список через `innerHTML = ''` — в браузере это
+   * снимает прежние строки, поэтому и здесь они не должны накапливаться. */
+  get innerHTML() { return this._innerHTML; }
+  set innerHTML(value) {
+    this._innerHTML = value;
+    if (value === '') this.children = [];
   }
   addEventListener() {}
   removeEventListener() {}
@@ -111,8 +119,11 @@ global.document = {
   title: '',
   getElementById: byId,
   createElement: (tag) => new El('', tag),
+  createDocumentFragment: () => new El('', 'fragment'),
   createTextNode: (text) => ({ textContent: text }),
-  querySelector: () => null,
+  /* Свайп-панель камер и логов объявлена на `.kiosk`; без него весь блок
+   * (в том числе панель логов) не выполняется — отдаём ему элемент. */
+  querySelector: (selector) => (selector === '.kiosk' ? byId('kiosk-root') : null),
   querySelectorAll: () => [],
   addEventListener: () => {},
   removeEventListener: () => {},
@@ -143,7 +154,13 @@ global.self = global;
 global.addEventListener = () => {};
 global.removeEventListener = () => {};
 global.dispatchEvent = () => true;
-global.location = { search: '', hash: '', href: 'http://127.0.0.1:8090/kiosk', protocol: 'http:' };
+/* HARNESS_DEMO=1 — экран с явно включённым демо-режимом (`?demo=1`). */
+global.location = {
+  search: process.env.HARNESS_DEMO === '1' ? '?demo=1' : '',
+  hash: '',
+  href: 'http://127.0.0.1:8090/kiosk',
+  protocol: 'http:',
+};
 global.localStorage = {
   store: {},
   getItem(key) { return Object.prototype.hasOwnProperty.call(this.store, key) ? this.store[key] : null; },
@@ -165,10 +182,21 @@ global.AbortController = class {
   constructor() { this.signal = { aborted: false }; }
   abort() { this.signal.aborted = true; }
 };
+/* Ответ на журнал событий (/api/kiosk_logs). Если заготовка его не несёт —
+ * отдаём пустой настоящий журнал: экран не должен ничего выдумывать сам. */
+const emptyJournal = {
+  ok: true,
+  data: { entries: [], count: 0, shown: 0, dropped: 0, limit: 400,
+          levels: { info: 0, ok: 0, warn: 0, err: 0, debug: 0 },
+          uptimeSec: 0, source: null, demo: false, journal: 'robot' },
+};
 global.fetch = async (url) => {
   const text = String(url);
   if (/camera/.test(text)) {
     return { ok: true, status: 200, json: async () => ({ ok: true, cameras: [] }) };
+  }
+  if (/kiosk_logs/.test(text)) {
+    return { ok: true, status: 200, json: async () => payload.logs || emptyJournal };
   }
   return { ok: true, status: 200, json: async () => payload };
 };
@@ -204,6 +232,18 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
   const near = byId('lidar-near');
   const empty = byId('lidar-empty');
   const canvas = byId('lidar-canvas');
+  // Панель «Логи»: строки, которые видит оператор (время · уровень · текст).
+  // Скрипт собирает строки во фрагменте и лишь потом вставляет его в список —
+  // в браузере фрагмент не остаётся узлом, поэтому разворачиваем его сами.
+  const logRows = [];
+  (byId('log-list').children || []).forEach((child) => {
+    if (child.tagName === 'FRAGMENT') logRows.push(...(child.children || []));
+    else logRows.push(child);
+  });
+  const logLines = logRows
+    .map((row) => (row.children || []).map((cell) => cell.textContent))
+    .filter((parts) => parts.length)
+    .map((parts) => ({ time: parts[0], level: parts[1], msg: parts.slice(2).join(' ') }));
   console.log(JSON.stringify({
     screen,
     meta: meta.textContent,
@@ -213,6 +253,8 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
     emptyText: empty.textContent,
     emptyTitle: empty.title,
     dots: canvas.dots.length,
+    logLines,
+    logStatus: byId('log-status').textContent,
     renderErrors,
     otherWarnings,
   }, null, 2));

@@ -52,6 +52,7 @@ except ImportError:  # pragma: no cover - не-POSIX платформы
 from flask import Flask, Response, jsonify, redirect, request
 from werkzeug.serving import make_server
 
+from robot_control import eventlog
 from robot_control.camera import CameraManager
 from robot_control.config import PROJECT_ROOT, Config
 from robot_control.lidar import LidarManager, set_self_port
@@ -68,8 +69,11 @@ from robot_control.slam import (
     dispatch_steering_command,
     dispatch_steering_zero,
     grant_steering_access,
+    kiosk_log_payload,
     lidar_for_screen,
     lidar_status_payload,
+    note_pin_required,
+    note_pin_result,
     revoke_steering_access,
     start_lidar,
     steering_access_valid,
@@ -444,6 +448,11 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         SESSION_COOKIE_SECURE=config.cookie_secure,
     )
 
+    # Панель «Логи» показывает настоящий журнал процесса: записи логирования
+    # robot_control.* и явные события маршрутов. Подключаем его первым делом,
+    # чтобы в журнал попало всё, включая неудачный старт источника данных.
+    eventlog.install()
+
     # Телеметрия открыта без логина; поворот модулей доступен только по PIN.
     try:
         state = build_state(
@@ -481,6 +490,18 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     @app.get(KIOSK_URL_PATH)
     def kiosk():
         return _send(KIOSK_PAGE)
+
+    @app.get("/api/kiosk_logs")
+    def api_kiosk_logs():
+        """Настоящий журнал событий робота для панели «Логи» на борту.
+
+        Публичен вместе с остальной телеметрией экрана: это журнал самого
+        процесса — подключение лидара, ошибки портов, PIN, команды руления и
+        тяги. Выдуманных строк в нём нет; если событий не было, ``entries``
+        пустой, и экран так и пишет.
+        """
+        limit = eventlog.clamp_limit(request.args.get("limit"))
+        return jsonify({"ok": True, "data": kiosk_log_payload(limit, state=state)})
 
     @app.get("/main.html")
     @app.get("/robot.html")
@@ -619,6 +640,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         body = request.get_json(silent=True) or {}
         pin = str(body.get("pin", ""))
         result = state.vault.verify(pin)
+        # Настоящий итог проверки — в журнал экрана (сам код PIN не пишется).
+        note_pin_result(result, where="бортовой экран")
         if result.get("ok"):
             grant_steering_access()
         else:
@@ -629,6 +652,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     @app.post("/api/kiosk_lock/session/end")
     def api_kiosk_steering_logout():
+        if steering_access_valid():
+            eventlog.record("info", "PIN-сессия руления закрыта оператором", source="руление")
         revoke_steering_access()
         return jsonify({"ok": True, "steeringAuthorized": False})
 
@@ -654,6 +679,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
         if not steering_access_valid():
+            note_pin_required("руление")
             return jsonify({"ok": False, "reason": "pin_required"}), 401
         result, status = dispatch_steering_command(state.source, request.get_json(silent=True))
         return jsonify(result), status
@@ -665,6 +691,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
         if not steering_access_valid():
+            note_pin_required("программный ноль")
             return jsonify({"ok": False, "reason": "pin_required"}), 401
         result, status = dispatch_steering_zero(state.source, request.get_json(silent=True))
         return jsonify(result), status
@@ -676,6 +703,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
         if not steering_access_valid():
+            note_pin_required("тяга")
             return jsonify({"ok": False, "reason": "pin_required"}), 401
         result, status = dispatch_drive_command(state.source, request.get_json(silent=True))
         return jsonify(result), status
@@ -692,6 +720,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if not pin or state is None:
             return False
         result = state.vault.verify(pin)
+        note_pin_result(result, where="настройки лидара")
         if result.get("ok"):
             grant_steering_access()
             return True

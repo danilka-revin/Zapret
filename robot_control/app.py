@@ -33,6 +33,7 @@ from flask import (
 from itsdangerous import BadSignature, URLSafeSerializer, URLSafeTimedSerializer
 from werkzeug.routing import BuildError
 
+from . import eventlog
 from .auth import (
     ROLE_OPERATOR,
     LoginThrottle,
@@ -91,6 +92,10 @@ def create_app(config: Config | None = None) -> Flask:
     """Фабрика приложения — так его удобно поднимать и в тестах, и в бою."""
     config = config or Config.from_env()
     app = Flask(__name__)
+
+    # Панель «Логи» на бортовом экране показывает настоящий журнал процесса:
+    # подключаем его до первого логирования, чтобы ничего не потерялось.
+    eventlog.install()
 
     app.config["SECRET_KEY"] = config.secret_key or secrets.token_urlsafe(48)
     if not config.secret_key:
