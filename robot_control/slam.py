@@ -405,6 +405,7 @@ ASSETS = {
     # страница киоска на борту робота (без авторизации)
     "robot.css": "robot_css",
     "robot.js": "robot_js",
+    "battery.js": "battery_js",
     "steering.css": "steering_css",
     "steering.js": "steering_js",
     "update.css": "update_css",
@@ -456,7 +457,8 @@ def chassis_ports(ports):
     остановлен). Порт из ``RC_LIDAR_PORT`` сравнивается по realpath, потому что
     на роботе это обычно ``/dev/serial/by-id/…`` → ``/dev/ttyUSB1``.
     """
-    reserved = lidar_reserved_ports()
+    from .battery import reserved_ports
+    reserved = lidar_reserved_ports() | reserved_ports()
     if not reserved:
         return list(ports)
     kept, skipped = [], []
@@ -471,7 +473,7 @@ def chassis_ports(ports):
             kept.append(port)
     if skipped:
         log.info(
-            "шасси: порт(ы) %s отданы лидару (RC_LIDAR_PORT) — модули их не открывают",
+            "шасси: порт(ы) %s отданы лидару/BMS (RC_LIDAR_PORT/RC_BMS_PORT) — модули их не открывают",
             ", ".join(skipped),
         )
     return kept
@@ -513,6 +515,9 @@ def chassis_source(mod, ports):
         перебирает такой порт: он всё равно занят, а совет «проверь кабель»
         уводит в сторону.
     """
+    from .battery import reserved_ports
+    bms_ports = reserved_ports()
+    ports = [p for p in ports if p not in bms_ports and os.path.realpath(p) not in bms_ports]
     return mod.SerialSource(
         ports,
         claim=try_lock_port,
@@ -547,7 +552,12 @@ def make_source(mode: str = "auto", ports=None):
         return mod.RosSource()
     if mode == "master":
         # мастер-Arduino на одном UART (RC_SLAM_PORT, по умолчанию /dev/ttyACM0)
-        return mod.MasterSource(os.environ.get("RC_SLAM_PORT", "/dev/ttyACM0").strip())
+        from .battery import reserved_ports
+        port = os.environ.get("RC_SLAM_PORT", "/dev/ttyACM0").strip()
+        if port in reserved_ports() or os.path.realpath(port) in reserved_ports():
+            log.error("Шасси: RC_SLAM_PORT совпадает с RC_BMS_PORT — мастер отключён")
+            return mod.NoSource()
+        return mod.MasterSource(port)
 
     if mode != "auto":
         log.warning("неизвестный RC_SLAM_SOURCE=%r — использую auto", mode)
@@ -727,6 +737,16 @@ def create_blueprint(state, guard=None) -> Blueprint:
             "drive": snap.get("drive"),
         }
         return jsonify({"ok": True, "data": public})
+
+    @bp.get("/api/battery")
+    def api_battery():
+        from .battery import kiosk_snapshot
+        return jsonify({"ok": True, "battery": kiosk_snapshot()}), 200, {"Cache-Control": "no-store"}
+
+    @bp.get("/api/battery/report.csv")
+    def api_battery_report():
+        from .battery import kiosk_snapshot, report_response
+        return report_response(kiosk_snapshot())
 
     # PIN-оверлей киоска: телеметрия публична, команды руления и тяги доступны
     # только после проверки PIN и в короткоживущей серверной сессии.

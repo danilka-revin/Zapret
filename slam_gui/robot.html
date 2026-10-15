@@ -29,6 +29,7 @@
         <b>RUS SLAM · Бортовой экран</b>
       </div>
       <div class="top-right">
+        <button id="battery-open" class="swipe-close" type="button" aria-controls="swipe-battery-view">АКБ · все банки · 4</button>
         <span class="mode-pill" id="mode-pill">—</span>
         <span class="chip" id="data-chip">ожидание</span>
         <time class="clock" id="clock">--:--</time>
@@ -173,9 +174,27 @@
         <h2 id="swipe-title-text">Камеры и логи</h2>
         <small id="swipe-title-hint">свайп влево — назад к статистике</small>
       </div>
+      <button id="swipe-battery-open" class="swipe-close" type="button" aria-controls="swipe-battery-view">АКБ · 4</button>
       <span class="swipe-live" id="swipe-live">● LIVE</span>
     </header>
     <div class="swipe-body">
+      <section id="swipe-battery-view" class="swipe-view battery-detail" hidden aria-label="Страница 4. Аккумулятор и все банки">
+        <header class="battery-report-head">
+          <div><h3>АКБ · отчёт по всем банкам</h3><p id="bms-status" role="status">Ожидание BMS…</p><small id="bms-updated">Нет измерений</small></div>
+          <a id="bms-report" class="swipe-close" href="api/battery/report.csv" aria-disabled="true">Скачать CSV</a>
+        </header>
+        <div id="bms-summary" class="bms-summary"></div>
+        <p id="bms-faults"></p>
+        <p id="bms-spread"></p>
+        <p id="bms-count"></p>
+        <p class="panel-meta">Ток: + заряд, − разряд. Балансировка — флаг BMS. Температуры относятся к датчикам АКБ, не к отдельным банкам.</p>
+        <div class="bms-table-wrap">
+          <table class="bms-table">
+            <thead><tr><th scope="col">Банка</th><th scope="col">Напряжение</th><th scope="col">От среднего</th><th scope="col">Балансировка</th><th scope="col">Отметка</th></tr></thead>
+            <tbody id="bms-cells"><tr><td colspan="5">Нет данных от BMS</td></tr></tbody>
+          </table>
+        </div>
+      </section>
       <div id="swipe-cameras-view" class="swipe-view swipe-camera-view">
       <!-- левая часть — две камеры друг над другом -->
       <div class="cam-stack">
@@ -431,6 +450,7 @@
   </div>
 
   <script src="robot.js"></script>
+  <script src="battery.js"></script>
   <script src="lidar_settings.js"></script>
 </body>
 </html>
