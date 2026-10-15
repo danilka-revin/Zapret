@@ -16,6 +16,7 @@
   white-space: nowrap;
 }
 .rc-update-launch:hover { border-color: #8bc897; background: #21452d; }
+.rc-update-launch.rc-update-floating { position: fixed; right: 16px; bottom: 16px; z-index: 12000; box-shadow: 0 8px 30px rgba(0,0,0,.45); }
 .rc-update-launch[data-state="available"] { animation: rc-update-pulse 1.8s ease-in-out infinite; border-color: #d3ae45; color: #ffeaac; }
 .rc-update-launch[data-state="busy"] { border-color: #73b0e5; color: #d6ecff; }
 .rc-update-launch[data-state="error"] { border-color: #a55353; color: #ffd4d4; }

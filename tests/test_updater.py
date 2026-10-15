@@ -157,3 +157,50 @@ def test_updater_api_requires_login_and_csrf(client, app, operator, monkeypatch)
     run = client.post("/api/update/run", json={}, headers={"X-CSRF-Token": payload["csrfToken"]})
     assert run.status_code == 202
     assert run.get_json()["status"] == "busy"
+
+
+def test_update_reinstalls_and_builds_even_without_requirements_change(tmp_path):
+    """Кнопка «Обновить с GitHub»: полный цикл, а не только git merge.
+
+    Раньше зависимости ставились лишь при смене requirements.txt, а сборки не
+    было вовсе: оператор жал обновление, а окружение и битый код могли
+    остаться прежними. Теперь каждый апдейт: fetch → ff → ensure_deps →
+    compile/import check → restart, а падение сборки откатывает код.
+    """
+    _remote, seed, clone = make_remote(tmp_path)
+    (seed / "README.md").write_text("version two, code only\n", encoding="utf-8")
+    git(seed, "add", "README.md")
+    git(seed, "commit", "-m", "code only update")
+    git(seed, "push", "origin", "main")
+
+    calls: list[str] = []
+    manager = UpdateManager(
+        clone, branch="main",
+        dependency_installer=lambda root: (calls.append("deps") or 0, "deps ok"),
+        build_runner=lambda root: (calls.append("build") or 0, "build ok"),
+        on_restart=lambda: calls.append("restart"),
+    )
+    assert manager.start() is True
+    state = wait_for_terminal(manager)
+    assert state["status"] == "done"
+    assert calls == ["deps", "build", "restart"]
+
+
+def test_failed_build_rolls_back_to_previous_version(tmp_path):
+    _remote, seed, clone = make_remote(tmp_path)
+    old_sha = git(clone, "rev-parse", "HEAD")
+    (seed / "README.md").write_text("broken version\n", encoding="utf-8")
+    git(seed, "add", "README.md")
+    git(seed, "commit", "-m", "broken update")
+    git(seed, "push", "origin", "main")
+
+    manager = UpdateManager(
+        clone, branch="main",
+        dependency_installer=lambda root: (0, "deps ok"),
+        build_runner=lambda root: (1, "SyntaxError: broken"),
+    )
+    assert manager.start() is True
+    state = wait_for_terminal(manager)
+    assert state["status"] == "error"
+    assert "не собралась" in state["error"]
+    assert git(clone, "rev-parse", "HEAD") == old_sha

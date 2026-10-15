@@ -41,6 +41,8 @@ from .auth import (
     hash_password,
 )
 from .config import Config, PROJECT_ROOT
+from .lidar import LidarManager
+from .lidar_settings import apply_lidar_settings, settings_payload
 from .slam import build_state, create_blueprint, start_lidar
 from .updater import UpdateManager, schedule_restart
 
@@ -374,6 +376,42 @@ def create_app(config: Config | None = None) -> Flask:
         except Exception as exc:  # noqa: BLE001 — диагностический endpoint
             return jsonify({"ok": False, "error": str(exc)[:300],
                             "buildSha": APP_BUILD_SHA}), 503
+
+    # ------------------------- Настройки лидара ------------------------- #
+    # Панель «Лидар» на экранах пульта: порт/протокол/скорость/линия мотора
+    # пишутся в .env и применяются сразу. Бортовой экран (8090) подхватит тот
+    # же .env сам (см. LidarManager._sync_settings_from_env_file), а скан —
+    # по peer-обмену, поэтому настраивать два приложения отдельно не нужно.
+    @app.get("/api/lidar/settings")
+    @login_required
+    def api_lidar_settings():
+        result = settings_payload(LidarManager.get_instance())
+        result["csrfToken"] = csrf_signer.dumps("csrf")
+        result["canEdit"] = True
+        result["requiresPin"] = False
+        return jsonify(result)
+
+    @app.post("/api/lidar/settings")
+    @login_required
+    def api_lidar_settings_save():
+        if not csrf_header_ok():
+            return jsonify({"ok": False, "error": "Недействительный CSRF-токен."}), 400
+        try:
+            result = apply_lidar_settings(request.get_json(silent=True) or {})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        result["csrfToken"] = csrf_signer.dumps("csrf")
+        return jsonify(result)
+
+    @app.post("/api/lidar/rescan")
+    @login_required
+    def api_lidar_rescan():
+        if not csrf_header_ok():
+            return jsonify({"ok": False, "error": "Недействительный CSRF-токен."}), 400
+        manager = LidarManager.get_instance()
+        manager.restart_search()
+        return jsonify({"ok": True, "settings": manager.current_settings(),
+                        "status": manager.get_status()})
 
     @app.route("/login", methods=["GET", "POST"], endpoint="auth.login")
     def login():

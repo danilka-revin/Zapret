@@ -29,8 +29,8 @@
     button.id = 'rc-update-launch';
     button.className = 'rc-update-launch';
     button.type = 'button';
-    button.textContent = 'Обновить';
-    button.title = 'Проверить и установить обновление сервера и интерфейса';
+    button.textContent = 'Обновить с GitHub';
+    button.title = 'Скачать с GitHub, переустановить, собрать и перезапустить сервер и экран';
 
     const overlay = document.createElement('div');
     overlay.id = 'rc-update-overlay';
@@ -38,8 +38,8 @@
     overlay.hidden = true;
     overlay.innerHTML = `
       <section class="rc-update-dialog" role="dialog" aria-modal="true" aria-labelledby="rc-update-title">
-        <header class="rc-update-head"><div><h2 id="rc-update-title">Обновление робота</h2>
-          <p>Сервер, веб-пульт и экран робота обновляются вместе из одной версии.</p></div>
+        <header class="rc-update-head"><div><h2 id="rc-update-title">Обновление с GitHub</h2>
+          <p>Скачиваю коммиты с GitHub → ставлю код fast-forward → переустанавливаю зависимости (ensure_deps.sh, офлайн из vendor/) → собираю и проверяю код → перезапускаю веб-пульт и бортовой экран. Прошивки Arduino кнопка не прошивает.</p></div>
           <button type="button" class="rc-update-close" aria-label="Закрыть">×</button></header>
         <div class="rc-update-facts">
           <div><span>Репозиторий</span><b id="rc-update-repo">—</b></div>
@@ -59,9 +59,9 @@
           <button type="button" class="rc-update-btn" id="rc-update-dismiss">Закрыть</button>
         </footer>
       </section>`;
-    const header = document.querySelector('.top-status, .head-actions');
+    const header = document.querySelector('.top-status, .head-actions, .top-right');
     if (header) header.append(button);
-    else document.body.append(button);
+    else { button.classList.add('rc-update-floating'); document.body.append(button); }
     document.body.append(overlay);
 
     button.addEventListener('click', () => {
@@ -146,8 +146,13 @@
         if (opened) {
           $('rc-update-phase').textContent = 'Проверка не выполнена';
           $('rc-update-message').textContent = message;
+          setButton('Повторить', 'error');
+        } else {
+          // Фоновая проверка не должна прятать саму кнопку: оператор ищет
+          // именно «Обновить с GitHub», а не «Повторить» после тихого сбоя
+          // сети/ветки. Ошибка видна красным состоянием, текст — по делу.
+          setButton('Обновить с GitHub', 'error');
         }
-        setButton('Повторить', 'error');
         return;
       }
       showCheck(body);
@@ -155,8 +160,10 @@
       if (opened) {
         $('rc-update-phase').textContent = 'Сервер обновлений недоступен';
         $('rc-update-message').textContent = 'Проверьте сеть и конфигурацию Git remote.';
+        setButton('Повторить', 'error');
+      } else {
+        setButton('Обновить с GitHub', 'error');
       }
-      setButton('Повторить', 'error');
     } finally {
       if (opened) $('rc-update-check').disabled = false;
     }

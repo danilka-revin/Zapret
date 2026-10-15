@@ -55,6 +55,7 @@ from werkzeug.serving import make_server
 from robot_control.camera import CameraManager
 from robot_control.config import PROJECT_ROOT, Config
 from robot_control.lidar import LidarManager, set_self_port
+from robot_control.lidar_settings import apply_lidar_settings, settings_payload
 from robot_control.slam import (
     GUI_DIR,
     KIOSK_PAGE,
@@ -679,6 +680,53 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         result, status = dispatch_drive_command(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
+    # ------------------------- Настройки лидара ------------------------- #
+    # Читать настройки и статус на борту можно без PIN (это та же публичная
+    # диагностика, что и в GET /api/lidar), а менять — только с PIN руления:
+    # либо уже открытой PIN-сессией, либо полем pin в запросе (проверяется тем
+    # же хранилищем с блокировкой после серии неудачных попыток).
+    def _lidar_settings_authorized(body: dict) -> bool:
+        if steering_access_valid():
+            return True
+        pin = str(body.get("pin") or "")
+        if not pin or state is None:
+            return False
+        result = state.vault.verify(pin)
+        if result.get("ok"):
+            grant_steering_access()
+            return True
+        return False
+
+    @app.get("/api/lidar/settings")
+    def api_kiosk_lidar_settings():
+        result = settings_payload(LidarManager.get_instance())
+        result["canEdit"] = True
+        result["requiresPin"] = not steering_access_valid()
+        return jsonify(result)
+
+    @app.post("/api/lidar/settings")
+    def api_kiosk_lidar_settings_save():
+        body = request.get_json(silent=True) or {}
+        if not _lidar_settings_authorized(body):
+            return jsonify({"ok": False, "error": "Нужен PIN руления.",
+                            "reason": "pin_required"}), 401
+        try:
+            result = apply_lidar_settings(body.get("settings") or body)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify(result)
+
+    @app.post("/api/lidar/rescan")
+    def api_kiosk_lidar_rescan():
+        body = request.get_json(silent=True) or {}
+        if not _lidar_settings_authorized(body):
+            return jsonify({"ok": False, "error": "Нужен PIN руления.",
+                            "reason": "pin_required"}), 401
+        manager = LidarManager.get_instance()
+        manager.restart_search()
+        return jsonify({"ok": True, "settings": manager.current_settings(),
+                        "status": manager.get_status()})
+
     @app.get("/healthz")
     def healthz():
         return jsonify({
@@ -687,8 +735,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "source": getattr(getattr(state, "source", None), "name", None) if state else None,
         })
 
-    # статика (robot.css, robot.js)
-    for filename in ("robot.css", "robot.js"):
+    # статика (robot.css, robot.js и панель настроек лидара)
+    for filename in ("robot.css", "robot.js", "lidar_settings.css", "lidar_settings.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
         def _view(name=filename):
             return _send(name)

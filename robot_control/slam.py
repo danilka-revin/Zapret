@@ -217,6 +217,9 @@ ASSETS = {
     "steering.js": "steering_js",
     "update.css": "update_css",
     "update.js": "update_js",
+    # панель настроек лидара (кнопка «Лидар» на пульте и на бортовом экране)
+    "lidar_settings.css": "lidar_settings_css",
+    "lidar_settings.js": "lidar_settings_js",
 }
 
 #: Порты, которые проверяем в режиме ``auto``, если список не задан явно.
