@@ -59,7 +59,7 @@ let sample = {
 let status = { connected: true, complete: true, configured: true, reason: 'Все банки прочитаны', data: sample,
   port: '/dev/ttyUSB0', connectedSince: Date.now() / 1000 - 60, setupAvailable: true };
 const setup = {
-  ok: true, available: true, port: null, configured: false, connected: false, requiresPin: true,
+  ok: true, available: true, port: null, configured: false, connected: false, requiresPin: false,
   ports: [
     { port: '/dev/ttyACM0', role: 'master', note: 'мастер руля (RC_SLAM_PORT) — не трогаем' },
     { port: '/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0', role: 'free', note: 'свободен', description: 'QinHeng CH340' }
@@ -169,21 +169,19 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   observer();
   await flush(); await flush();
   assert.equal(el('bms-setup').hidden, false);
-  assert.equal(el('bms-pin-wrap').hidden, false);
   const ports = el('bms-port-list').children;
   assert.equal(ports.length, 2);
   const masterRadio = find(ports[0], (node) => node.tag === 'input');
   const freeRadio = find(ports[1], (node) => node.tag === 'input');
   assert.equal(masterRadio.disabled, true, 'порт мастера выбрать нельзя');
   assert.equal(freeRadio.checked, true, 'свободный порт выбран по умолчанию');
-  el('bms-pin').value = '7232';
   el('bms-probe').fire('click');
   await flush(); await flush();
-  assert.deepEqual(posts[0], ['api/battery/probe', { port: '/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0', pin: '7232' }]);
+  assert.deepEqual(posts[0], ['api/battery/probe', { port: '/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0' }]);
   assert.match(el('bms-setup-msg').textContent, /Найдена BMS: JBD BMS: 41\.90 В/);
   el('bms-save').fire('click');
   await flush(); await flush();
-  assert.deepEqual(posts[1], ['api/battery/port', { port: '/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0', pin: '7232' }]);
+  assert.deepEqual(posts[1], ['api/battery/port', { port: '/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0' }]);
   assert.match(el('bms-setup-msg').textContent, /Сохранено в \.env/);
   console.log('Battery page: full JBD info, all banks, stale state, CSV and on-screen BMS setup OK');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

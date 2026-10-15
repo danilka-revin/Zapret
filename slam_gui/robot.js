@@ -1,4 +1,4 @@
-/* Бортовой экран: телеметрия + PIN-защищённый адресный поворот рулевых модулей. */
+/* Бортовой экран: телеметрия и функции без PIN; PIN нужен только для кейса. */
 (function () {
   'use strict';
 
@@ -21,8 +21,10 @@
 
   let lastData = null;
   let live = false;
-  let steeringAuthorized = false;
-  let steeringUnlockPending = false;
+  // На киоске PIN нужен только для открытия грузового отсека. Серверная
+  // авторизация руления/тяги остаётся отдельной настройкой веб-пульта.
+  let steeringAuthorized = true;
+  let stateFetchPending = false;
   let driveTimer = null;
   let driveDirection = 0;
   let driveQueued = null;
@@ -34,6 +36,10 @@
   const steerResult = Object.create(null);
 
   async function fetchState() {
+    // Не запускаем параллельные 250-мс опросы: медленный ответ не должен
+    // перезаписать более свежий скан лидара или телеметрию.
+    if (stateFetchPending) return;
+    stateFetchPending = true;
     try {
       const r = await fetch('api/kiosk_state', { cache: 'no-store' });
       if (!r.ok) throw new Error('http ' + r.status);
@@ -46,6 +52,8 @@
       }
     } catch (e) {
       live = false;
+    } finally {
+      stateFetchPending = false;
     }
   }
 
@@ -208,12 +216,13 @@
     const ctx = canvas.getContext && canvas.getContext('2d');
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
-    // clientWidth/clientHeight бывают 0, если браузер не поддерживает
-    // CSS aspect-ratio (старые встроенные веб-вьюхи на борту) или раскладка
-    // ещё не посчиталась — тогда берём размер ближайшего предка/канвы, чтобы
-    // карта лидара не оставалась пустой навсегда.
-    const w = canvas.clientWidth || (canvas.parentElement && canvas.parentElement.clientWidth) || canvas.width || 280;
-    const h = canvas.clientHeight || (canvas.parentElement && canvas.parentElement.clientHeight) || canvas.height || 280;
+    // clientWidth/clientHeight бывают 0, если раскладка ещё не посчиталась.
+    // Размер атрибута canvas хранится в физических пикселях, поэтому при
+    // fallback делим его на DPR, иначе на Retina-кiosk карта раздувается вдвое.
+    const rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+    const parent = canvas.parentElement;
+    const w = canvas.clientWidth || (rect && rect.width) || (parent && parent.clientWidth) || (canvas.width / dpr) || 280;
+    const h = canvas.clientHeight || (rect && rect.height) || (parent && parent.clientHeight) || (canvas.height / dpr) || 280;
     if (!w || !h) return;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
       canvas.width = Math.round(w * dpr);
@@ -257,14 +266,16 @@
     ctx.closePath();
     ctx.fill();
 
-    // точки скана
-    if (pts.length) {
-      const near = Math.min.apply(null, pts.map((p) => p.r));
-      pts.forEach((p) => {
-        const r = Math.min(p.r, LIDAR_RANGE_M) * k;
+    // Дальность карты — 10 м. Дальние точки не прижимаем к внешнему кольцу:
+    // прежний clamp создавал искусственную сплошную окружность вокруг карты.
+    const visiblePts = pts.filter((point) => point.r <= LIDAR_RANGE_M);
+    if (visiblePts.length) {
+      const near = Math.min.apply(null, visiblePts.map((p) => p.r));
+      visiblePts.forEach((p) => {
+        const r = p.r * k;
         const x = cx - r * Math.sin(p.a);
         const y = cy - r * Math.cos(p.a);
-        // ближайшее препятствие подсвечиваем красным
+        // Ближайшее препятствие подсвечиваем отдельным тоном.
         if (p.r === near && near < 1.0) ctx.fillStyle = '#e5e5e5';
         else if (p.r === near && near < 2.0) ctx.fillStyle = '#c2c2c2';
         else ctx.fillStyle = '#ffffff';
@@ -294,10 +305,8 @@
     return pts;
   }
 
-  // На бортовом экране (kiosk) при ошибке лидара детальный текст не показываем:
-  // оператор на борту видит только «скана лидара нет», а полная диагностика
-  // (причина, подсказка, USB-порты) остаётся только на веб-пульте (main.js).
-  // Это требование задачи: убрать текст с бортового, оставить только на вебке.
+  // На основной карте остаётся короткая подпись, а подробная диагностика,
+  // причина отсутствия скана и список USB-портов обновляются в панели настроек.
 
   function renderLidar(d) {
     const canvas = $('lidar-canvas');
@@ -310,12 +319,13 @@
     }
     const has = pts.length > 0;
     const near = has ? Math.min.apply(null, pts.map((p) => p.r)) : null;
+    const visibleCount = pts.filter((point) => point.r <= LIDAR_RANGE_M).length;
 
     const source = has && !isDemo ? lidarSourceText(d) : '';
     setText($('lidar-meta'), has
       ? (isDemo
         ? 'демо · ' + pts.length + ' точек (не лидар)'
-        : 'в реальном времени · ' + pts.length + ' точек' + (source ? ' · ' + source : ''))
+        : 'в реальном времени · ' + pts.length + ' точек · на карте: ' + visibleCount + '/' + pts.length + (source ? ' · ' + source : ''))
       : 'нет скана');
     setText($('lidar-count'), has ? String(pts.length) : '—');
     setText($('lidar-near'), near == null ? '—' : fmt(near, 2) + ' м');
@@ -392,9 +402,8 @@
   }
 
   /* =======================================================================
-     УПРАВЛЕНИЕ ПО PIN: кнопка → клавиатура (води пальцем) → функции
-     — статистика остаётся без пароля, PIN нужен только для этого оверлея
-     — закрыть → снова статистика, по новой нужен PIN (как просил)
+     КИОСК: функции доступны без PIN; PIN-клавиатура вызывается только при
+     открытии грузового отсека. Руление и тяга сохраняют свои лимиты и watchdog.
      ======================================================================= */
   function initKioskControls() {
     const overlay = $('ctrl-overlay');
@@ -443,7 +452,6 @@
     if (!overlay || !openBtn || !pinDots) return;
 
     let pinBuf = '';
-    let pinVerified = null; // храним верный PIN в памяти до выхода к статистике
     let lockState = null;   // {open, blocked, remainingMs, attemptsLeft}
     let lockTimer = null;
     let busy = false;
@@ -492,16 +500,21 @@
         if (lockState && lockState.blocked) btn.disabled = true;
         else btn.disabled = b;
       });
-      compartmentBtn.disabled = b;
+      if (compartmentBtn) compartmentBtn.disabled = b || !!(lockState && lockState.blocked && !lockState.open);
     }
 
     function showPinView() {
+      pinBuf = '';
       setHidden(pinView, false);
       setHidden(ctrlView, true);
       setHidden(themesView, true);
       setHidden(resetView, true);
-      if (subtitle) subtitle.textContent = 'введи PIN-код — откроются функции';
-      if (titleEl) titleEl.textContent = 'Управление роботом';
+      if (subtitle) subtitle.textContent = 'PIN запрашивается только для открытия кейса';
+      if (titleEl) titleEl.textContent = 'Открыть отсек';
+      const hint = $('pin-hint');
+      if (hint) hint.textContent = 'Введите PIN-код · 4–8 цифр';
+      if (pinSubmit) pinSubmit.textContent = 'Открыть отсек';
+      if (pinCancel) pinCancel.textContent = 'Назад к функциям';
       setMsg('', '');
       updatePinDisplay();
     }
@@ -510,46 +523,30 @@
       setHidden(ctrlView, false);
       setHidden(themesView, true);
       setHidden(resetView, true);
-      if (subtitle) subtitle.textContent = 'доступ открыт · выбери действие';
+      if (subtitle) subtitle.textContent = 'функции доступны без PIN · PIN нужен только для открытия кейса';
       if (titleEl) titleEl.textContent = 'Функции';
-      refreshLockStatus();
     }
 
     function openOverlay() {
       pinBuf = '';
-      // каждый раз заново — как просил: вернулся к статистике → по новой PIN
-      pinVerified = null;
-      showPinView();
-      updatePinDisplay();
+      showCtrlView();
       setMsg('', '');
       overlay.hidden = false;
       overlay.setAttribute('aria-hidden', 'false');
       document.body.style.overflow = 'hidden';
-      // фокус на шит для ESC
       if (sheet) sheet.focus();
       refreshLockStatus();
       vibrate(10);
     }
-    function revokeSteeringSession() {
-      setSteeringAuthorized(false);
-      Object.keys(pendingSteer).forEach((id) => delete pendingSteer[id]);
-      Object.keys(pendingZero).forEach((id) => delete pendingZero[id]);
-      Object.keys(pendingCalib).forEach((id) => delete pendingCalib[id]);
-      Object.keys(steerResult).forEach((id) => delete steerResult[id]);
-      fetch('api/kiosk_lock/session/end', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', keepalive: true
-      }).catch(() => {});
-    }
 
     function closeOverlay() {
+      void stopDrive();
       overlay.hidden = true;
       overlay.setAttribute('aria-hidden', 'true');
       document.body.style.overflow = '';
       pinBuf = '';
-      pinVerified = null;
-      steeringUnlockPending = false;
-      revokeSteeringSession();
       if (lockTimer) { clearInterval(lockTimer); lockTimer = null; }
+      setHidden(pinView, true);
       setHidden(resetView, true);
       setHidden(themesView, true);
       setMsg('', '');
@@ -557,12 +554,11 @@
     }
 
     function dismissOverlayForSteering() {
+      void stopDrive();
       overlay.hidden = true;
       overlay.setAttribute('aria-hidden', 'true');
       document.body.style.overflow = '';
       pinBuf = '';
-      pinVerified = null;
-      steeringUnlockPending = false;
       if (lockTimer) { clearInterval(lockTimer); lockTimer = null; }
       setHidden(pinView, true);
       setHidden(ctrlView, true);
@@ -571,9 +567,11 @@
       if (window._showSteeringPage) window._showSteeringPage();
     }
 
+    // Старое имя оставлено для совместимости с обработчиками: авторизация для
+    // управления больше не требуется, поэтому сразу открываем экран руления.
     window._openSteeringAuth = () => {
-      steeringUnlockPending = true;
-      openOverlay();
+      if (window._showSteeringPage) window._showSteeringPage();
+      else openOverlay();
     };
 
     // ---------- lock API ----------
@@ -602,12 +600,15 @@
       const open = !!lock.open;
       const blocked = !!lock.blocked;
       if (lockChip) {
-        lockChip.textContent = blocked ? 'БЛОКИРОВКА' : (open ? 'ОТСЕК ОТКРЫТ' : 'отсек закрыт');
-        lockChip.className = 'ctrl-chip ' + (blocked ? 'blocked' : open ? 'open' : 'closed');
+        lockChip.textContent = open ? 'ОТСЕК ОТКРЫТ' : blocked ? 'БЛОКИРОВКА' : 'отсек закрыт';
+        lockChip.className = 'ctrl-chip ' + (open ? 'open' : blocked ? 'blocked' : 'closed');
       }
       if (lockDetail) {
-        if (blocked) lockDetail.textContent = 'пауза ' + Math.ceil(lock.remainingMs / 1000) + ' с';
-        else lockDetail.textContent = open ? 'закрой после разгрузки' : 'готов к открытию';
+        if (open) lockDetail.textContent = blocked
+          ? 'закрыть можно без PIN'
+          : 'закрой после разгрузки';
+        else if (blocked) lockDetail.textContent = 'пауза ' + Math.ceil(lock.remainingMs / 1000) + ' с';
+        else lockDetail.textContent = 'готов к открытию';
       }
       if (attemptsEl) {
         if (blocked) attemptsEl.textContent = '';
@@ -615,16 +616,16 @@
         else attemptsEl.textContent = '';
       }
       if (compartmentBtn && compartmentTitle && compartmentHint) {
-        if (blocked) {
+        if (open) {
+          compartmentBtn.disabled = false;
+          compartmentTitle.textContent = 'Закрыть отсек';
+          compartmentHint.textContent = blocked ? 'закрыть можно без PIN' : 'нажми чтобы запереть';
+          compartmentBtn.classList.add('opened');
+        } else if (blocked) {
           compartmentBtn.disabled = true;
           compartmentTitle.textContent = 'Заблокировано';
           compartmentHint.textContent = 'ещё ' + Math.ceil(lock.remainingMs / 1000) + ' с';
           compartmentBtn.classList.remove('opened');
-        } else if (open) {
-          compartmentBtn.disabled = false;
-          compartmentTitle.textContent = 'Закрыть отсек';
-          compartmentHint.textContent = 'нажми чтобы запереть';
-          compartmentBtn.classList.add('opened');
         } else {
           compartmentBtn.disabled = false;
           compartmentTitle.textContent = 'Открыть отсек';
@@ -656,11 +657,21 @@
           pinPad.querySelectorAll('.pad-btn').forEach(b => b.disabled = false);
           updatePinDisplay();
         } else {
-          if (lockChip) lockChip.textContent = 'БЛОКИРОВКА';
-          if (lockDetail) lockDetail.textContent = 'пауза ' + Math.ceil(rem/1000) + ' с';
-          if (compartmentTitle) compartmentTitle.textContent = 'Заблокировано';
-          if (compartmentHint) compartmentHint.textContent = 'ещё ' + Math.ceil(rem/1000) + ' с';
-          setMsg('Заблокировано. Ещё ' + Math.ceil(rem/1000) + ' с', 'err');
+          const remaining = Math.ceil(rem / 1000);
+          if (lockState && lockState.open) {
+            if (lockChip) lockChip.textContent = 'ОТСЕК ОТКРЫТ';
+            if (lockDetail) lockDetail.textContent = 'закрыть можно без PIN';
+            if (compartmentTitle) compartmentTitle.textContent = 'Закрыть отсек';
+            if (compartmentHint) compartmentHint.textContent = 'закрыть можно без PIN';
+            if (compartmentBtn) compartmentBtn.disabled = false;
+            setMsg('PIN временно заблокирован · кейс можно закрыть без PIN', 'warn');
+          } else {
+            if (lockChip) lockChip.textContent = 'БЛОКИРОВКА';
+            if (lockDetail) lockDetail.textContent = 'пауза ' + remaining + ' с';
+            if (compartmentTitle) compartmentTitle.textContent = 'Заблокировано';
+            if (compartmentHint) compartmentHint.textContent = 'ещё ' + remaining + ' с';
+            setMsg('Заблокировано. Ещё ' + remaining + ' с', 'err');
+          }
         }
       }, 250);
     }
@@ -879,47 +890,42 @@
       if (pinBuf.length < 4) { setMsg('PIN — 4…8 цифр', 'warn'); shakeDots(); vibrate([20,30,20]); return; }
       if (lockState && lockState.blocked) { setMsg('Подожди — ввод заблокирован', 'err'); return; }
       setBusy(true);
-      setMsg('Проверяю…', 'warn');
+      setMsg('Проверяю PIN и открываю отсек…', 'warn');
       try {
-        const r = await fetch('api/kiosk_lock/verify', {
+        const response = await fetch('api/kiosk_lock/open', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ pin: pinBuf })
         });
-        const j = await r.json();
-        if (j && j.ok) {
-          pinVerified = pinBuf;
-          setSteeringAuthorized(!!j.steeringAuthorized);
-          if (j.lock) renderLock(j.lock);
-          setMsg('Доступ разрешён', 'ok');
-          vibrate([20, 40, 20]);
-          setTimeout(() => {
-            if (steeringUnlockPending) dismissOverlayForSteering();
-            else showCtrlView();
-            setBusy(false);
-          }, 420);
-        } else {
-          // ошибка
-          if (j && j.lock) renderLock(j.lock);
-          else await refreshLockStatus();
-          const reason = j ? j.reason : 'unknown';
-          if (reason === 'blocked' || (j && j.lock && j.lock.blocked)) {
-            shakeDots(); vibrate([40,80,40,80,80]);
-            setMsg('Заблокировано на ' + Math.ceil((j.remainingMs|| lockState.remainingMs|| 30000)/1000) + ' с', 'err');
-            // startBlockTimer handled by renderLock
-          } else if (reason === 'wrong') {
-            shakeDots(); vibrate([30,30,30]);
-            setMsg('Неверный PIN. Осталось попыток: ' + (j.attemptsLeft != null ? j.attemptsLeft : '?'), 'err');
-            // не очищаем полностью — даём исправить
-          } else if (reason === 'format') {
-            shakeDots(); setMsg('PIN — только цифры, 4…8', 'warn');
-          } else {
-            shakeDots(); setMsg('Ошибка проверки', 'err');
-          }
-          setBusy(false);
+        const result = await response.json();
+        if (result && result.lock) renderLock(result.lock);
+        else await refreshLockStatus();
+        if (response.ok && result && result.ok) {
+          pinBuf = '';
           updatePinDisplay();
+          setMsg('', '');
+          if (lockDetail) lockDetail.textContent = 'отсек открыт — забери груз';
+          vibrate([20, 40, 20]);
+          showCtrlView();
+          return;
         }
-      } catch (e) {
+
+        const reason = result && result.reason;
+        if (reason === 'blocked' || (result && result.lock && result.lock.blocked)) {
+          shakeDots(); vibrate([40,80,40,80,80]);
+          setMsg('Заблокировано на ' + Math.ceil(((result && result.remainingMs) ||
+            (lockState && lockState.remainingMs) || 30000) / 1000) + ' с', 'err');
+        } else if (reason === 'wrong') {
+          shakeDots(); vibrate([30,30,30]);
+          setMsg('Неверный PIN. Осталось попыток: ' + (result.attemptsLeft != null ? result.attemptsLeft : '?'), 'err');
+        } else if (reason === 'format') {
+          shakeDots(); setMsg('PIN — только цифры, 4…8', 'warn');
+        } else {
+          shakeDots(); setMsg((result && result.error) || 'Не удалось открыть отсек', 'err');
+        }
+        setBusy(false);
+        updatePinDisplay();
+      } catch (error) {
         setMsg('Нет связи с роботом', 'err');
         setBusy(false);
       }
@@ -927,48 +933,31 @@
 
     async function toggleCompartment() {
       if (busy) return;
-      if (lockState && lockState.blocked) { setMsg('Отсек заблокирован', 'err'); return; }
       const open = !!(lockState && lockState.open);
+      if (!open && lockState && lockState.blocked) {
+        setMsg('Отсек заблокирован', 'err');
+        return;
+      }
+      if (!open) {
+        // PIN спрашиваем именно при открытии кейса, а не при входе в функции.
+        showPinView();
+        return;
+      }
       setBusy(true);
-      if (pinMsg) setMsg(open ? 'Запираю…' : 'Открываю…', 'warn');
-      // если закрываем — PIN не нужен; если открываем — нужен pinVerified
+      setMsg('Запираю…', 'warn');
       try {
-        let r, j;
-        if (open) {
-          r = await fetch('api/kiosk_lock/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-          j = await r.json();
-        } else {
-          if (!pinVerified) { setMsg('Введи PIN заново', 'err'); showPinView(); setBusy(false); return; }
-          r = await fetch('api/kiosk_lock/open', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pin: pinVerified })
-          });
-          j = await r.json();
-          if (!j.ok && j.reason === 'blocked') {
-            if (j.lock) renderLock(j.lock);
-            setMsg('Заблокировано', 'err');
-            setBusy(false);
-            return;
-          }
-          if (!j.ok) {
-            // возможно PIN сброшен пока был в панели — просим ввести заново
-            setMsg('PIN устарел — введи заново', 'err');
-            showPinView();
-            pinBuf = '';
-            updatePinDisplay();
-            setBusy(false);
-            return;
-          }
-        }
-        if (j && j.lock) renderLock(j.lock);
+        const response = await fetch('api/kiosk_lock/close', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+        });
+        const result = await response.json();
+        if (!response.ok || !result || !result.ok) throw new Error((result && result.error) || 'Не удалось закрыть отсек.');
+        if (result.lock) renderLock(result.lock);
         else await refreshLockStatus();
-        vibrate(open ? 20 : [20,40,20]);
-        // toast inside status
-        if (lockDetail) lockDetail.textContent = open ? 'отсек заперт' : 'отсек открыт — забери груз';
-        setMsg(open ? 'Отсек закрыт' : 'Отсек открыт', 'ok');
-      } catch (e) {
-        setMsg('Нет связи', 'err');
+        vibrate(20);
+        if (lockDetail) lockDetail.textContent = 'отсек заперт';
+        setMsg('Отсек закрыт', 'ok');
+      } catch (error) {
+        setMsg(error.message || 'Нет связи', 'err');
       } finally {
         setBusy(false);
       }
@@ -985,7 +974,11 @@
     openBtn.addEventListener('click', openOverlay);
     if (backdrop) backdrop.addEventListener('click', closeOverlay);
     if (closeBtn) closeBtn.addEventListener('click', closeOverlay);
-    if (pinCancel) pinCancel.addEventListener('click', closeOverlay);
+    if (pinCancel) pinCancel.addEventListener('click', () => {
+      pinBuf = '';
+      setMsg('', '');
+      showCtrlView();
+    });
     if (ctrlBack) ctrlBack.addEventListener('click', closeOverlay);
     if (ctrlLogout) ctrlLogout.addEventListener('click', () => {
       // запереть если открыто и выйти
@@ -1117,7 +1110,7 @@
     updatePinDisplay();
     refreshLockStatus();
     updateAutoscanUI(autoScanOn);
-    // Проверяем блокировку PIN и срок сессии руления, даже когда оверлей закрыт.
+    // Обновляем состояние замка кейса, даже когда панель функций закрыта.
     setInterval(refreshLockStatus, 1500);
   }
 
@@ -1997,8 +1990,6 @@
     const tractionActive = !!drive.active || Number(drive.commandedPercent || 0) !== 0;
     const sourceStatus = $('steer-source-status');
     const authStatus = $('steer-auth-status');
-    const unlockButton = $('steer-unlock');
-    const lockButton = $('steer-lock');
 
     if (sourceStatus) {
       if (!available && String(control.source || '') === 'master-peer') {
@@ -2013,9 +2004,7 @@
         sourceStatus.textContent = 'Мастер подключён · перед поворотом задайте ручной программный ноль каждому модулю.';
       }
     }
-    if (authStatus) authStatus.textContent = steeringAuthorized ? 'PIN подтверждён' : 'управление закрыто';
-    if (unlockButton) unlockButton.hidden = steeringAuthorized;
-    if (lockButton) lockButton.hidden = !steeringAuthorized;
+    if (authStatus) authStatus.textContent = steeringAuthorized ? 'доступ без PIN' : 'управление недоступно';
 
     const now = Date.now();
     ['FL', 'FR', 'RL', 'RR'].forEach((id) => {
@@ -2114,7 +2103,7 @@
 
       let label;
       if (!available) label = 'нет управления';
-      else if (!steeringAuthorized) label = 'нужен PIN';
+      else if (!steeringAuthorized) label = 'управление недоступно';
       else if (!online) label = 'нет связи';
       else if (calibrating) label = 'калибровка по датчику…';
       else if (calibPending) label = 'калибровка в очереди';
@@ -2207,7 +2196,7 @@
     const reason = drive.reason && DRIVE_REASON_TEXT[drive.reason];
     if (!supported && String((d.steeringControl || {}).source || '') === 'master-peer') status.textContent = 'Тяга — только на бортовом экране (порт 8090).';
     else if (!supported) status.textContent = 'Тяга доступна при RC_SLAM_SOURCE=master.';
-    else if (!steeringAuthorized) status.textContent = 'Нужен PIN для движения.';
+    else if (!steeringAuthorized) status.textContent = 'Управление временно недоступно.';
     else if (reason) status.textContent = reason;
     else if (drive.active) status.textContent = 'Движение включено · отпустите кнопку для торможения.';
     else status.textContent = 'Готово · модули на связи, колёса выровнены.';
@@ -2305,8 +2294,6 @@
     const panel = $('swipe-motors-view');
     if (!panel) return;
     const ids = ['FL', 'FR', 'RL', 'RR'];
-    const unlockButton = $('steer-unlock');
-    const lockButton = $('steer-lock');
     const driveSpeed = $('drive-speed');
     if (driveSpeed) driveSpeed.addEventListener('input', () => {
       setText($('drive-speed-value'), String(driveSpeed.value));
@@ -2518,20 +2505,6 @@
       if (card) card.dataset.steerDirty = 'false';
     });
 
-    if (unlockButton) unlockButton.addEventListener('click', () => {
-      if (window._openSteeringAuth) window._openSteeringAuth();
-    });
-    if (lockButton) lockButton.addEventListener('click', async () => {
-      await stopDrive();
-      try {
-        await fetch('api/kiosk_lock/session/end', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
-        });
-      } catch (error) {}
-      setSteeringAuthorized(false);
-      ids.forEach((id) => { delete pendingSteer[id]; delete pendingZero[id]; delete pendingCalib[id]; delete steerResult[id]; });
-      renderSteeringControls(lastData || {});
-    });
     renderSteeringControls(lastData || {});
   }
 

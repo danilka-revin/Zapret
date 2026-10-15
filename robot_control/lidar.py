@@ -2152,6 +2152,9 @@ class LidarManager:
         self._state_written_kind = ""
         #: Порт, с которого сейчас идут витки (для обновления состояния).
         self._active_port: Optional[str] = None
+        #: Версия параметров: активный serial-поток прекращает старый перебор,
+        #: если соседний процесс сохранил новые настройки в .env.
+        self._settings_revision = 0
         #: Сеанс поиска этого менеджера в файле состояния процесса: записи
         #: нескольких менеджеров в одном процессе не затирают друг друга.
         self._searcher = _new_searcher()
@@ -2237,6 +2240,7 @@ class LidarManager:
         self._fallback_all = False
         self._active_port = None
         self._peer_misses = 0
+        self._settings_revision += 1
         self._set_status("лидар: идёт поиск порта (настройки применены)")
 
     def _stop_worker(self, timeout: float = 5.0) -> None:
@@ -2274,30 +2278,28 @@ class LidarManager:
         """Пересканировать порты с текущими настройками (кнопка в панели)."""
         return self.reconfigure(self.current_settings())
 
-    def _sync_settings_from_env_file(self) -> None:
-        """Подхватывает настройки, сохранённые вторым процессом в ``.env``.
+    def _sync_settings_from_env_file(self) -> bool:
+        """Подхватывает изменения ``.env`` даже во время чтения активного скана.
 
-        Панель настроек живёт в веб-пульте (8080), а бортовой экран (8090) —
-        отдельный процесс со своим менеджером. Он не перезапускается при
-        сохранении, поэтому его поток раз в секунду смотрит mtime ``.env``:
-        файл изменился — применяет новые RC_LIDAR_* с начала следующего круга.
-        Настройки, применённые этим же процессом через панель, совпадают с
-        текущими и повторного сброса поиска не вызывают.
+        Панель настроек может работать во втором процессе. Обычно этот метод
+        вызывается на границе круга поиска; активный поток чтения вызывает его
+        также из stop-callback раз в секунду. ``True`` означает, что настройки
+        изменились и текущую попытку на старом порту нужно прервать.
         """
         now = time.time()
         if now - self._env_checked < 1.0:
-            return
+            return False
         self._env_checked = now
         try:
             mtime = self._env_file.stat().st_mtime
         except OSError:
-            return
+            return False
         if mtime == self._env_mtime:
-            return
+            return False
         self._env_mtime = mtime
         values = read_env_file(self._env_file)
         if not any(key in values for key in LIDAR_ENV_KEYS):
-            return
+            return False
         try:
             settings = normalize_lidar_settings({
                 "port": values.get("RC_LIDAR_PORT", ""),
@@ -2308,10 +2310,12 @@ class LidarManager:
             })
         except ValueError as exc:
             log.warning("Лидар: настройки в .env не применены: %s", exc)
-            return
+            return False
         if settings != self.current_settings():
             log.info("Лидар: настройки изменились в .env — применяю без перезапуска")
             self._apply_settings(settings)
+            return True
+        return False
 
     # ----------------------------- приём данных ---------------------------- #
 
@@ -2587,8 +2591,9 @@ class LidarManager:
 
         while not self._stop:
             # Настройки могли сохранить из веб-панели в соседнем процессе:
-            # применяем их с нового круга, борт не ждёт перезапуска руками.
+            # применяем их с нового круга или прекращаем текущую попытку чтения.
             self._sync_settings_from_env_file()
+            settings_revision = self._settings_revision
             if self._ros_owns_lidar():
                 # Скан даёт ROS 2: своих портов лидар не занимает, уступать нечего.
                 self._clear_state()
@@ -2658,6 +2663,8 @@ class LidarManager:
             for index, port in enumerate(ports, start=1):
                 if self._stop:
                     return
+                if self._settings_revision != settings_revision:
+                    break
                 self._set_status(
                     "перебираю порты: %d из %d — %s" % (index, len(ports), os.path.basename(port)),
                     quiet=True,
@@ -2711,6 +2718,8 @@ class LidarManager:
                     note = self._port_note
                 finally:
                     self._release_port_lock()
+                if self._settings_revision != settings_revision:
+                    break
                 self.tried.append({"port": port, "ok": ok, "note": note})
                 if ok:
                     progressed = True
@@ -2722,6 +2731,11 @@ class LidarManager:
                     # lidar_holds_port): они знают, что тут читает лидар.
                     self._publish_state("found", port)
                     break
+
+            # Изменение .env могло прийти, пока probe_port читал непрерывный
+            # поток. Старый круг больше не нужен — сразу ищем по новым значениям.
+            if self._settings_revision != settings_revision:
+                continue
 
             if not progressed:
                 # Сосед мог отдать скан и без занятого порта (веб-пульт
@@ -2841,6 +2855,22 @@ class LidarManager:
             self._set_status("порт %s не открылся" % port, hint=hint, quiet=True)
             return False
 
+        settings_revision = self._settings_revision
+
+        def stop_probe() -> bool:
+            if self._stop:
+                return True
+            self._sync_settings_from_env_file()
+            return self._settings_revision != settings_revision
+
+        def publish_if_current(points: list[dict[str, float]]) -> None:
+            if self._settings_revision == settings_revision:
+                self._store_scan(points, "serial:%s" % os.path.basename(port))
+
+        def mark_found_if_current(probe: dict[str, Any]) -> None:
+            if self._settings_revision == settings_revision:
+                self._mark_found(probe)
+
         try:
             found = probe_port(
                 ser,
@@ -2849,10 +2879,15 @@ class LidarManager:
                 baud=self.baud,
                 motor=self.motor,
                 timeout=LIDAR_PROBE_TIMEOUT_S,
-                stop=lambda: self._stop,
-                publish=lambda pts: self._store_scan(pts, "serial:%s" % os.path.basename(port)),
-                on_found=self._mark_found,
+                stop=stop_probe,
+                publish=publish_if_current,
+                on_found=mark_found_if_current,
             )
+            if self._settings_revision != settings_revision:
+                # Поток мог успеть подтвердить старый лидар до выхода по stop.
+                # Не возвращаем статус «подключён» для уже устаревших настроек.
+                self._port_note = "настройки изменились"
+                return False
         except Exception as exc:  # noqa: BLE001 — кабель выдернули на ходу
             self.last_error = "%s: %s" % (port, exc)
             self._port_note = "обрыв"

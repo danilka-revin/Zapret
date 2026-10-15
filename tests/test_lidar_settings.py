@@ -121,7 +121,7 @@ def test_web_settings_api_requires_login_csrf_and_applies(client, app, operator,
         LidarManager._instance = previous
 
 
-def test_kiosk_settings_read_open_but_write_needs_pin(config, monkeypatch):
+def test_kiosk_lidar_settings_and_rescan_are_available_without_pin(config, monkeypatch):
     from robot_control.kiosk_app import create_kiosk_app
     manager = LidarManager()
     previous = LidarManager._instance
@@ -134,12 +134,13 @@ def test_kiosk_settings_read_open_but_write_needs_pin(config, monkeypatch):
         client = create_kiosk_app(config).test_client()
         page = client.get("/api/lidar/settings")
         assert page.status_code == 200
-        assert page.get_json()["requiresPin"] is True
+        assert page.get_json()["requiresPin"] is False
         payload = {"port": "", "protocol": "auto", "baud": "",
                    "motor": "auto", "autoprobe": True}
-        assert client.post("/api/lidar/settings", json=payload).status_code == 401
-        ok = client.post("/api/lidar/settings", json={**payload, "pin": "7232"})
+        ok = client.post("/api/lidar/settings", json=payload)
         assert ok.status_code == 200
+        rescanned = client.post("/api/lidar/rescan", json={})
+        assert rescanned.status_code == 200 and rescanned.get_json()["ok"] is True
         # На борту подхватились и новые статические файлы панели.
         assert client.get("/lidar_settings.js").status_code == 200
         assert client.get("/lidar_settings.css").status_code == 200
@@ -147,6 +148,101 @@ def test_kiosk_settings_read_open_but_write_needs_pin(config, monkeypatch):
     finally:
         manager.stop()
         LidarManager._instance = previous
+
+
+def test_external_env_change_interrupts_active_serial_read(manager, monkeypatch, tmp_path):
+    """Новый .env должен отпустить уже найденный порт, а не ждать обрыва лидара."""
+    env = tmp_path / ".env"
+    old = {"port": "/dev/ttyUSB0", "protocol": "auto", "baud": "",
+           "motor": "auto", "autoprobe": True}
+    new = {"port": "/dev/ttyUSB1", "protocol": "lds01", "baud": "230400",
+           "motor": "none", "autoprobe": False}
+    manager._apply_settings(old)
+    env.write_text("RC_LIDAR_PORT=/dev/ttyUSB1\nRC_LIDAR_PROTOCOL=lds01\n"
+                   "RC_LIDAR_BAUD=230400\nRC_LIDAR_MOTOR=none\n"
+                   "RC_LIDAR_AUTOPROBE=0\n", encoding="utf-8")
+    manager._env_file = env
+    manager._env_mtime = 0.0
+    manager._env_checked = 0.0
+
+    class FakeSerial:
+        closed = False
+        def close(self):
+            self.closed = True
+
+    serial = FakeSerial()
+    monkeypatch.setattr(lidar, "open_serial", lambda _module, _port, _baud: serial)
+    stops = []
+
+    def probe(_serial, port, **kwargs):
+        stops.append(kwargs["stop"]())
+        # Имитируем старый обход, который успел сообщить о находке уже после
+        # того, как stop-callback обнаружил новые настройки.
+        stale = {"port": port, "protocol": "auto", "baud": 115200, "motor": "none"}
+        kwargs["on_found"](stale)
+        kwargs["publish"]([{"a": 0.0, "r": 1.0}])
+        return stale
+
+    monkeypatch.setattr(lidar, "probe_port", probe)
+    assert manager._read_port(object(), "/dev/ttyUSB0") is False
+    assert stops == [True]
+    assert serial.closed is True
+    assert manager.detected is None
+    assert manager._active_port is None
+    assert manager.scan == []
+    assert manager.source_type == "none"
+    assert manager.current_settings() == new
+
+
+def test_worker_starts_new_port_immediately_after_env_change(manager, monkeypatch, tmp_path):
+    """Новая конфигурация прерывает не только порт, но и остаток старого круга."""
+    old = {"port": "/dev/ttyUSB0", "protocol": "auto", "baud": "",
+           "motor": "auto", "autoprobe": True}
+    new = {"port": "/dev/ttyUSB1", "protocol": "lds01", "baud": "230400",
+           "motor": "none", "autoprobe": False}
+
+    def env_text(settings):
+        return (f"RC_LIDAR_PORT={settings['port']}\n"
+                f"RC_LIDAR_PROTOCOL={settings['protocol']}\n"
+                f"RC_LIDAR_BAUD={settings['baud']}\n"
+                f"RC_LIDAR_MOTOR={settings['motor']}\n"
+                f"RC_LIDAR_AUTOPROBE={int(settings['autoprobe'])}\n")
+
+    env = tmp_path / ".env"
+    env.write_text(env_text(old), encoding="utf-8")
+    manager._apply_settings(old)
+    manager._env_file = env
+    manager._env_mtime = env.stat().st_mtime
+    manager._env_checked = 0.0
+    reads = []
+
+    monkeypatch.setattr(manager, "_ros_owns_lidar", lambda: False)
+    monkeypatch.setattr(manager, "candidate_ports", lambda **_kwargs: (
+        [old["port"], "/dev/ttyUSB2"] if manager.port == old["port"] else [manager.port]
+    ))
+    monkeypatch.setattr(lidar, "chassis_module_ports", lambda: [])
+    monkeypatch.setattr(manager, "_publish_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(manager, "_acquire_port_lock", lambda _port: True)
+    monkeypatch.setattr(manager, "_release_port_lock", lambda: None)
+    monkeypatch.setattr(manager, "_peer_cycle", lambda: False)
+    monkeypatch.setattr(lidar.time, "sleep", lambda _seconds: None)
+
+    def read_port(_serial, port):
+        reads.append((port, manager.current_settings()["port"]))
+        if port == old["port"]:
+            env.write_text(env_text(new), encoding="utf-8")
+            manager._env_mtime = 0.0
+            manager._env_checked = 0.0
+            assert manager._sync_settings_from_env_file() is True
+        else:
+            manager._stop = True
+        return False
+
+    monkeypatch.setattr(manager, "_read_port", read_port)
+    manager._serial_worker()
+
+    assert reads == [(old["port"], old["port"]), (new["port"], new["port"])]
+    assert manager.current_settings() == new
 
 
 def test_peer_port_becomes_sticky_so_scan_stays_fresh(manager, monkeypatch):
@@ -173,8 +269,9 @@ def test_env_file_change_is_picked_up_by_other_process(manager, tmp_path):
     manager._env_file = env
     manager._env_mtime = 0.0
     manager._env_checked = 0.0
-    manager._sync_settings_from_env_file()
+    assert manager._sync_settings_from_env_file() is True
     assert manager.current_settings() == {
         "port": "/dev/ttyUSB7", "protocol": "lds01", "baud": "230400",
         "motor": "none", "autoprobe": False,
     }
+    assert manager._sync_settings_from_env_file() is False
