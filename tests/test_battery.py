@@ -364,3 +364,297 @@ def test_explicit_chassis_sources_cannot_open_bms_port(monkeypatch):
     assert source.name == "none"
     mod = SimpleNamespace(SerialSource=lambda ports, **kwargs: ports)
     assert chassis_source(mod, ["/dev/fake-bms", "/dev/fake-module"]) == ["/dev/fake-module"]
+
+
+# ------------------------ полная информация платы ------------------------- #
+def test_parse_reports_passport_direction_energy_and_cell_extremes():
+    basic, cells = payloads()
+    basic = bytearray(basic)
+    basic[10:12] = ((23 << 9) | (3 << 5) | 14).to_bytes(2, "big")    # 14.03.2023
+    sample = parse_snapshot(bytes(basic), cells, now=100)
+    assert sample["manufactureDate"] == "2023-03-14"
+    assert sample["manufactureDateText"] == "14.03.2023"
+    assert sample["firmwareText"] == "0x21" and sample["ntcCount"] == 2
+    assert sample["direction"] == "discharge" and sample["directionText"] == "разряд"
+    assert sample["hoursToEmpty"] == 2.0 and sample["hoursToFull"] is None   # 25 Ач / 12,5 А
+    assert sample["remainingWh"] == 1280.0 and sample["fullWh"] == 2560.0
+    assert sample["minCell"] == 1 and sample["maxCell"] == 32
+    assert sample["sumMv"] == sum(3200 + i for i in range(32))
+    assert sample["sumVolts"] == round(sample["sumMv"] / 1000, 3)
+    assert sample["balancingCells"] == [1, 32]
+    # Нулевая дата — «не указана», а не 2000-00-00.
+    assert parse_snapshot(*payloads())["manufactureDate"] is None
+
+
+def test_charge_direction_idle_threshold_and_time_to_full():
+    from robot_control.battery import parse_snapshot as parse
+    basic, cells = payloads()
+    charging = bytearray(basic)
+    charging[2:4] = (500).to_bytes(2, "big", signed=True)             # +5 А
+    sample = parse(bytes(charging), cells)
+    assert sample["direction"] == "charge" and sample["hoursToFull"] == 5.0   # (50 − 25) / 5
+    idle = bytearray(basic)
+    idle[2:4] = (3).to_bytes(2, "big", signed=True)                    # 0,03 А — шум
+    sample = parse(bytes(idle), cells)
+    assert sample["direction"] == "idle" and sample["hoursToEmpty"] is None and sample["hoursToFull"] is None
+
+
+def test_read_requests_cover_only_read_registers():
+    from robot_control.battery import READ_REGISTERS, THRESHOLDS
+    assert read_request(0x05).hex() == "dda50500fffb77"
+    assert read_request(0xAA).hex() == "dda5aa00ff5677"
+    assert {reg for reg, *_ in THRESHOLDS} <= READ_REGISTERS
+    for forbidden in (0x00, 0x01, 0x06, 0x0A, 0xE1, 0xE2, 0xE3):
+        with pytest.raises(ProtocolError):
+            read_request(forbidden)
+    for register in READ_REGISTERS:
+        assert read_request(register)[1] == 0xA5        # только чтение, никакого 0x5A
+
+
+class ExtrasSerial(FakeSerial):
+    """Плата, которая отвечает на имя, счётчики и часть порогов."""
+    thresholds = {0x24: 3650, 0x25: 3400, 0x20: 4380, 0x28: 2000, 0x29: (-6000) & 0xFFFF,
+                  0x18: 3281, 0x10: 1860, 0x2F: 12}
+
+    def write(self, data):
+        self.writes.append(data)
+        reg = data[2]
+        if reg in (3, 4):
+            self.pending = response(reg, self.basic if reg == 3 else self.cells)
+        elif reg == 0x05:
+            self.pending = response(reg, b"SP04S034\x00\x00")
+        elif reg == 0xAA:
+            self.pending = response(reg, b"".join(n.to_bytes(2, "big") for n in (0, 0, 3) + (0,) * 8))
+        elif reg in self.thresholds:
+            self.pending = response(reg, self.thresholds[reg].to_bytes(2, "big"))
+        else:
+            self.pending = response(reg, b"", status=0x80)
+
+
+def test_extras_name_counters_and_thresholds_are_read_only_and_optional():
+    from robot_control.battery import THRESHOLDS
+    manager = BatteryManager("/dev/fake")
+    serial = ExtrasSerial()
+    for _ in range(len(THRESHOLDS)):
+        manager.poll(serial)
+        manager.poll_extras(serial)
+    assert all(frame[1] == 0xA5 for frame in serial.writes)
+    data = manager.snapshot()["data"]
+    assert data["deviceName"] == "SP04S034" and data["deviceNameState"] == "ok"
+    counters = {item["key"]: item["count"] for item in data["errorCounters"]}
+    assert counters["dsgoc"] == 3 and counters["sc"] == 0 and len(counters) == 11
+    assert data["errorCountersState"] == "ok"
+    values = {item["key"]: (item["value"], item["unit"]) for item in data["thresholds"]}
+    assert values["covp"] == (3.65, "В") and values["covp_rel"] == (3.4, "В")
+    assert values["povp"] == (43.8, "В")
+    assert values["chgoc"] == (20.0, "А") and values["dsgoc"] == (60.0, "А")   # разряд со знаком
+    assert values["chgot"] == (55.0, "°C")
+    assert values["design_cap"] == (18.6, "Ач") and values["cell_cnt"] == (12, "шт")
+    assert values["cuvp"] == (None, None)            # плата ответила 0x80 — «нет данных»
+    assert data["thresholdsState"] == "partial"
+    # Счётчики — раз в 10 опросов, а не каждый.
+    assert sum(1 for frame in serial.writes if frame[2] == 0xAA) == (len(THRESHOLDS) + 9) // 10
+
+
+def test_silent_extras_never_break_telemetry(monkeypatch):
+    from robot_control import battery
+    from robot_control.battery import THRESHOLDS
+    monkeypatch.setattr(battery, "OPTIONAL_TIMEOUT", 0.05)
+
+    class TelemetryOnlySerial(FakeSerial):
+        def write(self, data):
+            self.writes.append(data)
+            reg = data[2]
+            self.pending = response(reg, self.basic if reg == 3 else self.cells) if reg in (3, 4) else b""
+
+    manager = BatteryManager("/dev/fake")
+    serial = TelemetryOnlySerial()
+    started = time.monotonic()
+    manager.poll(serial)
+    manager.poll_extras(serial)
+    assert time.monotonic() - started < 2.0          # молчание платы не тормозит опрос надолго
+    for _ in range(len(THRESHOLDS)):
+        manager.poll(serial)
+        manager.poll_extras(serial)
+    snap = manager.snapshot()
+    assert snap["connected"] and snap["complete"]
+    # После 4 порогов подряд без ответа остальные не запрашиваются вовсе.
+    asked = [frame[2] for frame in serial.writes if frame[2] not in (3, 4, 0x05, 0xAA)]
+    assert len(asked) == battery.THRESHOLD_SILENCE_LIMIT
+    data = snap["data"]
+    assert len(data["thresholds"]) == len(THRESHOLDS)
+    assert data["deviceName"] is None and data["deviceNameState"] == "unavailable"
+    assert data["errorCounters"] is None and data["errorCountersState"] == "unavailable"
+    assert data["thresholdsState"] == "unavailable"
+
+
+def test_csv_includes_passport_counters_and_thresholds(battery_app):
+    from robot_control.battery import THRESHOLDS
+    manager = battery_app.extensions["rc_battery"]
+    serial = ExtrasSerial()
+    for _ in range(len(THRESHOLDS)):
+        manager.poll(serial)
+        manager.poll_extras(serial)
+    report = battery_app.test_client().get("/api/battery/report.csv").data.decode("utf-8-sig")
+    assert "Устройство;SP04S034" in report
+    assert "Мин. банка;1;Макс. банка;32" in report
+    assert "Перегрузка разряда: 3" in report
+    assert "Порог: Перенапряжение банки;3.65 В" in report
+    assert "Порог: Пониженное напряжение банки;нет данных" in report
+
+
+# --------------------------- подключение BMS с экрана -------------------------- #
+def test_port_roles_protect_master_and_lidar(tmp_path, monkeypatch):
+    from robot_control import bms_setup
+    master = tmp_path / "ttyACM0"
+    bms = tmp_path / "ttyUSB0"
+    free = tmp_path / "ttyUSB1"
+    busy = tmp_path / "ttyUSB2"
+    for path in (master, bms, free, busy):
+        path.touch()
+    monkeypatch.setenv("RC_SLAM_SOURCE", "master")
+    monkeypatch.setenv("RC_SLAM_PORT", str(master))
+    monkeypatch.setenv("RC_BMS_PORT", str(bms))
+    monkeypatch.setattr(bms_setup, "_lidar_ports", lambda: set())
+    monkeypatch.setattr(bms_setup, "_chassis_ports", lambda: set())
+    roles = {item["port"]: item["role"] for item in bms_setup.describe_ports(
+        [str(master), str(bms), str(free), str(busy)], locked=lambda port: port == str(busy))}
+    assert roles == {str(master): "master", str(bms): "bms", str(free): "free", str(busy): "busy"}
+    assert bms_setup.probe_port(str(master))["error"].startswith("это порт мастера")
+    with pytest.raises(ValueError):
+        bms_setup.apply_port(BatteryManager(), str(master), env_path=tmp_path / ".env")
+    probed = []
+    result = bms_setup.scan_ports(probe=lambda port: probed.append(port) or {"port": port, "found": port == str(free)},
+                                  ports=[{"port": str(master), "role": "master", "note": ""},
+                                         {"port": str(free), "role": "free", "note": ""},
+                                         {"port": str(busy), "role": "busy", "note": ""}])
+    assert probed == [str(free)] and result["found"] == [str(free)]
+    assert [item["port"] for item in result["skipped"]] == [str(master), str(busy)]
+
+
+def test_save_port_rewrites_only_bms_line(tmp_path):
+    from robot_control.bms_setup import save_port
+    env = tmp_path / ".env"
+    env.write_text("RC_SECRET_KEY=abc\n# комментарий\nRC_BMS_PORT=/dev/old\nRC_LIDAR_PORT=/dev/ttyUSB1\nRC_BMS_PORT=/dev/dup\n",
+                   encoding="utf-8")
+    env.chmod(0o640)
+    save_port("/dev/serial/by-id/usb-bms", env_path=env)
+    assert env.read_text(encoding="utf-8") == (
+        "RC_SECRET_KEY=abc\n# комментарий\nRC_BMS_PORT=/dev/serial/by-id/usb-bms\nRC_LIDAR_PORT=/dev/ttyUSB1\n")
+    assert env.stat().st_mode & 0o777 == 0o640
+    save_port("", env_path=env)
+    assert "RC_BMS_PORT=\n" in env.read_text(encoding="utf-8")
+    for bad in ("/dev/tty; rm -rf /", "ttyUSB0", "/dev/a b", "/dev/x\nRC_SLAM_PORT=/dev/y"):
+        with pytest.raises(ValueError):
+            save_port(bad, env_path=env)
+    fresh = tmp_path / "new" / ".env"
+    save_port("/dev/ttyUSB3", env_path=fresh)
+    assert fresh.read_text(encoding="utf-8").startswith("RC_SECRET_KEY=")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="PTY integration requires POSIX")
+def test_probe_finds_jbd_over_real_pty_and_reports_silence():
+    import pty
+    import select
+    from robot_control.bms_setup import probe_port
+    master, slave = pty.openpty()
+    name = os.ttyname(slave)
+    stop = threading.Event()
+    answer = {"on": True}
+
+    def emulate():
+        buffer = b""
+        while not stop.is_set():
+            ready, _, _ = select.select([master], [], [], .05)
+            if not ready:
+                continue
+            buffer += os.read(master, 1024)
+            while len(buffer) >= 7:
+                frame, buffer = buffer[:7], buffer[7:]
+                if answer["on"]:
+                    os.write(master, response(frame[2], payloads()[0 if frame[2] == 3 else 1]))
+
+    thread = threading.Thread(target=emulate, daemon=True)
+    thread.start()
+    try:
+        found = probe_port(name)
+        assert found["found"] is True and found["cells"] == 32 and "51.20 В" in found["summary"]
+        answer["on"] = False
+        silent = probe_port(name, timeout=0.3)
+        assert silent["found"] is False and "нет ответа" in silent["error"]
+    finally:
+        stop.set()
+        thread.join(timeout=1)
+        os.close(slave)
+        os.close(master)
+
+
+def test_setup_endpoints_require_pin_and_reconfigure(battery_app, monkeypatch, tmp_path):
+    from robot_control import bms_setup
+    client = battery_app.test_client()
+    body = client.get("/api/battery").get_json()["battery"]
+    assert body["setupAvailable"] is True and body["port"] == "/dev/fake"
+    monkeypatch.setattr(bms_setup, "describe_ports", lambda: [{"port": "/dev/ttyUSB7", "role": "free", "note": "свободен"}])
+    setup = client.get("/api/battery/setup").get_json()
+    assert setup["available"] and setup["ports"][0]["port"] == "/dev/ttyUSB7" and setup["requiresPin"]
+    for url, payload in (("/api/battery/probe", {"port": "/dev/ttyUSB7"}), ("/api/battery/scan", {}),
+                         ("/api/battery/port", {"port": "/dev/ttyUSB7"})):
+        assert client.post(url, json=payload).status_code == 401
+    monkeypatch.setattr(bms_setup, "probe_port", lambda port: {"ok": True, "found": True, "port": port, "summary": "JBD"})
+    probe = client.post("/api/battery/probe", json={"port": "/dev/ttyUSB7", "pin": "7232"})
+    assert probe.status_code == 200 and probe.get_json()["found"]
+    assert client.get("/api/battery/setup").get_json()["requiresPin"] is False   # PIN-сессия открыта
+    applied = []
+    monkeypatch.setattr(bms_setup, "apply_port", lambda manager, port: applied.append(port) or {"ok": True, "port": port})
+    assert client.post("/api/battery/port", json={"port": "/dev/ttyUSB7"}).get_json()["port"] == "/dev/ttyUSB7"
+    assert applied == ["/dev/ttyUSB7"]
+    assert client.post("/api/battery/port", json={}).status_code == 400
+    entries = client.get("/api/kiosk_logs?limit=50").get_json()["data"]["entries"]
+    assert any("BMS: порт /dev/ttyUSB7 сохранён" in entry["msg"] for entry in entries)
+
+
+def test_apply_port_saves_env_and_restarts_polling(tmp_path, monkeypatch):
+    from robot_control import bms_setup
+    port = tmp_path / "ttyUSB5"
+    port.touch()
+    env = tmp_path / ".env"
+    monkeypatch.setattr(bms_setup, "_lidar_ports", lambda: set())
+    monkeypatch.delenv("RC_SLAM_PORT", raising=False)
+    monkeypatch.delenv("RC_SLAM_SOURCE", raising=False)
+    calls = []
+
+    class Manager:
+        port = ""
+
+        def reconfigure(self, value):
+            calls.append(value)
+            self.port = value
+
+        def snapshot(self):
+            return {"configured": bool(self.port)}
+
+    result = bms_setup.apply_port(Manager(), str(port), env_path=env)
+    assert result["saved"] and calls == [str(port)]
+    assert f"RC_BMS_PORT={port}" in env.read_text(encoding="utf-8")
+    assert os.environ["RC_BMS_PORT"] == str(port)
+    bms_setup.apply_port(Manager(), "", env_path=env)
+    assert "RC_BMS_PORT" not in os.environ and calls[-1] == ""
+
+
+def test_manager_reconfigure_switches_port_and_clears_old_data():
+    manager = BatteryManager("/dev/fake", opener=lambda: (_ for _ in ()).throw(OSError("нет порта")))
+    manager.poll(FakeSerial())
+    assert manager.snapshot()["data"] is not None
+    manager.reconfigure("")
+    snap = manager.snapshot()
+    assert snap["data"] is None and not snap["configured"] and "Подключение BMS" in snap["reason"]
+    assert manager._thread is None
+
+
+def test_operator_console_points_to_kiosk_for_bms_setup(client, monkeypatch):
+    from robot_control import battery
+    monkeypatch.setattr(battery, "kiosk_snapshot", lambda: {"configured": False, "connected": False,
+                                                            "reason": "x", "data": None, "setupAvailable": True})
+    assert client.get("/api/battery").get_json()["battery"]["setupAvailable"] is False
+    setup = client.get("/api/battery/setup").get_json()
+    assert setup["available"] is False and "8090" in setup["reason"]

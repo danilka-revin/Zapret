@@ -29,7 +29,7 @@
         <b>RUS SLAM · Бортовой экран</b>
       </div>
       <div class="top-right">
-        <button id="battery-open" class="swipe-close" type="button" aria-controls="swipe-battery-view">АКБ · все банки · 4</button>
+        <button id="battery-open" class="swipe-close battery-open" type="button" aria-controls="swipe-battery-view" title="Аккумулятор: все банки, защиты, температуры, подключение BMS">АКБ подробно</button>
         <span class="mode-pill" id="mode-pill">—</span>
         <span class="chip" id="data-chip">ожидание</span>
         <time class="clock" id="clock">--:--</time>
@@ -44,12 +44,13 @@
     <div class="cols">
       <!-- Левая колонка: АКБ + шасси -->
       <div class="col-left">
-        <section class="battery-panel" aria-label="Состояние АКБ">
+        <section class="battery-panel" id="battery-panel" role="button" tabindex="0" aria-controls="swipe-battery-view" aria-label="Состояние АКБ — нажмите, чтобы открыть подробности по всем банкам">
           <article class="soc-big">
             <span class="kpi-label">Заряд АКБ</span>
             <b class="soc-value"><span id="k-soc">—</span><small>%</small></b>
             <div class="battery-bar"><i id="k-soc-bar"></i></div>
             <span class="kpi-sub" id="k-soc-state">—</span>
+            <span class="battery-more" id="battery-more">Подробно: все банки →</span>
           </article>
           <div class="batt-grid">
             <div class="batt-cell big">
@@ -174,26 +175,84 @@
         <h2 id="swipe-title-text">Камеры и логи</h2>
         <small id="swipe-title-hint">свайп влево — назад к статистике</small>
       </div>
-      <button id="swipe-battery-open" class="swipe-close" type="button" aria-controls="swipe-battery-view">АКБ · 4</button>
+      <button id="swipe-battery-open" class="swipe-close battery-open" type="button" aria-controls="swipe-battery-view">АКБ</button>
       <span class="swipe-live" id="swipe-live">● LIVE</span>
     </header>
     <div class="swipe-body">
-      <section id="swipe-battery-view" class="swipe-view battery-detail" hidden aria-label="Страница 4. Аккумулятор и все банки">
+      <section id="swipe-battery-view" class="swipe-view battery-detail" hidden aria-label="Страница 4. Аккумулятор: полная информация и все банки">
         <header class="battery-report-head">
-          <div><h3>АКБ · отчёт по всем банкам</h3><p id="bms-status" role="status">Ожидание BMS…</p><small id="bms-updated">Нет измерений</small></div>
-          <a id="bms-report" class="swipe-close" href="api/battery/report.csv" aria-disabled="true">Скачать CSV</a>
+          <div><h3>Аккумулятор · JBD BMS</h3><p id="bms-status" role="status">Ожидание BMS…</p><small id="bms-updated">Нет измерений</small></div>
+          <div class="bms-head-actions">
+            <button id="bms-setup-open" class="swipe-close" type="button" aria-controls="bms-setup" aria-expanded="false">Подключение BMS</button>
+            <a id="bms-report" class="swipe-close" href="api/battery/report.csv" aria-disabled="true">Скачать CSV</a>
+          </div>
         </header>
-        <div id="bms-summary" class="bms-summary"></div>
-        <p id="bms-faults"></p>
-        <p id="bms-spread"></p>
-        <p id="bms-count"></p>
-        <p class="panel-meta">Ток: + заряд, − разряд. Балансировка — флаг BMS. Температуры относятся к датчикам АКБ, не к отдельным банкам.</p>
-        <div class="bms-table-wrap">
-          <table class="bms-table">
-            <thead><tr><th scope="col">Банка</th><th scope="col">Напряжение</th><th scope="col">От среднего</th><th scope="col">Балансировка</th><th scope="col">Отметка</th></tr></thead>
-            <tbody id="bms-cells"><tr><td colspan="5">Нет данных от BMS</td></tr></tbody>
-          </table>
+
+        <section id="bms-setup" class="bms-setup" hidden aria-label="Подключение BMS">
+          <header><b>Подключение JBD BMS</b><span id="bms-setup-current">порт не выбран</span></header>
+          <p class="bms-setup-hint">BMS подключается к USB через переходник USB-UART: TX платы → RX переходника, RX → TX, GND → GND, 9600 8N1. Выберите порт и нажмите «Проверить» — будет одно чтение данных, в BMS ничего не записывается. Порты мастера руля и лидара здесь не открываются.</p>
+          <ul id="bms-port-list" class="bms-port-list"><li>Список портов загружается…</li></ul>
+          <label id="bms-pin-wrap" class="bms-pin" hidden>PIN руления (нужен для проверки и сохранения)
+            <input id="bms-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN" />
+          </label>
+          <div class="bms-setup-actions">
+            <button id="bms-probe" type="button">Проверить выбранный</button>
+            <button id="bms-scan" type="button">Найти автоматически</button>
+            <button id="bms-save" type="button" class="primary">Сохранить и подключить</button>
+            <button id="bms-disable" type="button" class="quiet">Отключить BMS</button>
+          </div>
+          <p id="bms-setup-msg" class="bms-setup-msg" role="status"></p>
+        </section>
+
+        <div class="bms-hero">
+          <article class="bms-soc">
+            <span>Заряд</span>
+            <b><span id="bms-soc">—</span><small>%</small></b>
+            <div class="bms-soc-bar"><i id="bms-soc-bar"></i></div>
+            <small id="bms-capacity">остаток — из — Ач</small>
+          </article>
+          <div id="bms-summary" class="bms-summary"></div>
         </div>
+
+        <div class="bms-columns">
+          <section class="bms-block bms-cells-block" aria-labelledby="bms-cells-title">
+            <h4 id="bms-cells-title">Банки</h4>
+            <p id="bms-spread"></p>
+            <p id="bms-count"></p>
+            <div id="bms-cell-tiles" class="bms-cell-tiles" aria-hidden="true"></div>
+            <h4 id="bms-passport-title" class="bms-subhead">Плата BMS</h4>
+            <dl id="bms-passport" class="bms-facts" aria-labelledby="bms-passport-title"></dl>
+          </section>
+          <div class="bms-side">
+            <section class="bms-block" aria-labelledby="bms-protect-title">
+              <h4 id="bms-protect-title">Защиты и ключи</h4>
+              <div id="bms-fets" class="bms-pills"></div>
+              <p id="bms-faults"></p>
+              <div id="bms-counters" class="bms-counters"></div>
+            </section>
+            <section class="bms-block" aria-labelledby="bms-temps-title">
+              <h4 id="bms-temps-title">Температуры</h4>
+              <div id="bms-temps" class="bms-temps"></div>
+            </section>
+          </div>
+        </div>
+
+        <section class="bms-block" aria-labelledby="bms-thresholds-title">
+          <h4 id="bms-thresholds-title">Пороги защит из памяти BMS <small>только чтение</small></h4>
+          <p id="bms-thresholds-state" class="panel-meta"></p>
+          <dl id="bms-thresholds" class="bms-facts bms-thresholds"></dl>
+        </section>
+
+        <section class="bms-block" aria-labelledby="bms-table-title">
+          <h4 id="bms-table-title">Все банки — точные значения</h4>
+          <p class="panel-meta">Ток: + заряд, − разряд. Балансировка — флаг BMS. Температуры относятся к датчикам АКБ, не к отдельным банкам.</p>
+          <div class="bms-table-wrap">
+            <table class="bms-table">
+              <thead><tr><th scope="col">Банка</th><th scope="col">Напряжение</th><th scope="col">От среднего</th><th scope="col">Балансировка</th><th scope="col">Отметка</th></tr></thead>
+              <tbody id="bms-cells"><tr><td colspan="5">Нет данных от BMS</td></tr></tbody>
+            </table>
+          </div>
+        </section>
       </section>
       <div id="swipe-cameras-view" class="swipe-view swipe-camera-view">
       <!-- левая часть — две камеры друг над другом -->

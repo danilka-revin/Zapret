@@ -920,6 +920,10 @@ uint32_t last_frame_ms = 0;
 char serial_line[48];
 uint8_t serial_length = 0;
 bool serial_overflow = false;
+uint32_t serial_last_char_ms = 0;
+// Обрывок строки без \n дольше секунды — мусор (наводка, сброс порта, эхо):
+// выбрасываем, иначе он склеится со следующей командой и «съест» её.
+const uint16_t SERIAL_LINE_TIMEOUT_MS = 1000;
 
 // Обработчики Wire вызываются из прерывания TWI: только копирование.
 void onCommandReceived(int count) {
@@ -965,12 +969,18 @@ void refreshFrame() {
 }
 
 void readSerialLines() {
+  if ((serial_length > 0 || serial_overflow) &&
+      (uint32_t)(millis() - serial_last_char_ms) > SERIAL_LINE_TIMEOUT_MS) {
+    serial_length = 0;
+    serial_overflow = false;
+  }
   while (Serial.available() > 0) {
     const char ch = (char)Serial.read();
+    serial_last_char_ms = millis();
     if (ch == '\n' || ch == '\r') {
       if (serial_overflow) {
         note(PSTR("слишком длинная строка — пропущена"));
-      } else if (serial_length > 0) {
+      } else if (serial_length > 0 && serial_line[0] != '@' && serial_line[0] != '#') {
         serial_line[serial_length] = '\0';
         handleModuleCommand(serial_line);
       }

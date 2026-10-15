@@ -822,7 +822,16 @@ def create_blueprint(state, guard=None) -> Blueprint:
     @bp.get("/api/battery")
     def api_battery():
         from .battery import kiosk_snapshot
-        return jsonify({"ok": True, "battery": kiosk_snapshot()}), 200, {"Cache-Control": "no-store"}
+        snap = kiosk_snapshot()
+        # Порт BMS держит бортовой экран: настраивать подключение можно только там.
+        snap["setupAvailable"] = False
+        return jsonify({"ok": True, "battery": snap}), 200, {"Cache-Control": "no-store"}
+
+    @bp.get("/api/battery/setup")
+    def api_battery_setup():
+        return jsonify({"ok": True, "available": False, "ports": [],
+                        "reason": "Подключение BMS настраивается на бортовом экране (порт 8090): "
+                                  "страница «АКБ» → «Подключение BMS»."}), 200, {"Cache-Control": "no-store"}
 
     @bp.get("/api/battery/report.csv")
     def api_battery_report():

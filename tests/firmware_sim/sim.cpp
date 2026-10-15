@@ -8,8 +8,12 @@
 //   ./sim tlm_dump   — вывести USB мастера после калибровки (для разбора сервером)
 #include "arduino_sim.h"
 
+#include <chrono>
+#include <fcntl.h>
 #include <functional>
 #include <sys/wait.h>
+#include <termios.h>
+#include <thread>
 #include <unistd.h>
 
 sim::Board board_fl, board_fr, board_rl, board_rr;
@@ -407,6 +411,25 @@ static void scenario_drive() {
   CHECK(board_fr.analog[3] == 0 && board_fr.level[5] == HIGH, "s выключает и тягу");
 }
 
+static void scenario_serial_garbage() {
+  boot({&board_fl, &board_fr, &board_rl, &board_rr});
+  for (const char* chunk : {"@TLM mod=RR deg=0.00 tgt=0.00 mov", "\x07\xff#"}) {
+    for (const char* p = chunk; *p; ++p) board_fl.serial.input.push_back((uint8_t)*p);
+    sim::run_for_ms(1200);               // обрывок без \n висит дольше секунды
+  }
+  board_fl.serial.send("k");
+  sim::run_for_ms(5);
+  CHECK(master::calib_state != master::CAL_IDLE, "после мусора в порту команда k всё равно выполнена");
+  board_fl.serial.send("@TLM mod=FL deg=0.00 tgt=0.00 moving=0 cal=0");
+  board_fl.serial.send("# FL: эхо сообщения");
+  sim::run_for_ms(5);
+  CHECK(!has(board_fl, "Неизв. команда: @TLM") && !has(board_fl, "Неизв. команда: #"),
+        "эхо телеметрии и сообщений не считается командой");
+  board_fl.serial.send("d 1");            // частичный ввод человека с паузами < 1 с
+  sim::run_for_ms(5);
+  CHECK(has(board_fl, "Шаблон: d [градусы] [f/b]"), "обычные ошибки по-прежнему видны");
+}
+
 static void scenario_frame_limits() {
   boot({&board_fr});
   FR::current_step = -123456;
@@ -585,6 +608,56 @@ static void scenario_tlm_dump() {
   std::fwrite(board_fl.serial.output.data(), 1, board_fl.serial.output.size(), stdout);
 }
 
+// ./sim pty /tmp/master-link — мастер и три слейва в реальном времени за
+// псевдотерминалом: сервер робота (RC_SLAM_PORT=/tmp/master-link) видит настоящую
+// логику прошивки — для ручной проверки экрана без железа.
+static int run_pty(const char* link_path) {
+  const int fd = posix_openpt(O_RDWR | O_NOCTTY);
+  if (fd < 0 || grantpt(fd) != 0 || unlockpt(fd) != 0) {
+    std::perror("posix_openpt");
+    return 2;
+  }
+  // Сторона робота сразу в raw-режиме: без эха телеметрии обратно в «мастер».
+  const int slave = open(ptsname(fd), O_RDWR | O_NOCTTY);
+  if (slave >= 0) {
+    termios mode;
+    if (tcgetattr(slave, &mode) == 0) {
+      cfmakeraw(&mode);
+      tcsetattr(slave, TCSANOW, &mode);
+    }
+    close(slave);
+  }
+  unlink(link_path);
+  if (symlink(ptsname(fd), link_path) != 0) {
+    std::perror("symlink");
+    return 2;
+  }
+  fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+  wire_boards();
+  board_fl.phys = -3000;
+  board_fr.phys = 2500;
+  board_rl.phys = 40;
+  board_rr.phys = -9000;
+  boot(all_boards());
+  std::printf("мастер на %s → %s\n", link_path, ptsname(fd));
+  std::fflush(stdout);
+  size_t sent = 0;
+  const auto wall_start = std::chrono::steady_clock::now();
+  const int64_t sim_start = sim::now_us;
+  for (;;) {
+    char buffer[256];
+    const ssize_t got = read(fd, buffer, sizeof(buffer));
+    for (ssize_t i = 0; i < got; ++i) board_fl.serial.input.push_back((uint8_t)buffer[i]);
+    sim::run_for_ms(10);
+    const std::string& out = board_fl.serial.output;
+    if (out.size() > sent) {
+      const ssize_t written = write(fd, out.data() + sent, out.size() - sent);
+      if (written > 0) sent += (size_t)written;
+    }
+    std::this_thread::sleep_until(wall_start + std::chrono::microseconds(sim::now_us - sim_start));
+  }
+}
+
 struct Scenario {
   const char* name;
   void (*fn)();
@@ -607,6 +680,7 @@ static const Scenario SCENARIOS[] = {
     {"zero_manual", scenario_zero_manual},
     {"drive", scenario_drive},
     {"frame_limits", scenario_frame_limits},
+    {"serial_garbage", scenario_serial_garbage},
     {"system_calibrate_all", scenario_system_calibrate_all},
     {"system_server_commands", scenario_system_server_commands},
     {"system_drive", scenario_system_drive},
@@ -627,6 +701,7 @@ static int run_one(const Scenario& scenario) {
 }
 
 int main(int argc, char** argv) {
+  if (argc > 2 && std::strcmp(argv[1], "pty") == 0) return run_pty(argv[2]);
   if (argc > 1 && std::strcmp(argv[1], "tlm_dump") == 0) {
     wire_boards();
     scenario_tlm_dump();

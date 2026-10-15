@@ -84,6 +84,17 @@
     }
     setText($('k-soc-state'), stateText);
 
+    // Подсказка на главном экране: панель АКБ — вход на страницу 4 (все банки).
+    const more = $('battery-more');
+    if (more) {
+      let hint = 'Подробно: все банки и защиты →';
+      if (bms && bms.configured === false) hint = 'BMS не подключена · настроить →';
+      else if (useBms && !bms.connected) hint = 'BMS не отвечает · проверить →';
+      else if (useBms && measured.cellCount) hint = 'Подробно: ' + measured.cellCount + ' банок и защиты →';
+      more.textContent = hint;
+      more.dataset.tone = bms && (bms.configured === false || (useBms && !bms.connected)) ? 'warn' : '';
+    }
+
     setText($('k-volts'), fmt(b.volts, 1));
     setText($('k-amps'), fmt(b.amps, 1));
     setText($('k-power'), fmt(useBms ? (measured.watts == null ? null : measured.watts / 1000) : d.powerKw, 2));
@@ -1203,6 +1214,27 @@
       const button = $(id);
       if (button) button.addEventListener('click', () => openSwipe('battery'));
     });
+    // Вся панель АКБ на главном экране открывает страницу 4 — её не нужно искать.
+    const batteryPanel = $('battery-panel');
+    if (batteryPanel) {
+      // Свайп, начатый на панели, — это жест страниц, а не нажатие.
+      let panelDown = null;
+      batteryPanel.addEventListener('pointerdown', (event) => {
+        panelDown = { x: event.clientX, y: event.clientY };
+      });
+      batteryPanel.addEventListener('click', (event) => {
+        const moved = panelDown && Number.isFinite(event.clientX) &&
+          (Math.abs(event.clientX - panelDown.x) > 12 || Math.abs(event.clientY - panelDown.y) > 12);
+        panelDown = null;
+        if (!moved) openSwipe('battery');
+      });
+      batteryPanel.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openSwipe('battery');
+        }
+      });
+    }
 
     if (closeBtn) closeBtn.addEventListener('click', closeSwipe);
     if (backdrop) backdrop.addEventListener('click', closeSwipe);
@@ -2046,7 +2078,8 @@
       const dirty = card.dataset.steerDirty === 'true';
       if (!dirty) slider.value = String(value);
       if (currentEl) currentEl.textContent = current == null ? '—' : Math.round(current) + '°';
-      if (targetEl) targetEl.textContent = Math.round(+slider.value || 0) + '°';
+      // Ползунок ограничен ±32°, а при калибровке цель — до ±200°: показываем настоящую.
+      if (targetEl) targetEl.textContent = (!dirty && busy && target != null ? Math.round(target) : Math.round(+slider.value || 0)) + '°';
 
       const ready = available && steeringAuthorized && online && homed && !busy && !pending && !zeroPending && !calibPending && !tractionActive;
       const canSetZero = available && steeringAuthorized && online && !busy && !pending && !zeroPending && !calibPending && !tractionActive;

@@ -455,6 +455,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     eventlog.install()
 
     from .battery import BatteryManager, report_response
+    from . import bms_setup
     battery = BatteryManager(os.environ.get("RC_BMS_PORT", "").strip())
     app.extensions["rc_battery"] = battery
     if not config.testing:
@@ -462,11 +463,79 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     @app.get("/api/battery")
     def api_battery():
-        return jsonify({"ok": True, "battery": battery.snapshot()}), 200, {"Cache-Control": "no-store"}
+        snap = battery.snapshot()
+        # Настройка порта BMS есть только здесь, на бортовом экране (он держит UART).
+        snap["setupAvailable"] = True
+        return jsonify({"ok": True, "battery": snap}), 200, {"Cache-Control": "no-store"}
 
     @app.get("/api/battery/report.csv")
     def api_battery_report():
         return report_response(battery.snapshot())
+
+    # ------------------- Подключение BMS со страницы «АКБ» ------------------- #
+    # Список портов публичен (это та же диагностика, что у лидара); проверка
+    # порта, автопоиск и сохранение открывают USB-порты — только с PIN руления.
+    def _bms_authorized(body: dict) -> bool:
+        if steering_access_valid():
+            return True
+        pin = str(body.get("pin") or "")
+        if not pin or state is None:
+            return False
+        result = state.vault.verify(pin)
+        note_pin_result(result, where="подключение BMS")
+        if result.get("ok"):
+            grant_steering_access()
+            return True
+        return False
+
+    def _bms_pin_required():
+        return jsonify({"ok": False, "reason": "pin_required", "error": "Нужен PIN руления."}), 401
+
+    @app.get("/api/battery/setup")
+    def api_battery_setup():
+        payload = bms_setup.setup_payload(battery)
+        payload["requiresPin"] = not steering_access_valid()
+        return jsonify(payload), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/battery/probe")
+    def api_battery_probe():
+        body = request.get_json(silent=True) or {}
+        if not _bms_authorized(body):
+            return _bms_pin_required()
+        port = str(body.get("port") or "").strip()
+        result = bms_setup.probe_port(port)
+        eventlog.record("info" if result.get("found") else "warn",
+                        "BMS: проверка %s — %s" % (port or "?", result.get("summary") or result.get("error")
+                                                   or "JBD не ответила"),
+                        source="АКБ")
+        return jsonify(result), 200 if result.get("ok") else 409
+
+    @app.post("/api/battery/scan")
+    def api_battery_scan():
+        body = request.get_json(silent=True) or {}
+        if not _bms_authorized(body):
+            return _bms_pin_required()
+        result = bms_setup.scan_ports()
+        eventlog.record("info", "BMS: автопоиск — найдено %d: %s" % (
+            len(result["found"]), ", ".join(result["found"]) or "нет"), source="АКБ")
+        return jsonify(result)
+
+    @app.post("/api/battery/port")
+    def api_battery_port():
+        body = request.get_json(silent=True) or {}
+        if not _bms_authorized(body):
+            return _bms_pin_required()
+        if "port" not in body or not isinstance(body.get("port"), str):
+            return jsonify({"ok": False, "error": "нужно поле port"}), 400
+        try:
+            result = bms_setup.apply_port(battery, body["port"])
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except OSError as exc:
+            return jsonify({"ok": False, "error": "не удалось записать .env: %s" % exc}), 500
+        eventlog.record("ok", "BMS: порт %s сохранён в .env, подключение…" % (result["port"] or "—")
+                        if result["port"] else "BMS отключена: RC_BMS_PORT очищен", source="АКБ")
+        return jsonify(result)
 
     # Телеметрия открыта без логина; поворот модулей доступен только по PIN.
     try:
