@@ -589,24 +589,25 @@ def test_probe_finds_jbd_over_real_pty_and_reports_silence():
         os.close(master)
 
 
-def test_setup_endpoints_require_pin_and_reconfigure(battery_app, monkeypatch, tmp_path):
+def test_setup_endpoints_are_available_without_pin_and_reconfigure(battery_app, monkeypatch):
     from robot_control import bms_setup
     client = battery_app.test_client()
     body = client.get("/api/battery").get_json()["battery"]
     assert body["setupAvailable"] is True and body["port"] == "/dev/fake"
     monkeypatch.setattr(bms_setup, "describe_ports", lambda: [{"port": "/dev/ttyUSB7", "role": "free", "note": "свободен"}])
-    setup = client.get("/api/battery/setup").get_json()
-    assert setup["available"] and setup["ports"][0]["port"] == "/dev/ttyUSB7" and setup["requiresPin"]
-    for url, payload in (("/api/battery/probe", {"port": "/dev/ttyUSB7"}), ("/api/battery/scan", {}),
-                         ("/api/battery/port", {"port": "/dev/ttyUSB7"})):
-        assert client.post(url, json=payload).status_code == 401
     monkeypatch.setattr(bms_setup, "probe_port", lambda port: {"ok": True, "found": True, "port": port, "summary": "JBD"})
-    probe = client.post("/api/battery/probe", json={"port": "/dev/ttyUSB7", "pin": "7232"})
+    monkeypatch.setattr(bms_setup, "scan_ports", lambda: {"ok": True, "found": [], "results": [], "skipped": []})
+    setup = client.get("/api/battery/setup").get_json()
+    assert setup["available"] and setup["ports"][0]["port"] == "/dev/ttyUSB7"
+    assert setup["requiresPin"] is False
+
+    probe = client.post("/api/battery/probe", json={"port": "/dev/ttyUSB7"})
     assert probe.status_code == 200 and probe.get_json()["found"]
-    assert client.get("/api/battery/setup").get_json()["requiresPin"] is False   # PIN-сессия открыта
+    assert client.post("/api/battery/scan", json={}).status_code == 200
     applied = []
     monkeypatch.setattr(bms_setup, "apply_port", lambda manager, port: applied.append(port) or {"ok": True, "port": port})
-    assert client.post("/api/battery/port", json={"port": "/dev/ttyUSB7"}).get_json()["port"] == "/dev/ttyUSB7"
+    saved = client.post("/api/battery/port", json={"port": "/dev/ttyUSB7"})
+    assert saved.status_code == 200 and saved.get_json()["port"] == "/dev/ttyUSB7"
     assert applied == ["/dev/ttyUSB7"]
     assert client.post("/api/battery/port", json={}).status_code == 400
     entries = client.get("/api/kiosk_logs?limit=50").get_json()["data"]["entries"]

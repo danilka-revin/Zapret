@@ -177,6 +177,16 @@ def test_real_scan_is_drawn(screen, tmp_path):
     assert report["renderErrors"] == [], report["renderErrors"]
 
 
+def test_kiosk_map_does_not_clamp_far_points_to_outer_ring(tmp_path):
+    """Точки за 10 м не должны собираться в искусственную окружность."""
+    points = [{"a": 0.0, "r": 12.0}, {"a": 1.57, "r": 2.0}]
+    payload = state_payload(points, lidar_status(points_count=2, nearest_m=2.0))
+    report = render("robot", payload, tmp_path)
+    assert report["count"] == "2"  # полный скан остаётся виден в счётчике
+    assert report["dots"] == 1     # на карту попала только точка в пределах 10 м
+    assert "на карте: 1/2" in report["meta"]
+
+
 @pytest.mark.parametrize("screen", SCREENS)
 def test_real_scan_signature_shows_port_protocol_and_baud(screen, tmp_path):
     """Оператор видит, что это именно лидар: порт, протокол, скорость."""

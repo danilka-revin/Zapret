@@ -13,8 +13,8 @@
     Киоск-экран на борту робота. Рассчитан на дисплей 11.6" 1920×1080 (landscape):
     слева — крупно АКБ и мини-шасси (как на пульте управления), справа — лидар
     360° на всю высоту. Цифры крупные, чтобы было видно издалека.
-    Статистика (АКБ, шасси, лидар) без пароля — доступна всем.
-    Управление отсеком, сервисом и рулевыми углами — только после PIN-кода.
+    Статистика, настройки, BMS и остальные функции доступны без PIN.
+    PIN запрашивается только при открытии грузового кейса.
   -->
   <div class="kiosk">
     <header class="top">
@@ -33,10 +33,10 @@
         <span class="mode-pill" id="mode-pill">—</span>
         <span class="chip" id="data-chip">ожидание</span>
         <time class="clock" id="clock">--:--</time>
-        <!-- КНОПКА УПРАВЛЕНИЯ — вход по PIN, сама статистика остаётся без пароля -->
-        <button id="k-ctrl-btn" class="k-ctrl-btn" type="button" aria-haspopup="dialog" aria-controls="ctrl-overlay" title="Управление роботом по PIN-коду">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 1 1 8 0v3"/><circle cx="12" cy="16" r="1.6" fill="currentColor" stroke="none"/></svg>
-          <span>Управление</span>
+        <!-- Функции киоска открыты без PIN; код спрашивается только при открытии кейса. -->
+        <button id="k-ctrl-btn" class="k-ctrl-btn" type="button" aria-haspopup="dialog" aria-controls="ctrl-overlay" title="Открыть функции. PIN нужен только для открытия кейса.">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2" fill="var(--bg)"/><circle cx="15" cy="12" r="2" fill="var(--bg)"/><circle cx="11" cy="17" r="2" fill="var(--bg)"/></svg>
+          <span>Функции</span>
         </button>
       </div>
     </header>
@@ -192,9 +192,6 @@
           <header><b>Подключение JBD BMS</b><span id="bms-setup-current">порт не выбран</span></header>
           <p class="bms-setup-hint">BMS подключается к USB через переходник USB-UART: TX платы → RX переходника, RX → TX, GND → GND, 9600 8N1. Выберите порт и нажмите «Проверить» — будет одно чтение данных, в BMS ничего не записывается. Порты мастера руля и лидара здесь не открываются.</p>
           <ul id="bms-port-list" class="bms-port-list"><li>Список портов загружается…</li></ul>
-          <label id="bms-pin-wrap" class="bms-pin" hidden>PIN руления (нужен для проверки и сохранения)
-            <input id="bms-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN" />
-          </label>
           <div class="bms-setup-actions">
             <button id="bms-probe" type="button">Проверить выбранный</button>
             <button id="bms-scan" type="button">Найти автоматически</button>
@@ -298,7 +295,7 @@
       </aside>
       </div>
 
-      <!-- PIN-защищённое руление и удерживаемое низкоскоростное движение. -->
+      <!-- Руление и удерживаемое низкоскоростное движение на киоске без PIN. -->
       <section id="swipe-motors-view" class="swipe-view steer-panel" hidden aria-label="Руление и тяга">
         <header class="steer-panel-head">
           <div>
@@ -306,9 +303,7 @@
             <p>Шаговые модули задаются отдельно; BLDC едет только пока удерживается направление.</p>
           </div>
           <div class="steer-access">
-            <span id="steer-auth-status" class="steer-auth-status">нужен PIN</span>
-            <button id="steer-unlock" class="btn-steer" type="button">Разблокировать</button>
-            <button id="steer-lock" class="btn-steer btn-steer--quiet" type="button" hidden>Заблокировать</button>
+            <span id="steer-auth-status" class="steer-auth-status">доступ без PIN</span>
           </div>
         </header>
         <section class="traction-controls" aria-label="Тяговые BLDC-моторы">
@@ -370,31 +365,31 @@
     </div>
   </div>
 
-  <!-- ============ ОВЕРЛЕЙ УПРАВЛЕНИЯ: PIN + ФУНКЦИИ ============ -->
+  <!-- ============ ФУНКЦИИ БЕЗ PIN · PIN ТОЛЬКО ДЛЯ ОТКРЫТИЯ КЕЙСА ============ -->
   <div id="ctrl-overlay" class="ctrl-overlay" hidden aria-hidden="true">
     <div class="ctrl-backdrop" id="ctrl-backdrop" aria-hidden="true"></div>
     <div class="ctrl-sheet" role="dialog" aria-modal="true" aria-labelledby="ctrl-title" tabindex="-1">
       <header class="ctrl-head">
         <div class="ctrl-head-left">
           <span class="ctrl-head-icon" aria-hidden="true">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 1 1 8 0v3"/></svg>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="var(--bg)"/><circle cx="15" cy="12" r="2" fill="var(--bg)"/><circle cx="11" cy="18" r="2" fill="var(--bg)"/></svg>
           </span>
           <div>
-            <h2 id="ctrl-title">Управление роботом</h2>
-            <p id="ctrl-subtitle" class="ctrl-subtitle">введи PIN-код — откроются функции</p>
+            <h2 id="ctrl-title">Функции</h2>
+            <p id="ctrl-subtitle" class="ctrl-subtitle">функции доступны без PIN · PIN нужен только для открытия кейса</p>
           </div>
         </div>
         <button id="ctrl-close" class="ctrl-close" type="button" aria-label="Закрыть">✕</button>
       </header>
 
-      <!-- === ЭКРАН 1: ПИН-КЛАВИАТУРА (сюда водить пальцами) === -->
-      <section id="pin-view" class="pin-view" aria-label="Ввод PIN-кода">
+      <!-- PIN-клавиатура появляется только после нажатия «Открыть кейс». -->
+      <section id="pin-view" class="pin-view" aria-label="Открытие кейса по PIN">
         <div class="pin-dots-wrap">
           <div id="pin-dots" class="pin-dots" aria-hidden="true">
             <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
           </div>
           <div id="pin-display" class="pin-display" aria-live="polite" aria-label="PIN">••••</div>
-          <p id="pin-hint" class="pin-hint">Води пальцем по цифрам — PIN 4–8 цифр</p>
+          <p id="pin-hint" class="pin-hint">Введите PIN-код · 4–8 цифр</p>
           <p id="pin-msg" class="pin-msg" role="status" aria-live="polite"></p>
         </div>
 
@@ -414,13 +409,13 @@
         </div>
 
         <div class="pin-actions">
-          <button id="pin-submit" class="btn btn-primary pin-submit" type="button">Открыть доступ</button>
-          <button id="pin-cancel" class="btn btn-ghost" type="button">Назад к статистике</button>
+          <button id="pin-submit" class="btn btn-primary pin-submit" type="button">Открыть кейс</button>
+          <button id="pin-cancel" class="btn btn-ghost" type="button">Назад к функциям</button>
         </div>
-        <p class="pin-footnote">Телеметрия остаётся публичной — PIN открывает отсек, руление и низкоскоростную тягу</p>
+        <p class="pin-footnote">PIN проверяется только для открытия кейса. Остальные функции доступны без PIN.</p>
       </section>
 
-      <!-- === ЭКРАН 2: ФУНКЦИИ (после верного PIN) === -->
+      <!-- === ФУНКЦИИ ДОСТУПНЫ СРАЗУ, БЕЗ PIN === -->
       <section id="ctrl-view" class="ctrl-view" hidden aria-label="Функции управления">
         <div class="ctrl-status-row">
           <div id="ctrl-lock-chip" class="ctrl-chip">отсек: —</div>
@@ -475,10 +470,10 @@
           <button id="ctrl-back" class="btn btn-ghost btn-large" type="button">← Вернуться к статистике</button>
           <button id="ctrl-logout" class="btn btn-ghost btn-large" type="button">Запереть и выйти</button>
         </div>
-        <p class="pin-footnote">Кнопка «Вернуться к статистике» — обратно к публичному экрану без пароля · отсек остаётся в выбранном положении</p>
+        <p class="pin-footnote">Закройте панель, чтобы вернуться к экрану телеметрии · состояние кейса не меняется</p>
       </section>
 
-      <!-- === ЭКРАН 3: ТЕМЫ (20 видов, доступны только после PIN) === -->
+      <!-- === ЭКРАН 3: ТЕМЫ (20 видов, доступны без PIN) === -->
       <section id="themes-view" class="themes-view" hidden aria-label="Выбор темы оформления">
         <div class="themes-head">
           <button id="themes-back" class="btn btn-ghost" type="button">← Назад</button>

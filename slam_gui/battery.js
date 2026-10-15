@@ -335,8 +335,6 @@
     text('bms-setup-current', setupData.port
       ? 'сейчас: ' + setupData.port + (setupData.connected ? ' · на связи' : ' · нет ответа')
       : 'порт не выбран');
-    const pinWrap = $('bms-pin-wrap');
-    if (pinWrap) pinWrap.hidden = !setupData.requiresPin;
     const ports = Array.isArray(setupData.ports) ? setupData.ports : [];
     if (!selectedPort) {
       const preferred = ports.find((item) => item.role === 'bms') || ports.find((item) => item.role === 'free');
@@ -399,19 +397,12 @@
   }
 
   async function post(url, body) {
-    const pinInput = $('bms-pin');
-    const pin = pinInput && pinInput.value ? String(pinInput.value) : '';
     const response = await fetch(url, {
       method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({}, body || {}, pin ? { pin } : {}))
+      body: JSON.stringify(body || {})
     });
     const result = await response.json().catch(() => ({}));
-    if (response.status === 401) {
-      if (setupData) setupData.requiresPin = true;
-      setupHtmlKey = '';
-      renderSetup();
-      throw new Error('Нужен PIN руления: введите его в поле ниже и повторите.');
-    }
+    if (!response.ok) throw new Error(result.error || ('Ошибка HTTP ' + response.status));
     return { response, result };
   }
 

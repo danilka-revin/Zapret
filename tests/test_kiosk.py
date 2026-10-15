@@ -2,7 +2,7 @@
 
 Проверяем три вещи:
   * публичная телеметрия и экран киоска работают без логина;
-  * поворот моторов требует короткую PIN-сессию и точный адресный payload;
+  * функции киоска доступны без PIN, а грузовой кейс открывается только с PIN;
   * запуск экрана в браузере работает без графики — «браузером» в тестах
     служит скрипт-заглушка, который только отмечает свой запуск в файле.
 """
@@ -93,7 +93,7 @@ def test_screen_contains_individual_steering_controls(kiosk_client):
     assert "api/kiosk_steer" in js
     assert "X-Robot-Control" in js
     assert "selectSwipeView(view || 'motors')" in js
-    assert "openSwipe('motors')" in js  # переход из PIN открывает именно управление
+    assert "openSwipe('motors')" in js  # переход к панели руля и тяги
     assert "openSwipe('cameras')" in js
     assert "if (dx > 65) openSwipe('motors');" in js
     assert "else if (dx < -65) openSwipe('cameras');" in js
@@ -117,16 +117,28 @@ def test_telemetry_api_returns_only_public_values(kiosk_client):
         assert isinstance(status["reason"], str) and status["reason"]
 
 
-def test_steering_endpoint_requires_pin_and_command_header(kiosk_client):
+def test_pin_is_required_only_when_opening_case(kiosk_client):
+    # В киоске больше нет отдельной PIN-проверки/сессии для доступа к функциям.
+    assert kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "7232"}).status_code == 404
+    no_pin = kiosk_client.post("/api/kiosk_lock/open", json={})
+    assert no_pin.status_code == 403
+    assert no_pin.get_json()["reason"] == "format"
+
+    wrong = kiosk_client.post("/api/kiosk_lock/open", json={"pin": "0000"})
+    assert wrong.status_code == 403 and wrong.get_json()["reason"] == "wrong"
+
+    opened = kiosk_client.post("/api/kiosk_lock/open", json={"pin": "7232"})
+    assert opened.status_code == 200 and opened.get_json()["lock"]["open"] is True
+    closed = kiosk_client.post("/api/kiosk_lock/close", json={})
+    assert closed.status_code == 200 and closed.get_json()["lock"]["open"] is False
+
+
+def test_steering_endpoint_is_available_without_pin_but_requires_command_header(kiosk_client):
     body = {"module": "FL", "angle": 10}
     headers = {"X-Robot-Control": "steering"}
-    assert kiosk_client.post("/api/kiosk_steer", json=body, headers=headers).status_code == 401
-
-    verified = kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "7232"})
-    assert verified.status_code == 200
-    assert verified.get_json()["steeringAuthorized"] is True
+    assert kiosk_client.get("/api/kiosk_lock").get_json()["steeringAuthorized"] is True
     assert kiosk_client.post("/api/kiosk_steer", json=body).status_code == 400
-    # Эта фикстура работает на симуляторе, поэтому он заведомо не может двигать моторы.
+    # Эта фикстура работает на симуляторе, поэтому она заведомо не может двигать моторы.
     response = kiosk_client.post("/api/kiosk_steer", json=body, headers=headers)
     assert response.status_code == 409
     assert response.get_json()["reason"] == "control_not_supported"
@@ -146,8 +158,6 @@ def test_steering_endpoint_dispatches_exactly_one_module_and_angle(kiosk_app, ki
 
     source = FakeSteeringSource()
     kiosk_app.extensions["rc_slam"].source = source
-    verified = kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "7232"})
-    assert verified.status_code == 200
     headers = {"X-Robot-Control": "steering"}
 
     response = kiosk_client.post("/api/kiosk_steer", json={"module": "fr", "angle": 12.5}, headers=headers)
@@ -164,12 +174,11 @@ def test_steering_endpoint_dispatches_exactly_one_module_and_angle(kiosk_app, ki
         assert response.status_code == 400
     assert source.commands == [("FR", 12.5)]
 
-    ended = kiosk_client.post("/api/kiosk_lock/session/end", json={})
-    assert ended.status_code == 200
-    assert kiosk_client.post("/api/kiosk_steer", json={"module": "FR", "angle": 10}, headers=headers).status_code == 401
+    # Следующая команда тоже доступна без PIN-сессии.
+    assert kiosk_client.post("/api/kiosk_steer", json={"module": "FR", "angle": 10}, headers=headers).status_code == 200
 
 
-def test_manual_software_zero_requires_pin_and_targets_one_module(kiosk_app, kiosk_client):
+def test_manual_software_zero_is_available_without_pin_and_targets_one_module(kiosk_app, kiosk_client):
     class FakeSteeringSource:
         name = "master"
         supports_individual_steer = True
@@ -186,8 +195,6 @@ def test_manual_software_zero_requires_pin_and_targets_one_module(kiosk_app, kio
     headers = {"X-Robot-Control": "steering"}
     body = {"module": "rr"}
 
-    assert kiosk_client.post("/api/kiosk_zero", json=body, headers=headers).status_code == 401
-    assert kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "7232"}).status_code == 200
     assert kiosk_client.post("/api/kiosk_zero", json=body).status_code == 400
     response = kiosk_client.post("/api/kiosk_zero", json=body, headers=headers)
     assert response.status_code == 200
@@ -199,7 +206,7 @@ def test_manual_software_zero_requires_pin_and_targets_one_module(kiosk_app, kio
     assert source.zeroed == ["RR"]
 
 
-def test_opto_calibration_requires_pin_and_accepts_module_or_all(kiosk_app, kiosk_client):
+def test_opto_calibration_is_available_without_pin_and_accepts_module_or_all(kiosk_app, kiosk_client):
     class FakeCalibrationSource:
         name = "master"
         supports_individual_steer = True
@@ -216,8 +223,6 @@ def test_opto_calibration_requires_pin_and_accepts_module_or_all(kiosk_app, kios
     kiosk_app.extensions["rc_slam"].source = source
     headers = {"X-Robot-Control": "steering"}
 
-    assert kiosk_client.post("/api/kiosk_calibrate", json={"module": "FR"}, headers=headers).status_code == 401
-    assert kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "7232"}).status_code == 200
     assert kiosk_client.post("/api/kiosk_calibrate", json={"module": "FR"}).status_code == 400
     response = kiosk_client.post("/api/kiosk_calibrate", json={"module": "fr"}, headers=headers)
     assert response.status_code == 200 and response.get_json()["module"] == "FR"
@@ -234,14 +239,13 @@ def test_opto_calibration_requires_pin_and_accepts_module_or_all(kiosk_app, kios
 
 def test_opto_calibration_is_refused_by_sources_without_it(kiosk_client):
     """Симулятор и пульт-наблюдатель не калибруют: честный отказ 409."""
-    assert kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "7232"}).status_code == 200
     response = kiosk_client.post("/api/kiosk_calibrate", json={"module": "ALL"},
                                  headers={"X-Robot-Control": "steering"})
     assert response.status_code == 409
     assert response.get_json()["reason"] == "control_not_supported"
 
 
-def test_kiosk_drive_requires_pin_and_accepts_only_bounded_percent(kiosk_app, kiosk_client):
+def test_kiosk_drive_is_available_without_pin_and_accepts_only_bounded_percent(kiosk_app, kiosk_client):
     class FakeDriveSource:
         name = "master"
         supports_drive = True
@@ -258,9 +262,7 @@ def test_kiosk_drive_requires_pin_and_accepts_only_bounded_percent(kiosk_app, ki
     header = {"X-Robot-Control": "drive"}
     body = {"percent": -12.5}
 
-    assert kiosk_client.post("/api/kiosk_drive", json=body, headers=header).status_code == 401
     assert kiosk_client.post("/api/kiosk_drive", json=body).status_code == 400
-    assert kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "7232"}).status_code == 200
 
     response = kiosk_client.post("/api/kiosk_drive", json=body, headers=header)
     assert response.status_code == 200
@@ -271,8 +273,9 @@ def test_kiosk_drive_requires_pin_and_accepts_only_bounded_percent(kiosk_app, ki
         assert kiosk_client.post("/api/kiosk_drive", json=invalid, headers=header).status_code == 400
     assert source.commands == [-12.5]
 
-    kiosk_client.post("/api/kiosk_lock/session/end", json={})
-    assert kiosk_client.post("/api/kiosk_drive", json={"percent": 0}, headers=header).status_code == 401
+    stopped = kiosk_client.post("/api/kiosk_drive", json={"percent": 0}, headers=header)
+    assert stopped.status_code == 200
+    assert source.commands == [-12.5, 0]
 
 
 def test_telemetry_has_no_cargo_or_audit_data(kiosk_client):
@@ -311,8 +314,8 @@ def test_journal_records_real_pin_and_command_events(kiosk_app, kiosk_client):
             return {"ok": True, "angle": angle}
 
     kiosk_app.extensions["rc_slam"].source = FakeSteeringSource()
-    kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "0000"})
-    kiosk_client.post("/api/kiosk_lock/verify", json={"pin": "7232"})
+    kiosk_client.post("/api/kiosk_lock/open", json={"pin": "0000"})
+    kiosk_client.post("/api/kiosk_lock/open", json={"pin": "7232"})
     kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 12.5},
                       headers={"X-Robot-Control": "steering"})
     kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 99},

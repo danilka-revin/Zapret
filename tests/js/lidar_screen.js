@@ -45,6 +45,7 @@ function makeCtx(el) {
   const target = {
     canvas: el,
     fillRect: (...args) => { el.dots.push(args); },
+    clearRect: () => { el.dots = []; },
     measureText: () => ({ width: 10 }),
   };
   return new Proxy(target, {

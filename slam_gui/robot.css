@@ -594,7 +594,7 @@ body.soc-crit .kpi-sub { color: var(--err); }
 body.is-stale .kiosk { opacity: .75; }
 body.is-stale #data-chip { color: var(--warn); border-color: #3a3a3e; }
 
-/* ------------------------ Кнопка управления (вход по PIN) ------------------------ */
+/* ------------------------ Кнопка функций (без PIN) ------------------------ */
 .k-ctrl-btn {
   display: inline-flex;
   align-items: center;
@@ -922,7 +922,7 @@ body.is-stale #data-chip { color: var(--warn); border-color: #3a3a3e; }
 @keyframes scan-label-blink { from { opacity: .85; } to { opacity: 1; box-shadow: 0 0 12px rgba(255,255,255,.6); } }
 .lidar-scan-beam[hidden], .lidar-scan-label[hidden] { display: none !important; }
 
-/* ========================= ТЕМЫ: 20 видов (после PIN) ========================= */
+/* ========================= ТЕМЫ: 20 видов (без PIN) ========================= */
 .themes-view { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 14px; }
 .themes-view[hidden] { display: none !important; }
 .themes-head { display: flex; align-items: center; gap: 12px; }
@@ -1683,9 +1683,6 @@ body.swipe-open .kiosk {
 .bms-port-list li.role-free .port-role, .bms-port-list li.role-bms .port-role { color: #b8f0c0; }
 .bms-port-list li.role-master, .bms-port-list li.role-lidar, .bms-port-list li.role-chassis { opacity: .55; }
 .bms-port-list li.role-arduino .port-role, .bms-port-list li.role-busy .port-role { color: #ffd18a; }
-.bms-pin { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
-.bms-pin[hidden] { display: none; }
-.bms-pin input { width: 140px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); font: inherit; font-size: 16px; }
 .bms-setup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .bms-setup-actions button { padding: 10px 16px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; }
 .bms-setup-actions button.primary { border-color: #e5a33d; background: #3a2a10; color: #ffe2b0; }
