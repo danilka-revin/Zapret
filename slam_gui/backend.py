@@ -1095,7 +1095,14 @@ def scan_points(msg):
 
 
 class RosSource:
-    """ROS 2 (rclpy): /modules/state, /battery, /screen/motors, /scan (лидар). Если rclpy нет — падаем в sim."""
+    """ROS 2 (rclpy): /modules/state, /battery, /screen/motors и скан лидара.
+
+    Пути к системному ROS 2 добавляются сами (``robot_control/ros_env.py``):
+    экран работает из ``.venv`` и без этого не видел ``rclpy`` вовсе. Если ROS 2
+    нет — источник не выдумывает данные: ``linkOk`` остаётся ложным, а причина
+    видна в ``self.reason`` (симуляция включается только явно,
+    ``RC_SLAM_SOURCE=sim``).
+    """
 
     name = "ros"
 
@@ -1104,14 +1111,22 @@ class RosSource:
         self.data = {}
         self.scan = []
         self.scan_at = 0.0
+        # ROS 2 стоит системно (/opt/ros/<дистрибутив>), а экран запускается из
+        # .venv проекта: без подготовки путей rclpy в нём не виден, и источник
+        # молча падал в симуляцию (см. robot_control/ros_env.py).
         try:
+            from robot_control import ros_env
+            ros_env.ensure_python_path()
             import rclpy                                            # noqa: F401
             from rclpy.node import Node
-        except ImportError:
-            print("! ros: rclpy не найден — используется демонстрационный источник")
-            self.fallback = SimSource()
+        except ImportError as exc:
+            print("! ros: rclpy не найден (%s) — источник не подключён." % exc)
+            print("       поставь ROS 2 и пакеты лидара: ./scripts/ros2_setup.sh")
+            self.fallback = None
+            self.reason = "ROS 2 недоступен: rclpy не импортируется в этом интерпретаторе"
             return
         self.fallback = None
+        self.reason = ""
         threading.Thread(target=self._spin_node, daemon=True).start()
 
     def _spin_node(self):
@@ -1122,6 +1137,8 @@ class RosSource:
         from rclpy.qos import qos_profile_sensor_data
 
         source = self
+        # Топик скана: по умолчанию /scan, как у драйверов лидаров (RC_LIDAR_ROS_TOPIC).
+        scan_topic = os.environ.get("RC_LIDAR_ROS_TOPIC") or "/scan"
 
         class Bridge(Node):
             def __init__(self):
@@ -1130,12 +1147,20 @@ class RosSource:
                 self.create_subscription(Float32, "/battery/voltage", source._on_volts, 10)
                 self.create_subscription(Float32, "/battery/current", source._on_amps, 10)
                 self.create_subscription(String, "/screen/motors", source._on_motors, 10)
-                self.create_subscription(LaserScan, "/scan", source._on_scan, qos_profile_sensor_data)
+                self.create_subscription(LaserScan, scan_topic, source._on_scan,
+                                         qos_profile_sensor_data)
 
-        rclpy.init(args=None)
-        node = Bridge()
+        if not rclpy.ok():
+            rclpy.init(args=None)
+        try:
+            node = Bridge()
+        except Exception as exc:                                     # noqa: BLE001
+            self.reason = "узел ROS 2 не создался: %s" % exc
+            print("! ros: %s" % self.reason)
+            return
         self.ok = True
-        print("· ros: мост экрана запущен (/screen/state, /battery/*, /screen/motors)")
+        print("· ros: мост экрана запущен (/screen/state, /battery/*, /screen/motors, %s)"
+              % scan_topic)
         try:
             rclpy.spin(node)
         except Exception:                                            # noqa: BLE001

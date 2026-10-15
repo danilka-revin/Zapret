@@ -786,8 +786,11 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     @app.post("/api/lidar/rescan")
     def api_kiosk_lidar_rescan():
         manager = LidarManager.get_instance()
-        manager.restart_search()
+        result = manager.restart_search()
         return jsonify({"ok": True, "settings": manager.current_settings(),
+                        # При источнике ros «пересканировать» значит перезапустить
+                        # драйвер через супервизор: его ответ виден в панели.
+                        "ros_rescan": result.get("ros_rescan") if isinstance(result, dict) else None,
                         "status": manager.get_status()})
 
     @app.get("/healthz")

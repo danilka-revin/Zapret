@@ -199,10 +199,23 @@
     return !!(st && st.demo === true);
   }
 
-  // Порт, протокол и скорость, с которых реально читается скан (GET /api/lidar).
+  // Откуда реально читается скан (GET /api/lidar): драйвер ROS 2 с топиком или
+  // USB-порт приложения. Подпись под картой — единственное место, где оператор
+  // видит, кто сейчас держит лидар, поэтому ROS 2 назван явно.
   function lidarSourceText(d) {
     const st = d && d.lidarStatus;
-    const det = st && st.detected;
+    if (!st) return '';
+    const ros = st.ros;
+    if (ros && ros.connected) {
+      const parts = ['ROS 2', String(ros.topic || '/scan')];
+      const supervisor = ros.supervisor;
+      if (supervisor && supervisor.driver) {
+        parts.push(String(supervisor.driver_package || supervisor.driver));
+      }
+      if (ros.hz) parts.push(ros.hz + ' Гц');
+      return parts.join(' · ');
+    }
+    const det = st.detected;
     if (!det || !det.port) return '';
     const parts = [String(det.port).split('/').pop()];
     if (det.protocol) parts.push(String(det.protocol));

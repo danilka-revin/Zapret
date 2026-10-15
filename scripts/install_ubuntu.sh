@@ -18,6 +18,11 @@
 #   --systemd        то же, что --autostart (устаревшее имя флага)
 #   --ap             поднять на этой машине точку доступа Wi-Fi (робот сам раздаёт сеть)
 #   --ap-autostart   поднимать точку доступа и при каждой загрузке
+#   --ros2           ROS 2 для лидара: поставить ROS 2 и пакеты драйверов, собрать
+#                    ros2_ws, включить чтение лидара из /scan (RC_LIDAR_SOURCE=ros)
+#                    и поставить службу robot-lidar
+#   --no-ros2        не трогать ROS 2 даже если он уже установлен
+#                    (без флагов: если ROS 2 в системе есть — только собрать ros2_ws)
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -26,6 +31,7 @@ RUN=1
 AUTOSTART=0
 AP=0
 AP_AUTOSTART=0
+ROS2="auto"                   # auto: ставить/собирать, если ROS 2 есть или просили --ros2
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-run)       RUN=0; shift ;;
@@ -33,7 +39,9 @@ while [[ $# -gt 0 ]]; do
     --systemd)      AUTOSTART=1; shift ;;                 # старое имя флага
     --ap)           AP=1; shift ;;
     --ap-autostart) AP=1; AP_AUTOSTART=1; shift ;;
-    -h|--help)      sed -n '2,26p' "$0"; exit 0 ;;
+    --ros2)         ROS2=1; shift ;;
+    --no-ros2)      ROS2=0; shift ;;
+    -h|--help)      sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "неизвестный аргумент: $1" >&2; exit 1 ;;
   esac
 done
@@ -99,6 +107,33 @@ fi
 # любой пароль как «неверный» — лучше упасть здесь с понятной причиной.
 log "проверяю записанные учётки…"
 .venv/bin/python scripts/create_operator.py --list
+
+# --- 4c. лидар через ROS 2 ----------------------------------------------------- #
+# Зачем: приложение само подбирать протокол лидара по USB больше не нужно —
+# драйвер ROS 2 (hls_lfcd_lds_driver, rplidar_ros, ldlidar_stl_ros2,
+# turtlebot3_node) публикует sensor_msgs/LaserScan в /scan, а пульт и экран
+# читают топик. ROS 2 и его пакеты ставятся системно и собираются в ros2_ws;
+# сами приложения остаются в .venv и видят rclpy через PYTHONPATH
+# (robot_control/ros_env.py).
+if [[ "$ROS2" == "1" ]] || { [[ "$ROS2" == "auto" ]] && compgen -G "/opt/ros/*" >/dev/null; }; then
+  log "настраиваю ROS 2 для лидара…"
+  ROS2_ARGS=(--drivers)
+  [[ "$ROS2" == "1" ]] && ROS2_ARGS+=(--install)
+  [[ $AUTOSTART -eq 1 ]] && ROS2_ARGS+=(--service)
+  if ./scripts/ros2_setup.sh "${ROS2_ARGS[@]}"; then
+    if [[ $AUTOSTART -eq 1 ]]; then
+      log "служба robot-lidar включена (лидар поднимается до приложений)"
+    else
+      log "запускать лидар вручную: ./scripts/ros2_lidar.sh"
+    fi
+  else
+    log "ROS 2 не настроен — лидар останется на USB-пути (RC_LIDAR_SOURCE=auto)"
+    log "  повторить: ./scripts/ros2_setup.sh --install --drivers --service"
+  fi
+else
+  log "ROS 2 не найден — лидар читается напрямую по USB (как раньше)"
+  log "  включить ROS 2-путь: ./scripts/install_ubuntu.sh --ros2 (или ./scripts/ros2_setup.sh --install)"
+fi
 
 # --- 5. порт в фаерволе -------------------------------------------------------- #
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then

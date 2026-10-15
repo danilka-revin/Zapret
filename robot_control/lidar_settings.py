@@ -28,6 +28,7 @@ from .config import PROJECT_ROOT
 from .lidar import (
     LIDAR_BAUD_CHOICES,
     LIDAR_PROTOCOLS,
+    LIDAR_SOURCES,
     MOTOR_MODES,
     LidarManager,
     discover_ports,
@@ -39,7 +40,7 @@ from .lidar import (
 
 #: Какие ключи .env принадлежат лидару (остальные строки файла не трогаем).
 ENV_KEYS = (
-    "RC_LIDAR_PORT", "RC_LIDAR_PROTOCOL", "RC_LIDAR_BAUD",
+    "RC_LIDAR_SOURCE", "RC_LIDAR_PORT", "RC_LIDAR_PROTOCOL", "RC_LIDAR_BAUD",
     "RC_LIDAR_MOTOR", "RC_LIDAR_AUTOPROBE",
 )
 
@@ -53,6 +54,7 @@ def settings_payload(manager: LidarManager | None = None) -> dict[str, Any]:
         "ok": True,
         "settings": manager.current_settings(),
         "options": {
+            "sources": list(LIDAR_SOURCES),
             "protocols": list(LIDAR_PROTOCOLS),
             "bauds": ["", *[str(rate) for rate in LIDAR_BAUD_CHOICES]],
             "motors": [mode for mode in MOTOR_MODES if mode != "off"],
@@ -77,6 +79,7 @@ def save_lidar_settings(settings: dict[str, Any],
     if target.is_file():
         lines = target.read_text(encoding="utf-8").splitlines()
     values = {
+        "RC_LIDAR_SOURCE": normalized["source"],
         "RC_LIDAR_PORT": normalized["port"],
         "RC_LIDAR_PROTOCOL": normalized["protocol"],
         "RC_LIDAR_BAUD": normalized["baud"],

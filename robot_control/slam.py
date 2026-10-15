@@ -502,6 +502,16 @@ def load_backend():
 
 
 def _have(module_name: str) -> bool:
+    """Есть ли модуль в этом интерпретаторе.
+
+    Для ``rclpy`` отдельная ветка: ROS 2 ставится системно в ``/opt/ros``, а
+    приложение работает из ``.venv`` и без подготовки путей системных пакетов не
+    видит (см. :mod:`robot_control.ros_env`). Раньше ``auto`` из-за этого
+    выбирал UART-модули, хотя ROS 2 на роботе стоял.
+    """
+    if module_name == "rclpy":
+        from . import ros_env
+        return ros_env.rclpy_available()
     try:
         __import__(module_name)
     except ImportError:
