@@ -599,7 +599,9 @@ class MasterSource:
             return
         while not self._stop:
             try:
-                with serial.Serial(self.port, self.baud, timeout=0.2) as dev:
+                # exclusive: второй процесс не может открыть тот же UART и читать
+                # его вперемешку (строки телеметрии рвутся, команды теряются).
+                with serial.Serial(self.port, self.baud, timeout=0.2, exclusive=True) as dev:
                     self.serial_ready.set()
                     print("· master: %s открыт" % self.port)
                     while not self._stop:
@@ -651,6 +653,82 @@ class MasterSource:
         out["mode"] = "МАСТЕР НА СВЯЗИ" if link else None
         out["linkOk"] = link
         return out
+
+
+class MasterPeerSource:
+    """Пульт (8080) без собственного UART: телеметрия берётся с бортового экрана.
+
+    Порт мастера один, и владеет им бортовой экран (8090). Если открыть его ещё
+    раз из пульта, два процесса читают одни и те же байты, строки рвутся, а
+    команды отбрасываются. Поэтому пульт только опрашивает публичный
+    ``/api/kiosk_state`` экрана и показывает моторы; управление (руление, ноль,
+    тяга) доступно только на самом экране.
+    """
+
+    name = "master-peer"
+    supports_individual_steer = False
+    supports_drive = False
+    POLL_S = 0.2
+    STALE_S = 1.5
+
+    def __init__(self, peer_url, fetch=None):
+        self.peer_url = peer_url
+        self.lock = threading.Lock()
+        self.snapshot_data = None
+        self.snapshot_time = 0.0
+        self.error = "ещё не опрошен"
+        self._fetch = fetch or self._http_get
+        threading.Thread(target=self._poll, daemon=True).start()
+
+    def _http_get(self):
+        import urllib.request
+        with urllib.request.urlopen(self.peer_url, timeout=1.0) as response:
+            return json.loads(response.read().decode("utf-8", "replace"))
+
+    def _poll(self):
+        while True:
+            try:
+                body = self._fetch()
+                data = body.get("data") if isinstance(body, dict) else None
+                if not isinstance(data, dict):
+                    raise ValueError("экран не вернул телеметрию")
+                with self.lock:
+                    self.snapshot_data = data
+                    self.snapshot_time = time.time()
+                    self.error = ""
+            except Exception as exc:  # noqa: BLE001 — экран может быть выключен
+                with self.lock:
+                    self.error = str(exc) or type(exc).__name__
+            time.sleep(self.POLL_S)
+
+    def read(self, now=None):
+        now = time.time() if now is None else now
+        with self.lock:
+            data = self.snapshot_data
+            fresh = data is not None and now - self.snapshot_time < self.STALE_S
+            error = self.error
+        out = NoSource().read()
+        if not fresh:
+            out["peer"] = {"url": self.peer_url, "error": error or "нет связи с бортовым экраном"}
+            return out
+        out["motors"] = data.get("motors") or out["motors"]
+        out["drive"] = data.get("drive") or out["drive"]
+        out["linkOk"] = bool(data.get("linkOk"))
+        out["mode"] = data.get("mode")
+        out["peer"] = {"url": self.peer_url, "error": ""}
+        return out
+
+    def steer_module(self, module, angle, now=None):
+        return {"ok": False, "reason": "control_not_supported"}
+
+    def zero_module(self, module, now=None):
+        return {"ok": False, "reason": "control_not_supported"}
+
+    def drive(self, percent, now=None):
+        return {"ok": False, "reason": "control_not_supported"}
+
+    def stop_drive(self, now=None):
+        return {"ok": False, "reason": "control_not_supported"}
 
 
 class SerialSource:

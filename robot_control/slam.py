@@ -528,10 +528,21 @@ def chassis_source(mod, ports):
     )
 
 
-def make_source(mode: str = "auto", ports=None):
+def peer_kiosk_url() -> str:
+    """Адрес бортового экрана, откуда пульт берёт телеметрию мастера."""
+    explicit = (os.environ.get("RC_SLAM_PEER_URL") or "").strip()
+    if explicit:
+        return explicit
+    port = (os.environ.get("RC_KIOSK_PORT") or "8090").strip() or "8090"
+    return f"http://127.0.0.1:{port}/api/kiosk_state"
+
+
+def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
     """Источник данных робота.
 
     ``master``: один UART мастер-Arduino (строки "@TLM", см. firmware/motor_master).
+    Порт открывает только владелец (``master_role="owner"`` — бортовой экран);
+    пульт (``"peer"``) читает телеметрию с экрана и порт не трогает.
     ``auto``: ROS 2, если есть rclpy; иначе UART-модули, если есть pyserial и
     живой порт; иначе пустой источник (без выдуманных данных).
     """
@@ -550,6 +561,8 @@ def make_source(mode: str = "auto", ports=None):
         return chassis_source(mod, chosen)
     if mode == "ros":
         return mod.RosSource()
+    if mode == "master" and master_role == "peer":
+        return mod.MasterPeerSource(peer_kiosk_url())
     if mode == "master":
         # мастер-Arduino на одном UART (RC_SLAM_PORT, по умолчанию /dev/ttyACM0)
         from .battery import reserved_ports
@@ -576,10 +589,10 @@ def make_source(mode: str = "auto", ports=None):
 
 
 def build_state(mode="auto", ports=None, lock_file=None, pin=None,
-                max_attempts=None, lock_sec=None):
+                max_attempts=None, lock_sec=None, master_role="owner"):
     """Собирает ``App`` из backend.py: источник данных + PIN-хранилище."""
     mod = load_backend()
-    source = make_source(mode, ports)
+    source = make_source(mode, ports, master_role=master_role)
     path = str(lock_file) if lock_file else str(GUI_DIR / "state" / "lock.json")
     directory = os.path.dirname(path)
     if directory:

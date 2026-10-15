@@ -293,6 +293,8 @@ def create_app(config: Config | None = None) -> Flask:
     # Он занимает "/" и "/console"; если подключить не удалось, "/" показывает
     # внятную ошибку вместо пустого 404.
     try:
+        # Пульт 8080 не открывает UART мастера: порт держит бортовой экран (8090),
+        # иначе два процесса читают его вперемешку. Здесь — только телеметрия.
         slam_state = build_state(
             mode=config.slam_source,
             ports=config.slam_ports,
@@ -300,6 +302,7 @@ def create_app(config: Config | None = None) -> Flask:
             pin=config.slam_pin,
             max_attempts=config.slam_max_attempts,
             lock_sec=config.slam_lock_seconds,
+            master_role="peer",
         )
         app.extensions["rc_slam"] = slam_state
         app.register_blueprint(create_blueprint(slam_state, guard=login_required))

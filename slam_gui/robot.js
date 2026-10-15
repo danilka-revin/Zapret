@@ -1967,7 +1967,9 @@
     const lockButton = $('steer-lock');
 
     if (sourceStatus) {
-      if (!available) {
+      if (!available && String(control.source || '') === 'master-peer') {
+        sourceStatus.textContent = 'Руление и тяга — только на бортовом экране (порт 8090). Здесь показана телеметрия.';
+      } else if (!available) {
         sourceStatus.textContent = 'Ручной поворот доступен только при RC_SLAM_SOURCE=master и подключённом UART мастера.';
       } else if (d.linkOk === false) {
         sourceStatus.textContent = 'Мастер выбран, но свежей связи с рулевыми модулями пока нет.';
@@ -2090,7 +2092,8 @@
     if (forward) forward.disabled = !enabled || !drive.canDrive;
     if (stop) stop.disabled = !enabled;
     const reason = drive.reason && DRIVE_REASON_TEXT[drive.reason];
-    if (!supported) status.textContent = 'Тяга доступна при RC_SLAM_SOURCE=master.';
+    if (!supported && String((d.steeringControl || {}).source || '') === 'master-peer') status.textContent = 'Тяга — только на бортовом экране (порт 8090).';
+    else if (!supported) status.textContent = 'Тяга доступна при RC_SLAM_SOURCE=master.';
     else if (!steeringAuthorized) status.textContent = 'Нужен PIN для движения.';
     else if (reason) status.textContent = reason;
     else if (drive.active) status.textContent = 'Движение включено · отпустите кнопку для торможения.';
@@ -2243,7 +2246,7 @@
     function errorText(reason) {
       const messages = {
         pin_required: 'PIN истёк · разблокируйте',
-        control_not_supported: 'источник не поддерживает управление',
+        control_not_supported: 'управление только на бортовом экране',
         module_offline: 'нет свежей связи',
         serial_unavailable: 'порт мастера недоступен',
         not_homed: 'сначала задайте ручной ноль',
@@ -2329,12 +2332,20 @@
     ids.forEach((id) => {
       const slider = $('steer-slider-' + id);
       const card = panel.querySelector('[data-steer-card="' + id + '"]');
-      if (slider) slider.addEventListener('input', () => markDirty(id, slider.value));
+      // Ползунок двигает цель на экране; команда уходит, когда палец отпущен
+      // (change), — одна команда на жест, а не поток при каждом шаге.
+      if (slider) {
+        slider.addEventListener('input', () => markDirty(id, slider.value));
+        slider.addEventListener('change', () => { void sendSteer(id); });
+      }
       panel.querySelectorAll('[data-steer-adjust="' + id + '"]').forEach((button) => {
-        button.addEventListener('click', () => markDirty(id, Number(slider.value) + Number(button.dataset.step)));
+        button.addEventListener('click', () => {
+          markDirty(id, Number(slider.value) + Number(button.dataset.step));
+          void sendSteer(id);
+        });
       });
       const zero = panel.querySelector('[data-steer-zero="' + id + '"]');
-      if (zero) zero.addEventListener('click', () => markDirty(id, 0));
+      if (zero) zero.addEventListener('click', () => { markDirty(id, 0); void sendSteer(id); });
       const origin = panel.querySelector('[data-steer-origin="' + id + '"]');
       if (origin) origin.addEventListener('click', () => setSoftwareZero(id));
       const send = panel.querySelector('[data-steer-send="' + id + '"]');
