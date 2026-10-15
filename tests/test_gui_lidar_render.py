@@ -201,10 +201,14 @@ def test_stale_scan_is_not_shown_as_live(tmp_path):
     payload = real_payload(connected=False, source="no_signal", demo=False,
                            points_count=0, age_s=12.0, detected=None,
                            reason="скан устарел: лидар отвалился")
+    # Бортовой (kiosk 8090) — только статичная плашка без причины (диагностика — на вебке 8080)
     report = render("robot", payload, tmp_path)
     assert "в реальном времени" not in report["meta"]
     assert report["emptyHidden"] is False
-    assert "устарел" in report["emptyText"]
+    assert report["emptyText"] == "скана лидара нет"
+    # Веб (8080) — показывает причину
+    report_main = render("main", payload, tmp_path)
+    assert "устарел" in report_main["emptyText"]
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +225,11 @@ def test_demo_scan_is_labelled_as_demo(screen, tmp_path):
     assert "в реальном времени" not in meta
     # точки демо рисуются, но причина отсутствия лидара остаётся на экране
     assert report["emptyHidden"] is False
-    assert "демо-скан" in report["emptyText"]
+    if screen == "robot":
+        # Бортовой — статичная плашка без текста ошибки (диагностика только на вебке)
+        assert report["emptyText"] == "скана лидара нет"
+    else:
+        assert "демо-скан" in report["emptyText"]
     assert report["renderErrors"] == []
 
 
@@ -248,11 +256,15 @@ def test_missing_scan_shows_reason_and_usb_diagnostics(screen, tmp_path):
     assert report["count"] == "—"
     assert report["emptyHidden"] is False
     text = report["emptyText"]
-    assert "лидар не ответил" in text
-    # USB-диагностика из API видна оператору: порты, права, исключения
-    assert "/dev/serial/by-id/usb-CP2102" in text and "(доступен)" in text
-    assert "нет доступа — нужна группа dialout" in text      # /dev/ttyUSB0
-    assert "исключён настройками" in text                    # и то и другое сразу
+    if screen == "robot":
+        # Бортовой (kiosk 8090) — только статичная плашка, без причины и USB-диагностики
+        assert text == "скана лидара нет"
+    else:
+        assert "лидар не ответил" in text
+        # USB-диагностика из API видна оператору: порты, права, исключения
+        assert "/dev/serial/by-id/usb-CP2102" in text and "(доступен)" in text
+        assert "нет доступа — нужна группа dialout" in text      # /dev/ttyUSB0
+        assert "исключён настройками" in text                    # и то и другое сразу
     assert report["renderErrors"] == []
 
 

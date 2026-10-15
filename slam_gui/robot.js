@@ -273,30 +273,10 @@
     return pts;
   }
 
-  // Почему скана нет: сервер отдаёт причину (порт не найден, скорость не та,
-  // мотор не включён, порт занят вторым процессом робота). Молчать нельзя —
-  // иначе «скана лидара нет» выглядит как поломка экрана.
-  function lidarReason(d) {
-    const st = d && d.lidarStatus;
-    if (!st || typeof st !== 'object') return '';
-    const reason = st.reason ? String(st.reason) : '';
-    const hint = st.hint ? String(st.hint) : '';
-    const usb = st.usb_diagnostics;
-    const ports = usb && Array.isArray(usb.ports) ? usb.ports.map(portNote).join(', ') : '';
-    const diagnosis = usb ? [usb.summary, ports].filter(Boolean).join(': ') : '';
-    return [reason, hint, diagnosis].filter(Boolean).join(' — ');
-  }
-
-  // Порт может быть одновременно недоступен (нет группы dialout) и исключён
-  // настройками мастера/шасси. Показываем обе причины: иначе оператор чинит
-  // права, а порт всё равно не пробуют открыть из-за исключения.
-  function portNote(p) {
-    const notes = [];
-    if (!p.accessible) notes.push('нет доступа — нужна группа dialout');
-    if (p.excluded) notes.push('исключён настройками');
-    if (!notes.length) notes.push('доступен');
-    return p.port + ' (' + notes.join(', ') + ')';
-  }
+  // На бортовом экране (kiosk) при ошибке лидара детальный текст не показываем:
+  // оператор на борту видит только «скана лидара нет», а полная диагностика
+  // (причина, подсказка, USB-порты) остаётся только на веб-пульте (main.js).
+  // Это требование задачи: убрать текст с бортового, оставить только на вебке.
 
   function renderLidar(d) {
     const canvas = $('lidar-canvas');
@@ -310,9 +290,6 @@
     const has = pts.length > 0;
     const near = has ? Math.min.apply(null, pts.map((p) => p.r)) : null;
 
-    // Причина «нет скана» показывается и при демо: оператор на борту должен
-    // видеть, что реального лидара нет, а не принимать демо за работающий.
-    const reason = has && !isDemo ? '' : lidarReason(d);
     const source = has && !isDemo ? lidarSourceText(d) : '';
     setText($('lidar-meta'), has
       ? (isDemo
@@ -325,9 +302,9 @@
     if (empty) {
       empty.hidden = has && !isDemo;
       if (!(has && !isDemo)) {
-        setText(empty, reason ? 'скана лидара нет · ' + reason : 'скана лидара нет');
+        setText(empty, 'скана лидара нет');
       }
-      empty.title = reason;
+      empty.title = '';
     }
     drawLidar(canvas, pts);
   }
