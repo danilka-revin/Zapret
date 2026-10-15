@@ -38,12 +38,14 @@ class UpdateManager:
         branch: str | None = None,
         on_restart: Callable[[], None] | None = None,
         dependency_installer: Callable[[Path], tuple[int, str]] | None = None,
+        build_runner: Callable[[Path], tuple[int, str]] | None = None,
     ) -> None:
         self.root = Path(root).resolve()
         self.remote = remote.strip() or "origin"
         self.branch_override = (branch or "").strip()
         self.on_restart = on_restart
         self.dependency_installer = dependency_installer
+        self.build_runner = build_runner
         self.state_path = self.root / "var" / "update-state.json"
         self.lock_path = self.root / "var" / "update.lock"
         self._state_lock = threading.RLock()
@@ -294,6 +296,36 @@ class UpdateManager:
                                 stderr=subprocess.STDOUT, text=True, timeout=900, check=False)
         return result.returncode, result.stdout[-6000:]
 
+    def _build_check(self) -> tuple[int, str]:
+        """«Сборка» Python-проекта: компиляция всех модулей интерпретатором .venv.
+
+        Отдельного компилятора у проекта нет, поэтому сборка — это
+        ``compileall`` по коду приложений и проверка, что главный пакет
+        импортируется. Падение здесь означает, что новая версия не запустится:
+        обновление откатывается, а работающая старая продолжает обслуживать.
+        """
+        if self.build_runner:
+            return self.build_runner(self.root)
+        venv_python = self.root / ".venv" / "bin" / "python"
+        python = str(venv_python) if venv_python.is_file() else sys.executable
+        targets = [name for name in ("robot_control", "slam_gui/backend.py",
+                                     "run.py", "run_kiosk.py")
+                   if (self.root / name).exists()]
+        if not targets:
+            return 0, "Проверять нечего — исходников не найдено."
+        result = subprocess.run(
+            [python, "-m", "compileall", "-q", *targets],
+            cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, timeout=300, check=False)
+        output = result.stdout[-6000:]
+        if result.returncode != 0:
+            return result.returncode, output
+        check = subprocess.run(
+            [python, "-c", "import robot_control.app, robot_control.kiosk_app; print('import ok')"],
+            cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, timeout=120, check=False)
+        return check.returncode, (output + check.stdout[-2000:]).strip()
+
     def _run_update(self, lock_file) -> None:
         old_sha = ""
         merged = False
@@ -366,32 +398,47 @@ class UpdateManager:
             ancestor = self._command(["merge-base", "--is-ancestor", old_sha, new_sha])
             if ancestor.returncode != 0:
                 raise UpdateError("Обновление не применено: ветки разошлись; автоматически перезаписывать файлы небезопасно.")
-            req_changed = self._command(["diff", "--quiet", old_sha, new_sha, "--", "requirements.txt"])
-            if req_changed.returncode not in {0, 1}:
-                raise UpdateError("Не удалось проверить изменения файла зависимостей.")
-            requirements_changed = req_changed.returncode == 1
-
             self._set(phase=f"Применяю {changes} коммит(ов)…", stage="install", pct=55)
             merge = self._command(["merge", "--ff-only", "--no-edit", new_sha], timeout=60)
             if merge.returncode != 0:
                 raise UpdateError("Git не смог выполнить безопасное fast-forward-обновление.")
             merged = True
 
-            if requirements_changed:
-                self._set(phase="Обновляю зависимости приложения…", stage="dependencies", pct=72)
-                code, output = self._install_dependencies()
-                if output.strip():
-                    for line in output.splitlines()[-15:]:
-                        self._write_state({}, log=line)
-                if code != 0:
-                    rollback = self._command(["reset", "--hard", old_sha], timeout=60)
-                    merged = rollback.returncode != 0
-                    detail = output.strip().splitlines()[-1] if output.strip() else "pip завершился с ошибкой"
-                    if rollback.returncode != 0:
-                        raise UpdateError("Не удалось установить зависимости и откатить исходный код; требуется ручная проверка. " + detail[:180])
-                    raise UpdateError("Не удалось установить зависимости; исходный код откатан. " + detail[:200])
-            else:
-                self._set(phase="Зависимости не изменились — шаг пропущен.", stage="dependencies", pct=87)
+            # Полный цикл, как при ручной переустановке: зависимости ставим
+            # КАЖДЫЙ раз (ensure_deps.sh сам пропускает уже установленное и
+            # работает офлайн из vendor/), а не только когда поменялся
+            # requirements.txt, — иначе «обновил, а на роботе старый flask»
+            # оставалось возможным при ручных правках окружения.
+            self._set(phase="Переустанавливаю зависимости (ensure_deps.sh)…",
+                      stage="dependencies", pct=68)
+            code, output = self._install_dependencies()
+            if output.strip():
+                for line in output.splitlines()[-15:]:
+                    self._write_state({}, log=line)
+            if code != 0:
+                rollback = self._command(["reset", "--hard", old_sha], timeout=60)
+                merged = rollback.returncode != 0
+                detail = output.strip().splitlines()[-1] if output.strip() else "pip завершился с ошибкой"
+                if rollback.returncode != 0:
+                    raise UpdateError("Не удалось установить зависимости и откатить исходный код; требуется ручная проверка. " + detail[:180])
+                raise UpdateError("Не удалось установить зависимости; исходный код откатан. " + detail[:200])
+
+            # Сборка-проверка новой версии до перезапуска: битый код не должен
+            # заменить работающий — при ошибке компиляции откатываемся.
+            self._set(phase="Собираю и проверяю новую версию…", stage="build", pct=84)
+            code, output = self._build_check()
+            if output.strip():
+                for line in output.splitlines()[-15:]:
+                    self._write_state({}, log=line)
+            if code != 0:
+                rollback = self._command(["reset", "--hard", old_sha], timeout=60)
+                merged = rollback.returncode != 0
+                detail = output.strip().splitlines()[-1] if output.strip() else "compileall завершился с ошибкой"
+                if rollback.returncode != 0:
+                    raise UpdateError("Новая версия не собралась и откатить код не удалось; требуется ручная проверка. " + detail[:180])
+                raise UpdateError("Новая версия не собралась (проверка кода); исходный код откатан. " + detail[:200])
+            self._set(phase="Сборка прошла — перезапускаю пульт и экран…",
+                      stage="build", pct=92)
 
             current = self.local_revision()
             self._write_state({

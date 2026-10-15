@@ -256,6 +256,105 @@ def normalize_protocol(value: str) -> str:
     return proto if proto in LIDAR_PROTOCOLS else "auto"
 
 
+#: Скорости, которые имеет смысл предлагать оператору в настройках лидара.
+LIDAR_BAUD_CHOICES: Tuple[int, ...] = (115200, 230400, 256000, 460800)
+#: Ключи .env, которыми задаётся лидар (их правит веб-панель настроек).
+LIDAR_ENV_KEYS: Tuple[str, ...] = (
+    "RC_LIDAR_PORT", "RC_LIDAR_PROTOCOL", "RC_LIDAR_BAUD",
+    "RC_LIDAR_MOTOR", "RC_LIDAR_AUTOPROBE",
+)
+
+
+def env_file_path() -> Path:
+    """Файл ``.env`` проекта: источник правды для настроек обоих процессов."""
+    return Path(__file__).resolve().parent.parent / ".env"
+
+
+def read_env_file(path: Optional[Path] = None) -> dict[str, str]:
+    """Значения из ``.env`` (только строки KEY=VALUE, без изменения окружения)."""
+    target = Path(path) if path is not None else env_file_path()
+    values: dict[str, str] = {}
+    try:
+        lines = target.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def normalize_lidar_settings(raw: Any) -> dict[str, Any]:
+    """Проверяет настройки лидара из веб-формы и приводит их к одному виду.
+
+    Возвращает ``{"port": str, "protocol": str, "baud": str, "motor": str,
+    "autoprobe": bool}`` — ровно то, что пишется в ``.env``. Плохое значение —
+    ``ValueError`` с понятной оператору причиной (её показывает панель).
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("Настройки лидара должны быть объектом.")
+    port = str(raw.get("port") or "").strip()
+    if len(port) > 500 or any(ord(ch) < 32 for ch in port):
+        raise ValueError("Порт лидара: слишком длинное или недопустимое значение.")
+    for chunk in port.replace(";", ",").split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if not chunk.startswith("/") or any(ch in chunk for ch in " \t\r\n;&|$`\\\"'"):
+            raise ValueError(
+                "Порт лидара: ожидается абсолютный путь вида /dev/ttyUSB0 "
+                "или /dev/serial/by-id/… (можно список через запятую и glob).")
+        if ".." in chunk.split("/"):
+            raise ValueError("Порт лидара: путь не должен содержать «..».")
+        port = port.replace(";", ",")
+    protocol_raw = str(raw.get("protocol") or "auto").strip().lower()
+    protocol = normalize_protocol(protocol_raw)
+    if protocol_raw.replace(" ", "") not in LIDAR_PROTOCOLS and \
+            protocol_raw.replace(" ", "") not in _PROTOCOL_ALIASES:
+        raise ValueError(
+            "Протокол лидара: ожидается auto, rplidar, ld06 или lds01 "
+            "(LDS-01/LDS-02 от TurtleBot3).")
+    baud_raw = str(raw.get("baud") or "").strip().lower()
+    if baud_raw in {"", "auto", "0", "авто", "автоподбор"}:
+        baud = ""
+    else:
+        try:
+            baud_value = int(baud_raw)
+        except ValueError:
+            raise ValueError("Скорость лидара: ожидается число (например 256000) или «авто».") from None
+        if not 1200 <= baud_value <= 4_000_000:
+            raise ValueError("Скорость лидара: значение вне диапазона 1200…4000000 бод.")
+        baud = str(baud_value)
+    motor = str(raw.get("motor") or "auto").strip().lower()
+    if motor not in MOTOR_MODES:
+        raise ValueError(
+            "Мотор RPLIDAR: ожидается auto, none, dtr-low, dtr-high, rts-low или rts-high.")
+    autoprobe_raw = raw.get("autoprobe", True)
+    if isinstance(autoprobe_raw, bool):
+        autoprobe = autoprobe_raw
+    elif isinstance(autoprobe_raw, (int, float)):
+        autoprobe = bool(autoprobe_raw)
+    else:
+        autoprobe = str(autoprobe_raw).strip().lower() in {"1", "true", "yes", "on", "да"}
+    return {"port": port, "protocol": protocol, "baud": baud,
+            "motor": motor, "autoprobe": autoprobe}
+
+
+def lidar_settings_from_env(env: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    """Действующие настройки лидара из окружения (или переданного словаря)."""
+    source = env if env is not None else os.environ
+    return normalize_lidar_settings({
+        "port": source.get("RC_LIDAR_PORT") or "",
+        "protocol": source.get("RC_LIDAR_PROTOCOL") or "auto",
+        "baud": source.get("RC_LIDAR_BAUD") or "",
+        "motor": source.get("RC_LIDAR_MOTOR") or "auto",
+        "autoprobe": source.get("RC_LIDAR_AUTOPROBE") or "1",
+    })
+
+
 def normalize_angle(rad: float) -> float:
     """Нормализует угол в диапазон [-pi, pi]."""
     return math.atan2(math.sin(rad), math.cos(rad))
@@ -1971,6 +2070,7 @@ class LidarManager:
         self._lock_fd: Optional[int] = None
         self._peer_misses = 0
         self._peer_reason = ""
+        self._peer_retry_at = 0.0  # запасная peer-проверка не чаще раза в 2 с
         # С какого порта начинать очередной круг перебора и что нашли в
         # прошлом круге (видно в GET /api/lidar → tried).
         self._rotate = 0
@@ -1997,6 +2097,15 @@ class LidarManager:
         #: Сеанс поиска этого менеджера в файле состояния процесса: записи
         #: нескольких менеджеров в одном процессе не затирают друг друга.
         self._searcher = _new_searcher()
+        #: Файл .env и его mtime на момент старта: второй процесс робота
+        #: (пульт ↔ борт) подхватывает сохранённые из веб-панели настройки по
+        #: изменению файла, без перезапуска обоих приложений руками.
+        self._env_file = env_file_path()
+        self._env_checked = 0.0
+        try:
+            self._env_mtime = self._env_file.stat().st_mtime
+        except OSError:
+            self._env_mtime = 0.0
 
     # --------------------------- жизненный цикл --------------------------- #
 
@@ -2028,6 +2137,123 @@ class LidarManager:
         # Состояние в общем журнале: без этого мёртвый процесс держал бы порты
         # «в приоритете» лидара, пока не истечёт TTL файла.
         self._clear_state()
+
+    # ------------------------- настройки (веб-панель) ---------------------- #
+
+    def current_settings(self) -> dict[str, Any]:
+        """Настройки, с которыми этот менеджер ищет лидар прямо сейчас."""
+        return {
+            "port": self.port or "",
+            "protocol": self.protocol,
+            "baud": str(self.baud) if self.baud else "",
+            "motor": self.motor,
+            "autoprobe": bool(self.autoprobe),
+        }
+
+    def _apply_settings(self, settings: dict[str, Any]) -> None:
+        """Применяет проверенные настройки и сбрасывает поиск на новый круг."""
+        self.port = settings["port"] or None
+        self.protocol = settings["protocol"]
+        self.baud = int(settings["baud"]) if settings["baud"] else None
+        self.motor = settings["motor"]
+        self.autoprobe = bool(settings["autoprobe"])
+        self.excluded = excluded_ports()
+        self.peer_urls = peer_urls()
+        # Окружение тоже обновляем: перебор портов, диагностика и соседние
+        # модули (slam.py) читают RC_LIDAR_* из него, а не из менеджера.
+        os.environ["RC_LIDAR_PORT"] = settings["port"]
+        os.environ["RC_LIDAR_PROTOCOL"] = settings["protocol"]
+        os.environ["RC_LIDAR_BAUD"] = settings["baud"]
+        os.environ["RC_LIDAR_MOTOR"] = settings["motor"]
+        os.environ["RC_LIDAR_AUTOPROBE"] = "1" if settings["autoprobe"] else "0"
+        with self.lock:
+            self.scan = []
+            self.scan_at = 0.0
+            self.source_type = "none"
+        self.detected = None
+        self.last_error = ""
+        self.tried = []
+        self.candidates = []
+        self._sticky = None
+        self._rotate = 0
+        self._fallback_all = False
+        self._active_port = None
+        self._peer_misses = 0
+        self._set_status("лидар: идёт поиск порта (настройки применены)")
+
+    def _stop_worker(self, timeout: float = 5.0) -> None:
+        """Останавливает поток перебора и ждёт, пока он отпустит порт."""
+        thread = self._thread
+        self._stop = True
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=timeout)
+        self._release_port_lock()
+        self._clear_state()
+
+    def reconfigure(self, settings: dict[str, Any]) -> dict[str, Any]:
+        """Новые настройки без перезапуска приложения: поиск начинается заново.
+
+        Так веб-панель применяет порт/протокол/скорость/линию мотора сразу:
+        старый поток останавливается (он отпускает USB-порт), параметры
+        меняются, и перебор стартует уже с ними.
+        """
+        normalized = normalize_lidar_settings(settings)
+        was_running = bool(self._thread and self._thread.is_alive())
+        if was_running:
+            self._stop_worker()
+        self._apply_settings(normalized)
+        if was_running:
+            self.start()
+        log.info(
+            "Лидар: настройки применены: порт=%s протокол=%s скорость=%s мотор=%s автопоиск=%s",
+            normalized["port"] or "(автопоиск)", normalized["protocol"],
+            normalized["baud"] or "(автоподбор)", normalized["motor"],
+            "1" if normalized["autoprobe"] else "0",
+        )
+        return self.current_settings()
+
+    def restart_search(self) -> dict[str, Any]:
+        """Пересканировать порты с текущими настройками (кнопка в панели)."""
+        return self.reconfigure(self.current_settings())
+
+    def _sync_settings_from_env_file(self) -> None:
+        """Подхватывает настройки, сохранённые вторым процессом в ``.env``.
+
+        Панель настроек живёт в веб-пульте (8080), а бортовой экран (8090) —
+        отдельный процесс со своим менеджером. Он не перезапускается при
+        сохранении, поэтому его поток раз в секунду смотрит mtime ``.env``:
+        файл изменился — применяет новые RC_LIDAR_* с начала следующего круга.
+        Настройки, применённые этим же процессом через панель, совпадают с
+        текущими и повторного сброса поиска не вызывают.
+        """
+        now = time.time()
+        if now - self._env_checked < 1.0:
+            return
+        self._env_checked = now
+        try:
+            mtime = self._env_file.stat().st_mtime
+        except OSError:
+            return
+        if mtime == self._env_mtime:
+            return
+        self._env_mtime = mtime
+        values = read_env_file(self._env_file)
+        if not any(key in values for key in LIDAR_ENV_KEYS):
+            return
+        try:
+            settings = normalize_lidar_settings({
+                "port": values.get("RC_LIDAR_PORT", ""),
+                "protocol": values.get("RC_LIDAR_PROTOCOL", "auto"),
+                "baud": values.get("RC_LIDAR_BAUD", ""),
+                "motor": values.get("RC_LIDAR_MOTOR", "auto"),
+                "autoprobe": values.get("RC_LIDAR_AUTOPROBE", "1"),
+            })
+        except ValueError as exc:
+            log.warning("Лидар: настройки в .env не применены: %s", exc)
+            return
+        if settings != self.current_settings():
+            log.info("Лидар: настройки изменились в .env — применяю без перезапуска")
+            self._apply_settings(settings)
 
     # ----------------------------- приём данных ---------------------------- #
 
@@ -2116,6 +2342,7 @@ class LidarManager:
             "age_s": round(now - scan_at, 2) if scan_at > 0 else None,
             "nearest_m": near if is_fresh else None,
             "configured_port": self.port,
+            "settings": self.current_settings(),
             # В каком интерпретаторе работает веб-приложение и есть ли в нём
             # pyserial: проверка лидара и пульт обязаны запускаться из одной .venv.
             "python": sys.executable,
@@ -2301,6 +2528,9 @@ class LidarManager:
             return
 
         while not self._stop:
+            # Настройки могли сохранить из веб-панели в соседнем процессе:
+            # применяем их с нового круга, борт не ждёт перезапуска руками.
+            self._sync_settings_from_env_file()
             if self._ros_owns_lidar():
                 # Скан даёт ROS 2: своих портов лидар не занимает, уступать нечего.
                 self._clear_state()
@@ -2322,6 +2552,13 @@ class LidarManager:
                 self._search_since = 0.0
             self._publish_state("searching")
             if not ports:
+                # Своих кандидатов нет, но скан может уже идти у второго
+                # процесса (веб-пульт держит порт, ROS или HTTP-фид): без этой
+                # проверки борт показывал «порт не найден» при живом скане
+                # по соседству только потому, что его список портов пуст.
+                if self._peer_cycle():
+                    self._publish_state("peer")
+                    continue
                 hint = ("подключи лидар или задай RC_LIDAR_PORT (список портов: "
                         "ls /dev/ttyUSB* /dev/serial/by-id/; проверка: scripts/lidar_check.py)")
                 if module_ports:
@@ -2378,6 +2615,16 @@ class LidarManager:
                     if self._peer_cycle():
                         progressed = True
                         self._fallback_all = False
+                        # Порт соседа запоминаем как «свой найденный»: без
+                        # этого следующий круг начинался ротацией со СЛЕДУЮЩЕГО
+                        # порта, менеджер уходил подбирать параметры чужих
+                        # USB-устройств на секунды…минуты (у каждой модели
+                        # своя скорость и линии мотора), а скан от соседа за
+                        # это время протухал (свежесть — 1 с). Итог на борту:
+                        # веб показывал лидар, бортовой экран — «нет скана»,
+                        # хотя оба процесса исправны. Теперь круг всегда
+                        # начинается с порта соседа и сразу обновляет peer-скан.
+                        self._sticky = port
                         # Скан идёт от соседа: свой перебор стоит, приоритет на
                         # порты больше не нужен — модули могут читать свои.
                         self._publish_state("peer")
@@ -2419,6 +2666,16 @@ class LidarManager:
                     break
 
             if not progressed:
+                # Сосед мог отдать скан и без занятого порта (веб-пульт
+                # получает точки по ROS/HTTP): пробуем peer ещё раз, прежде
+                # чем объявлять «скана нет» и уходить в паузу перебора. Не
+                # чаще раза в 2 с: peer-проверка ходит по HTTP и не должна
+                # тормозить сам перебор портов.
+                if time.time() >= self._peer_retry_at:
+                    self._peer_retry_at = time.time() + 2.0
+                    if self._peer_cycle():
+                        self._publish_state("peer")
+                        continue
                 # Ни один порт не ответил — говорим об этом прямо:
                 # видно, что перебор был по всем портам, а не по одному.
                 self._active_port = None          # витков нет: состояние не обновляем
