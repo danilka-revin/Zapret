@@ -1,0 +1,105 @@
+/* Кнопка «Остановить всё» и окно подтверждения остановки.
+   Тон — красный: действие обрывает связь с роботом, его нельзя спутать с
+   «Обновить с GitHub» (зелёная) или обычными кнопками экрана. */
+
+.rc-stop-launch {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid #8a3d36;
+  border-radius: 9px;
+  background: #341814;
+  color: #ffdcd6;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rc-stop-launch:hover:not(:disabled) { border-color: #c9584a; background: #431d18; }
+.rc-stop-launch:disabled { opacity: .55; cursor: not-allowed; }
+.rc-stop-launch.rc-stop-floating {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 12100;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .45);
+}
+.rc-stop-launch[data-state="blocked"] { border-style: dashed; color: #d7b7b1; }
+.rc-stop-launch[data-state="stopped"] { border-color: #6d2f28; background: #26120f; color: #e7bdb6; }
+
+.rc-stop-overlay {
+  position: fixed;
+  z-index: 12600;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, .74);
+  backdrop-filter: blur(5px);
+}
+.rc-stop-overlay[hidden] { display: none; }
+.rc-stop-dialog {
+  width: min(620px, 100%);
+  max-height: 92vh;
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid #553631;
+  border-radius: 16px;
+  background: #150f0e;
+  color: #f6ecea;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, .6);
+  font-family: Inter, system-ui, sans-serif;
+}
+.rc-stop-head { display: flex; align-items: start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
+.rc-stop-head h2 { margin: 0; font-size: 20px; }
+.rc-stop-head p { margin: 6px 0 0; color: #b6a3a0; font-size: 12px; line-height: 1.5; }
+.rc-stop-close {
+  flex: none; width: 36px; height: 36px; border: 1px solid #453430; border-radius: 9px;
+  background: #1e1615; color: #f2e7e5; font-size: 24px; line-height: 1; cursor: pointer;
+}
+.rc-stop-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.rc-stop-facts > div { min-width: 0; display: grid; gap: 4px; padding: 10px 12px; border: 1px solid #3a2a26; border-radius: 9px; background: #1b1312; }
+.rc-stop-facts span { color: #a89895; font-size: 11px; }
+.rc-stop-facts b { overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.45; }
+.rc-stop-state { min-height: 18px; margin: 14px 0 0; color: #c4b3b0; font-size: 12.5px; line-height: 1.5; }
+.rc-stop-state[data-tone="warn"] { color: #ffd79a; }
+.rc-stop-state[data-tone="error"] { color: #ffb4a8; }
+.rc-stop-state[data-tone="ok"] { color: #a9e3b4; }
+.rc-stop-log {
+  max-height: 130px;
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: #0d0908;
+  color: #cbb6b2;
+  white-space: pre-wrap;
+  font: 10px/1.45 ui-monospace, SFMono-Regular, monospace;
+}
+.rc-stop-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.rc-stop-btn {
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid #453430;
+  border-radius: 8px;
+  background: #1e1615;
+  color: #f2e7e5;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.rc-stop-btn.danger { border-color: #9d4237; background: #4a1d17; color: #ffe1db; }
+.rc-stop-btn:hover:not(:disabled) { border-color: #c9584a; }
+.rc-stop-btn:disabled { opacity: .45; cursor: not-allowed; }
+@media (max-width: 700px) {
+  .rc-stop-overlay { padding: 8px; }
+  .rc-stop-dialog { max-height: 96vh; padding: 14px; }
+  .rc-stop-facts { grid-template-columns: 1fr; }
+  .rc-stop-actions { justify-content: stretch; }
+  .rc-stop-actions button { flex: 1 1 120px; }
+}

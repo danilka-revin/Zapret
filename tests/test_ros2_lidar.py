@@ -326,6 +326,10 @@ def test_auto_uses_ros_when_ros_is_available(manager, monkeypatch):
     manager.ros = FakeRos()
     manager.source_mode = "auto"
     assert manager._ros_owns_lidar() is True, "auto обязан предпочитать ROS 2"
+    # Пока идёт окно ожидания драйвера (RC_LIDAR_ROS_GRACE_S), порты не трогаем:
+    # драйвер поднимается несколько секунд. После окна USB-путь включается —
+    # это проверяет tests/test_lidar_ros_fallback.py.
+    assert manager.ros_holds_lidar() is True
     # Воркер в этом режиме на порты не ходит: их держит драйвер ROS 2.
     monkeypatch.setattr("robot_control.lidar.LIDAR_RESCAN_S", 0.05)
     monkeypatch.setattr("robot_control.lidar.open_serial",

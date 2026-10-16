@@ -56,6 +56,7 @@ from werkzeug.serving import make_server
 
 from robot_control import estop as estop_latch
 from robot_control import eventlog
+from robot_control import shutdown
 from robot_control.camera import CameraManager
 from robot_control.config import PROJECT_ROOT, Config
 from robot_control.lidar import LidarManager, set_self_port
@@ -67,6 +68,7 @@ from robot_control.slam import (
     STEERING_COMMAND_HEADER,
     STEERING_COMMAND_HEADER_VALUE,
     DRIVE_COMMAND_HEADER_VALUE,
+    STOP_COMMAND_HEADER_VALUE,
     build_state,
     dispatch_drive_command,
     dispatch_steering_calibration,
@@ -816,6 +818,38 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                         "ros_rescan": result.get("ros_rescan") if isinstance(result, dict) else None,
                         "status": manager.get_status()})
 
+    # ---------------------- Остановка робота кнопкой --------------------- #
+    # Кнопка на бортовом экране гасит всё то же, что ./scripts/stop.sh: пульт
+    # 8080, этот экран 8090, супервизор лидара и окно киоска. Входа оператора
+    # на киоске нет, поэтому запрос помечается заголовком «от кнопки» (как
+    # команды руления и тяги) — сторонний POST такой заголовок поставить не
+    # может, а случайное нажатие всё равно требует подтверждения в окне.
+    @app.get("/api/system/stop")
+    def api_kiosk_stop_status():
+        return jsonify({
+            "ok": True,
+            "canStop": True,
+            "requiresCsrf": False,
+            "targets": list(shutdown.TARGETS),
+            "script": str(PROJECT_ROOT / shutdown.STOP_SCRIPT),
+            "restart": "вернуть всё: ярлык «Запустить робот» или ./scripts/start.sh",
+            "autostart": "автозапуск не выключается: ./scripts/autostart.sh off — если не нужен",
+        })
+
+    @app.post("/api/system/stop")
+    def api_kiosk_stop():
+        if request.headers.get(STEERING_COMMAND_HEADER) != STOP_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "error": "Запрос не от кнопки остановки."}), 400
+        result = shutdown.stop_all(PROJECT_ROOT)
+        if result.get("ok"):
+            eventlog.record(
+                "warn",
+                "остановка по кнопке на бортовом экране: пульт, экран и лидар",
+                source="остановка",
+            )
+            return jsonify(result), 202
+        return jsonify(result), 500
+
     @app.get("/healthz")
     def healthz():
         return jsonify({
@@ -825,7 +859,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         })
 
     # статика (robot.css, robot.js и панель настроек лидара)
-    for filename in ("robot.css", "robot.js", "battery.js", "lidar_settings.css", "lidar_settings.js"):
+    for filename in ("robot.css", "robot.js", "battery.js", "lidar_settings.css",
+                     "lidar_settings.js", "power.css", "power.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
         def _view(name=filename):
             return _send(name)

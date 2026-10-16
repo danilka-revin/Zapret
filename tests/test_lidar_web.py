@@ -47,16 +47,6 @@ def backend():
 
 
 @pytest.fixture
-def kiosk_client(config):
-    """Клиент бортового экрана (8090) — тот же, что в тестах киоска."""
-    from robot_control.kiosk_app import create_kiosk_app
-
-    application = create_kiosk_app(config)
-    application.config.update(TESTING=True)
-    return application.test_client()
-
-
-@pytest.fixture
 def manager():
     """Менеджер лидара в известном состоянии, без фонового перебора портов."""
     previous = LidarManager._instance

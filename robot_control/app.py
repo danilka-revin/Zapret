@@ -35,6 +35,7 @@ from itsdangerous import BadSignature, URLSafeSerializer, URLSafeTimedSerializer
 from werkzeug.routing import BuildError
 
 from . import eventlog
+from . import shutdown
 from .auth import (
     ROLE_OPERATOR,
     LoginThrottle,
@@ -407,6 +408,52 @@ def create_app(config: Config | None = None) -> Flask:
         except Exception as exc:  # noqa: BLE001 — диагностический endpoint
             return jsonify({"ok": False, "error": str(exc)[:300],
                             "buildSha": APP_BUILD_SHA}), 503
+
+    # ---------------------- Остановка робота кнопкой --------------------- #
+    # Кнопка «Остановить всё» на экранах: гасит пульт (8080), бортовой экран
+    # (8090), супервизор лидара ROS 2 и окно киоска — то же, что человек делает
+    # командой ./scripts/stop.sh. Требуется вход оператора и CSRF-токен: это
+    # единственное действие, после которого интерфейс перестаёт отвечать.
+    @app.get("/api/system/stop")
+    def api_system_stop_status():
+        """Что остановит кнопка и можно ли её нажимать сейчас."""
+        user, _via = current_user()
+        if user is None:
+            return jsonify({
+                "ok": False,
+                "canStop": False,
+                "error": "остановка доступна из пульта после входа оператора",
+            }), 401
+        return jsonify({
+            "ok": True,
+            "canStop": True,
+            "user": user,
+            "targets": list(shutdown.TARGETS),
+            "script": str(PROJECT_ROOT / shutdown.STOP_SCRIPT),
+            "restart": "вернуть всё: ярлык «Запустить робот» или ./scripts/start.sh",
+            "autostart": "автозапуск не выключается: ./scripts/autostart.sh off — если не нужен",
+            "csrfToken": csrf_signer.dumps("csrf"),
+        })
+
+    @app.post("/api/system/stop")
+    def api_system_stop():
+        user, _via = current_user()
+        if user is None:
+            return jsonify({"ok": False, "error": "Нужен вход оператора."}), 401
+        if not csrf_header_ok():
+            return jsonify({"ok": False, "error": "Недействительный CSRF-токен."}), 400
+        result = shutdown.stop_all(PROJECT_ROOT)
+        if result.get("ok"):
+            log.warning("оператор %s остановил робота кнопкой «Остановить всё»", user)
+            eventlog.record(
+                "warn",
+                "остановка по кнопке оператором %s: пульт, бортовой экран и лидар"
+                % user,
+                source="остановка",
+            )
+            return jsonify(result), 202
+        log.error("остановка по кнопке не запущена: %s", result.get("error"))
+        return jsonify(result), 500
 
     # ------------------------- Сводка работы ---------------------------- #
     # Оператор видит её на главном экране (вкладка «Сводка»). Все цифры — из
