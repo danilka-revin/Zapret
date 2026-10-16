@@ -30,6 +30,7 @@ from pathlib import Path
 
 from flask import Blueprint, Response, jsonify, request, send_from_directory, session
 
+from robot_control import estop as estop_latch
 from robot_control import eventlog
 from robot_control.camera import CameraManager
 from robot_control.lidar import (
@@ -154,6 +155,7 @@ COMMAND_REASON_TEXT = {
     "angle_limit": "угол вне допуска ±%.0f°" % STEERING_ANGLE_LIMIT_DEG,
     "invalid_drive": "неверная величина тяги",
     "drive_limit": "тяга вне допуска ±%d%%" % MAX_DRIVE_PERCENT,
+    "estop": "E-STOP: движение заблокировано, снимите защёлку с PIN",
     "control_not_supported": "источник данных не умеет адресное управление",
     "module_offline": "модуль не на связи",
     "serial_unavailable": "нет связи по UART",
@@ -301,6 +303,8 @@ def dispatch_steering_command(source, body):
 
 
 def _steering_command(source, body):
+    if estop_latch.latched() is not None:
+        return {"ok": False, "reason": "estop"}, 409
     if not isinstance(body, dict) or set(body) != {"module", "angle"}:
         return {"ok": False, "reason": "payload"}, 400
     module = body.get("module")
@@ -352,6 +356,8 @@ def dispatch_steering_zero(source, body):
 
 
 def _steering_zero(source, body):
+    if estop_latch.latched() is not None:
+        return {"ok": False, "reason": "estop"}, 409
     if not isinstance(body, dict) or set(body) != {"module"}:
         return {"ok": False, "reason": "payload"}, 400
     module = body.get("module")
@@ -388,6 +394,8 @@ def dispatch_steering_calibration(source, body):
 
 
 def _steering_calibration(source, body):
+    if estop_latch.latched() is not None:
+        return {"ok": False, "reason": "estop"}, 409
     if not isinstance(body, dict) or set(body) != {"module"}:
         return {"ok": False, "reason": "payload"}, 400
     module = body.get("module")
@@ -414,6 +422,35 @@ def _steering_calibration(source, body):
     return {"ok": False, "reason": reason}, status
 
 
+def engage_estop(source):
+    """Нажатие E-STOP: взвести защёлку и сразу послать нулевую тягу в источник.
+
+    Защёлка работает даже если источник не ответил: тогда все команды тяги и
+    руления отклоняются, а нулевая тяга повторяется при следующем нажатии.
+    """
+    info = estop_latch.latch("E-STOP")
+    drive = getattr(source, "drive", None)
+    stopped = False
+    if getattr(source, "supports_drive", False) and callable(drive):
+        try:
+            stopped = bool((drive(0) or {}).get("ok"))
+        except Exception as exc:  # источник не должен ронять веб-пульт
+            log.error("E-STOP: тяга не остановлена: %s", exc)
+    eventlog.record("error", "E-STOP: защёлка взведена, тяга остановлена" if stopped
+                    else "E-STOP: защёлка взведена, источник тяги не подтвердил останов",
+                    source="руление")
+    return {"ok": True, "estop": True, "driveStopped": stopped, "since": info.get("since")}
+
+
+def release_estop():
+    """Снять защёлку. Вызывать только после проверки PIN-сессии руления."""
+    if estop_latch.latched() is None:
+        return {"ok": True, "estop": False}
+    estop_latch.release()
+    eventlog.record("warn", "E-STOP снят оператором с PIN", source="руление")
+    return {"ok": True, "estop": False}
+
+
 def dispatch_drive_command(source, body):
     """Проверить ограниченную команду тяги (отрицательная величина — назад)."""
     result, status = _drive_command(source, body)
@@ -434,6 +471,8 @@ def _drive_command(source, body):
         return {"ok": False, "reason": "invalid_drive"}, 400
     if not math.isfinite(percent):
         return {"ok": False, "reason": "invalid_drive"}, 400
+    if percent != 0 and estop_latch.latched() is not None:
+        return {"ok": False, "reason": "estop"}, 409
     if abs(percent) > MAX_DRIVE_PERCENT:
         return {"ok": False, "reason": "drive_limit", "limit": MAX_DRIVE_PERCENT}, 400
     if not getattr(source, "supports_drive", False):
@@ -466,6 +505,9 @@ ASSETS = {
     "console.js": "console_js",
     "console-core.js": "console_core_js",
     "vision.js": "vision_js",
+    # вкладка «Сводка» основного экрана (рейсы, энергия, замок — с сервера)
+    "summary.js": "summary_js",
+    "summary.css": "summary_css",
     # наш скрипт: пробрасывает токен сессии в подзапросы (нужен в iframe без cookie)
     "slam_auth.js": "slam_auth_js",
     # страница киоска на борту робота (без авторизации)
@@ -625,8 +667,9 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
     mod = load_backend()
     mode = (mode or "auto").strip().lower()
 
-    if mode == "sim":
-        return mod.SimSource()
+    if mode == "none":
+        # Робот не подключён: значения пустые, демо-физики нет.
+        return mod.NoSource()
     if mode == "serial":
         # Явно заданные RC_SLAM_PORTS — воля оператора: их лидар и так не
         # трогает (они попадают в excluded_ports()). Если список пуст, ищем
@@ -661,7 +704,7 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
         log.info("источник данных: UART-модули %s", ", ".join(live))
         return chassis_source(mod, live)
 
-    log.info("источник данных: робот не подключён — значения пустые (симуляция только по RC_SLAM_SOURCE=sim)")
+    log.info("источник данных: робот не подключён — значения пустые (демо-режима нет)")
     return mod.NoSource()
 
 
@@ -690,21 +733,17 @@ def _send(name: str):
 
 
 def lidar_for_screen(manager, snap):
-    """Точки лидара для экрана и признак, что это демо.
+    """Точки лидара для экрана. Демо-скана нет: только реальные данные менеджера.
 
-    Реальные точки приходят только из менеджера лидара: USB-порт (RPLIDAR,
-    LD06/LD19, LDS-01/LDS-02), ROS 2 ``/scan``, HTTP ``POST /api/lidar`` или
-    соседний процесс робота. Всё, что лежит в ``snap["lidar"]`` сверх этого, —
-    данные источника-симуляции (``RC_SLAM_SOURCE=sim``): без пометки они
-    выглядели бы на экране как «в реальном времени · 180 точек», то есть демо
-    выдавалось бы за работающий лидар.
+    Точки приходят из USB-порта (RPLIDAR, LD06/LD19, LDS-01/LDS-02), ROS 2
+    ``/scan``, HTTP ``POST /api/lidar`` или соседнего процесса робота. Без них
+    возвращается ``None`` — экран покажет «нет данных».
+    Второе значение (признак демо) всегда ``False``; оно сохранено для формата ответа.
     """
+    del snap  # раньше сюда подставлялся выдуманный скан; теперь не используется
     scan = manager.get_scan()
     if scan:
         return scan, False
-    fallback = snap.get("lidar") if isinstance(snap, dict) else None
-    if isinstance(fallback, list) and fallback:
-        return fallback, True
     return None, False
 
 
@@ -712,8 +751,8 @@ def lidar_status_payload(manager, points, demo):
     """Единый статус лидара для ``/api/lidar``, ``/api/state`` и киоска.
 
     Одинаковый во всех ответах: соседний процесс робота берёт по нему скан, а
-    экран — причину «скана нет». Флаг ``demo`` не даёт выдуманному скану
-    разъехаться по обоим экранам как реальному.
+    экран — причину «скана нет». Флаг ``demo`` всегда ``False``: выдуманного
+    скана в системе нет.
     """
     status = manager.get_status()
     status["demo"] = bool(demo)
@@ -915,6 +954,26 @@ def create_blueprint(state, guard=None) -> Blueprint:
         result, status = dispatch_steering_calibration(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
+    @bp.post("/api/estop")
+    @guard
+    def api_estop():
+        if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        return jsonify(engage_estop(state.source))
+
+    @bp.post("/api/estop/release")
+    @guard
+    def api_estop_release():
+        """Снять E-STOP: PIN в теле запроса — та же проверка, что у замка."""
+        if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        body = request.get_json(silent=True) or {}
+        result = state.vault.verify(str(body.get("pin", "")))
+        note_pin_result(result, where="снятие E-STOP")
+        if not result.get("ok"):
+            return jsonify({"ok": False, "reason": result.get("reason", "pin")}), 403
+        return jsonify(release_estop())
+
     @bp.post("/api/kiosk_drive")
     def api_kiosk_drive():
         if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
@@ -938,6 +997,7 @@ def create_blueprint(state, guard=None) -> Blueprint:
         # найден, не та скорость, порт занят вторым процессом робота и т. д.).
         snap["lidarStatus"] = lidar_status_payload(manager, points, demo)
         snap["cameras"] = CameraManager.get_instance().list_cameras()
+        snap["estop"] = estop_latch.latched()
         return jsonify({"ok": True, "data": snap})
 
     @bp.post("/api/drive")
@@ -958,8 +1018,7 @@ def create_blueprint(state, guard=None) -> Blueprint:
 
         Ответ открыт без авторизации намеренно: по нему второй процесс робота
         (пульт 8080 ↔ бортовой экран 8090) берёт скан, когда USB-порт занят
-        соседом. Точки источника-симуляции отдаются только с флагом ``demo`` —
-        сосед их не принимает, а экран показывает как демо.
+        соседом. Демо-точек в системе нет, флаг ``demo`` всегда ``False``.
         """
         mgr = LidarManager.get_instance()
         scan = mgr.get_scan()
@@ -967,8 +1026,7 @@ def create_blueprint(state, guard=None) -> Blueprint:
         if scan is None and hasattr(state, "source"):
             try:
                 src_data = getattr(state.source, "read", lambda: {})()
-                scan = src_data.get("lidar")
-                demo = bool(scan)
+                scan = src_data.get("lidar")  # реальный скан источника; демо-режима нет
             except Exception:  # noqa: BLE001 — источник может не уметь read()
                 scan = None
         return jsonify(lidar_status_payload(mgr, scan, demo))

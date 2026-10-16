@@ -261,7 +261,7 @@
           </header>
           <div class="cam-viewport" id="cam1-view">
             <canvas id="cam1-canvas" aria-label="Камера 1"></canvas>
-            <p class="cam-empty" id="cam1-empty">нет сигнала — демо-режим</p>
+            <p class="cam-empty" id="cam1-empty">нет сигнала</p>
             <span class="cam-rec" aria-hidden="true">● REC</span>
           </div>
           <footer class="cam-foot"><span id="cam1-meta">1920×1080 · 30 fps</span><span class="cam-dot ok"></span></footer>
@@ -273,7 +273,7 @@
           </header>
           <div class="cam-viewport" id="cam2-view">
             <canvas id="cam2-canvas" aria-label="Камера 2"></canvas>
-            <p class="cam-empty" id="cam2-empty">нет сигнала — демо-режим</p>
+            <p class="cam-empty" id="cam2-empty">нет сигнала</p>
             <span class="cam-rec" aria-hidden="true">● REC</span>
           </div>
           <footer class="cam-foot"><span id="cam2-meta">1920×1080 · 30 fps</span><span class="cam-dot warn"></span></footer>
@@ -321,7 +321,7 @@
         <p id="steer-source-status" class="steer-source-status" role="status">Проверка связи с модулями…</p>
         <section class="steer-calib-bar" aria-label="Калибровка руля по оптодатчику">
           <div><b>Ноль руля — по оптодатчику D18</b>
-            <span>Колесо идёт вправо до 100°, затем влево до 200°, находит флажок и встаёт в его середину. Колёса не должны упираться, рядом — никого.</span></div>
+            <span>Колесо ищет флажок в пределах ±135° (ход руля 270°): сначала вправо, затем влево. Подходит к каждой кромке по три раза и встаёт в середину флажка по среднему. После включения Arduino выставьте колёса прямо руками (±30°). Колёса не должны упираться, рядом — никого.</span></div>
           <button id="steer-calib-all" class="btn-steer btn-steer--calib" type="button" disabled>Калибровать все колёса</button>
         </section>
         <div class="steer-grid">
@@ -442,14 +442,14 @@
             <span class="ctrl-card-arrow" aria-hidden="true">→</span>
           </button>
 
-          <button class="ctrl-card" type="button" data-mock="Подсветка" role="listitem">
+          <button class="ctrl-card" type="button" disabled aria-disabled="true" title="не подключено к роботу" role="listitem">
             <span class="ctrl-card-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span>
-            <span class="ctrl-card-text"><b>Подсветка</b><small>вкл / выкл</small></span>
+            <span class="ctrl-card-text"><b>Подсветка</b><small>нет команды на роботе</small></span>
           </button>
 
-          <button class="ctrl-card" type="button" data-mock="Сигнал" role="listitem">
+          <button class="ctrl-card" type="button" disabled aria-disabled="true" title="не подключено к роботу" role="listitem">
             <span class="ctrl-card-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8h4l5-4v16l-5-4H3z"/><path d="M15 9a5 5 0 0 1 0 6"/><path d="M17 7a8 8 0 0 1 0 10"/></svg></span>
-            <span class="ctrl-card-text"><b>Сигнал</b><small>подать звук</small></span>
+            <span class="ctrl-card-text"><b>Сигнал</b><small>нет команды на роботе</small></span>
           </button>
 
           <button id="btn-themes" class="ctrl-card" type="button" role="listitem">

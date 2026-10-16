@@ -54,6 +54,7 @@ except ImportError:  # pragma: no cover - не-POSIX платформы
 from flask import Flask, Response, jsonify, redirect, request
 from werkzeug.serving import make_server
 
+from robot_control import estop as estop_latch
 from robot_control import eventlog
 from robot_control.camera import CameraManager
 from robot_control.config import PROJECT_ROOT, Config
@@ -69,6 +70,9 @@ from robot_control.slam import (
     build_state,
     dispatch_drive_command,
     dispatch_steering_calibration,
+    engage_estop,
+    release_estop,
+    note_pin_result,
     dispatch_steering_command,
     dispatch_steering_zero,
     kiosk_log_payload,
@@ -589,6 +593,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         manager = LidarManager.get_instance()
         snap = state.snapshot()
         points, demo = lidar_for_screen(manager, snap)
+        estop_info = estop_latch.latched()
         # Телеметрия и доступность управления публичны; PIN используется только для кейса.
         return jsonify({"ok": True, "data": {
             "battery": snap.get("battery"),
@@ -602,6 +607,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "lidarStatus": lidar_status_payload(manager, points, demo),
             "speedMps": snap.get("speedMps"),
             "powerKw": snap.get("powerKw"),
+            "estop": estop_info,
             "mode": snap.get("mode"),
             "linkOk": snap.get("linkOk"),
             "ts": snap.get("ts"),
@@ -618,7 +624,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         """Скан и статус лидара бортового экрана.
 
         По этому адресу пульт (8080) берёт скан, когда порт лидара держит
-        бортовой экран, — поэтому демо-скан отдаётся только с флагом ``demo``.
+        бортовой экран. Демо-скана в системе нет, флаг ``demo`` всегда ``False``.
         """
         mgr = LidarManager.get_instance()
         scan = mgr.get_scan()
@@ -626,8 +632,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if scan is None and state and hasattr(state, "source"):
             try:
                 src_data = getattr(state.source, "read", lambda: {})()
-                scan = src_data.get("lidar")
-                demo = bool(scan)
+                scan = src_data.get("lidar")  # реальный скан источника; демо-режима нет
             except Exception:  # noqa: BLE001 — источник может не уметь read()
                 scan = None
         return jsonify(lidar_status_payload(mgr, scan, demo))
@@ -753,6 +758,24 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
         result, status = dispatch_steering_calibration(state.source, request.get_json(silent=True))
         return jsonify(result), status
+
+    @app.post("/api/estop")
+    def api_estop():
+        """E-STOP с борта: без PIN (остановить может любой), снятие — только с PIN."""
+        if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        return jsonify(engage_estop(state.source))
+
+    @app.post("/api/estop/release")
+    def api_estop_release():
+        if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        body = request.get_json(silent=True) or {}
+        result = state.vault.verify(str(body.get("pin", "")))
+        note_pin_result(result, where="снятие E-STOP")
+        if not result.get("ok"):
+            return jsonify({"ok": False, "reason": result.get("reason", "pin")}), 403
+        return jsonify(release_estop())
 
     @app.post("/api/kiosk_drive")
     def api_kiosk_drive():
@@ -1077,7 +1100,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="адрес прослушивания (по умолчанию RC_BIND_HOST или 0.0.0.0)")
     parser.add_argument("--port", type=int, default=None,
                         help=f"порт экрана (по умолчанию RC_KIOSK_PORT или {DEFAULT_PORT})")
-    parser.add_argument("--source", choices=["auto", "sim", "serial", "ros", "master"], default=None,
+    parser.add_argument("--source", choices=["auto", "none", "serial", "ros", "master"], default=None,
                         help="источник данных: master (по умолчанию), auto, sim, serial или ros")
     parser.add_argument("--open", dest="open_screen", action="store_true", default=None,
                         help="открыть экран в браузере (по умолчанию — если есть дисплей)")
@@ -1099,7 +1122,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Настройки (заодно подхватываем .env — например RC_KIOSK_OPEN).
     # По умолчанию используется USB-мастер четырёх I2C-плат; стенд включается
-    # явно: RC_SLAM_SOURCE=sim ./run_kiosk.py
+    # явно: RC_SLAM_SOURCE=none ./run_kiosk.py
     cfg = Config.from_env()
     if args.source:
         cfg = replace(cfg, slam_source=args.source)

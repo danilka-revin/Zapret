@@ -5,11 +5,13 @@
  * Модуль работает и в браузере (window.RS), и в Node (module.exports) —
  * используется узлами пульта и модульными тестами gui/tests/console.test.js.
  *
+ * Статистика работы (рейсы, пробег, энергия) — на вкладке «Сводка» основного
+ * экрана и считается на сервере: robot_control/stats.py.
+ *
  * Состав:
  *   RS.pack   — модель АКБ 12S3P LiFePO4 (SOC по OCV, энергия, пороги);
  *   RS.uart   — кадры протокола обмена (10 Б команда, 16 Б телеметрия, CRC16);
  *   RS.PinVault — PIN-хранилище замка ячейки (SHA-256 + соль, блокировки, аудит);
- *   RS.StatsStore — статистика: рейсы, события, энергия, экспорт CSV/JSON;
  *   RS.fmt     — форматирование чисел/времени.
  * ========================================================================== */
 (function (global) {
@@ -138,9 +140,11 @@
   function remainingWh(soc) { return PACK.capacityWh * Math.max(0, Math.min(100, Number(soc) || 0)) / 100; }
 
   /** Запас хода, км, по текущему расходу (Вт·ч/км); при нуле — паспортные 22 км. */
+  // Запас хода считается только по реальному расходу (Вт·ч/км из сводки работы).
+  // Без него — null, а не выдуманная норма: экран покажет «—».
   function rangeKm(soc, whPerKm) {
-    const c = Number(whPerKm) > 5 ? Number(whPerKm) : PACK.capacityWh / 22;
-    return remainingWh(soc) / c;
+    const c = Number(whPerKm);
+    return c > 5 ? remainingWh(soc) / c : null;
   }
 
   /** Уровень по напряжению: 3 — норма, 2 — низкий, 1 — критический, 0 — авария. */
@@ -169,7 +173,7 @@
       rangeKm: rangeKm(soc, o.whPerKm),
       level,
       tempC: Number(o.tempC) || 28,
-      cycles: Number(o.cycles) || 0,
+      cycles: o.cycles === null || o.cycles === undefined ? null : (Number(o.cycles) || 0),
       cells: {
         min: +(cellV - spread).toFixed(3),
         max: +(cellV + spread * 1.25).toFixed(3),
@@ -536,353 +540,9 @@
   RS.PinVault = PinVault;
   RS.DEFAULT_PIN = DEFAULT_PIN;
 
-  /* ======================================================================
-   * 7. Статистика: рейсы, события, метрики сессии, экспорт
-   * ==================================================================== */
-  const STATS_KEY = 'rus_slam_stats_v1';
-
-  function emptyTotals() {
-    return {
-      trips: 0, distanceM: 0, energyWh: 0, movingSec: 0, cargoKg: 0, cargoTrips: 0,
-      maxSpeed: 0, chargeCycles: 0, manualOps: 0, obstacles: 0, faults: 0,
-      locks: { open: 0, denied: 0, changed: 0 },
-      signs: { stop: 0, pedestrian_crossing: 0, speed_bump: 0, unknown: 0 },
-      lights: { red: 0, green: 0 },
-    };
-  }
-
-  class StatsStore {
-    /**
-     * @param {Storage} [storage]
-     * @param {{key?:string, capacity?:number, tripCapacity?:number}} [opts]
-     */
-    constructor(storage, opts) {
-      const o = opts || {};
-      this.storage = storage || safeStorage('localStorage');
-      this.key = o.key || STATS_KEY;
-      this.tripCapacity = o.tripCapacity || 200;
-      this.data = this._load();
-      this.session = {
-        startedAt: Date.now(), distanceM: 0, energyWh: 0, movingSec: 0, maxSpeed: 0,
-      };
-      this._trip = null;
-      this._dirty = false;
-      this._lastSave = 0;
-      this._tickSec = 0;
-    }
-
-    _load() {
-      let raw = null;
-      try { raw = JSON.parse(this.storage.getItem(this.key) || 'null'); } catch (e) { raw = null; }
-      if (!raw || typeof raw !== 'object') {
-        return { version: 1, updatedAt: Date.now(), totals: emptyTotals(), trips: [], daily: {} };
-      }
-      raw.totals = Object.assign(emptyTotals(), raw.totals || {});
-      raw.totals.locks = Object.assign({ open: 0, denied: 0, changed: 0 }, raw.totals.locks);
-      raw.totals.signs = Object.assign({ stop: 0, pedestrian_crossing: 0, speed_bump: 0, unknown: 0 }, raw.totals.signs);
-      raw.totals.lights = Object.assign({ red: 0, green: 0 }, raw.totals.lights);
-      raw.trips = Array.isArray(raw.trips) ? raw.trips : [];
-      raw.daily = raw.daily || {};
-      return raw;
-    }
-
-    save(force) {
-      const now = Date.now();
-      if (!force && now - this._lastSave < 15000) { this._dirty = true; return; }
-      this.data.updatedAt = now;
-      try { this.storage.setItem(this.key, JSON.stringify(this.data)); } catch (e) { /* нет места */ }
-      this._dirty = false;
-      this._lastSave = now;
-    }
-
-    /** Немедленная запись на диск (например, перед закрытием пульта). */
-    flush() { this.save(true); }
-
-    reset() {
-      this.data = { version: 1, updatedAt: Date.now(), totals: emptyTotals(), trips: [], daily: {} };
-      this.session = { startedAt: Date.now(), distanceM: 0, energyWh: 0, movingSec: 0, maxSpeed: 0 };
-      this._trip = null;
-      this.save(true);
-    }
-
-    get totals() { return this.data.totals; }
-    get trips() { return this.data.trips; }
-    get tripActive() { return !!this._trip; }
-
-    _dayKey(ts) {
-      const d = new Date(ts || Date.now());
-      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    }
-
-    /**
-     * Шаг интеграции метрик (вызывается из главного цикла симулятора).
-     * @param {number} dt — шаг, с
-     * @param {{distanceM?:number, voltage:number, current:number, speed:number,
-     *          auto:boolean, estop?:boolean, cargo?:boolean, payload?:number,
-     *          origin?:string, mission?:string}} s
-     */
-    tick(dt, s) {
-      const step = Math.max(0, Number(dt) || 0);
-      if (!step) return;
-      const speed = Math.max(0, Number(s.speed) || 0);
-      const dist = Number(s.distanceM) || speed * step;
-      const voltage = Number(s.voltage) || PACK.nominalV;
-      const current = Math.max(0, Number(s.current) || 0);
-      const dE = voltage * current * step / 3600;
-
-      this.session.distanceM += dist;
-      this.session.energyWh += dE;
-      if (speed > 0.05) this.session.movingSec += step;
-      this.session.maxSpeed = Math.max(this.session.maxSpeed, speed);
-
-      this.data.totals.distanceM += dist;
-      this.data.totals.energyWh += dE;
-      if (speed > 0.05) this.data.totals.movingSec += step;
-      this.data.totals.maxSpeed = Math.max(this.data.totals.maxSpeed, speed);
-      const day = this._dayKey();
-      const d = this.data.daily[day] || (this.data.daily[day] = { distanceM: 0, energyWh: 0, trips: 0, cargoKg: 0 });
-      d.distanceM += dist; d.energyWh += dE;
-
-      // Рейсы: автоматический режим «auto» = активная миссия
-      if (s.auto && !this._trip) this._beginTrip(s);
-      if (this._trip) {
-        this._trip.distanceM += dist;
-        this._trip.energyWh += dE;
-        if (speed > 0.05) this._trip.movingSec += step;
-        this._trip.maxSpeed = Math.max(this._trip.maxSpeed, speed);
-        if (s.cargo) this._trip.cargoKg = Math.max(this._trip.cargoKg, Number(s.payload) || 0);
-      }
-      if (this._trip && (s.estop || !s.auto)) {
-        this._endTrip(s.estop ? 'aborted' : 'ok', s);
-      }
-      this._tickSec += step;
-      if (this._tickSec >= 1) { this._tickSec = 0; this.save(false); }
-    }
-
-    _beginTrip(s) {
-      this._trip = {
-        id: this.data.trips.length + 1,
-        startedAt: Date.now(),
-        distanceM: 0, energyWh: 0, movingSec: 0, maxSpeed: 0,
-        cargoKg: s.cargo ? (Number(s.payload) || 0) : 0,
-        from: s.origin || 'база',
-        to: s.mission || 'AUTO',
-        route: (s.origin || '—') + ' → ' + (s.mission || 'AUTO'),
-      };
-      RS._onTripStart && RS._onTripStart(this._trip);
-    }
-
-    _endTrip(result, s) {
-      const t = this._trip;
-      this._trip = null;
-      if (!t) return null;
-      const endedAt = Date.now();
-      const durationSec = (endedAt - t.startedAt) / 1000;
-      const avg = t.movingSec > 0.5 ? t.distanceM / t.movingSec : 0;
-      const trip = Object.assign(t, {
-        endedAt, durationSec, result,
-        avgSpeed: avg,
-        to: (s && s.mission) || t.to,
-        route: t.from + ' → ' + ((s && s.mission) || t.to),
-      });
-      this.data.trips.push(trip);
-      if (this.data.trips.length > this.tripCapacity) this.data.trips.shift();
-      const tot = this.data.totals;
-      tot.trips += 1;
-      tot.cargoKg += trip.cargoKg;
-      if (trip.cargoKg > 0) tot.cargoTrips += 1;
-      if (result !== 'ok') tot.faults += 1;
-      const day = this._dayKey(trip.startedAt);
-      const d = this.data.daily[day] || (this.data.daily[day] = { distanceM: 0, energyWh: 0, trips: 0, cargoKg: 0 });
-      d.trips += 1; d.cargoKg += trip.cargoKg;
-      if (result !== 'ok') d.faults = (d.faults || 0) + 1;
-      this.save(true);
-      RS._onTripEnd && RS._onTripEnd(trip);
-      return trip;
-    }
-
-    /** Принудительное завершение рейса (например, по E-STOP). */
-    abortTrip(reason, s) { return this._endTrip(reason || 'aborted', s || {}); }
-
-    _bump(path, n) {
-      const parts = path.split('.');
-      let obj = this.data.totals;
-      for (let i = 0; i < parts.length - 1; i++) {
-        obj[parts[i]] = obj[parts[i]] || {};
-        obj = obj[parts[i]];
-      }
-      const key = parts[parts.length - 1];
-      obj[key] = (obj[key] || 0) + (n === undefined ? 1 : n);
-      this._dirty = true;
-    }
-
-    /**
-     * Счётчики событий пишутся на диск сразу: событий мало (десятки за
-     * испытание), а потеря счётчика при перезапуске пульта недопустима.
-     */
-    _event(path, n) { this._bump(path, n); this.save(true); }
-
-    noteSign(kind) {
-      const k = this.data.totals.signs[kind] === undefined ? 'unknown' : kind;
-      this._event('signs.' + k);
-    }
-    noteLight(kind) { this._event('lights.' + (kind === 'green' ? 'green' : 'red')); }
-    noteObstacle(n) { this._event('obstacles', n); }
-    noteManual(n) { this._event('manualOps', n); }
-    noteFault(n) { this._event('faults', n); }
-    noteChargeCycle(n) { this._event('chargeCycles', n); }
-    noteLock(kind) {
-      if (kind === 'open') this._event('locks.open');
-      else if (kind === 'changed') this._event('locks.changed');
-      else this._event('locks.denied');
-    }
-
-    /** Производные показатели для панели статистики. */
-    summary() {
-      const t = this.data.totals;
-      const km = t.distanceM / 1000;
-      const sessionKm = this.session.distanceM / 1000;
-      return {
-        trips: t.trips,
-        distanceM: t.distanceM,
-        distanceKm: km,
-        energyWh: t.energyWh,
-        cargoKg: t.cargoKg,
-        movingSec: t.movingSec,
-        maxSpeed: t.maxSpeed,
-        chargeCycles: t.chargeCycles,
-        manualOps: t.manualOps,
-        obstacles: t.obstacles,
-        faults: t.faults,
-        signs: Object.assign({}, t.signs),
-        lights: Object.assign({}, t.lights),
-        locks: Object.assign({}, t.locks),
-        avgTripSec: t.trips ? t.movingSec / t.trips : 0,
-        avgSpeedKmh: t.movingSec > 1 ? (t.distanceM / t.movingSec) * 3.6 : 0,
-        whPerKm: km > 0.05 ? t.energyWh / km : 0,
-        session: {
-          distanceM: this.session.distanceM,
-          distanceKm: sessionKm,
-          energyWh: this.session.energyWh,
-          movingSec: this.session.movingSec,
-          maxSpeed: this.session.maxSpeed,
-          whPerKm: sessionKm > 0.05 ? this.session.energyWh / sessionKm : 0,
-          startedAt: this.session.startedAt,
-        },
-        recentTrips: this.data.trips.slice(-10).reverse(),
-      };
-    }
-
-    /** Расход сессии, Вт·ч/км (для оценки запаса хода). */
-    whPerKm() { return this.summary().session.whPerKm || this.summary().whPerKm; }
-
-    toCSV() {
-      const s = this.summary();
-      const lines = [];
-      lines.push('# RUS SLAM — статистика сервисного пульта');
-      lines.push('# сформировано;' + new Date().toISOString());
-      lines.push('');
-      lines.push('Показатель;Значение');
-      lines.push('Рейсов;' + s.trips);
-      lines.push('Пробег, м;' + s.distanceM.toFixed(1));
-      lines.push('Энергия, Вт·ч;' + s.energyWh.toFixed(1));
-      lines.push('Груз, кг;' + s.cargoKg);
-      lines.push('Время в движении, с;' + s.movingSec.toFixed(0));
-      lines.push('Средняя скорость, км/ч;' + s.avgSpeedKmh.toFixed(2));
-      lines.push('Расход, Вт·ч/км;' + s.whPerKm.toFixed(1));
-      lines.push('Максимальная скорость, м/с;' + s.maxSpeed.toFixed(2));
-      lines.push('Циклов заряда;' + s.chargeCycles);
-      lines.push('Объездов препятствий;' + s.obstacles);
-      lines.push('Ручных команд;' + s.manualOps);
-      lines.push('Открытий замка;' + s.locks.open);
-      lines.push('Отказов доступа;' + s.locks.denied);
-      lines.push('Знак Стоп;' + s.signs.stop);
-      lines.push('Знак переход;' + s.signs.pedestrian_crossing);
-      lines.push('Знак неровность;' + s.signs.speed_bump);
-      lines.push('Светофор красный;' + s.lights.red);
-      lines.push('Светофор зелёный;' + s.lights.green);
-      lines.push('');
-      lines.push('# Рейсы');
-      lines.push('id;начало;окончание;маршрут;дистанция_м;энергия_Втч;время_с;движение_с;груз_кг;ср_скорость_мс;макс_скорость_мс;результат');
-      for (const t of this.data.trips) {
-        lines.push([
-          t.id, new Date(t.startedAt).toISOString(), new Date(t.endedAt).toISOString(),
-          (t.route || '').replace(/;/g, ','), t.distanceM.toFixed(1), t.energyWh.toFixed(1),
-          t.durationSec.toFixed(0), t.movingSec.toFixed(0), t.cargoKg || 0,
-          (t.avgSpeed || 0).toFixed(2), (t.maxSpeed || 0).toFixed(2), t.result,
-        ].join(';'));
-      }
-      return lines.join('\n');
-    }
-
-    toJSON() {
-      return JSON.stringify({
-        generatedAt: new Date().toISOString(),
-        device: 'RUS SLAM 4WIS/4WID, НТЦ АО «АВТОВАЗ»',
-        summary: this.summary(),
-        totals: this.data.totals,
-        daily: this.data.daily,
-        trips: this.data.trips,
-      }, null, 2);
-    }
-
-    /** Печатный отчёт (HTML): сводка, события, рейсы, подпись. */
-    reportHTML() {
-      const s = this.summary();
-      const rows = this.data.trips.slice(-25).reverse().map((t) => `
-        <tr><td>${t.id}</td><td>${fmt.date(t.startedAt)}</td><td>${t.route || ''}</td>
-        <td>${(t.distanceM / 1000).toFixed(3)}</td><td>${t.energyWh.toFixed(1)}</td>
-        <td>${fmt.dur(t.movingSec)}</td><td>${t.cargoKg || 0}</td>
-        <td>${(t.avgSpeed || 0).toFixed(2)}</td><td>${t.result}</td></tr>`).join('');
-      return `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
-<title>RUS SLAM — отчёт о работе</title>
-<style>
- body{font:13px/1.45 Arial,Helvetica,sans-serif;color:#17211d;margin:24px}
- h1{font-size:19px;margin:0 0 2px} h2{font-size:14px;margin:18px 0 6px}
- .muted{color:#6a7570;font-size:11px}
- table{border-collapse:collapse;width:100%;margin-top:6px}
- th,td{border:1px solid #cfd8d3;padding:4px 6px;font-size:11px;text-align:left}
- th{background:#eef3f0}
- .kpi{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}
- .kpi div{border:1px solid #cfd8d3;border-radius:8px;padding:8px 12px;min-width:120px}
- .kpi b{display:block;font-size:16px}
- .sig{margin-top:26px;font-size:12px;color:#333}
-</style></head><body>
-<h1>RUS SLAM — отчёт о работе робота-курьера 4WIS/4WID</h1>
-<div class="muted">НТЦ АО «АВТОВАЗ» · сформировано ${fmt.date(Date.now())} · источник: сервисный пульт, окно «Сервис»</div>
-<h2>Сводка</h2>
-<div class="kpi">
- <div><span>Рейсов</span><b>${s.trips}</b></div>
- <div><span>Пробег</span><b>${(s.distanceM / 1000).toFixed(2)} км</b></div>
- <div><span>Энергия</span><b>${s.energyWh.toFixed(0)} Вт·ч</b></div>
- <div><span>Груз</span><b>${s.cargoKg} кг</b></div>
- <div><span>Время в движении</span><b>${fmt.dur(s.movingSec)}</b></div>
- <div><span>Средняя скорость</span><b>${s.avgSpeedKmh.toFixed(2)} км/ч</b></div>
- <div><span>Расход</span><b>${s.whPerKm.toFixed(1)} Вт·ч/км</b></div>
- <div><span>Циклов заряда</span><b>${s.chargeCycles}</b></div>
-</div>
-<h2>События и доступ к грузу</h2>
-<table><tr><th>Показатель</th><th>Значение</th></tr>
- <tr><td>Знак «Стоп» / переход / неровность</td><td>${s.signs.stop} / ${s.signs.pedestrian_crossing} / ${s.signs.speed_bump}</td></tr>
- <tr><td>Светофор (красный / зелёный)</td><td>${s.lights.red} / ${s.lights.green}</td></tr>
- <tr><td>Объездов препятствий</td><td>${s.obstacles}</td></tr>
- <tr><td>Ручных сервисных команд</td><td>${s.manualOps}</td></tr>
- <tr><td>Открытий ячейки / отказов / смен PIN</td><td>${s.locks.open} / ${s.locks.denied} / ${s.locks.changed}</td></tr>
- <tr><td>Сбоев и аварий</td><td>${s.faults}</td></tr>
-</table>
-<h2>Рейсы (последние ${Math.min(25, this.data.trips.length)})</h2>
-${this.data.trips.length ? `<table><tr><th>№</th><th>Начало</th><th>Маршрут</th><th>км</th><th>Вт·ч</th><th>движение</th><th>груз, кг</th><th>ср., м/с</th><th>итог</th></tr>${rows}</table>`
-        : '<div class="muted">Рейсы ещё не зафиксированы.</div>'}
-<div class="sig">Оператор смены: ____________________ &nbsp;&nbsp;&nbsp; Подпись: ____________________</div>
-</body></html>`;
-    }
-  }
-
-  RS.StatsStore = StatsStore;
   RS.fmt = fmt;
   RS.sha256Hex = sha256Hex;
   RS.randomHex = randomHex;
-  RS.emptyTotals = emptyTotals;
   RS.version = '1.0.0';
 
   if (typeof module !== 'undefined' && module.exports) module.exports = RS;

@@ -171,6 +171,14 @@ struct Board {
   long flag_lo = -200, flag_hi = 200;    // шаги, где датчик закрыт
   long hysteresis = 20;
   bool opto_state = false;
+  // Разброс срабатывания: при каждом освобождении датчика следующий сдвиг края флажка
+  // берётся из списка (по кругу). Сдвиг вступает, только когда колесо вне старого и
+  // нового окна: как люфт между подходами, а не перескок флажка под колесом.
+  std::vector<long> flag_shift_script;
+  size_t flag_shift_index = 0;
+  long flag_shift = 0;
+  bool flag_shift_pending = false;
+  long flag_shift_next = 0;
   // Проверки сигналов TB6600.
   int64_t last_dir_change_us = -1000000;
   int64_t pul_rise_us = 0;
@@ -191,9 +199,27 @@ struct Board {
   bool opto_active() {
     if (opto_stuck) return true;
     if (!opto_present) return false;
-    const bool inside = phys >= flag_lo && phys <= flag_hi;
-    const bool held = phys >= flag_lo - hysteresis && phys <= flag_hi + hysteresis;
-    opto_state = opto_state ? held : inside;
+    const long lo = flag_lo + flag_shift;
+    const long hi = flag_hi + flag_shift;
+    const bool inside = phys >= lo && phys <= hi;
+    const bool held = phys >= lo - hysteresis && phys <= hi + hysteresis;
+    const bool was = opto_state;
+    opto_state = was ? held : inside;
+    if (was && !opto_state && !flag_shift_script.empty()) {
+      flag_shift_next = flag_shift_script[flag_shift_index % flag_shift_script.size()];
+      ++flag_shift_index;
+      flag_shift_pending = true;
+    }
+    if (flag_shift_pending) {
+      const long next_lo = flag_lo + flag_shift_next;
+      const long next_hi = flag_hi + flag_shift_next;
+      const long union_lo = (lo < next_lo ? lo : next_lo) - hysteresis;
+      const long union_hi = (hi > next_hi ? hi : next_hi) + hysteresis;
+      if (phys < union_lo || phys > union_hi) {
+        flag_shift = flag_shift_next;
+        flag_shift_pending = false;
+      }
+    }
     return opto_state;
   }
 

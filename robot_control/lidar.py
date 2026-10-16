@@ -576,46 +576,6 @@ def parse_ld06_packet(pkt: bytes) -> list[dict[str, float]]:
     return pts
 
 
-def generate_demo_scan(t: Optional[float] = None, speed: float = 0.5) -> list[dict[str, float]]:
-    """Генерирует скан помещения склада со стенами и столбиками."""
-    now = time.time() if t is None else t
-    pts: list[dict[str, float]] = []
-    num_rays = 180
-
-    for i in range(num_rays):
-        a = (i / num_rays) * math.pi * 2.0 - math.pi
-        # Базовый прямоугольный контур помещения ~5×4 м
-        cos_a = math.cos(a)
-        sin_a = math.sin(a)
-        r_x = abs(3.5 / cos_a) if abs(cos_a) > 1e-4 else 12.0
-        r_y = abs(2.5 / sin_a) if abs(sin_a) > 1e-4 else 12.0
-        r = min(r_x, r_y)
-
-        # Небольшая динамическая волна и неровность стен
-        r += 0.08 * math.sin(a * 8.0 + now * 0.5) + 0.04 * math.cos(a * 15.0)
-
-        # Столбик 1 (угол ~35°)
-        if abs(a - 0.6) < 0.08:
-            r = min(r, 1.8 + 0.05 * math.sin(now))
-        # Столбик 2 (угол ~-50°)
-        if abs(a + 0.9) < 0.07:
-            r = min(r, 2.4 + 0.04 * math.cos(now * 1.2))
-        # Стеллаж сбоку (угол ~110°)
-        if 1.7 < a < 2.2:
-            r = min(r, 2.1)
-
-        # Движение робота влияет на скан
-        r += 0.06 * math.sin(now * speed * 2.0 + a * 3.0)
-        r = max(0.2, min(9.8, r))
-
-        pts.append({"a": round(a, 4), "r": round(r, 3)})
-
-    return pts
-
-
-# ============================================================================
-# Разбор потока данных лидара
-# ============================================================================
 class ScanAccumulator:
     """Собирает точки в виток и публикует его.
 
@@ -2441,16 +2401,12 @@ class LidarManager:
             self.source_type = source_label
         return len(pts)
 
-    def get_scan(
-        self, max_age: float = LIDAR_MAX_AGE_S, allow_demo: bool = False
-    ) -> Optional[list[dict[str, float]]]:
-        """Возвращает свежий скан или None (если устарел)."""
+    def get_scan(self, max_age: float = LIDAR_MAX_AGE_S) -> Optional[list[dict[str, float]]]:
+        """Возвращает свежий скан или None (если устарел). Демо-скана нет."""
         now = time.time()
         with self.lock:
             if self.scan and (now - self.scan_at) < max_age:
                 return list(self.scan)
-        if allow_demo:
-            return generate_demo_scan()
         return None
 
     def get_status(self) -> dict[str, Any]:
@@ -3081,9 +3037,8 @@ class LidarManager:
     def _peer_cycle(self) -> bool:
         """Берёт готовый скан у второго процесса робота (у него занят порт).
 
-        Демо-скан соседа за реальный не принимается: иначе стенд без лидара
-        (``RC_SLAM_SOURCE=sim``) «заражал» второй процесс выдуманными точками,
-        и оба экрана показывали бы демо под видом работающего лидара.
+        Признак ``demo`` у соседа по-прежнему учитывается (на случай старой
+        версии, которая его пишет): такой скан не принимается.
         """
         for url in self._peer_targets():
             data = _fetch_json(url)

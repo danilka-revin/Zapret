@@ -19,7 +19,6 @@ DOM, скрипт выполняется как в странице, ``fetch`` �
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -80,7 +79,7 @@ def state_payload(points: list[dict], status: dict) -> dict:
         "data": {
             "ts": 0,
             "linkOk": True,
-            "source": "sim",
+            "source": "none",
             "mode": None,
             "speedMps": 0.0,
             "powerKw": 0.08,
@@ -102,18 +101,6 @@ def state_payload(points: list[dict], status: dict) -> dict:
 def real_payload(points_count: int = 360, **status_over) -> dict:
     return state_payload(scan_points(points_count),
                          lidar_status(points_count=points_count, **status_over))
-
-
-def demo_payload(points_count: int = 180) -> dict:
-    """Демо-скан источника данных: точки есть, лидара нет."""
-    status = lidar_status(
-        connected=False, demo=True, source="no_signal", points_count=0,
-        detected=None, configured_port="/dev/ttyUSB1", pyserial="3.5",
-        reason="демо-скан источника данных (реального лидара нет): "
-               "лидар не ответил ни на одном из 2 портов",
-        hint="проверь питание и кабель лидара",
-    )
-    return state_payload(scan_points(points_count, radius=3.0), status)
 
 
 def ros_payload(points_count: int = 360, **ros_over) -> dict:
@@ -168,21 +155,16 @@ def empty_payload() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def render(screen: str, payload: dict, tmp_path: Path, *, demo: bool = False) -> dict:
+def render(screen: str, payload: dict, tmp_path: Path) -> dict:
     """Прогоняет ``slam_gui/<screen>.js`` на заготовленном ответе API.
 
-    ``demo=True`` — тот же экран с явно включённым демо-режимом (``?demo=1``):
-    только в нём панель логов имеет право рисовать выдуманные строки.
     """
     assert screen in SCREENS
     payload_file = tmp_path / ("payload_%s.json" % screen)
     payload_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    env = dict(os.environ)
-    if demo:
-        env["HARNESS_DEMO"] = "1"
     result = subprocess.run(
         [NODE, str(HARNESS), screen, str(payload_file)],
-        cwd=str(ROOT), capture_output=True, text=True, timeout=120, env=env,
+        cwd=str(ROOT), capture_output=True, text=True, timeout=120,
     )
     assert result.returncode == 0, \
         "экран %s упал:\n%s\n%s" % (screen, result.stdout, result.stderr)
@@ -304,39 +286,6 @@ def test_stale_scan_is_not_shown_as_live(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Демо-скан не выдаётся за лидар
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("screen", SCREENS)
-def test_demo_scan_is_labelled_as_demo(screen, tmp_path):
-    report = render(screen, demo_payload(), tmp_path)
-    meta = report["meta"]
-    assert "демо" in meta
-    assert "не лидар" in meta
-    assert "в реальном времени" not in meta
-    # точки демо рисуются, но причина отсутствия лидара остаётся на экране
-    assert report["emptyHidden"] is False
-    if screen == "robot":
-        # Бортовой — статичная плашка без текста ошибки (диагностика только на вебке)
-        assert report["emptyText"] == "скана лидара нет"
-    else:
-        assert "демо-скан" in report["emptyText"]
-    assert report["renderErrors"] == []
-
-
-@pytest.mark.parametrize("screen", SCREENS)
-def test_demo_flag_in_status_overrides_points(screen, tmp_path):
-    """Даже если точки пришли, ``demo`` в состоянии обязывает подписать демо."""
-    payload = state_payload(scan_points(120), lidar_status(
-        demo=True, connected=False, source="sim", points_count=120, detected=None,
-        reason="демо-скан источника данных (реального лидара нет)"))
-    report = render(screen, payload, tmp_path)
-    assert "демо" in report["meta"] and "не лидар" in report["meta"]
-    assert report["emptyHidden"] is False
-
-
-# ---------------------------------------------------------------------------
 # Скана нет
 # ---------------------------------------------------------------------------
 
@@ -432,15 +381,6 @@ def test_log_panel_does_not_invent_lines(tmp_path):
     assert report["logLines"] == [], report["logLines"]
     assert "журнал робота" in report["logStatus"]
     assert "демо" not in report["logStatus"]
-    assert report["renderErrors"] == []
-
-
-def test_demo_logs_only_when_explicitly_asked(tmp_path):
-    """Демо-строки появляются только по явному «?demo=1» и подписаны как демо."""
-    report = render("robot", real_payload(), tmp_path, demo=True)
-    assert report["logLines"], "демо-режим не показал ни одной строки"
-    assert "демо-строки включены" in report["logStatus"]
-    assert all("демо" in line["msg"] for line in report["logLines"]), report["logLines"]
     assert report["renderErrors"] == []
 
 

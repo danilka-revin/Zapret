@@ -4,7 +4,7 @@
  * Данные: GET api/state раз в 300 мс (slam_gui/backend.py).
  *   • сервер не отвечает или последний ответ старше 2 с → значения не выдумываются:
  *     показываются последние полученные, помечаются «устарели», выводится тревога;
- *   • демо-данные — только при адресе с параметром ?demo=1 (показ без робота).
+ *   • без робота значения не подставляются: экран показывает «нет данных».
  *
  * Что показывает экран:
  *   меню слева: разделы (пункты ведут к разделам экрана, «Сервис» — к пульту),
@@ -22,7 +22,6 @@
 
   /* ------------------------------------------------------------ настройки */
   const POLL_MS = 300;             // период опроса /api/state
-  const DEMO_MS = 200;             // шаг отрисовки демо-данных
   const FETCH_TIMEOUT_MS = 1500;   // дольше — запрос неудачный
   const STALE_MS = 2000;           // ответ старше — данные устарели
   const EVENTS_KEEP = 40;          // событий в памяти
@@ -36,10 +35,9 @@
   const MODULES = ['FL', 'FR', 'RL', 'RR'];
   const LEVEL_SEV = { 'НОРМА': 'ok', 'НИЗКИЙ': 'warn', 'КРИТИЧЕСКИЙ': 'err' };
   const LEVEL_WORD = { 'НОРМА': 'норма', 'НИЗКИЙ': 'низкий', 'КРИТИЧЕСКИЙ': 'критический' };
-  const SOURCE_NAME = { sim: 'симуляция', serial: 'UART ×4 · 20 Гц', ros: 'ROS 2', demo: 'демо-данные', master: 'мастер · UART', none: 'робот не подключён' };
+  const SOURCE_NAME = { serial: 'UART ×4 · 20 Гц', ros: 'ROS 2', master: 'мастер · UART', none: 'робот не подключён' };
 
   const params = new URLSearchParams(window.location.search);
-  const DEMO = params.get('demo') === '1';
   const SESSION_TOKEN = params.get('st');   // сессия без cookie (как в slam_auth.js)
 
   /* ------------------------------------------------------------ помощники */
@@ -103,51 +101,6 @@
 
   const isProblem = (s) => s.sev === 'warn' || s.sev === 'err';
 
-  /* ------------------------------------------------------ демо (?demo=1) */
-
-  function demoData(nowMs) {
-    const t = nowMs / 1000;
-    const speed = 0.55 + 0.45 * Math.sin(t / 9);                       // условная скорость
-    const motors = MODULES.map((id, i) => {
-      const rpm = speed * 260 + Math.sin(t * 2 + i) * 3;
-      return {
-        id,
-        angle: Math.sin(t / (2.6 + i * 0.4)) * 34,
-        rpm,
-        temp: 34 + Math.abs(rpm) / 40 + Math.sin(t / 5 + i) * 1.4,
-        homed: true,
-        online: true,
-        fault: false,
-      };
-    });
-    const soc = 55 + 25 * Math.sin(t / 120);                           // медленный цикл заряда
-    const amps = 6 + 12 * Math.abs(Math.sin(t / 9));
-    const volts = 30 + (soc / 100) * 13.8 - amps * 0.075;
-    const capacityWh = 714;
-    const battery = {
-      soc: round1(soc),
-      volts: round2(volts),
-      amps: round2(amps),
-      watts: Math.round(volts * amps),
-      remainingWh: Math.round(capacityWh * soc / 100),
-      rangeKm: round1(capacityWh * soc / 100 / 32),
-      state: amps > 0.2 ? 'разряд' : 'покой',
-      level: volts >= DEFAULT_LOW_V ? 'НОРМА' : volts >= DEFAULT_CRIT_V ? 'НИЗКИЙ' : 'КРИТИЧЕСКИЙ',
-      tempC: 28,
-      thresholds: { lowV: DEFAULT_LOW_V, criticalV: DEFAULT_CRIT_V },
-    };
-    return {
-      source: 'demo',
-      mode: 'АВТОНОМНЫЙ РЕЖИМ',
-      route: 'склад → зона выгрузки',
-      motors,
-      battery,
-      powerKw: round2(battery.watts / 1000),
-      speedMps: round2(speed),
-      linkOk: true,
-    };
-  }
-
   /* ----------------------------------------------------- источник данных */
 
   const link = { data: null, at: 0, error: '' };   // последний удачный ответ
@@ -171,13 +124,9 @@
   }
 
   function currentView(nowMs) {
-    if (DEMO) {
-      return { demo: true, hasData: true, live: true, source: 'demo', data: demoData(nowMs) };
-    }
     const hasData = link.data !== null;
     const live = hasData && nowMs - link.at < STALE_MS;
     return {
-      demo: false,
       hasData,
       live,
       source: live ? String(link.data.source || '—') : null,
@@ -309,8 +258,7 @@
     const chip = $('data-chip');
     let text = 'ожидание сервера';
     let tone = '';
-    if (view.demo) { text = 'демо-данные'; tone = 'warn'; }
-    else if (view.live) {
+    if (view.live) {
       text = 'сервер · ' + (SOURCE_NAME[view.source] || view.source);
       tone = view.source === 'none' ? 'warn' : 'ok';
     }
@@ -467,17 +415,9 @@
     return d.lidar.filter((p) => p && Number.isFinite(p.a) && Number.isFinite(p.r) && p.r >= 0);
   }
 
-  // Сервер помечает выдуманный скан (стенд без железа, RC_SLAM_SOURCE=sim):
-  // такие точки обязаны показываться как демо, а не «в реальном времени».
-  function lidarIsDemo(d) {
-    if (d && d.lidarDemo === true) return true;
-    const st = d && d.lidarStatus;
-    return !!(st && st.demo === true);
-  }
-
   // Откуда реально идёт скан: ROS 2 или USB-порт (порт, протокол и скорость из
   // GET /api/lidar). На роботе по этой подписи видно, что читается именно лидар,
-  // а не демо, и каким драйвером.
+  // и каким драйвером.
   function lidarSourceText(d) {
     const st = d && d.lidarStatus;
     if (!st) return '';
@@ -499,27 +439,6 @@
     if (det.baud) parts.push(det.baud + ' бод');
     if (st.source === 'peer') parts.push('скан от второго процесса');
     return parts.join(' · ');
-  }
-
-  function demoLidar() {
-    const pts = [];
-    const t = Date.now() / 1000;
-    const speed = 0.7;
-    for (let i = 0; i < 180; i++) {
-      const a = (i / 180) * Math.PI * 2 - Math.PI;
-      const cosA = Math.cos(a);
-      const sinA = Math.sin(a);
-      const rx = Math.abs(cosA) > 1e-4 ? Math.abs(3.5 / cosA) : 12;
-      const ry = Math.abs(sinA) > 1e-4 ? Math.abs(2.5 / sinA) : 12;
-      let r = Math.min(rx, ry);
-      if (Math.abs(a - 0.6) < 0.08) r = 1.8 + Math.sin(t) * 0.1;
-      if (Math.abs(a + 0.9) < 0.07) r = 2.4;
-      r += Math.sin(t * speed + a * 3) * 0.1;
-      if (r < 0.4) r = 0.4;
-      if (r > 9.8) r = 9.8;
-      pts.push({ a, r });
-    }
-    return pts;
   }
 
   // Почему скана нет: сервер отдаёт причину (порт лидара не найден, не та
@@ -550,30 +469,21 @@
   function renderLidar(view, d) {
     const canvas = $('lidar-canvas');
     if (!canvas) return;
-    let pts = lidarPoints(d);
-    let isDemo = lidarIsDemo(d);
-    if (!pts.length && DEMO) {
-      pts = demoLidar();
-      isDemo = true;
-    }
+    const pts = lidarPoints(d);
     const has = pts.length > 0;
     const near = has ? Math.min(...pts.map((p) => p.r)) : null;
-    const reason = has && !isDemo ? '' : lidarReason(d);
-    const source = has && !isDemo ? lidarSourceText(d) : '';
+    const reason = has ? '' : lidarReason(d);
+    const source = has ? lidarSourceText(d) : '';
 
     setText($('lidar-meta'), has
-      ? (isDemo
-        ? 'демо · ' + pts.length + ' точек (не лидар)'
-        : 'в реальном времени · ' + pts.length + ' точек' + (source ? ' · ' + source : ''))
+      ? 'в реальном времени · ' + pts.length + ' точек' + (source ? ' · ' + source : '')
       : (reason ? 'лидар: нет данных' : 'нет скана'));
     setText($('lidar-count'), has ? String(pts.length) : '—');
     setText($('lidar-near'), near === null ? '—' : fmt(near, 2) + ' м');
     const empty = $('lidar-empty');
     if (empty) {
-      // Демо-скан не скрывает причину: на стенде без железа оператор должен
-      // видеть, что реального лидара нет, а не думать, что он работает.
-      empty.hidden = has && !isDemo;
-      if (!(has && !isDemo)) {
+      empty.hidden = has;
+      if (!has) {
         setText(empty, reason ? 'скана лидара нет · ' + reason : 'скана лидара нет');
       }
       empty.title = reason;
@@ -748,59 +658,6 @@
     }
   }
 
-  function drawDemoCamera(ctx, cw, ch, d, isRear) {
-    const t = Date.now() / 1000;
-    const speed = typeof d.speedMps === 'number' ? Math.max(0, d.speedMps) : 0.5;
-    const rawOff = (t * speed * 40) % 40;
-    const offset = isRear ? (40 - rawOff) % 40 : rawOff;
-
-    const sky = ctx.createLinearGradient(0, 0, 0, ch * 0.48);
-    sky.addColorStop(0, '#0f1f1a');
-    sky.addColorStop(1, '#152a22');
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, cw, ch * 0.48);
-
-    ctx.fillStyle = '#1b2f27';
-    ctx.fillRect(0, ch * 0.48 - 1, cw, 2);
-
-    ctx.fillStyle = '#111c17';
-    ctx.beginPath();
-    ctx.moveTo(cw * 0.5 - 12, ch * 0.48);
-    ctx.lineTo(cw * 0.5 + 12, ch * 0.48);
-    ctx.lineTo(cw, ch);
-    ctx.lineTo(0, ch);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.strokeStyle = '#2b4037';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(cw * 0.5 - 12, ch * 0.48); ctx.lineTo(0, ch);
-    ctx.moveTo(cw * 0.5 + 12, ch * 0.48); ctx.lineTo(cw, ch);
-    ctx.stroke();
-
-    ctx.strokeStyle = 'rgba(255,255,255,.9)';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([14, 14]);
-    ctx.lineDashOffset = -offset * 2;
-    ctx.beginPath();
-    ctx.moveTo(cw * 0.5, ch * 0.48);
-    ctx.lineTo(cw * 0.5, ch);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    ctx.fillStyle = 'rgba(0,0,0,.38)';
-    ctx.fillRect(0, ch - 18, cw, 18);
-    ctx.fillStyle = '#9fe36b';
-    ctx.font = '700 10px Inter, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(isRear ? 'CAM 1 · задняя' : 'CAM 0 · передняя', 8, ch - 6);
-    ctx.textAlign = 'right';
-    ctx.fillStyle = '#dbe7e1';
-    ctx.font = '10px ui-monospace, monospace';
-    ctx.fillText(speed.toFixed(2) + ' м/с · ' + new Date().toLocaleTimeString('ru-RU', { hour12: false }), cw - 8, ch - 6);
-  }
-
   function renderCamera(view, d) {
     const meta = $('cam-meta');
     const front = $('cam-canvas');
@@ -812,17 +669,16 @@
                      (WEBCAM.backendFront && WEBCAM.backendFront.naturalWidth > 0);
     const hasLiveR = (WEBCAM.rearReady && WEBCAM.rearVideo && WEBCAM.rearVideo.videoWidth > 0) ||
                      (WEBCAM.backendRear && WEBCAM.backendRear.naturalWidth > 0);
-    const hasLive = hasLiveF || hasLiveR || DEMO;
+    const hasLive = hasLiveF || hasLiveR;
 
     if (meta) {
       if (hasLiveF && hasLiveR) setText(meta, '2× LIVE · 30 fps');
       else if (hasLiveF) setText(meta, 'CAM 0 · LIVE · 30 fps');
-      else if (DEMO) setText(meta, 'демо · 30 fps');
       else setText(meta, 'нет сигнала');
     }
 
-    if (emptyF) emptyF.hidden = hasLiveF || DEMO;
-    if (emptyR) emptyR.hidden = hasLiveR || DEMO;
+    if (emptyF) emptyF.hidden = hasLiveF;
+    if (emptyR) emptyR.hidden = hasLiveR;
 
     if (front) drawCamera(front, d, hasLiveF, false);
     if (rear) drawCamera(rear, d, hasLiveR, true);
@@ -884,11 +740,6 @@
       const vw = videoSource.videoWidth || videoSource.naturalWidth || 640;
       const vh = videoSource.videoHeight || videoSource.naturalHeight || 360;
       ctx.fillText(`${vw}×${vh} · LIVE`, cw - 8, ch - 5);
-      return;
-    }
-
-    if (DEMO) {
-      drawDemoCamera(ctx, cw, ch, d, isRear);
       return;
     }
 
@@ -955,12 +806,12 @@
 
   async function loop() {
     try {
-      if (!DEMO) await poll();
+      await poll();
       render();
     } catch (err) {
       console.error('RUS SLAM main:', err);
     } finally {
-      setTimeout(loop, DEMO ? DEMO_MS : POLL_MS);
+      setTimeout(loop, POLL_MS);
     }
   }
 
