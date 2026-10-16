@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import socket
 import stat
 import sys
@@ -21,10 +22,13 @@ from pathlib import Path
 import pytest
 from werkzeug.serving import make_server
 
+from robot_control import kiosk_app as kiosk_module
 from robot_control.config import Config
 from robot_control.kiosk_app import (
     DEFAULT_PORT,
     PROFILE_DIR_NAME,
+    _install_stop_signals,
+    _probe_hosts,
     _reopen_delay,
     browser_command,
     create_kiosk_app,
@@ -794,6 +798,258 @@ def test_screen_is_not_opened_twice(config, long_lived_browser, monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+# ------------------- остановка сервера гасит экран на мониторе --------------- #
+@pytest.fixture
+def fast_server_checks(monkeypatch):
+    """Проверки «жив ли сервер» чаще и короче: тест не ждёт боевые 15 секунд."""
+    monkeypatch.setattr(kiosk_module, "SERVER_CHECK_SEC", 0.1)
+    monkeypatch.setattr(kiosk_module, "SERVER_GONE_SEC", 0.5)
+
+
+@pytest.fixture
+def window_browser(tmp_path: Path) -> Path:
+    """«Браузер», который держит окно открытым и пишет свой pid (как настоящее окно)."""
+    script = tmp_path / "window-browser.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'echo "$@" >> "{tmp_path / "opened.txt"}"\n'
+        f'echo $$ > "{tmp_path / "browser.pid"}"\n'
+        "exec sleep 60\n",  # exec: TERM убивает и «окно», и его сон
+        encoding="utf-8",
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return script
+
+
+def _start_kiosk_server(config: Config):
+    """Настоящий сервер киоска на случайном порту + поток обслуживания."""
+    server = make_server("127.0.0.1", 0, create_kiosk_app(config), threaded=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def _stop_kiosk_server(server, thread) -> None:
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=5)
+
+
+def _browser_pid(tmp_path: Path) -> int:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        pid_file = tmp_path / "browser.pid"
+        if pid_file.exists():
+            try:
+                return int(pid_file.read_text(encoding="utf-8").strip())
+            except ValueError:
+                pass
+        time.sleep(0.05)
+    raise AssertionError("окно киоска так и не открылось")
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # pragma: no cover - чужой процесс
+        return True
+    return True
+
+
+def _wait_dead(pid: int, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _process_alive(pid):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_screen_watchdog_gives_up_when_server_is_stopped(
+        config, fake_browser, monkeypatch, fast_server_checks):
+    """Баг «монитор запускается снова и снова»: сервер остановлен — показ должен
+    прекратиться, а не переоткрывать окно вечно.
+
+    Именно так робот и жил раньше: ``./scripts/stop.sh`` (или кнопка «Остановить
+    всё», или ``systemctl stop robot-kiosk``) гасила сервер и окно, а сторож
+    экрана в отдельном процессе продолжал открывать браузер заново — уже на
+    остановленном роботе и на мёртвый адрес.
+    """
+    monkeypatch.setenv("RC_KIOSK_BROWSER", str(fake_browser))
+    server, thread = _start_kiosk_server(config)
+    port = server.server_port
+    marker = fake_browser.parent / "opened.txt"
+    stop = threading.Event()
+    display = None
+    try:
+        display = open_kiosk_screen(port, watch=True, stop_event=stop)
+        assert display is not None
+        assert _wait_for(marker, 1), "экран не открылся при живом сервере"
+
+        _stop_kiosk_server(server, thread)
+        server = None
+
+        display.join(timeout=15)
+        assert not display.is_alive(), "сторож экрана не остановился вместе с сервером"
+        assert display_claimed(port) is False, "замок показа не отпущен"
+
+        opened = len(_wait_for(marker, 1))
+        time.sleep(1.5)  # раньше за это время окно открывалось ещё раз-другой
+        assert len(_wait_for(marker, 1)) == opened, \
+            "экран открылся заново уже после остановки сервера"
+    finally:
+        stop.set()
+        if display is not None:
+            display.join(timeout=10)
+        if server is not None:
+            _stop_kiosk_server(server, thread)
+
+
+def test_screen_window_is_closed_when_server_is_stopped(
+        config, window_browser, monkeypatch, fast_server_checks):
+    """Окно на мониторе гаснет вместе с сервером, а не висит на мёртвом адресе."""
+    monkeypatch.setenv("RC_KIOSK_BROWSER", str(window_browser))
+    tmp_path = window_browser.parent
+    server, thread = _start_kiosk_server(config)
+    port = server.server_port
+    stop = threading.Event()
+    display = None
+    browser_pid = 0
+    try:
+        display = open_kiosk_screen(port, watch=True, stop_event=stop)
+        assert display is not None
+        browser_pid = _browser_pid(tmp_path)
+        assert _process_alive(browser_pid), "окно киоска не открыто"
+
+        _stop_kiosk_server(server, thread)
+        server = None
+
+        assert _wait_dead(browser_pid), "окно киоска осталось на мониторе"
+        display.join(timeout=10)
+        assert not display.is_alive()
+        assert display_claimed(port) is False
+    finally:
+        stop.set()
+        if display is not None:
+            display.join(timeout=10)
+        if browser_pid and _process_alive(browser_pid):
+            os.kill(browser_pid, signal.SIGKILL)
+        if server is not None:
+            _stop_kiosk_server(server, thread)
+
+
+def test_screen_survives_short_server_restart(
+        config, window_browser, monkeypatch):
+    """Перезапуск сервера (обновление, ``systemctl restart``) экран не гасит.
+
+    Сокет на пару секунд освобождается, и без запаса терпения сторож решил бы,
+    что робот остановлен, — монитор гас среди работы.
+    """
+    monkeypatch.setenv("RC_KIOSK_BROWSER", str(window_browser))
+    monkeypatch.setattr(kiosk_module, "SERVER_CHECK_SEC", 0.1)
+    monkeypatch.setattr(kiosk_module, "SERVER_GONE_SEC", 5.0)
+    tmp_path = window_browser.parent
+    server, thread = _start_kiosk_server(config)
+    port = server.server_port
+    stop = threading.Event()
+    display = None
+    browser_pid = 0
+    try:
+        display = open_kiosk_screen(port, watch=True, stop_event=stop)
+        assert display is not None
+        browser_pid = _browser_pid(tmp_path)
+
+        _stop_kiosk_server(server, thread)          # «сервер перезапускается»
+        time.sleep(0.8)                             # порт свободен меньше запаса
+        server, thread = _start_kiosk_server_on(port, config)
+
+        time.sleep(1.5)
+        assert _process_alive(browser_pid), "экран погас при перезапуске сервера"
+        assert display.is_alive(), "сторож экрана вышел при перезапуске сервера"
+        assert display_claimed(port) is True
+    finally:
+        stop.set()
+        if display is not None:
+            display.join(timeout=10)
+        if browser_pid and _process_alive(browser_pid):
+            os.kill(browser_pid, signal.SIGKILL)
+        if server is not None:
+            _stop_kiosk_server(server, thread)
+
+
+def _start_kiosk_server_on(port: int, config: Config):
+    """Тот же сервер, но на уже известном порту (имитация возвращения после restart)."""
+    server = make_server("127.0.0.1", port, create_kiosk_app(config), threaded=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def test_screen_is_not_opened_without_a_server_at_all(
+        config, fake_browser, monkeypatch, fast_server_checks):
+    """Сервера нет вовсе — окно не открывается: нечего показывать."""
+    monkeypatch.setenv("RC_KIOSK_BROWSER", str(fake_browser))
+    with socket.socket() as sock:          # заведомо свободный порт
+        sock.bind(("127.0.0.1", 0))
+        free = sock.getsockname()[1]
+    marker = fake_browser.parent / "opened.txt"
+    stop = threading.Event()
+    display = None
+    try:
+        # HEALTH_TIMEOUT_SEC — значение по умолчанию аргумента, его не подменить;
+        # поэтому stub-ом делаем саму проверку «сервер ответил».
+        monkeypatch.setattr(kiosk_module, "wait_for_server",
+                            lambda _base_url, timeout=0.3: False)
+        display = open_kiosk_screen(free, watch=True, stop_event=stop)
+        assert display is not None
+        display.join(timeout=10)
+        assert not display.is_alive()
+        assert not marker.exists(), "браузер открылся на мёртвый адрес"
+        assert display_claimed(free) is False
+    finally:
+        stop.set()
+        if display is not None:
+            display.join(timeout=10)
+
+
+def test_probe_hosts_cover_explicit_bind_address():
+    """Сервер на конкретном адресе виден сторожу, а не только 127.0.0.1."""
+    assert _probe_hosts(None) == ("127.0.0.1",)
+    assert _probe_hosts("0.0.0.0") == ("127.0.0.1",)
+    assert _probe_hosts("::") == ("127.0.0.1",)
+    assert _probe_hosts("192.168.4.1") == ("127.0.0.1", "192.168.4.1")
+
+
+def test_stop_signals_close_the_screen_instead_of_dying(monkeypatch):
+    """SIGTERM/SIGINT: окно закрывается, а процесс не обрывается мгновенно.
+
+    ``kill`` из ``./scripts/stop.sh`` и Ctrl+C в ярлыке «Запустить робот»
+    раньше просто убивали процесс — окно киоска оставалось на мониторе.
+    """
+    stop = threading.Event()
+    shutdowns: list[bool] = []
+
+    class FakeServer:
+        def shutdown(self) -> None:
+            shutdowns.append(True)
+
+    saved = {name: signal.getsignal(getattr(signal, name))
+             for name in ("SIGINT", "SIGTERM")}
+    try:
+        _install_stop_signals(stop, FakeServer())
+        os.kill(os.getpid(), signal.SIGTERM)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not (stop.is_set() and shutdowns):
+            time.sleep(0.02)
+        assert stop.is_set(), "сигнал не остановил показ экрана"
+        assert shutdowns == [True], "сигнал не остановил сервер киоска"
+    finally:
+        for name, handler in saved.items():
+            signal.signal(getattr(signal, name), handler)
 
 
 # ----------------------------------- запуск ---------------------------------- #

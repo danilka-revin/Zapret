@@ -12,7 +12,9 @@
 командой — ``./run_kiosk.py`` или ``./scripts/kiosk.sh``: сервер поднимается на
 8090 и сам открывает экран в браузере в киоск-режиме (без рамок, на весь
 экран). Если браузер закрыли — экран открывается заново, чтобы на дисплее
-робота всегда была телеметрия.
+робота всегда была телеметрия. Сторож экрана живёт только пока жив сервер
+киоска: сервер остановили (``./scripts/stop.sh``, кнопка «Остановить всё»,
+``systemctl stop robot-kiosk``) — окно закрывается и больше не открывается.
 
 Экран при этом открывается строго в одном экземпляре, сколько бы раз ни
 запустили команду (автозапуск рабочего стола, ярлык, вручную): повторный
@@ -35,6 +37,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -141,10 +144,18 @@ BROWSER_REOPEN_SEC = 2.0
 BROWSER_QUICK_EXIT_SEC = 10.0
 #: Верхняя граница растущей паузы между быстрыми перезапусками браузера.
 BROWSER_REOPEN_MAX_SEC = 30.0
+#: Сколько ждать закрытия окна киоска, прежде чем добить его SIGKILL.
+BROWSER_CLOSE_TIMEOUT_SEC = 3.0
 #: Сколько ждать освобождения замка экрана, прежде чем решить, что окно киоска
 #: уже открыто другим запуском (небольшая пауза — на случай смены владельца:
 #: старый показ как раз завершается, когда стартует новый).
 DISPLAY_CLAIM_TIMEOUT_SEC = 3.0
+#: Как часто сторож экрана проверяет, жив ли сервер киоска, пока окно открыто.
+SERVER_CHECK_SEC = 2.0
+#: Сколько сервер экрана может не слушать порт, прежде чем показ прекращается.
+#: Запас нужен на перезапуск: обновление (``SIGHUP`` → ``os.execv``) рвёт сокет
+#: на пару секунд, и это не остановка — гасить экран в этот момент нельзя.
+SERVER_GONE_SEC = 15.0
 
 
 # ---------------------------------------------------------------- окружение --- #
@@ -1005,6 +1016,78 @@ def display_claimed(port: int | None = None) -> bool:
     return False
 
 
+def _probe_hosts(host: str | None) -> tuple[str, ...]:
+    """Куда стучаться сторожу экрана, чтобы узнать, жив ли сервер киоска.
+
+    Сервер может слушать как все адреса (``0.0.0.0``), так и один конкретный
+    (``RC_BIND_HOST=192.168.4.1``): во втором случае проверка только
+    ``127.0.0.1`` решила бы, что сервер остановлен, и погасила бы экран.
+    """
+    hosts = ["127.0.0.1"]
+    if host and host not in {"0.0.0.0", "::", "localhost", "127.0.0.1"}:
+        hosts.append(host)
+    return tuple(hosts)
+
+
+def _server_listening(port: int, hosts: Sequence[str] = ("127.0.0.1",)) -> bool:
+    """Слушает ли сервер экрана порт прямо сейчас (дешёвая проверка сторожа)."""
+    return any(port_in_use(port, host) for host in hosts)
+
+
+def _wait_for_kiosk_port(port: int, hosts: Sequence[str], timeout: float,
+                         stop_event: threading.Event) -> bool:
+    """Ждёт, пока порт экрана снова начнёт слушаться; False — остановка показа.
+
+    Проверка нужна перед каждым открытием окна: экран показывает данные сервера
+    киоска, и без сервера показывать нечего. Пауза (``SERVER_GONE_SEC``) — на
+    перезапуск обновления: сокет в это время свободен, но робот не остановлен.
+    """
+    deadline = time.monotonic() + max(0.0, timeout)
+    while not stop_event.is_set():
+        if _server_listening(port, hosts):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        stop_event.wait(0.25)
+    return False
+
+
+class _ServerWatch:
+    """Следит, жив ли сервер киоска, пока окно экрана открыто.
+
+    Одна проверка порта врёт на перезапуске (обновление поднимает
+    ``run_kiosk.py`` заново за секунду-две), поэтому «сервер остановлен» — это
+    ``SERVER_GONE_SEC`` без слушателя подряд. Как только остановка подтверждена,
+    показ прекращается: окно закрывается и больше не открывается. Иначе сторож
+    продолжал бы возвращать экран на монитор уже после остановки всего робота.
+    """
+
+    def __init__(self, port: int, hosts: Sequence[str] = ("127.0.0.1",)) -> None:
+        self.port = port
+        self.hosts = tuple(hosts)
+        self._due = time.monotonic() + SERVER_CHECK_SEC
+        self._gone_since: float | None = None
+
+    def stopped(self) -> bool:
+        """True, если сервер экрана не слушает порт уже ``SERVER_GONE_SEC``."""
+        now = time.monotonic()
+        if now < self._due:
+            return False
+        self._due = now + SERVER_CHECK_SEC
+        if _server_listening(self.port, self.hosts):
+            if self._gone_since is not None:
+                log.info("сервер экрана (порт %s) снова отвечает — показ продолжается",
+                         self.port)
+            self._gone_since = None
+            return False
+        if self._gone_since is None:
+            self._gone_since = now
+            log.info("сервер экрана (порт %s) не отвечает — жду %.0f с: остановка "
+                     "или перезапуск", self.port, SERVER_GONE_SEC)
+            return False
+        return now - self._gone_since >= SERVER_GONE_SEC
+
+
 def _reopen_delay(quick_exits: int) -> float:
     """Пауза перед переоткрытием: растёт, если браузер выходит почти сразу."""
     if quick_exits <= 1:
@@ -1012,15 +1095,52 @@ def _reopen_delay(quick_exits: int) -> float:
     return min(BROWSER_REOPEN_SEC * 2 ** (quick_exits - 1), BROWSER_REOPEN_MAX_SEC)
 
 
-def _display_worker(url: str, base_url: str, watch: bool,
-                    stop_event: threading.Event, claim: _DisplayClaim) -> None:
-    """Открывает экран в браузере и, если ``watch``, держит его открытым."""
+def _close_window(proc: "subprocess.Popen[bytes]",
+                  timeout: float = BROWSER_CLOSE_TIMEOUT_SEC) -> None:
+    """Закрывает окно киоск-браузера и дожидается его.
+
+    Дождаться нужно по двум причинам: без ``wait`` закрытый браузер остаётся
+    зомби в таблице процессов, а упорное окно (snap-обёртка не всегда умирает
+    от SIGTERM) продолжало бы светить на мониторе уже после остановки робота.
+    """
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    log.warning("окно киоска не закрылось за %.0f с — завершаю принудительно", timeout)
+    proc.kill()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:  # pragma: no cover - ядро держит процесс
+        log.error("окно киоска не закрывается даже по SIGKILL (pid %s)", proc.pid)
+
+
+def _display_worker(port: int, url: str, base_url: str, watch: bool,
+                    stop_event: threading.Event, claim: _DisplayClaim,
+                    hosts: Sequence[str] = ("127.0.0.1",)) -> None:
+    """Открывает экран в браузере и, если ``watch``, держит его открытым.
+
+    Показ живёт только пока жив сервер киоска: сервер остановили (служба
+    ``robot-kiosk``, ``./scripts/stop.sh``, кнопка «Остановить всё» или Ctrl+C
+    в ярлыке «Запустить робот») — окно закрывается и заново не открывается.
+    Без этой проверки сторож переоткрывал экран вечно, и «остановленный» робот
+    продолжал светить монитором.
+    """
     try:
         if not wait_for_server(base_url):
             log.warning("сервер не ответил за %.0f с — открываю %s как есть",
                         HEALTH_TIMEOUT_SEC, url)
         quick_exits = 0
         while not stop_event.is_set():
+            # Нет сервера — нет и данных для экрана: окно не открываем вовсе.
+            if not _wait_for_kiosk_port(port, hosts, SERVER_GONE_SEC, stop_event):
+                log.info("сервер экрана (порт %s) остановлен — показ прекращён, "
+                         "экран больше не открывается", port)
+                return
             browser = find_browser()
             if browser is None:
                 log.warning(
@@ -1044,29 +1164,42 @@ def _display_worker(url: str, base_url: str, watch: bool,
                 "экран робота открыт в браузере (%s), профиль %s: %s",
                 os.path.basename(browser), profile, url,
             )
+            server_watch = _ServerWatch(port, hosts)
             if not watch:
                 # Не переоткрываем, но замок показа держим, пока окно живо:
                 # иначе следующий запуск решит, что экран никто не показывает.
                 while not stop_event.wait(0.5):
                     if proc.poll() is not None:
                         return
-                if proc.poll() is None:
-                    proc.terminate()
+                    if server_watch.stopped():
+                        _close_window(proc)
+                        log.info("сервер экрана (порт %s) остановлен — окно закрыто",
+                                 port)
+                        return
+                _close_window(proc)
                 return
             # Ждём закрытия браузера и открываем заново: экран всегда на месте.
             # Но если процесс вышел почти сразу, это не «окно закрыли», а
             # лаунчер передал адрес другой копии/браузер упал: паузу между
             # попытками увеличиваем, чтобы не плодить окна очередями.
             started = time.monotonic()
+            server_stopped = False
             try:
                 while not stop_event.wait(0.5):
                     if proc.poll() is not None:
                         break
+                    if server_watch.stopped():
+                        server_stopped = True
+                        break
                 else:
                     return
             finally:
-                if stop_event.is_set() and proc.poll() is None:
-                    proc.terminate()  # показ остановлен — своё окно закрываем
+                if stop_event.is_set() or server_stopped:
+                    _close_window(proc)  # показ остановлен — своё окно закрываем
+            if server_stopped:
+                log.info("сервер экрана (порт %s) остановлен — окно закрыто, "
+                         "показ прекращён", port)
+                return
             lived = time.monotonic() - started
             quick_exits = quick_exits + 1 if lived < BROWSER_QUICK_EXIT_SEC else 0
             delay = _reopen_delay(quick_exits)
@@ -1078,11 +1211,13 @@ def _display_worker(url: str, base_url: str, watch: bool,
 
 
 def open_kiosk_screen(port: int | None = None, *, watch: bool = True,
-                      stop_event: threading.Event | None = None) -> threading.Thread | None:
+                      stop_event: threading.Event | None = None,
+                      host: str | None = None) -> threading.Thread | None:
     """Открыть бортовой экран в отдельном потоке (сервер не блокируется).
 
     Возвращает поток показа или None, если экран этого порта уже открыт
     (этим или другим запуском киоска): второй браузер не запускается никогда.
+    Поток завершается сам, когда сервер экрана остановлен.
     """
     port = port or kiosk_port()
     claim = _claim_display(port)
@@ -1093,7 +1228,8 @@ def open_kiosk_screen(port: int | None = None, *, watch: bool = True,
     base_url = f"http://127.0.0.1:{port}"
     thread = threading.Thread(
         target=_display_worker,
-        args=(kiosk_url(port), base_url, watch, stop_event or threading.Event(), claim),
+        args=(port, kiosk_url(port), base_url, watch,
+              stop_event or threading.Event(), claim, _probe_hosts(host)),
         name="kiosk-display",
         daemon=True,
     )
@@ -1124,6 +1260,63 @@ def _remove_pid_file() -> None:
         _pid_file().unlink()
     except OSError:
         pass
+
+
+def _display_pid_file(port: int) -> Path:
+    """Pid-файл сторожа экрана (рядом с замком показа ``kiosk-display-*.lock``).
+
+    Нужен, когда сервер киоска поднимает не этот процесс (служба
+    ``robot-kiosk`` или прошлый запуск): тогда ``var/kiosk.pid`` принадлежит
+    серверу, а процесс, который держит окно на мониторе, ``./scripts/stop.sh``
+    раньше не видел вовсе — и сторож переоткрывал экран уже после остановки.
+    """
+    return PROJECT_ROOT / "var" / f"kiosk-display-{port}.pid"
+
+
+def _write_display_pid_file(port: int) -> None:
+    try:
+        path = _display_pid_file(port)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    except OSError as exc:  # не критично: файл нужен только для stop.sh
+        log.debug("не удалось записать %s: %s", path, exc)
+
+
+def _remove_display_pid_file(port: int) -> None:
+    try:
+        _display_pid_file(port).unlink()
+    except OSError:
+        pass
+
+
+def _install_stop_signals(stop_event: threading.Event, server) -> None:
+    """SIGTERM/SIGINT: сначала закрыть окно и сервер, и только потом выйти.
+
+    Без обработчика ``kill`` из ``./scripts/stop.sh`` (или Ctrl+C в ярлыке
+    «Запустить робот») обрывал процесс мгновенно: окно киоска оставалось на
+    мониторе сиротой, а сторож экрана не успевал его закрыть.
+
+    Обработчик намеренно ничего не логирует: сигнал приходит в главный поток
+    между байткодами, и журналирование из него могло бы deadlock-нуть процесс,
+    если сигнал застал его внутри другого вызова logging.
+    """
+
+    def handler(_signum, _frame):
+        stop_event.set()
+        if server is not None:
+            # shutdown() блокируется до выхода serve_forever(), а тот работает в
+            # этом же потоке: из обработчика сигнала зовём его отдельным потоком.
+            threading.Thread(target=server.shutdown, daemon=True,
+                             name="kiosk-shutdown").start()
+
+    for name in ("SIGINT", "SIGTERM"):
+        signum = getattr(signal, name, None)
+        if signum is None:  # pragma: no cover - не-POSIX платформы
+            continue
+        try:
+            signal.signal(signum, handler)
+        except (ValueError, OSError, RuntimeError):  # не главный поток
+            pass
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -1194,30 +1387,48 @@ def main(argv: Sequence[str] | None = None) -> int:
             log.error("не удалось занять порт %s: %s", port, exc)
             return 1
 
+    # Остановка по сигналу (Ctrl+C, kill из ./scripts/stop.sh или от ярлыка
+    # «Запустить робот»): сначала взводим stop_event — сторож экрана закрывает
+    # окно киоска, — и только потом выходит процесс. Без этого окно оставалось
+    # на мониторе сиротой.
+    _install_stop_signals(stop_event, server)
+
     if server is None:
         # Порт уже занят: экран отдаёт кто-то другой (служба robot-kiosk или
         # прошлый запуск). Наша задача — просто показать его на дисплее.
         print(f"Экран робота: {url} (сервер уже запущен отдельно)")
         if not open_screen:
             return 0
-        display = open_kiosk_screen(port, watch=watch, stop_event=stop_event)
-        if display is None:
-            # Экран уже на дисплее (автозапуск/прошлый запуск его держит).
-            # Мы — лишний дублирующий запуск: не висим и окна не плодим.
-            print("Экран уже открыт другим запуском — выхожу, чтобы не дублировать окно.")
-            return 0
+        # Свой pid-файл: сервер этому процессу не принадлежит, var/kiosk.pid
+        # записан не им, и ./scripts/stop.sh сторожа экрана раньше не видел —
+        # тот переживал остановку и открывал окно на мониторе снова и снова.
+        _write_display_pid_file(port)
         try:
-            while display.is_alive():
-                display.join(timeout=0.5)
-        except KeyboardInterrupt:
-            pass
-        stop_event.set()
-        return 0
+            display = open_kiosk_screen(port, watch=watch, stop_event=stop_event,
+                                        host=host)
+            if display is None:
+                # Экран уже на дисплее (автозапуск/прошлый запуск его держит).
+                # Мы — лишний дублирующий запуск: не висим и окна не плодим.
+                print("Экран уже открыт другим запуском — выхожу, чтобы не дублировать окно.")
+                return 0
+            try:
+                while display.is_alive():
+                    display.join(timeout=0.5)
+            except KeyboardInterrupt:
+                pass
+            stop_event.set()
+            display.join(timeout=BROWSER_REOPEN_SEC + 1.0)
+            log.info("показ экрана остановлен")
+            return 0
+        finally:
+            _remove_display_pid_file(port)
 
+    display = None
     if open_screen:
         # None (экран уже открыт) — не беда: сервер всё равно должен работать,
         # а открытое окно показывает именно этот адрес.
-        open_kiosk_screen(port, watch=watch, stop_event=stop_event)
+        display = open_kiosk_screen(port, watch=watch, stop_event=stop_event,
+                                    host=host)
 
     _write_pid_file()
     log.info("экран робота (киоск) слушает http://%s:%s/ · источник: %s",
@@ -1230,6 +1441,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         log.info("остановлено")
     finally:
         stop_event.set()
+        if display is not None:
+            # Поток показа — демон: не дождавшись его, процесс вышел бы раньше,
+            # чем окно киоска закрылось, и экран остался бы на мониторе.
+            display.join(timeout=BROWSER_CLOSE_TIMEOUT_SEC * 2 + 2.0)
         server.server_close()
         _remove_pid_file()
     return 0

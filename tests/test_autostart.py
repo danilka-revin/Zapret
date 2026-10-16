@@ -266,6 +266,31 @@ def test_stop_sh_stops_servers_from_pid_files(fake_host, tmp_path):
                 process.wait(timeout=5)
 
 
+def test_stop_sh_stops_screen_watchdog(fake_host, tmp_path):
+    """Сторож экрана гасится вместе с серверами: иначе он открывает окно снова.
+
+    Когда сервер 8090 поднимает не ``kiosk.sh`` (служба robot-kiosk или прошлый
+    запуск), процесс с окном на мониторе живёт отдельно и pid-файла сервера не
+    имеет — stop.sh его не видел, и экран возвращался на остановленном роботе.
+    """
+    var_dir = tmp_path / "var"
+    kiosk = spawn_fake_server(var_dir, name="kiosk.pid")
+    watcher = spawn_fake_server(var_dir, name="kiosk-display-8090.pid")
+    try:
+        result = run("stop.sh", "--servers")
+        assert result.returncode == 0, result.stderr
+        assert wait_dead(kiosk), "сервер экрана не остановлен"
+        assert wait_dead(watcher), "сторож экрана пережил остановку"
+        assert not any(var_dir.iterdir()), "pid-файлы должны быть удалены"
+        assert "сторож экрана робота" in result.stdout
+        assert "Всё остановлено" in result.stdout
+    finally:
+        for process in (kiosk, watcher):
+            if alive(process):
+                process.kill()
+                process.wait(timeout=5)
+
+
 def test_stop_sh_reports_nothing_running(fake_host):
     result = run("stop.sh")
     assert result.returncode == 0, result.stderr
