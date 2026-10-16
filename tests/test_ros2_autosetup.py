@@ -340,8 +340,10 @@ def test_fresh_ubuntu_gets_ros_drivers_and_a_built_workspace_without_flags(syste
     assert "--continue-on-error" in builds[0]
     assert "MAKEFLAGS=-j" in builds[0]
     assert set(system.built()) >= {"zapret_lidar", "ldlidar_stl_ros2"}
-    # 5. Всё проверено — лидар переключается на ROS 2.
-    assert "RC_LIDAR_SOURCE=ros" in system.env_file()
+    # 5. Всё проверено — лидар переключается на ROS 2. Именно auto: если драйвер
+    # не поднимется, приложение вернётся к USB-порту, а не останется без скана.
+    assert "RC_LIDAR_SOURCE=auto" in system.env_file()
+    assert f"RC_LIDAR_SOURCE=ros\n" not in system.env_file()
     assert "RC_LIDAR_ROS_TOPIC=/scan" in system.env_file()
     state = system.state()
     assert state["state"] == "ok", state

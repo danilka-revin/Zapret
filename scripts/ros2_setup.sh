@@ -9,7 +9,7 @@
 #   ./scripts/ros2_setup.sh --no-install только собрать ros2_ws, без apt и sudo
 #   ./scripts/ros2_setup.sh --rebuild    пересобрать ros2_ws с нуля
 #   ./scripts/ros2_setup.sh --service    ещё и службу robot-lidar (systemd)
-#   ./scripts/ros2_setup.sh --no-env     не трогать .env (RC_LIDAR_SOURCE=ros)
+#   ./scripts/ros2_setup.sh --no-env     не трогать .env (RC_LIDAR_SOURCE=auto)
 #   ./scripts/ros2_setup.sh --distro jazzy   выбрать дистрибутив ROS 2 вручную
 #   Прежние флаги --install, --drivers и --ldlidar по-прежнему принимаются: всё
 #   это теперь делается и без них.
@@ -24,8 +24,11 @@
 #      клонируется в ros2_ws/src, а известные ошибки их сборки правятся сами.
 #   3. rosdep ставит зависимости исходников, colcon компилирует весь ros2_ws;
 #      повторно — только если исходники изменились.
-#   4. В .env: RC_LIDAR_SOURCE=ros, когда rclpy и сборка проверены (выбранный
-#      оператором serial не трогается).
+#   4. В .env: RC_LIDAR_SOURCE=auto, когда rclpy и сборка проверены (выбранный
+#      оператором ros/serial не трогается). Именно auto, а не ros: драйвер может
+#      не подняться (модель лидара не опознана, порт занят), и тогда приложение
+#      вернётся к чтению USB-порта (окно RC_LIDAR_ROS_GRACE_S) вместо того,
+#      чтобы оставить оба экрана без скана.
 # Пароль sudo спрашивается один раз и только если что-то ставится. Без терминала
 # (служба, автозапуск) установка с паролем невозможна — код 3 и подсказка.
 # Коды: 0 — готово, 1 — ошибка, 3 — нужен пароль администратора, 4 — ROS 2
@@ -1216,7 +1219,10 @@ write_env() {
     ""|auto|ros|ros2)
       local topic
       topic="$(env_file_value RC_LIDAR_ROS_TOPIC)"
-      touch_env RC_LIDAR_SOURCE ros
+      # auto, а не ros: «ROS 2 есть» не значит «драйвер поднялся». В auto ROS 2
+      # остаётся первым источником, а если /scan молчит дольше
+      # RC_LIDAR_ROS_GRACE_S — приложение само читает USB-порт (см. lidar.py).
+      touch_env RC_LIDAR_SOURCE auto
       touch_env RC_LIDAR_ROS_TOPIC "${topic:-/scan}"
       ;;
     *)

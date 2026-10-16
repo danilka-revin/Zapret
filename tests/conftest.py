@@ -71,6 +71,16 @@ def operator(store: OperatorStore, config: Config):
 
 
 @pytest.fixture
+def kiosk_client(config: Config):
+    """Клиент бортового экрана (8090) — то же, что поднимает run_kiosk.py."""
+    from robot_control.kiosk_app import create_kiosk_app
+
+    application = create_kiosk_app(config)
+    application.config.update(TESTING=True)
+    return application.test_client()
+
+
+@pytest.fixture
 def app(config: Config):
     application = create_app(config)
     application.config.update(TESTING=True)

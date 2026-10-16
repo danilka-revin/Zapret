@@ -93,6 +93,16 @@ LIDAR_PUBLISH_GAP_S = 0.35
 #: переподключения LDS-01 после обрыва или смены USB-порта.
 LIDAR_RESCAN_S = 1.0
 
+#: Сколько секунд в режиме ``auto`` доверяем ROS 2, прежде чем вернуться к
+#: чтению USB-порта самим приложением (``RC_LIDAR_ROS_GRACE_S``). Драйвер
+#: лидара поднимается несколько секунд, но если ``/scan`` так и не пошёл,
+#: «ROS 2 установлен» не должно означать «лидара нет вовсе».
+LIDAR_ROS_GRACE_S = 20.0
+
+#: Пометка попытки на порту, которую прервал оживший ROS 2 (см. ``_read_port``):
+#: это не «лидар не отвечает», и статус перебора такой пометкой не затирается.
+PORT_NOTE_ROS_TAKEOVER = "ROS 2 начал отдавать скан — отпускаю порт"
+
 #: Скорости RPLIDAR по моделям (у A3 на USB-адаптере есть переключатель 115200/256000).
 RPLIDAR_BAUDS = (115200, 256000, 460800)
 #: LD06/LD19 — односторонний поток на 230400, команд не принимает.
@@ -267,6 +277,16 @@ def _env_float(name: str, default: float) -> float:
     except ValueError:
         log.warning("Лидар: %s=%r — не число, беру %s", name, raw, default)
         return default
+
+
+def ros_grace_s() -> float:
+    """Окно ожидания скана из ROS 2 (``RC_LIDAR_ROS_GRACE_S``, секунды).
+
+    Читается на каждом обращении, а не один раз при импорте: настройку меняют
+    в ``.env`` и на боевом роботе хотят видеть эффект без перезапуска.
+    ``0`` — читать USB-порт сразу, не дожидаясь драйвера ROS 2.
+    """
+    return max(0.0, _env_float("RC_LIDAR_ROS_GRACE_S", LIDAR_ROS_GRACE_S))
 
 
 def pyserial_version() -> Optional[str]:
@@ -2122,6 +2142,9 @@ class LidarManager:
 
         self._stop = False
         self._thread: Optional[threading.Thread] = None
+        #: Когда менеджер начал работу: от этого считается окно ожидания ROS 2
+        #: (``RC_LIDAR_ROS_GRACE_S``) в режиме ``auto`` — см. :meth:`ros_holds_lidar`.
+        self._started_at = time.time()
         #: Подписка на ROS 2: топик скана (/scan) и состояние супервизора
         #: драйвера (/zapret/lidar/status). Живёт в фоне (см. ros_lidar.py).
         self.ros = RosLidar(self._on_ros_scan)
@@ -2189,6 +2212,7 @@ class LidarManager:
         if self._thread and self._thread.is_alive():
             return
         self._stop = False
+        self._started_at = time.time()
         self._publish_state("searching")
         # ROS 2 поднимаем первым: если он есть, драйвер лидара уже держит порт, и
         # USB-перебор не нужен вовсе (см. _ros_owns_lidar).
@@ -2541,7 +2565,15 @@ class LidarManager:
         видны (это и есть ответ «что происходит»), а журнал не засоряется.
         Итог круга перебора в журнал повторно не пишется, даже если между
         кругами статус успел пробежать по портам (``quiet``-сообщения).
+
+        Если ROS 2 установлен, но скан из него не идёт, к подсказке добавляется
+        причина, по которой лидар читается по USB: иначе оператор видит «порт
+        лидара не найден» и не понимает, почему приложение не пользуется ROS 2,
+        который на роботе стоит.
         """
+        note = self.ros_fallback_note()
+        if note:
+            hint = (hint + "; " + note) if hint else note
         if reason == self.reason and hint == self.hint:
             return
         self.reason = reason
@@ -2610,12 +2642,14 @@ class LidarManager:
         self._state_written_kind = state
 
     def _ros_owns_lidar(self) -> bool:
-        """Лидар отдаёт ROS 2 — USB-порт трогать нельзя.
+        """ROS 2 выбран источником скана (``auto`` с установленным ROS 2 или ``ros``).
 
-        Драйвер лидара (пакет ROS 2) уже держит порт: свой перебор в этом случае
-        отбирал бы у него устройство и получал «порт занят другой программой» —
-        именно так скана не было ни на пульте, ни на борту, хотя ``ros2 topic
-        echo /scan`` в терминале работал.
+        Это ответ на вопрос «куда идти за сканом и кого просить о
+        пересканировании», а не «можно ли прямо сейчас читать USB-порт»: про
+        это — :meth:`ros_holds_lidar`. Драйвер лидара, когда он работает, держит
+        порт; свой перебор в этом случае отбирал бы у него устройство и получал
+        «порт занят другой программой» — так скана не было ни на пульте, ни на
+        борту, хотя ``ros2 topic echo /scan`` в терминале работал.
 
         ``RC_LIDAR_SOURCE=serial`` — единственный случай, когда ROS 2 не мешает:
         тогда скан читает само приложение (стенд без ROS, отладка USB-пути).
@@ -2629,13 +2663,80 @@ class LidarManager:
             return True
         return bool(self._ros_started or self.ros.available)  # auto
 
+    def _ros_quiet_s(self) -> float:
+        """Сколько секунд ROS 2 не даёт скан.
+
+        Отсчёт идёт от последнего сообщения ``/scan``, а если его не было —
+        от старта менеджера. Запрошенный вручную перезапуск драйвера тоже
+        считается ожиданием: после кнопки «Пересканировать» супервизор гасит и
+        поднимает драйвер, и это занимает те же секунды, что и первый запуск.
+        """
+        now = time.time()
+        # getattr — на случай подменённого источника ROS 2 (тесты, заглушки):
+        # отсутствие отметки времени значит «скана ещё не было».
+        seen = max(
+            float(getattr(self.ros, "scan_at", 0.0) or 0.0),
+            float(getattr(self.ros, "rescan_requested_at", 0.0) or 0.0),
+        )
+        if not seen:
+            seen = self._started_at or now
+        return max(0.0, now - seen)
+
+    def ros_holds_lidar(self) -> bool:
+        """Владеет ли лидаром ROS 2 **сейчас** → USB-порт трогать нельзя.
+
+        В ``auto`` ROS 2 не блокирует USB-путь навсегда: драйверу даётся окно
+        :func:`ros_grace_s` (по умолчанию 20 с), а если ``/scan`` так и не
+        пошёл — приложение возвращается к чтению USB-порта. Без этого
+        установленный ROS 2 с не поднявшимся драйвером оставлял **оба** экрана
+        без лидара («скана лидара нет»), хотя порт читался бы: именно так лидар
+        пропадал «опять» после того, как ROS 2 поставился сам.
+
+        Свой замок порта (``data/lidar-<порт>.lock``) при этом остаётся: порт,
+        который держит драйвер, приложение не откроет и честно скажет «занят».
+        Как только ``/scan`` оживает, чтение порта прекращается (см.
+        ``stop_probe`` в :meth:`_read_port`) — драйвер снова единственный хозяин.
+
+        ``RC_LIDAR_SOURCE=ros`` — явный выбор оператора: USB не трогаем никогда.
+        """
+        if self.source_mode == "serial":
+            return False
+        if self.source_mode == "ros":
+            return True
+        if not (self._ros_started or self.ros.available):
+            return False
+        if self.ros.fresh():
+            return True
+        if int(getattr(self.ros, "publishers", 0) or 0) > 0:
+            # Топик кто-то публикует: драйвер жив и держит USB-порт. Даже если
+            # наш подписчик точек не видит, отбирать порт нельзя — два читателя
+            # одного адаптера ломают скан обоим; экран скажет, что случилось
+            # (``ros.summary`` различает «драйвер не запущен» и «публикует, но
+            # точек нет»).
+            return True
+        return self._ros_quiet_s() < ros_grace_s()
+
+    def ros_fallback_note(self) -> str:
+        """Почему лидар читается по USB, хотя ROS 2 установлен (для подписи на экране).
+
+        Пустая строка — объяснять нечего: ROS 2 не установлен, скан из него
+        идёт, или источник выбран явно (``ros``/``serial``).
+        """
+        if self.source_mode != "auto" or not self.ros.available or self.ros.fresh():
+            return ""
+        if self.ros_holds_lidar():
+            return ""
+        return ("ROS 2 установлен, но %s молчит %.0f с — читаю USB-порт сам "
+                "(драйвер так и не поднялся)"
+                % (getattr(self.ros, "topic", "/scan"), self._ros_quiet_s()))
+
     def _serial_worker(self) -> None:
         """Поток поиска порта лидара и чтения скана."""
         try:
             import serial  # pyserial
         except ImportError:
             serial = None  # type: ignore[assignment]
-            if not self._ros_owns_lidar():
+            if not self.ros_holds_lidar():
                 # Порт искать нечем: состояние «ищу» снимаем, иначе модули шасси
                 # зря уступали бы порты лидару, которого в этом интерпретаторе нет.
                 self._clear_state()
@@ -2651,7 +2752,7 @@ class LidarManager:
             # применяем их с нового круга или прекращаем текущую попытку чтения.
             self._sync_settings_from_env_file()
             settings_revision = self._settings_revision
-            if self._ros_owns_lidar():
+            if self.ros_holds_lidar():
                 # Скан даёт ROS 2: своих портов лидар не занимает, уступать нечего.
                 # Но состояние ROS 2 показываем то же, что и на экране: «ROS 2
                 # есть, но драйвер не запущен» — это не «лидар не найден», и
@@ -2660,11 +2761,18 @@ class LidarManager:
                 if self.ros.fresh():
                     self._set_status(self.ros.summary())
                 else:
-                    self._set_status(self.ros.summary(), hint=self.ros.hint(), warn=True)
+                    hint = self.ros.hint()
+                    if self.source_mode == "auto":
+                        # Ждём драйвер не бесконечно: говорим, сколько ещё
+                        # секунд доверяем ROS 2, а дальше читаем USB сами.
+                        left = max(0.0, ros_grace_s() - self._ros_quiet_s())
+                        hint = (hint + "; " if hint else "") + (
+                            "жду скан из ROS 2 ещё %.0f с, дальше читаю USB-порт сам" % left)
+                    self._set_status(self.ros.summary(), hint=hint, warn=True)
                 time.sleep(LIDAR_RESCAN_S)
                 continue
 
-            if serial is None and not self._ros_owns_lidar():
+            if serial is None and not self.ros_holds_lidar():
                 # Источник переключили на USB, а pyserial в этом интерпретаторе
                 # нет: говорим прямо, вместо того чтобы искать порт «вслепую».
                 self._clear_state()
@@ -2741,6 +2849,11 @@ class LidarManager:
                     return
                 if self._settings_revision != settings_revision:
                     break
+                if self.ros_holds_lidar():
+                    # Драйвер ROS 2 поднялся (или заговорил топик), пока шёл
+                    # перебор портов: хозяин лидара — он, попытки прекращаем.
+                    self._fallback_all = False
+                    break
                 self._set_status(
                     "перебираю порты: %d из %d — %s" % (index, len(ports), os.path.basename(port)),
                     quiet=True,
@@ -2811,6 +2924,13 @@ class LidarManager:
             # Изменение .env могло прийти, пока probe_port читал непрерывный
             # поток. Старый круг больше не нужен — сразу ищем по новым значениям.
             if self._settings_revision != settings_revision:
+                continue
+
+            if self.ros_holds_lidar():
+                # Перебор прервал оживший ROS 2: «лидар не ответил ни на одном
+                # порту» было бы неправдой. На следующем круге ветка ROS 2 сама
+                # покажет состояние и скан.
+                time.sleep(LIDAR_RESCAN_S)
                 continue
 
             if not progressed:
@@ -2937,7 +3057,15 @@ class LidarManager:
             if self._stop:
                 return True
             self._sync_settings_from_env_file()
-            return self._settings_revision != settings_revision
+            if self._settings_revision != settings_revision:
+                return True
+            # Драйвер ROS 2 поднялся, пока мы проверяли порт: в режиме ``auto``
+            # хозяин лидара — ROS 2, поэтому попытку прекращаем и отпускаем
+            # порт (иначе два читателя одного USB: у драйвера пропадёт скан).
+            if self.source_mode == "auto" and self.ros.fresh():
+                self._port_note = PORT_NOTE_ROS_TAKEOVER
+                return True
+            return False
 
         def publish_if_current(points: list[dict[str, float]]) -> None:
             if self._settings_revision == settings_revision:
@@ -2976,6 +3104,11 @@ class LidarManager:
                 pass
 
         if not found:
+            if self._port_note == PORT_NOTE_ROS_TAKEOVER:
+                # Попытку прервал оживший ROS 2: это не «лидар не отвечает»,
+                # статус перебора портов затирать нельзя (драйвер снова хозяин).
+                self.last_error = ""
+                return False
             self.detected = None
             self._set_status(
                 "лидар на %s не отвечает" % port,
@@ -3089,7 +3222,16 @@ class LidarManager:
         block = ros_env.describe(self.ros.topic)
         block.update(self.ros.status())
         block["source_mode"] = self.source_mode
+        # ``owns_lidar`` — ROS 2 выбран источником (кого просить о пересканировании),
+        # ``holds_lidar`` — ROS 2 владеет лидаром прямо сейчас (USB не трогаем).
+        # В ``auto`` второе перестаёт быть истинным, если ``/scan`` не пошёл
+        # дольше окна RC_LIDAR_ROS_GRACE_S: тогда лидар читает USB-перебор, и
+        # на экране это видно (``usb_fallback``), а не выглядит как «скана нет».
         block["owns_lidar"] = self._ros_owns_lidar()
+        block["holds_lidar"] = self.ros_holds_lidar()
+        block["quiet_s"] = round(self._ros_quiet_s(), 1)
+        block["grace_s"] = round(ros_grace_s(), 1)
+        block["usb_fallback"] = self.ros_fallback_note()
         # Подсказка ROS 2 не должна затирать причину уровня менеджера: если скан
         # идёт из ROS 2, пользователю показывать нечего.
         if self.ros.fresh():

@@ -63,6 +63,10 @@ STEERING_ANGLE_LIMIT_DEG = 32.0
 STEERING_COMMAND_HEADER = "X-Robot-Control"
 STEERING_COMMAND_HEADER_VALUE = "steering"
 DRIVE_COMMAND_HEADER_VALUE = "drive"
+#: Заголовок кнопки «Остановить всё» на бортовом экране: у киоска нет входа
+#: оператора, поэтому запрос на остановку помечается так же, как команды
+#: движения — сторонний POST из браузера такой заголовок поставить не может.
+STOP_COMMAND_HEADER_VALUE = "stop"
 MAX_DRIVE_PERCENT = 20
 
 
@@ -518,6 +522,9 @@ ASSETS = {
     "steering.js": "steering_js",
     "update.css": "update_css",
     "update.js": "update_js",
+    # кнопка «Остановить всё»: пульт, бортовой экран, лидар и окно киоска
+    "power.css": "power_css",
+    "power.js": "power_js",
     # панель настроек лидара (кнопка «Лидар» на пульте и на бортовом экране)
     "lidar_settings.css": "lidar_settings_css",
     "lidar_settings.js": "lidar_settings_js",
