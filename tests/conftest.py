@@ -21,6 +21,13 @@ FAST_ITERATIONS = 1_000  # тесты не должны тормозить на 
 
 
 @pytest.fixture(autouse=True)
+def isolated_estop_latch(tmp_path, monkeypatch):
+    """Защёлка E-STOP — файл; тесты не должны трогать реальный data/estop.json."""
+    monkeypatch.setenv("RC_ESTOP_FILE", str(tmp_path / "estop.json"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def clean_event_journal():
     """Журнал событий бортового экрана — состояние процесса, а не теста.
 

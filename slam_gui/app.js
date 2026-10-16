@@ -182,21 +182,70 @@ document.getElementById("clearance").addEventListener("input", (e) => {
   document.getElementById("clr-val").textContent = state.clearance.toFixed(2) + " м";
 });
 
-document.getElementById("btn-estop").addEventListener("click", () => {
-  state.estop = !state.estop;
-  if (state.estop) { state.auto = false; state.explore = false; }
-  document.getElementById("btn-estop").classList.toggle("on", state.estop);
-  document.getElementById("estop-state").textContent = state.estop ? "ВКЛ" : "ВЫКЛ";
-  document.getElementById("statusline").classList.toggle("danger", state.estop);
-  document.getElementById("mode-label").textContent = state.estop ? "E-STOP · гейт закрыт" : "TELEOP · симуляция";
-  document.getElementById("gate").textContent = state.estop ? "HOLD" : "OK";
-  document.getElementById("link-pulse").className = "pulse" + (state.estop ? " off" : "");
-  if (state.estop) setMission("FAULT");
+/* E-STOP: защёлка живёт на борту (общая для пульта 8080 и бортового экрана 8090),
+   а не только в этой вкладке. Нажатие взводит её и шлёт нулевую тягу; снятие — с PIN. */
+function applyEstopUi(on) {
+  state.estop = on;
+  if (on) { state.auto = false; state.explore = false; }
+  document.getElementById("btn-estop").classList.toggle("on", on);
+  document.getElementById("estop-state").textContent = on ? "ВКЛ" : "ВЫКЛ";
+  document.getElementById("statusline").classList.toggle("danger", on);
+  document.getElementById("mode-label").textContent = on ? "E-STOP · гейт закрыт" : "TELEOP · симуляция";
+  document.getElementById("gate").textContent = on ? "HOLD" : "OK";
+  document.getElementById("link-pulse").className = "pulse" + (on ? " off" : "");
+  if (on) setMission("FAULT");
   else if (state.mission === "FAULT") setMission("IDLE");
-  toast(state.estop ? "Аварийный стоп включён" : "E-stop снят");
-  log(state.estop ? "err" : "ok", state.estop ? "E-STOP asserted" : "E-STOP cleared");
   publishCmd();
+}
+const ESTOP_HEADERS = { "Content-Type": "application/json", "X-Robot-Control": "drive" };
+async function postEstop(path, body) {
+  const r = await fetch(path, { method: "POST", headers: ESTOP_HEADERS, body: JSON.stringify(body || {}), cache: "no-store" });
+  let j = null;
+  try { j = await r.json(); } catch (e) { j = null; }
+  return { status: r.status, body: j || {} };
+}
+async function syncEstopFromBoard() {
+  try {
+    const r = await fetch("api/state", { cache: "no-store" });
+    const j = await r.json();
+    if (j && j.ok && j.data) applyEstopUi(!!j.data.estop);
+  } catch (e) {
+    /* борт не ответил: остаёмся с локальным состоянием, без выдуманной защёлки */
+  }
+}
+document.getElementById("btn-estop").addEventListener("click", async () => {
+  if (!state.estop) {
+    try {
+      const res = await postEstop("api/estop");
+      if (res.status !== 200 || !res.body.ok) throw new Error("HTTP " + res.status);
+      applyEstopUi(true);
+      toast(res.body.driveStopped ? "E-STOP: тяга остановлена на борту" : "E-STOP взведён, но борт не подтвердил останов тяги");
+      log(res.body.driveStopped ? "err" : "warn", "E-STOP asserted (борт)");
+    } catch (e) {
+      applyEstopUi(true);
+      toast("Борт не ответил: E-STOP только в пульте, проверьте связь");
+      log("err", "E-STOP asserted (локально, нет связи с бортом)");
+    }
+    return;
+  }
+  const pin = window.prompt("PIN, чтобы снять E-STOP на борту:", "");
+  if (pin === null) return;
+  try {
+    const res = await postEstop("api/estop/release", { pin: pin });
+    if (res.status === 200 && res.body.ok) {
+      applyEstopUi(false);
+      toast("E-STOP снят на борту");
+      log("ok", "E-STOP cleared (борт)");
+    } else if (res.status === 403) {
+      toast("Неверный PIN: E-STOP не снят");
+    } else {
+      toast("Борт не снял E-STOP: HTTP " + res.status);
+    }
+  } catch (e) {
+    toast("Борт не ответил: E-STOP не снят");
+  }
 });
+syncEstopFromBoard();
 
 function homeModules() {
   state.modules.forEach((m) => { m.steer = 0; m.homed = true; });

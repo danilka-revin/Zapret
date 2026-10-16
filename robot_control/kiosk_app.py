@@ -54,6 +54,7 @@ except ImportError:  # pragma: no cover - не-POSIX платформы
 from flask import Flask, Response, jsonify, redirect, request
 from werkzeug.serving import make_server
 
+from robot_control import estop as estop_latch
 from robot_control import eventlog
 from robot_control.camera import CameraManager
 from robot_control.config import PROJECT_ROOT, Config
@@ -69,6 +70,9 @@ from robot_control.slam import (
     build_state,
     dispatch_drive_command,
     dispatch_steering_calibration,
+    engage_estop,
+    release_estop,
+    note_pin_result,
     dispatch_steering_command,
     dispatch_steering_zero,
     kiosk_log_payload,
@@ -589,6 +593,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         manager = LidarManager.get_instance()
         snap = state.snapshot()
         points, demo = lidar_for_screen(manager, snap)
+        estop_info = estop_latch.latched()
         # Телеметрия и доступность управления публичны; PIN используется только для кейса.
         return jsonify({"ok": True, "data": {
             "battery": snap.get("battery"),
@@ -602,6 +607,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "lidarStatus": lidar_status_payload(manager, points, demo),
             "speedMps": snap.get("speedMps"),
             "powerKw": snap.get("powerKw"),
+            "estop": estop_info,
             "mode": snap.get("mode"),
             "linkOk": snap.get("linkOk"),
             "ts": snap.get("ts"),
@@ -752,6 +758,24 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
         result, status = dispatch_steering_calibration(state.source, request.get_json(silent=True))
         return jsonify(result), status
+
+    @app.post("/api/estop")
+    def api_estop():
+        """E-STOP с борта: без PIN (остановить может любой), снятие — только с PIN."""
+        if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        return jsonify(engage_estop(state.source))
+
+    @app.post("/api/estop/release")
+    def api_estop_release():
+        if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        body = request.get_json(silent=True) or {}
+        result = state.vault.verify(str(body.get("pin", "")))
+        note_pin_result(result, where="снятие E-STOP")
+        if not result.get("ok"):
+            return jsonify({"ok": False, "reason": result.get("reason", "pin")}), 403
+        return jsonify(release_estop())
 
     @app.post("/api/kiosk_drive")
     def api_kiosk_drive():

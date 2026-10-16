@@ -110,6 +110,8 @@ def test_telemetry_api_returns_only_public_values(kiosk_client):
         assert set(body["data"]) == {
             "battery", "motors", "lidar", "speedMps", "powerKw", "mode", "linkOk", "ts",
             "source", "steeringControl", "drive", "lidarStatus", "lidarDemo", "masterMessages",
+            # состояние E-STOP публично: экран обязан показывать защёлку
+            "estop",
         }
         # причина «нет скана» видна на экране, а не только в журнале
         status = body["data"]["lidarStatus"]
