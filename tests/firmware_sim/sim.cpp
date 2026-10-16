@@ -174,7 +174,7 @@ static void scenario_calib_left() {
   CHECK(has(board_fr, "Калибровка ЗАВЕРШЕНА!"), "нет сообщения о завершении");
   CHECK(has(board_fr, "ширина флажка 3.00°"), "ширина флажка 400 шагов = 3.00°: %s",
         board_fr.serial.output.c_str());
-  CHECK(seconds < 20.0, "калибровка шла %.1f с", seconds);
+  CHECK(seconds < 60.0, "калибровка шла %.1f с", seconds);
   CHECK(board_fr.min_period_us == 100, "рабочий шаг 100 мкс (10 кГц), а min период %lld",
         (long long)board_fr.min_period_us);
   CHECK(!has(board_fr, "ищу влево"), "датчик слева от колеса находится поиском вправо");
@@ -182,13 +182,13 @@ static void scenario_calib_left() {
 }
 
 static void scenario_calib_right() {
-  board_fr.phys = 3000;                  // флажок левее: вправо 100° пусто, потом влево
+  board_fr.phys = 3000;                  // флажок левее: вправо 135° пусто, потом влево
   boot({&board_fr});
   calibrate_fr();
-  CHECK(has(board_fr, "справа датчика нет, ищу влево на 200°"), "переход к поиску влево");
+  CHECK(has(board_fr, "справа датчика нет, ищу влево на 270°"), "переход к поиску влево");
   CHECK(has(board_fr, "датчик найден слева"), "датчик найден поиском влево");
   CHECK(FR::zero_set && std::labs(board_fr.phys) <= 1, "ноль найден: phys=%ld", board_fr.phys);
-  CHECK(board_fr.phys_max >= 3000 + 13333 - 1, "сначала прошёл вправо 100°: max=%ld", board_fr.phys_max);
+  CHECK(std::labs(board_fr.phys_max - (3000 + 18000)) <= 2, "сначала прошёл вправо 135°: max=%ld", board_fr.phys_max);
   check_signals(board_fr);
 }
 
@@ -209,13 +209,14 @@ static void scenario_calib_far_left() {
 }
 
 static void scenario_calib_out_of_range() {
-  board_fr.phys = -14000;                // −105°: за зоной поиска ±100°
+  board_fr.phys = -19000;                // −142.5°: флажок за пределом ±135° от старта
   boot({&board_fr});
   calibrate_fr();
   CHECK(!FR::zero_set && FR::calib_error == FR::CAL_ERR_NOT_FOUND, "ошибка «не найден»: err=%d",
         FR::calib_error);
-  CHECK(has(board_fr, "ОШИБКА калибровки: датчик не сработал"), "текст ошибки");
-  CHECK(board_fr.phys == -14000 + 13333 - 26667, "вправо 100° и влево 200°: phys=%ld", board_fr.phys);
+  CHECK(has(board_fr, "ОШИБКА калибровки: датчик не найден"), "текст ошибки");
+  CHECK(std::labs(board_fr.phys - (-19000 - 18000)) <= 2, "вправо 135° и влево 270°: phys=%ld",
+        board_fr.phys);
   CHECK(!FR::motorBusy(), "мотор остановлен");
 }
 
@@ -224,10 +225,11 @@ static void scenario_calib_no_sensor() {
   boot({&board_fr});
   calibrate_fr();
   CHECK(FR::calib_error == FR::CAL_ERR_NOT_FOUND && !FR::zero_set, "без датчика — ошибка");
-  CHECK(board_fr.phys_max == 13333 && board_fr.phys_min == -13334,
-        "ход поиска +100°/−200°: min=%ld max=%ld", board_fr.phys_min, board_fr.phys_max);
+  CHECK(std::labs(board_fr.phys_max - 18000) <= 2 && std::labs(board_fr.phys_min + 18000) <= 2,
+        "ход поиска +135°/−270° (±135° от старта): min=%ld max=%ld", board_fr.phys_min,
+        board_fr.phys_max);
   sim::run_for_ms(200);
-  CHECK(board_fr.phys == -13334 && !FR::motorBusy(), "после ошибки колесо стоит");
+  CHECK(std::labs(board_fr.phys + 18000) <= 2 && !FR::motorBusy(), "после ошибки колесо стоит");
 }
 
 static void scenario_calib_stuck() {
@@ -270,6 +272,60 @@ static void scenario_calib_asymmetric() {
   calibrate_fr();
   CHECK(FR::zero_set && std::labs(board_fr.phys - 500) <= 1,
         "ноль — середина флажка (гистерезис не сдвигает): phys=%ld", board_fr.phys);
+}
+
+// Флажок на краю диапазона, поиск с обеих сторон. Ход руля не выходит за ±135°.
+static void scenario_calib_full_range_plus() {
+  board_fr.flag_lo = 15800;              // флажок при +118.5°, найдётся быстрым ходом вправо
+  board_fr.flag_hi = 16200;
+  boot({&board_fr});
+  calibrate_fr();
+  CHECK(FR::zero_set && has(board_fr, "датчик найден справа"), "найден справа");
+  CHECK(std::labs(board_fr.phys - 16000) <= 1, "ноль в середине флажка: phys=%ld", board_fr.phys);
+  CHECK(board_fr.phys_max <= 18000 + 2 && board_fr.phys_min >= -18000 - 2,
+        "ход не вышел за ±135°: min=%ld max=%ld", board_fr.phys_min, board_fr.phys_max);
+  check_signals(board_fr);
+}
+
+static void scenario_calib_full_range_minus() {
+  board_fr.flag_lo = -16200;             // флажок при −121.5°: вправо 135° пусто, ищем влево 270°
+  board_fr.flag_hi = -15800;
+  boot({&board_fr});
+  calibrate_fr();
+  CHECK(FR::zero_set && has(board_fr, "датчик найден слева"), "найден слева");
+  CHECK(std::labs(board_fr.phys - (-16000)) <= 1, "ноль в середине флажка: phys=%ld", board_fr.phys);
+  CHECK(board_fr.phys_max <= 18000 + 2 && board_fr.phys_min >= -18000 - 2,
+        "ход не вышел за ±135°: min=%ld max=%ld", board_fr.phys_min, board_fr.phys_max);
+  check_signals(board_fr);
+}
+
+// Срабатывание датчика сдвигается на +60, 0, −60 шагов (до 0.45°) от подхода к подходу.
+// Один подход дал бы ноль со сдвигом на 30 шагов; среднее по трём подходам каждой
+// кромки сдвиги гасит: ноль попадает в середину флажка.
+static void scenario_calib_passes_averaged() {
+  board_fr.flag_shift_script = {60, 0, -60};
+  board_fr.phys = 0;
+  boot({&board_fr});
+  calibrate_fr();
+  CHECK(FR::zero_set && FR::calib_error == FR::CAL_OK, "калибровка прошла: err=%d", FR::calib_error);
+  CHECK(count(board_fr, "кромка справа найдена") == 3 && count(board_fr, "кромка слева найдена") == 3,
+        "по три подхода на каждую кромку: справа %ld, слева %ld",
+        count(board_fr, "кромка справа найдена"), count(board_fr, "кромка слева найдена"));
+  CHECK(std::labs(board_fr.phys) <= 2, "среднее гасит сдвиги подходов: phys=%ld", board_fr.phys);
+  check_signals(board_fr);
+}
+
+// Кромки с разных подходов расходятся на 300 шагов (2.25°) — больше допуска 2°.
+// Ноль не ставим: ошибка 6.
+static void scenario_calib_spread_error() {
+  board_fr.flag_shift_script = {150, 0, -150};
+  board_fr.phys = 0;
+  boot({&board_fr});
+  calibrate_fr();
+  CHECK(!FR::zero_set && FR::calib_error == FR::CAL_ERR_SPREAD, "ошибка разброса: err=%d zero=%d",
+        FR::calib_error, FR::zero_set);
+  CHECK(has(board_fr, "кромки расходятся между подходами"), "текст ошибки разброса");
+  CHECK(!FR::motorBusy(), "мотор остановлен");
 }
 
 static void scenario_moves() {
@@ -674,6 +730,10 @@ static const Scenario SCENARIOS[] = {
     {"calib_stuck", scenario_calib_stuck},
     {"calib_abort", scenario_calib_abort},
     {"calib_asymmetric", scenario_calib_asymmetric},
+    {"calib_full_range_plus", scenario_calib_full_range_plus},
+    {"calib_full_range_minus", scenario_calib_full_range_minus},
+    {"calib_passes_averaged", scenario_calib_passes_averaged},
+    {"calib_spread_error", scenario_calib_spread_error},
     {"moves", scenario_moves},
     {"swing", scenario_swing},
     {"pause_resume", scenario_pause_resume},

@@ -1930,7 +1930,7 @@
       const dirty = card.dataset.steerDirty === 'true';
       if (!dirty) slider.value = String(value);
       if (currentEl) currentEl.textContent = current == null ? '—' : Math.round(current) + '°';
-      // Ползунок ограничен ±32°, а при калибровке цель — до ±200°: показываем настоящую.
+      // Ползунок ограничен ±32°, а при калибровке цель — до ±135°: показываем настоящую.
       if (targetEl) targetEl.textContent = (!dirty && busy && target != null ? Math.round(target) : Math.round(+slider.value || 0)) + '°';
 
       const ready = available && steeringAuthorized && online && homed && !busy && !pending && !zeroPending && !calibPending && !tractionActive;
@@ -2300,8 +2300,10 @@
       const all = id === 'ALL';
       const confirmed = window.confirm(
         (all ? 'Все четыре колеса' : 'Колесо ' + id) +
-        ' повернётся: вправо до 100°, затем влево до 200°, пока не найдёт оптодатчик D18, и встанет в ноль. ' +
-        'Колёса не должны упираться, рядом не должно быть людей. Тяга во время калибровки запрещена. Начать?'
+        ' будет искать оптодатчик D18 в пределах ±135° от текущего положения (сначала вправо, затем влево) ' +
+        'и встанет в ноль по среднему трёх подходов к каждой кромке. После включения Arduino колёса должны ' +
+        'стоять примерно прямо (±30°). Колёса не должны упираться, рядом не должно быть людей. ' +
+        'Тяга во время калибровки запрещена. Начать?'
       );
       if (!confirmed) return;
       const targets = all ? ids : [id];

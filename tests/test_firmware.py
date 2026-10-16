@@ -69,7 +69,12 @@ def test_pins_levels_and_speeds_match_the_tested_sketch():
     assert _const(reference, "STEP_PERIOD_US") == _const(core, "STEP_PERIOD_US") == "100"
     assert _const(reference, "CALIB_STEP_PERIOD_US") == _const(core, "CALIB_STEP_PERIOD_US") == "2000"
     assert float(_const(reference, "STEPS_PER_DEGREE")) == float(_const(core, "STEPS_PER_DEGREE"))
-    assert float(_const(reference, "CALIB_SEARCH_DEGREES")) == float(_const(core, "CALIB_SEARCH_DEGREES"))
+    # Эталон проверен на железе с поиском вправо 100° / влево 200°. Новый ход руля ±135°
+    # задан явно (ход 270°, колесо может уйти на 135° в обе стороны) — это осознанное отличие.
+    assert float(_const(reference, "CALIB_SEARCH_DEGREES")) == 100.0
+    assert float(_const(core, "CALIB_HALF_RANGE_DEG")) == 135.0
+    assert int(_const(core, "CALIB_SLOW_PASSES")) == 3          # подходов на кромку, ноль — среднее
+    assert float(_const(core, "CALIB_MAX_EDGE_SPREAD_DEG")) == 2.0
     assert float(_const(reference, "CALIB_SLOW_SEARCH_DEGREES")) == float(
         _const(core, "CALIB_SLOW_SEARCH_DEGREES"))
     assert _const(reference, "OPTO_ACTIVE_LOW") == _const(core, "OPTO_ACTIVE_LOW") == "true"
@@ -92,6 +97,28 @@ def test_master_accepts_monitor_commands_of_the_tested_sketch():
     # Тяга — отдельная команда «t»: «d» осталась поворотом, как в проверенном скетче.
     assert 'PSTR("t %d")' in master
     assert '"d %d"' not in master
+
+
+def test_calibration_messages_fit_the_line_buffers_in_utf8():
+    """Строка монитора режется по буферу: vnote — 176 байт, текст ошибки — 112.
+
+    Кириллица — 2 байта на символ. Обрезка посреди символа отдаёт в USB битый UTF-8
+    (так и было при первом варианте длинных сообщений калибровки), поэтому длину
+    считаем в байтах, с учётом подстановок и префикса строки.
+    """
+    note_re = re.compile(r'note\(PSTR\("((?:[^"\\]|\\.)*)"')
+    for path in (MASTER, NODE):
+        text = _text(path)
+        for fmt in note_re.findall(text):
+            fmt = fmt.replace('\\"', '"')
+            # Подстановка %s занимает ~8 байт (например «-135.00»), префикс «# FL: » — 6,
+            # перевод строки — 2; буфер строки — 176.
+            size = len(fmt.encode("utf-8")) + 8 * fmt.count("%") + 6 + 2
+            assert size <= 176, (path.name, fmt, size)
+        block = text[text.index("void copyCalibErrorText"):]
+        block = block[:block.index("\n}\n")]
+        for fmt in re.findall(r'PSTR\("((?:[^"\\]|\\.)*)"\)', block):
+            assert len(fmt.encode("utf-8")) <= 110, (path.name, fmt)
 
 
 def _compiler() -> str | None:
@@ -117,7 +144,7 @@ def test_firmware_simulation_scenarios(simulator):
     result = subprocess.run([str(simulator)], capture_output=True, text=True, timeout=600)
     report = result.stdout + "\n" + result.stderr[-6000:]
     assert result.returncode == 0, report
-    assert "22/22 сценариев прошли" in result.stdout, report
+    assert "26/26 сценариев прошли" in result.stdout, report
 
 
 def test_server_parses_simulated_master_telemetry(simulator):

@@ -68,8 +68,10 @@ const float STEER_LIMIT_DEG = 32.0f;           // предел абсолютн�
 const float MANUAL_MOVE_LIMIT_DEG = 360.0f;    // предел одной ручной команды d / c
 
 // ---- калибровка по оптодатчику (команда k) ----
-const float CALIB_SEARCH_DEGREES = 100.0f;     // быстрый поиск: вправо 100°, затем влево 200°
+const float CALIB_HALF_RANGE_DEG = 135.0f;     // ход руля ±135° (270° всего): быстрый поиск вправо 135°, затем влево 270°
 const float CALIB_SLOW_SEARCH_DEGREES = 20.0f; // медленный подход к кромке — не дальше
+const uint8_t CALIB_SLOW_PASSES = 3;           // подходов к КАЖДОЙ кромке; ноль — среднее по всем подходам
+const float CALIB_MAX_EDGE_SPREAD_DEG = 2.0f;  // разброс кромок между подходами больше — ошибка 6, ноль не ставим
 const float CALIB_CLEARANCE_DEGREES = 2.0f;    // отъезд за кромку перед медленным подходом
 const float CALIB_MAX_FLAG_DEGREES = 30.0f;    // шире — датчик «залип» или ошибка проводки
 // true: ноль = середина между кромками, найденными медленным подходом справа и
@@ -78,7 +80,7 @@ const float CALIB_MAX_FLAG_DEGREES = 30.0f;    // шире — датчик «з
 // потому что медленные фазы сразу срабатывали на той же кромке.
 const bool CALIB_ZERO_AT_CENTER = true;
 const float CALIB_ZERO_OFFSET_DEG = 0.0f;      // поправка, если «прямо» ≠ нулю датчика
-const uint32_t CALIB_TIMEOUT_MS = 45000UL;     // страховка: дольше — ошибка
+const uint32_t CALIB_TIMEOUT_MS = 120000UL;    // страховка: дольше — ошибка (3 подхода на кромку)
 const uint8_t OPTO_DEBOUNCE_TICKS = 3;         // 3 тика по 50 мкс подряд = срабатывание
 
 // ---- тяга BLDC ----
@@ -128,6 +130,7 @@ const uint8_t CAL_ERR_STUCK = 2;       // датчик не освобождае
 const uint8_t CAL_ERR_EDGE = 3;        // кромка не найдена при медленном подходе
 const uint8_t CAL_ERR_ABORTED = 4;     // прервано командой s
 const uint8_t CAL_ERR_TIMEOUT = 5;     // дольше CALIB_TIMEOUT_MS
+const uint8_t CAL_ERR_SPREAD = 6;      // кромки между подходами расходятся больше CALIB_MAX_EDGE_SPREAD_DEG
 
 // Биты состояния модуля: кадр слейва по I2C и поля телеметрии @TLM.
 const uint16_t STATUS_MOVING = 0x01;
@@ -144,8 +147,10 @@ uint8_t home_source = HOME_NONE;
 uint8_t calib_state = CAL_IDLE;
 uint8_t calib_error = CAL_OK;
 uint32_t calib_started_ms = 0;
-int32_t calib_edge_from_minus = 0;     // кромка при подходе слева (движение вправо)
-int32_t calib_edge_from_plus = 0;      // кромка при подходе справа (движение влево)
+int32_t calib_edges_plus[CALIB_SLOW_PASSES];   // кромки при подходе справа (движение влево), по подходам
+int32_t calib_edges_minus[CALIB_SLOW_PASSES];  // кромки при подходе слева (движение вправо), по подходам
+uint8_t calib_plus_count = 0;
+uint8_t calib_minus_count = 0;
 bool cycle_active = false;
 bool cycle_to_end = true;
 int32_t cycle_start_step = 0;
@@ -374,16 +379,19 @@ void startMotor(int32_t target, uint16_t period_us, uint8_t watch) {
 }
 
 // ---------------------------------------------------------------------------
-// Калибровка по оптодатчику. Флажок находится быстрым ходом (вправо 100°,
-// потом влево 200°), затем обе его кромки ищутся медленно, каждый раз снаружи:
-// справа налево и слева направо. Ноль — середина между ними (или кромка, см.
-// CALIB_ZERO_AT_CENTER) плюс CALIB_ZERO_OFFSET_DEG.
+// Калибровка по оптодатчику. Флажок находится быстрым ходом в пределах ±135°
+// от старта (вправо 135°, потом влево 270°). Затем каждая кромка снимается
+// CALIB_SLOW_PASSES раз медленным подходом снаружи: справа налево и слева направо,
+// вперемешку. Ноль — середина между средними кромками (или кромка, см.
+// CALIB_ZERO_AT_CENTER) плюс CALIB_ZERO_OFFSET_DEG. Разброс кромок больше
+// CALIB_MAX_EDGE_SPREAD_DEG — ошибка 6, ноль не ставится.
 void copyCalibErrorText(uint8_t error, char* out, size_t out_size) {
   const char* text;
   switch (error) {
-    case CAL_ERR_NOT_FOUND: text = PSTR("датчик не сработал: вправо 100° и влево 200° пусто"); break;
+    case CAL_ERR_NOT_FOUND: text = PSTR("датчик не найден в ±135° от старта"); break;
     case CAL_ERR_STUCK: text = PSTR("датчик не освобождается (залип или флажок шире 30°)"); break;
     case CAL_ERR_EDGE: text = PSTR("кромка не найдена при медленном подходе"); break;
+    case CAL_ERR_SPREAD: text = PSTR("кромки расходятся между подходами"); break;
     case CAL_ERR_ABORTED: text = PSTR("прервана командой s"); break;
     case CAL_ERR_TIMEOUT: text = PSTR("не уложилась по времени"); break;
     default: text = PSTR("нет ошибок"); break;
@@ -413,12 +421,14 @@ bool startCalibration() {
   home_source = HOME_NONE;
   calib_error = CAL_OK;
   calib_started_ms = millis();
+  calib_plus_count = 0;
+  calib_minus_count = 0;
   if (optoActive()) {
     note(PSTR("Калибровка: датчик уже закрыт — выхожу из флажка вправо"));
     calibrationStep(CAL_EXIT_PLUS, CALIB_MAX_FLAG_DEGREES, STEP_PERIOD_US, OPTO_WATCH_CLEAR);
   } else {
-    note(PSTR("Калибровка: быстрый поиск вправо на %d°..."), (int)CALIB_SEARCH_DEGREES);
-    calibrationStep(CAL_FAST_PLUS, CALIB_SEARCH_DEGREES, STEP_PERIOD_US, OPTO_WATCH_ACTIVE);
+    note(PSTR("Калибровка: быстрый поиск вправо на %d°..."), (int)CALIB_HALF_RANGE_DEG);
+    calibrationStep(CAL_FAST_PLUS, CALIB_HALF_RANGE_DEG, STEP_PERIOD_US, OPTO_WATCH_ACTIVE);
   }
   return true;
 }
@@ -437,22 +447,61 @@ void failCalibration(uint8_t error) {
   note(PSTR("ОШИБКА калибровки: %s"), text);
 }
 
+// Среднее по подходам (округление к ближайшему, половины — от нуля).
+int32_t meanSteps(const int32_t* values, uint8_t count) {
+  if (count == 0) return 0;
+  int32_t sum = 0;
+  for (uint8_t i = 0; i < count; ++i) sum += values[i];
+  return sum >= 0 ? (sum + count / 2) / count : -((-sum + count / 2) / count);
+}
+
+// Разброс кромок между подходами (макс − мин).
+int32_t spreadSteps(const int32_t* values, uint8_t count) {
+  if (count == 0) return 0;
+  int32_t low = values[0];
+  int32_t high = values[0];
+  for (uint8_t i = 1; i < count; ++i) {
+    if (values[i] < low) low = values[i];
+    if (values[i] > high) high = values[i];
+  }
+  return high - low;
+}
+
+uint8_t calibrationPassesDone() {
+  return (uint8_t)(calib_plus_count + calib_minus_count);
+}
+
 void finishCalibrationEdges() {
   haltMotor();
-  int32_t zero_at = calib_edge_from_minus;
+  // Кромки с разных подходов должны совпадать: иначе датчик или механика врут,
+  // и ноль ставить нельзя.
+  const int32_t limit = degreesToSteps(CALIB_MAX_EDGE_SPREAD_DEG);
+  const int32_t spread_plus = spreadSteps(calib_edges_plus, calib_plus_count);
+  const int32_t spread_minus = spreadSteps(calib_edges_minus, calib_minus_count);
+  if (spread_plus > limit || spread_minus > limit) {
+    failCalibration(CAL_ERR_SPREAD);
+    return;
+  }
+  const int32_t edge_plus = meanSteps(calib_edges_plus, calib_plus_count);
+  const int32_t edge_minus = meanSteps(calib_edges_minus, calib_minus_count);
+  int32_t zero_at = edge_minus;
   if (CALIB_ZERO_AT_CENTER) {
-    const int32_t sum = calib_edge_from_minus + calib_edge_from_plus;
+    const int32_t sum = edge_plus + edge_minus;
     zero_at = sum >= 0 ? (sum + 1) / 2 : -((1 - sum) / 2);
   }
   zero_at += degreesToSteps(CALIB_ZERO_OFFSET_DEG);
   char width[16];
   char shift[16];
-  formatDegrees(calib_edge_from_plus - calib_edge_from_minus, width, sizeof(width));
+  char spread_a[16];
+  char spread_b[16];
+  formatDegrees(edge_plus - edge_minus, width, sizeof(width));
   formatDegrees(zero_at, shift, sizeof(shift));
-  note(PSTR("Калибровка: кромки найдены, ширина флажка %s°, ноль на %s° от прежнего отсчёта"),
-       width, shift);
+  formatDegrees(spread_plus, spread_a, sizeof(spread_a));
+  formatDegrees(spread_minus, spread_b, sizeof(spread_b));
+  note(PSTR("Калибровка: кромки найдены, ширина флажка %s°, разброс %s°/%s°, ноль на %s°"),
+       width, spread_a, spread_b, shift);
   noInterrupts();
-  current_step -= zero_at;   // найденная точка становится нулём
+  current_step -= zero_at;   // среднее положение флажка становится нулём
   target_step = current_step;
   interrupts();
   calib_state = CAL_GO_ZERO;
@@ -473,6 +522,9 @@ void updateCalibration() {
   interrupts();
   if (!event && busy) return;
 
+  // Порядок подходов: медленно справа налево, затем слева направо, и так
+  // CALIB_SLOW_PASSES раз каждый. Между подходами колесо выходит из флажка
+  // на сторону, откуда пришло, — следующий подход снова идёт от края.
   switch (calib_state) {
     case CAL_FAST_PLUS:
       if (event) {
@@ -480,8 +532,8 @@ void updateCalibration() {
         calibrationStep(CAL_EXIT_PLUS, CALIB_MAX_FLAG_DEGREES, STEP_PERIOD_US, OPTO_WATCH_CLEAR);
       } else {
         note(PSTR("Калибровка: справа датчика нет, ищу влево на %d°..."),
-             (int)(2.0f * CALIB_SEARCH_DEGREES));
-        calibrationStep(CAL_FAST_MINUS, -2.0f * CALIB_SEARCH_DEGREES, STEP_PERIOD_US,
+             (int)(2.0f * CALIB_HALF_RANGE_DEG));
+        calibrationStep(CAL_FAST_MINUS, -2.0f * CALIB_HALF_RANGE_DEG, STEP_PERIOD_US,
                         OPTO_WATCH_ACTIVE);
       }
       break;
@@ -505,8 +557,10 @@ void updateCalibration() {
                       CALIB_STEP_PERIOD_US, OPTO_WATCH_ACTIVE);
       break;
     case CAL_SLOW_MINUS:
-      if (event) {
-        calib_edge_from_plus = event_step;
+      if (event && calib_plus_count < CALIB_SLOW_PASSES) {
+        calib_edges_plus[calib_plus_count++] = event_step;
+        note(PSTR("Калибровка: кромка справа найдена (подход %d из %d)"),
+             (int)calib_plus_count, (int)CALIB_SLOW_PASSES);
         calibrationStep(CAL_EXIT_MINUS, -CALIB_MAX_FLAG_DEGREES, STEP_PERIOD_US, OPTO_WATCH_CLEAR);
       } else {
         failCalibration(CAL_ERR_EDGE);
@@ -524,9 +578,15 @@ void updateCalibration() {
                       CALIB_STEP_PERIOD_US, OPTO_WATCH_ACTIVE);
       break;
     case CAL_SLOW_PLUS:
-      if (event) {
-        calib_edge_from_minus = event_step;
-        finishCalibrationEdges();
+      if (event && calib_minus_count < CALIB_SLOW_PASSES) {
+        calib_edges_minus[calib_minus_count++] = event_step;
+        note(PSTR("Калибровка: кромка слева найдена (подход %d из %d)"),
+             (int)calib_minus_count, (int)CALIB_SLOW_PASSES);
+        if (calibrationPassesDone() >= 2 * CALIB_SLOW_PASSES) {
+          finishCalibrationEdges();
+        } else {
+          calibrationStep(CAL_EXIT_PLUS, CALIB_MAX_FLAG_DEGREES, STEP_PERIOD_US, OPTO_WATCH_CLEAR);
+        }
       } else {
         failCalibration(CAL_ERR_EDGE);
       }
@@ -543,6 +603,7 @@ void updateCalibration() {
       break;
   }
 }
+
 
 // ---------------------------------------------------------------------------
 // Качание (c), обычные повороты (d, h, w, g), ноль (z), стоп (s).

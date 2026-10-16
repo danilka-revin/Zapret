@@ -36,7 +36,7 @@
             <p>Рулевые шаговые моторы + удерживаемое низкоскоростное движение BLDC</p></div>
           <button type="button" class="rc-steering-close" aria-label="Закрыть">×</button>
         </header>
-        <div class="rc-steering-safety" role="note"><b>Ноль руля — по оптодатчику D18:</b> «Калибровка» поворачивает колесо (до 100° вправо и 200° влево) и ставит его в середину флажка. «Задать 0°» — запасной ручной вариант без датчика. Ноль теряется после перезапуска Arduino.</div>
+        <div class="rc-steering-safety" role="note"><b>Ноль руля — по оптодатчику D18:</b> «Калибровка» ищет оптодатчик в пределах ±135° (ход руля 270°) и ставит ноль в середину флажка по среднему трёх подходов к каждой кромке. После включения Arduino выставьте колёса прямо руками (±30°). «Задать 0°» — запасной ручной вариант без датчика. Ноль теряется после перезапуска Arduino.</div>
         <div class="rc-steering-toolbar">
           <span id="rc-steering-auth">Нужен PIN</span>
           <button type="button" class="rc-steering-btn" id="rc-steering-unlock">Разблокировать</button>
@@ -437,7 +437,7 @@
 
   async function calibrate(id) {
     if (!authorized) return unlock();
-    if (!window.confirm('Колесо ' + id + ' повернётся вправо до 100°, затем влево до 200°, пока не найдёт оптодатчик D18, и встанет в ноль. Колесо не должно упираться, рядом не должно быть людей. Начать?')) return;
+    if (!window.confirm('Колесо ' + id + ' будет искать оптодатчик D18 в пределах ±135° от текущего положения (сначала вправо, затем влево) и встанет в ноль. После включения Arduino колесо должно стоять примерно прямо (±30°). Колесо не должно упираться, рядом не должно быть людей. Начать?')) return;
     try {
       const { response, body } = await json('api/kiosk_calibrate', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
