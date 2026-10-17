@@ -2,10 +2,7 @@
 {% block title %}Вход оператора{% endblock %}
 {% block content %}
 <section class="card card-narrow">
-  <div class="glyph" aria-hidden="true" style="margin-bottom:18px"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-
-  <span class="eyebrow"><span class="num">01</span>RUS SLAM · Система доступа</span>
-  <h1 class="card-title ndot" id="login-title" style="margin-top:10px">Вход оператора</h1>
+  <h1 class="card-title">Вход оператора</h1>
   <p class="muted">Управление роботом доступно после авторизации.</p>
 
   {% if error %}
@@ -38,8 +35,6 @@
     <button type="submit" class="btn btn-primary">Войти</button>
   </form>
 
-  <hr class="dot-rule">
-
   <p class="muted hint">
     Не подходит пароль? Он задаётся на машине робота:<br>
     <code>.venv/bin/python scripts/create_operator.py --username admin --min-length 4</code><br>
@@ -48,36 +43,4 @@
     После 5 неверных попыток вход блокируется на 5 минут.
   </p>
 </section>
-{% endblock %}
-
-{% block scripts %}
-<script>
-// «Загрузка системы»: заголовок проявляется точечным шрифтом, буквы
-// «декодируются» из случайных глифов — как при старте Nothing OS.
-(function(){
-  const el = document.getElementById('login-title');
-  if (!el) return;
-  const finalText = el.textContent;
-  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (reduce) return;
-  const glyphs = '▪▫◦·+×∙0123456789ABCDEF#/<>*';
-  const start = performance.now();
-  const duration = 900;
-  el.style.opacity = '1';
-  function frame(now){
-    const p = Math.min(1, (now - start) / duration);
-    const reveal = Math.floor(finalText.length * p);
-    let out = '';
-    for (let i = 0; i < finalText.length; i++){
-      const ch = finalText[i];
-      if (ch === ' ' || i < reveal) out += ch;
-      else out += glyphs[Math.floor(Math.random() * glyphs.length)];
-    }
-    el.textContent = out;
-    if (p < 1) requestAnimationFrame(frame);
-    else el.textContent = finalText;
-  }
-  requestAnimationFrame(frame);
-})();
-</script>
 {% endblock %}

@@ -2,11 +2,8 @@
 {% block title %}Ошибка {{ code }}{% endblock %}
 {% block content %}
 <section class="card card-narrow">
-  <div class="glyph" aria-hidden="true" style="margin-bottom:18px"><i></i><i></i><i></i><i></i><i></i></div>
-  <span class="eyebrow"><span class="num">!</span>Сбой системы</span>
-  <h1 class="card-title ndot ndot-accent" style="margin-top:10px; font-size:56px">{{ code }}</h1>
+  <h1 class="card-title">{{ code }}</h1>
   <p class="muted">{{ message }}</p>
-  <hr class="dot-rule">
   <p><a class="btn btn-primary" href="{{ u('panel.dashboard') }}">На главную</a></p>
 </section>
 {% endblock %}
