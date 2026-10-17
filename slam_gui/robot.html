@@ -8,8 +8,9 @@
   <link rel="stylesheet" href="robot.css" />
   <link rel="stylesheet" href="lidar_settings.css" />
   <link rel="stylesheet" href="power.css" />
+  <link rel="stylesheet" href="nothing.css" />
 </head>
-<body class="kiosk-body">
+<body class="kiosk-body nothing">
   <!--
     Киоск-экран на борту робота. Рассчитан на дисплей 11.6" 1920×1080 (landscape):
     слева — крупно АКБ и мини-шасси (как на пульте управления), справа — лидар
@@ -47,6 +48,7 @@
       <div class="col-left">
         <section class="battery-panel" id="battery-panel" role="button" tabindex="0" aria-controls="swipe-battery-view" aria-label="Состояние АКБ — нажмите, чтобы открыть подробности по всем банкам">
           <article class="soc-big">
+            <div class="glyph" aria-hidden="true" style="margin-bottom:4px"><i></i><i></i><i></i><i></i><i></i></div>
             <span class="kpi-label">Заряд АКБ</span>
             <b class="soc-value"><span id="k-soc">—</span><small>%</small></b>
             <div class="battery-bar"><i id="k-soc-bar"></i></div>
