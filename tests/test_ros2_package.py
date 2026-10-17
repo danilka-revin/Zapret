@@ -139,6 +139,17 @@ def test_reserved_ports_are_never_offered_to_the_lidar(tmp_path, monkeypatch):
     assert candidates == [str(lidar_port)]
 
 
+def test_default_master_port_is_reserved_even_without_an_env_value(monkeypatch):
+    """RC_SLAM_SOURCE=master без RC_SLAM_PORT: мастер всё равно на /dev/ttyACM0."""
+    for name in ("RC_SLAM_PORT", "RC_SLAM_MASTER_PORT", "RC_SLAM_PORTS",
+                 "RC_BMS_PORT", "RC_LIDAR_EXCLUDE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("RC_SLAM_SOURCE", "master")
+    assert "/dev/ttyACM0" in ros_drivers.reserved_ports()
+    monkeypatch.setenv("RC_SLAM_SOURCE", "serial")
+    assert "/dev/ttyACM0" not in ros_drivers.reserved_ports()
+
+
 def test_driver_command_uses_direct_executable_and_ros_parameters(tmp_path):
     executable = tmp_path / "rplidar_composition"
     executable.write_text("#!/bin/sh\n")
@@ -154,6 +165,78 @@ def test_driver_command_uses_direct_executable_and_ros_parameters(tmp_path):
     lds = ros_drivers.driver_command(ros_drivers.DRIVERS["lds01"], port="/dev/ttyUSB1")
     assert lds[:3] == ["ros2", "run", "hls_lfcd_lds_driver"]
     assert "port:=/dev/ttyUSB1" in lds
+
+
+def test_rplidar_default_baud_is_never_empty():
+    """Пустой serial_baudrate:= ронял rplidar_composition: параметр объявлен int."""
+    argv = ros_drivers.driver_command(ros_drivers.DRIVERS["rplidar"],
+                                      port="/dev/ttyUSB0")
+    assert "serial_baudrate:=115200" in argv
+    assert not any(part.startswith("serial_baudrate:=") and part.endswith(":=")
+                   for part in argv)
+
+
+def test_probed_baud_and_explicit_override_win_over_the_default(tmp_path):
+    """RPLIDAR A2/A3/C1 работают не на 115200: скорость берём из пробы/настройки."""
+    port = tmp_path / "ttyUSB0"
+    port.write_text("")
+    plan = ros_drivers.build_plan(
+        model="rplidar", ports=[str(port)], installed={"rplidar_ros"},
+        bauds={"rplidar@%s" % port: 256000})
+    item = next(item for item in plan if item.driver.name == "rplidar")
+    assert item.baud == 256000
+    plan = ros_drivers.build_plan(
+        model="rplidar", ports=[str(port)], installed={"rplidar_ros"},
+        bauds={"rplidar@%s" % port: 256000}, baud_override=460800)
+    assert next(item for item in plan if item.driver.name == "rplidar").baud == 460800
+    plan = ros_drivers.build_plan(model="rplidar", ports=[str(port)],
+                                  installed={"rplidar_ros"})
+    assert next(item for item in plan if item.driver.name == "rplidar").baud == 115200
+
+
+def test_rplidar_without_a_probe_tries_every_known_baud(tmp_path):
+    """Без пробы RPLIDAR A3 молча не поднимался: драйвер получал «скорость A1»."""
+    port = tmp_path / "ttyUSB0"
+    port.write_text("")
+    plan = ros_drivers.build_plan(model="rplidar", ports=[str(port)],
+                                  installed={"rplidar_ros"})
+    rates = [item.baud for item in plan
+             if item.driver.name == "rplidar" and item.port == str(port)]
+    assert rates == [115200, 256000, 460800]
+
+    # Проба знает точную скорость — лишние попытки не нужны.
+    plan = ros_drivers.build_plan(
+        model="rplidar", ports=[str(port)], installed={"rplidar_ros"},
+        bauds={"rplidar@%s" % port: 256000})
+    rates = [item.baud for item in plan
+             if item.driver.name == "rplidar" and item.port == str(port)]
+    assert rates == [256000]
+
+
+def test_explicit_opencr_model_uses_only_the_board_driver(tmp_path):
+    """«opencr» — это выбор платы, а не синоним auto: чужие драйверы не нужны."""
+    acm = tmp_path / "ttyACM0"
+    acm.write_text("")
+    plan = ros_drivers.build_plan(model="opencr", ports=[str(acm)],
+                                  installed={"turtlebot3_node"})
+    assert {item.driver.name for item in plan} == {"opencr"}
+    assert [driver.name for driver in ros_drivers.drivers_for_protocol("opencr")] == ["opencr"]
+
+
+def test_opencr_is_never_started_on_a_lidar_usb_port(tmp_path, monkeypatch):
+    monkeypatch.delenv("RC_SLAM_PORT", raising=False)
+    monkeypatch.delenv("RC_BMS_PORT", raising=False)
+    usb = tmp_path / "ttyUSB0"
+    usb.write_text("")
+    acm = tmp_path / "ttyACM7"
+    acm.write_text("")
+    plan = ros_drivers.build_plan(model="opencr", ports=[str(usb), str(acm)],
+                                  installed={"turtlebot3_node"})
+    assert plan, "план OpenCR пуст"
+    # USB-переходник лидара не должен попасть в план ни при каких условиях.
+    assert all(not item.port.startswith("/dev/ttyUSB") for item in plan), \
+        [item.port for item in plan]
+    assert {item.port for item in plan} <= {str(acm), "/dev/ttyACM0"}
 
 
 def test_opencr_driver_passes_the_board_port_and_parameters_file():
@@ -298,6 +381,84 @@ def test_probe_reads_real_bytes_from_a_pseudo_terminal():
         thread.join(timeout=2.0)
         os.close(master)
         os.close(slave)
+
+
+def test_probe_read_window_is_a_hard_time_limit(monkeypatch):
+    """Непрерывный поток не должен растягивать проверку до 64 КБ и десятков секунд."""
+    from zapret_lidar import probe as ros_probe
+
+    class Endless:
+        timeout = 0.1
+
+        def read(self, size):
+            time.sleep(0.01)
+            return b"\xfa" * 64
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(ros_probe, "_open",
+                        lambda port, baud, timeout=0.15: Endless())
+    started = time.monotonic()
+    data = ros_probe.read_bytes("/dev/fake", 230400, window=0.2)
+    elapsed = time.monotonic() - started
+    assert 0 < len(data) < ros_probe.MAX_READ_BYTES
+    assert elapsed < 0.9, "окно проверки не соблюдается: %.1f с" % elapsed
+
+
+def test_probe_reports_the_baud_for_the_plan():
+    pytest.importorskip("serial")
+    from zapret_lidar import probe as ros_probe
+
+    master, slave = os.openpty()
+    port = os.ttyname(slave)
+    stop = threading.Event()
+
+    def writer():
+        index = 0
+        while not stop.is_set():
+            try:
+                os.write(master, lds01_packet(index))
+            except OSError:  # pragma: no cover — порт закрыли
+                return
+            index += 1
+            time.sleep(0.01)
+
+    thread = threading.Thread(target=writer, daemon=True)
+    thread.start()
+    try:
+        report = ros_probe.probe_port(port, bauds={"lds01": (230400,)})
+        assert report["protocol"] == "lds01"
+        assert report["baud"] == 230400
+        assert ros_probe.bauds_for_plan({port: report}) == {"lds01@%s" % port: 230400}
+    finally:
+        stop.set()
+        thread.join(timeout=2.0)
+        os.close(master)
+        os.close(slave)
+
+
+def test_cli_passes_model_port_and_baud_to_the_node(monkeypatch):
+    """Явные --model/--port/--baud раньше терялись при запуске узла."""
+    import types
+
+    from zapret_lidar import supervisor as ros_supervisor
+
+    seen: dict[str, list[str] | None] = {}
+
+    def fake_node_main(argv=None):
+        seen["argv"] = argv
+        return 0
+
+    module = types.ModuleType("zapret_lidar.node")
+    module.main = fake_node_main
+    monkeypatch.setitem(sys.modules, "zapret_lidar.node", module)
+    assert ros_supervisor.main(["--model", "lds01", "--port", "/dev/ttyUSB0",
+                                "--baud", "256000"]) == 0
+    argv = seen["argv"] or []
+    assert "--ros-args" in argv
+    assert "model:=lds01" in argv and "port:=/dev/ttyUSB0" in argv
+    assert "baud:=256000" in argv
 
 
 # --------------------------------------------------------------------------- #

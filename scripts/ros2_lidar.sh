@@ -66,8 +66,26 @@ read_env() {
   printf '%s' "${value:-$fallback}"
 }
 
+# Настройки, которые нужны самому супервизору (а не только командной строке):
+# порты мастера/шасси/BMS он исключает из автопоиска по переменным окружения.
+# systemd берёт их из EnvironmentFile=.env, а запуск из терминала — нет: без
+# этого супервизор считал /dev/ttyACM0 свободным и открывал порт мастера руления
+# (Arduino перезагружается, руль на секунду теряет связь). Поэтому переносим
+# значения из .env в окружение процесса, не перетирая уже заданные.
+for _key in RC_LIDAR_PROTOCOL RC_LIDAR_PORT RC_LIDAR_BAUD RC_LIDAR_SOURCE \
+            RC_LIDAR_ROS_TOPIC RC_LIDAR_ROS_STATUS_TOPIC RC_LIDAR_EXCLUDE \
+            RC_ROS_PREFIX RC_ROS_WS_INSTALL \
+            RC_SLAM_SOURCE RC_SLAM_PORT RC_SLAM_MASTER_PORT RC_SLAM_PORTS RC_BMS_PORT \
+            TURTLEBOT3_MODEL; do
+  if [[ -z "${!_key:-}" ]]; then
+    _value="$(read_env "$_key" '')"
+    [[ -n "$_value" ]] && export "$_key=$_value"
+  fi
+done
+unset _key _value
+
 # --- 1. что запускать: модель, порт, скорость -------------------------------- #
-[[ -n "$MODEL" ]] || MODEL="$(read_env RC_LIDAR_PROTOCOL auto)"
+[[ -n "$MODEL" ]] || MODEL="${RC_LIDAR_PROTOCOL:-auto}"
 [[ -n "$PORT"  ]] || PORT="$(read_env RC_LIDAR_PORT '')"
 [[ -n "$BAUD"  ]] || BAUD="$(read_env RC_LIDAR_BAUD '')"
 SCAN_TOPIC="$(read_env RC_LIDAR_ROS_TOPIC /scan)"
@@ -236,6 +254,57 @@ if [[ "$ENGINE" == "venv" || "$ENGINE" == "python" ]]; then
   EXTRA="$(python_site "$INSTALL/zapret_lidar")$(python_site "$PREFIX")"
   export PYTHONPATH="${EXTRA}${PYTHONPATH:+$PYTHONPATH:}$ROOT/ros2_ws/src/zapret_lidar"
   [[ -d "$SRC_PKG" ]] || warn "нет $SRC_PKG — супервизор найдётся, только если ros2_ws собран"
+fi
+
+# Проверяем движок до запуска. venv проекта может быть создан другим Python,
+# чем у ROS 2 (после обновления Ubuntu), и тогда `import rclpy` в нём падает;
+# раньше скрипт молча запускал его, служба перезапускала упавший процесс и
+# лидар не поднимался никогда. Лучше сразу перейти на системный python/ros2.
+use_ros2_engine() {
+  ENGINE=ros2
+  CMD=(ros2 launch zapret_lidar lidar.launch.py "model:=$MODEL")
+  [[ -n "$PORT" ]] && CMD+=("port:=$PORT")
+  [[ -n "$BAUD" ]] && CMD+=("baud:=$BAUD")
+  CMD+=("scan_topic:=$SCAN_TOPIC" "status_topic:=$STATUS_TOPIC")
+}
+
+if [[ "$ENGINE" == "python" ]]; then
+  # Системный python3 должен уметь rclpy — иначе супервизор падает на импорте,
+  # а --keep-alive перезапускает его по кругу. Если есть собранный ros2_ws,
+  # запускаем через «ros2 launch» (он сам находит правильный интерпретатор).
+  if ! _rclpy_out="$(python3 -c 'import rclpy' 2>&1)"; then
+    _rclpy_last="${_rclpy_out##*$'\n'}"
+    if have ros2 && [[ -n "$WS_SETUP" ]]; then
+      warn "python3 не импортирует rclpy (${_rclpy_last:-нет вывода}) — запускаю через ros2 launch"
+      use_ros2_engine
+    else
+      # Не выходим: обёртка/тесты могут подменять python3, а без rclpy всё
+      # равно ничего не запустится — супервизор сам скажет об этом понятной
+      # строкой и завершится, не оставляя «молчаливый» код 0.
+      warn "python3 не импортирует rclpy (${_rclpy_last:-нет вывода}): проверь ./scripts/ros2_setup.sh --check"
+    fi
+  fi
+  unset _rclpy_out _rclpy_last
+fi
+
+if [[ "$ENGINE" == "venv" ]]; then
+  PY="$ROOT/.venv/bin/python"
+  # System python3 — ровно тот, для которого ROS 2 ставит rclpy, поэтому его
+  # не проверяем: обёртки/тесты могут подменять команду python3. А вот .venv
+  # мог быть создан другим Python (после обновления Ubuntu) — тогда запуск
+  # падал бы на импорте rclpy и служба перезапускала бы его бесконечно.
+  if ! "$PY" -c 'import rclpy' >/dev/null 2>&1; then
+    if command -v python3 >/dev/null 2>&1 && python3 -c 'import rclpy' >/dev/null 2>&1; then
+      warn "в $PY нет rclpy (разные версии Python?) — запускаю системным python3"
+      ENGINE=python
+      CMD=(python3 -m zapret_lidar.supervisor --ros-args "${ros_args[@]}")
+    elif have ros2 && [[ -n "$WS_SETUP" ]]; then
+      warn "в $PY нет rclpy — запускаю через ros2 launch"
+      use_ros2_engine
+    else
+      die "rclpy не импортируется из $PY, а системного python3 с rclpy нет. Пересоздай окружение: rm -rf .venv && ./scripts/ensure_deps.sh, затем ./scripts/ros2_setup.sh (подробности: ./scripts/ros2_setup.sh --check)"
+    fi
+  fi
 fi
 
 log "запускаю супервизор лидара (модель: $MODEL, порт: ${PORT:-автопоиск}, движок: $ENGINE)"

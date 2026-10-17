@@ -1022,9 +1022,13 @@ class RosSource:
         try:
             from robot_control import ros_env
             ros_env.ensure_python_path()
+            # Сигналы приложения (stop.sh, systemd, киоск) не перехватываем:
+            # иначе rclpy.init() в фоновом потоке подменяет SIGTERM всего
+            # процесса, и экран не может штатно завершиться.
+            ros_env.init_rclpy()
             import rclpy                                            # noqa: F401
             from rclpy.node import Node
-        except ImportError as exc:
+        except Exception as exc:  # noqa: BLE001 — нет ROS 2, сломан rclpy и т. п.
             print("! ros: rclpy не найден (%s) — источник не подключён." % exc)
             print("       поставь ROS 2 и пакеты лидара: ./scripts/ros2_setup.sh")
             self.fallback = None
@@ -1055,8 +1059,13 @@ class RosSource:
                 self.create_subscription(LaserScan, scan_topic, source._on_scan,
                                          qos_profile_sensor_data)
 
-        if not rclpy.ok():
-            rclpy.init(args=None)
+        try:
+            from robot_control import ros_env
+            ros_env.init_rclpy(rclpy)
+        except Exception as exc:                                     # noqa: BLE001
+            self.reason = "rclpy не инициализировался: %s" % exc
+            print("! ros: %s" % self.reason)
+            return
         try:
             node = Bridge()
         except Exception as exc:                                     # noqa: BLE001
@@ -1066,10 +1075,28 @@ class RosSource:
         self.ok = True
         print("· ros: мост экрана запущен (/screen/state, /battery/*, /screen/motors, %s)"
               % scan_topic)
+        # Свой executor: rclpy.spin() берёт глобальный executor процесса, а в
+        # нём одновременно крутится мост лидара из веб-пульта. Два потока в
+        # одном executor'е — гонка на его очередях и потерянные сканы.
         try:
-            rclpy.spin(node)
+            from rclpy.executors import SingleThreadedExecutor
+        except ImportError:                                          # pragma: no cover
+            executor = None
+        try:
+            if executor is None:
+                rclpy.spin(node)
+            else:
+                executor = SingleThreadedExecutor()
+                executor.add_node(node)
+                try:
+                    executor.spin()
+                finally:
+                    try:
+                        executor.remove_node(node)
+                    finally:
+                        executor.shutdown()
         except Exception:                                            # noqa: BLE001
-            pass
+            self.ok = False
 
     def _on_state(self, msg):
         try:

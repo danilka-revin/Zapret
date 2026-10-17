@@ -130,6 +130,14 @@ def probe(ports: str, as_json: bool) -> int:
     return 0 if any(report["protocol"] for report in reports) else 1
 
 
+def _env_int(name: str, default: int = 0) -> int:
+    """Целое из окружения; битое значение не роняет CLI трейсбеком."""
+    try:
+        return int(float((os.environ.get(name) or "").strip() or default))
+    except (TypeError, ValueError):
+        return default
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """Точка входа: план/проверка портов без ROS 2, запуск узла — с ROS 2."""
     parser = argparse.ArgumentParser(
@@ -142,25 +150,31 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--probe", action="store_true",
                         help="проверить порты и выйти")
     parser.add_argument("--json", action="store_true", help="машинный вывод")
-    parser.add_argument("--model", default=os.environ.get("RC_LIDAR_PROTOCOL") or "auto",
+    # Значения по умолчанию — None, а не из .env: иначе запуск через
+    # ``ros2 launch``/``ros2 run`` безусловно добавлял бы «-p model:=auto» и
+    # перекрывал параметры launch-файла (узел брал auto вместо выбранной модели).
+    parser.add_argument("--model", default=None,
                         help="модель лидара: auto | lds01 | rplidar | ld06 | ld19 | stl27l | opencr")
-    parser.add_argument("--port", default=os.environ.get("RC_LIDAR_PORT") or "",
+    parser.add_argument("--port", default=None,
                         help="порт(ы) лидара через запятую; можно glob")
-    parser.add_argument("--baud", type=int, default=int(os.environ.get("RC_LIDAR_BAUD") or 0),
+    parser.add_argument("--baud", type=int, default=None,
                         help="скорость порта; 0 — по умолчанию для драйвера")
-    parser.add_argument("--prefix", default=os.environ.get("RC_ROS_PREFIX") or "",
+    parser.add_argument("--prefix", default=None,
                         help="префикс ROS 2 для проверки пакетов")
     parser.add_argument("--installed", default="",
                         help="список установленных пакетов через запятую (для тестов)")
     args, rest = parser.parse_known_args(argv)
+    model = args.model if args.model is not None else (os.environ.get("RC_LIDAR_PROTOCOL") or "auto")
+    port = args.port if args.port is not None else (os.environ.get("RC_LIDAR_PORT") or "")
+    baud = args.baud if args.baud is not None else _env_int("RC_LIDAR_BAUD")
+    prefix = args.prefix if args.prefix is not None else (os.environ.get("RC_ROS_PREFIX") or "")
 
     if args.list_drivers:
         return list_drivers(args.json)
     if args.print_plan:
-        return print_plan(args.model, args.port, args.baud, args.prefix,
-                          args.installed, args.json)
+        return print_plan(model, port, baud, prefix, args.installed, args.json)
     if args.probe:
-        return probe(args.port, args.json)
+        return probe(port, args.json)
 
     # Обычный запуск: дальше нужен rclpy, поэтому импорт узла — только здесь.
     try:
@@ -171,10 +185,24 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("Проверить план без ROS 2: --print-plan", file=sys.stderr)
         return 2
     extra = list(rest)
-    if extra:
-        # Аргументы командной строки → параметры ROS 2 (--ros-args -p key:=value).
-        if "--ros-args" not in extra:
-            extra = ["--ros-args"] + extra
+    # Аргументы CLI → параметры ROS 2. Раньше --model/--port/--baud работали
+    # только для --print-plan, а запуск узла молча брал значения по умолчанию.
+    cli_params: list[str] = []
+    if args.model is not None:
+        cli_params += ["-p", "model:=%s" % args.model]
+    if args.port is not None:
+        cli_params += ["-p", "port:=%s" % args.port]
+    if args.baud is not None:
+        cli_params += ["-p", "baud:=%d" % int(args.baud)]
+    if cli_params:
+        if "--ros-args" in extra:
+            index = extra.index("--ros-args") + 1
+            # Параметры CLI — после параметров скрипта: явный аргумент важнее .env.
+            extra = extra[:index] + cli_params + extra[index:]
+        else:
+            extra = ["--ros-args"] + cli_params + extra
+    elif extra and "--ros-args" not in extra:
+        extra = ["--ros-args"] + extra
     return node_main(extra or None)
 
 

@@ -667,6 +667,37 @@ def test_lidar_script_builds_a_missing_workspace_by_itself(system):
     assert started and "ros2_ws/src/zapret_lidar" in started[0]
 
 
+def test_lidar_script_exports_master_ports_from_env_to_the_supervisor(system):
+    """Запуск из терминала не должен отдавать супервизору порт мастера руления.
+
+    systemd передаёт .env сам, а ./scripts/ros2_lidar.sh — нет: супервизор
+    считал /dev/ttyACM0 свободным и открывал его (Arduino перезагружается).
+    """
+    make_colcon_prefix(system)
+    (system.project / ".env").write_text(
+        "RC_SECRET_KEY=x\nRC_LIDAR_SOURCE=auto\n"
+        "RC_SLAM_PORT=/dev/ttyACM0\nRC_SLAM_PORTS=/dev/ttyUSB0,/dev/ttyUSB1\n"
+        "RC_BMS_PORT=/dev/ttyUSB2\n", encoding="utf-8")
+    fake_python = system.bin / "python3"
+    fake_python.write_text(textwrap.dedent('''\
+        #!/usr/bin/env bash
+        if [[ " $* " == *" zapret_lidar.supervisor "* ]]; then
+          echo "RC_SLAM_PORT=${RC_SLAM_PORT:-}" >> "$FAKE_DIR/calls.log"
+          echo "RC_SLAM_PORTS=${RC_SLAM_PORTS:-}" >> "$FAKE_DIR/calls.log"
+          echo "RC_BMS_PORT=${RC_BMS_PORT:-}" >> "$FAKE_DIR/calls.log"
+          exit 0
+        fi
+        exec %s "$@"
+        ''') % sys.executable, encoding="utf-8")
+    fake_python.chmod(0o755)
+    result = system.run("--no-setup", script="ros2_lidar.sh")
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = system.calls()
+    assert "RC_SLAM_PORT=/dev/ttyACM0" in calls
+    assert "RC_SLAM_PORTS=/dev/ttyUSB0,/dev/ttyUSB1" in calls
+    assert "RC_BMS_PORT=/dev/ttyUSB2" in calls
+
+
 def test_keep_alive_restarts_on_sigusr1_and_stops_on_term(system):
     make_colcon_prefix(system)
     fake_python = system.bin / "python3"
