@@ -504,6 +504,8 @@ def _drive_command(source, body):
 ASSETS = {
     "main.css": "main_css",
     "main.js": "main_js",
+    # карта лидара в стиле RViz (зум, сетка, Decay Time) — общая для пульта и бортового экрана
+    "lidar_view.js": "lidar_view_js",
     "styles.css": "styles_css",
     "app.js": "app_js",
     "console.js": "console_js",

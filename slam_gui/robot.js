@@ -3,7 +3,6 @@
   'use strict';
 
   const LIDAR_RANGE_M = 10;
-  const LIDAR_RING_M = 2;
   const POLL_MS = 250;
 
   const $ = (id) => document.getElementById(id);
@@ -216,77 +215,11 @@
     return parts.join(' · ');
   }
 
-  function drawLidar(canvas, pts) {
+  // Карта в стиле RViz — модуль lidar_view.js (сетка, оси, шасси, зум, Decay Time).
+  function drawLidar(canvas, pts, d) {
     if (!canvas) return;
-    const ctx = canvas.getContext && canvas.getContext('2d');
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    // clientWidth/clientHeight бывают 0, если раскладка ещё не посчиталась.
-    // Размер атрибута canvas хранится в физических пикселях, поэтому при
-    // fallback делим его на DPR, иначе на Retina-кiosk карта раздувается вдвое.
-    const rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
-    const parent = canvas.parentElement;
-    const w = canvas.clientWidth || (rect && rect.width) || (parent && parent.clientWidth) || (canvas.width / dpr) || 280;
-    const h = canvas.clientHeight || (rect && rect.height) || (parent && parent.clientHeight) || (canvas.height / dpr) || 280;
-    if (!w || !h) return;
-    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-    }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-
-    const cx = w / 2;
-    const cy = h / 2;
-    const R = Math.max(20, Math.min(w, h) / 2 - 20);
-    const k = R / LIDAR_RANGE_M;
-
-    // сетка колец
-    ctx.strokeStyle = '#2a2a2c';
-    ctx.lineWidth = 1.5;
-    for (let m = LIDAR_RING_M; m <= LIDAR_RANGE_M; m += LIDAR_RING_M) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, m * k, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    // подписи метров
-    ctx.fillStyle = '#7a7a7e';
-    ctx.font = '12px ' + getComputedStyle(document.body).fontFamily;
-    for (let m = LIDAR_RING_M; m <= LIDAR_RANGE_M; m += LIDAR_RING_M) {
-      ctx.fillText(m + ' м', cx + 4, cy - m * k - 4);
-    }
-    // оси
-    ctx.strokeStyle = '#333335';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
-    ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
-    ctx.stroke();
-    // вперёд (ось Y-) пометим
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.moveTo(cx, cy - R + 2);
-    ctx.lineTo(cx - 5, cy - R + 12);
-    ctx.lineTo(cx + 5, cy - R + 12);
-    ctx.closePath();
-    ctx.fill();
-
-    // Дальность карты — 10 м. Дальние точки не прижимаем к внешнему кольцу:
-    // прежний clamp создавал искусственную сплошную окружность вокруг карты.
-    const visiblePts = pts.filter((point) => point.r <= LIDAR_RANGE_M);
-    if (visiblePts.length) {
-      const near = Math.min.apply(null, visiblePts.map((p) => p.r));
-      visiblePts.forEach((p) => {
-        const r = p.r * k;
-        const x = cx - r * Math.sin(p.a);
-        const y = cy - r * Math.cos(p.a);
-        // Ближайшее препятствие подсвечиваем отдельным тоном.
-        if (p.r === near && near < 1.0) ctx.fillStyle = '#e5e5e5';
-        else if (p.r === near && near < 2.0) ctx.fillStyle = '#c2c2c2';
-        else ctx.fillStyle = '#ffffff';
-        ctx.fillRect(x - 2, y - 2, 4, 4);
-      });
-    }
+    const stamp = d && d.lidarStatus ? d.lidarStatus.scan_at : null;
+    if (window.RCLidarView) window.RCLidarView.render(canvas, pts, { stamp });
   }
 
   // На основной карте остаётся короткая подпись, а подробная диагностика,
@@ -311,7 +244,7 @@
       if (!has) setText(empty, 'скана лидара нет');
       empty.title = '';
     }
-    drawLidar(canvas, pts);
+    drawLidar(canvas, pts, d);
   }
 
   // Экран рисуется по блокам, и сбой одного не гасит остальные. Раньше любое
@@ -783,6 +716,7 @@
           if (window._lidarGrid && window._lidarGrid.fill) window._lidarGrid.fill(0);
         } catch(e) {}
         const lidarCanvas = document.getElementById('lidar-canvas');
+        if (lidarCanvas && window.RCLidarView) window.RCLidarView.clear(lidarCanvas);
         if (lidarCanvas) {
           const ctx = lidarCanvas.getContext('2d');
           if (ctx) {

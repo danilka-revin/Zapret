@@ -406,8 +406,6 @@
 
   /* ------------------------------------------------------------ лидар */
 
-  const LIDAR_RANGE_M = 10;        // радиус карты, м
-  const LIDAR_RING_M = 2;          // шаг колец, м
 
   // Точки приходят как [{a: угол, рад (0 — вперёд, против часовой), r: дистанция, м}].
   function lidarPoints(d) {
@@ -488,59 +486,14 @@
       }
       empty.title = reason;
     }
-    drawLidar(canvas, pts);
+    drawLidar(canvas, pts, d);
   }
 
-  function drawLidar(canvas, pts) {
-    const ctx = canvas.getContext && canvas.getContext('2d');
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    // clientWidth/clientHeight бывают 0, если браузер не поддерживает
-    // CSS aspect-ratio (старые встроенные веб-вьюхи на борту) или раскладка
-    // ещё не посчиталась — тогда берём размер ближайшего предка/канвы, чтобы
-    // карта лидара не оставалась пустой навсегда.
-    const w = canvas.clientWidth || (canvas.parentElement && canvas.parentElement.clientWidth) || canvas.width || 280;
-    const h = canvas.clientHeight || (canvas.parentElement && canvas.parentElement.clientHeight) || canvas.height || 280;
-    if (!w || !h) return;
-    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-    }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-
-    const cx = w / 2;
-    const cy = h / 2;
-    const R = Math.max(10, Math.min(w, h) / 2 - 6);
-    const k = R / LIDAR_RANGE_M;
-
-    ctx.strokeStyle = '#2b4037';
-    ctx.lineWidth = 1;
-    for (let m = LIDAR_RING_M; m <= LIDAR_RANGE_M; m += LIDAR_RING_M) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, m * k, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    ctx.beginPath();                       // оси: вперёд и вбок
-    ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
-    ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
-    ctx.stroke();
-
-    ctx.fillStyle = '#9fe36b';
-    pts.forEach((p) => {
-      const r = Math.min(p.r, LIDAR_RANGE_M) * k;
-      const x = cx - r * Math.sin(p.a);
-      const y = cy - r * Math.cos(p.a);
-      ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
-    });
-
-    ctx.fillStyle = '#e6efe9';            // робот: треугольник носом вперёд
-    ctx.beginPath();
-    ctx.moveTo(cx, cy - 7);
-    ctx.lineTo(cx + 5, cy + 5);
-    ctx.lineTo(cx - 5, cy + 5);
-    ctx.closePath();
-    ctx.fill();
+  // Карта в стиле RViz — модуль lidar_view.js (сетка, оси, шасси, зум, Decay Time).
+  function drawLidar(canvas, pts, d) {
+    if (!canvas) return;
+    const stamp = d && d.lidarStatus ? d.lidarStatus.scan_at : null;
+    if (window.RCLidarView) window.RCLidarView.render(canvas, pts, { stamp });
   }
 
   function renderRoute(d) {

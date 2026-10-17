@@ -18,3 +18,24 @@
 .rc-lidar-btn{min-height:36px;padding:0 12px;border:1px solid #37443b;border-radius:8px;background:#18211b;color:#e7efe9;font:inherit;font-size:12px;font-weight:700;cursor:pointer}
 .rc-lidar-btn.primary{border-color:#527d5c;background:#203d29;color:#e3f7e7}
 @media(max-width:700px){.rc-lidar-overlay{padding:8px}.rc-lidar-dialog{padding:14px}.rc-lidar-actions button{flex:1 1 140px}}
+/* Карта лидара (lidar_view.js): кнопки масштаба поверх канвы, касания — только для зума */
+.rc-lv-zoom{position:absolute;right:8px;bottom:8px;z-index:2;display:flex;gap:4px}
+.rc-lv-zoom button{appearance:none;width:30px;height:30px;padding:0;border:1px solid #37443b;border-radius:8px;background:rgba(16,23,19,.86);color:#e7efe9;font:700 16px/1 system-ui,sans-serif;cursor:pointer;touch-action:manipulation}
+.rc-lv-zoom button:hover{border-color:#8bc897;background:rgba(33,69,45,.92)}
+.rc-lv-zoom button:focus-visible{outline:2px solid #8bc897;outline-offset:1px}
+.lidar-map canvas{touch-action:none;cursor:grab}
+.lidar-map canvas:active{cursor:grabbing}
+/* Блок «Отображение» в диалоге настроек лидара */
+.rc-lidar-view{display:grid;gap:10px;margin:0 0 14px;padding:10px 12px;border:1px solid #2c3830;border-radius:10px;background:#151d17}
+.rc-lidar-view legend{padding:0 6px;color:#cfe0d4;font-size:12px;font-weight:800}
+.rc-lidar-view .rc-lidar-hint{margin:0;color:#99aaa0;font-size:11.5px;line-height:1.5}
+.rc-lidar-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.rc-lidar-grid2 label{display:grid;gap:6px;min-width:0;color:#cfe0d4;font-size:12px}
+.rc-lidar-grid2 input:not([type=checkbox]),.rc-lidar-grid2 select{min-height:36px;padding:0 8px;border:1px solid #37443b;border-radius:8px;background:#18211b;color:#e7efe9;font:inherit;min-width:0}
+.rc-lidar-grid2 input[type=color]{padding:2px;cursor:pointer}
+.rc-lidar-grid2 input[type=range]{padding:0;min-height:auto;accent-color:#8bc897}
+.rc-lidar-grid2 .rc-lidar-check{display:flex;flex-direction:row;align-items:center;gap:8px}
+.rc-lidar-grid2 .rc-lidar-check input{min-height:auto}
+.rc-lidar-val{color:#8fb89c;font-variant-numeric:tabular-nums}
+.rc-lidar-view .rc-lidar-actions{justify-content:flex-start}
+@media(max-width:700px){.rc-lidar-grid2{grid-template-columns:1fr}}

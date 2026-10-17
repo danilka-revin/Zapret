@@ -22,6 +22,46 @@
     }[character]));
   }
 
+  // Отображение карты — как LaserScan в RViz. Значения живут в браузере экрана
+  // (модуль lidar_view.js) и применяются сразу; на железо они не влияют.
+  const VIEW_MARKUP = window.RCLidarView ? `
+        <fieldset class="rc-lidar-view" id="rc-lidar-view">
+          <legend>Отображение карты — как LaserScan в RViz</legend>
+          <p class="rc-lidar-hint">Применяется сразу и сохраняется в этом браузере.
+            Масштаб: колесо мыши или щипок, кнопки «+» «−» на карте, перетаскивание — сдвиг,
+            двойной щелчок или «⊙» — вид по умолчанию (робот в центре, 10 м).</p>
+          <div class="rc-lidar-grid2">
+            <label>Size (m) — размер точки, м
+              <span class="rc-lidar-val" id="rc-lv-size-val"></span>
+              <input type="range" id="rc-lv-size" min="0.01" max="0.5" step="0.01" /></label>
+            <label>Alpha — прозрачность
+              <span class="rc-lidar-val" id="rc-lv-alpha-val"></span>
+              <input type="range" id="rc-lv-alpha" min="0.1" max="1" step="0.05" /></label>
+            <label>Color Transformer
+              <select id="rc-lv-color">
+                <option value="range">Range — цвет по дальности (AxisColor)</option>
+                <option value="flat">Flat Color — один цвет</option>
+              </select></label>
+            <label>Flat Color
+              <input type="color" id="rc-lv-flat" /></label>
+            <label>Min Color — у препятствия
+              <input type="color" id="rc-lv-min" /></label>
+            <label>Max Color — на дальности
+              <input type="color" id="rc-lv-max" /></label>
+            <label>Min Value, м
+              <input type="number" id="rc-lv-minv" min="0" max="50" step="0.5" /></label>
+            <label>Max Value, м
+              <input type="number" id="rc-lv-maxv" min="0.5" max="60" step="0.5" /></label>
+            <label>Decay Time, с — история скана (0 — выкл.)
+              <input type="number" id="rc-lv-decay" min="0" max="30" step="0.5" /></label>
+            <label class="rc-lidar-check"><input type="checkbox" id="rc-lv-grid" /> Grid — метровая сетка</label>
+            <label class="rc-lidar-check"><input type="checkbox" id="rc-lv-axes" /> Axes — оси X (красная) и Y (зелёная)</label>
+          </div>
+          <div class="rc-lidar-actions">
+            <button type="button" class="rc-lidar-btn" id="rc-lv-reset">Сбросить отображение</button>
+          </div>
+        </fieldset>` : '';
+
   function mount() {
     if ($('rc-lidar-launch')) return;
 
@@ -51,6 +91,7 @@
           <button type="button" class="rc-lidar-close" aria-label="Закрыть">×</button>
         </header>
         <div class="rc-lidar-status" id="rc-lidar-status" role="status" aria-live="polite">Загружаю статус…</div>
+        ${VIEW_MARKUP}
         <form id="rc-lidar-form" class="rc-lidar-form">
           <label>Откуда берётся скан
             <select id="rc-lidar-source">
@@ -113,10 +154,12 @@
     window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && opened) close(); });
     $('rc-lidar-form').addEventListener('submit', (event) => { event.preventDefault(); void save(); });
     $('rc-lidar-rescan').addEventListener('click', () => void rescan());
+    bindView();
   }
 
   function open() {
     opened = true;
+    viewPopulate();
     const overlay = $('rc-lidar-overlay');
     if (overlay) overlay.hidden = false;
     const button = $('rc-lidar-launch');
@@ -196,6 +239,64 @@
     $('rc-lidar-baud').value = value.baud || '';
     $('rc-lidar-motor').value = value.motor || 'auto';
     $('rc-lidar-autoprobe').checked = value.autoprobe !== false;
+  }
+
+  // Блок отображения: значения берём из lidar_view.js и отправляем туда же.
+  function viewPopulate() {
+    if (!window.RCLidarView || !$('rc-lv-size')) return;
+    const v = window.RCLidarView.getSettings();
+    $('rc-lv-size').value = v.size;
+    $('rc-lv-alpha').value = v.alpha;
+    $('rc-lv-color').value = v.color;
+    $('rc-lv-flat').value = v.flatColor;
+    $('rc-lv-min').value = v.minColor;
+    $('rc-lv-max').value = v.maxColor;
+    $('rc-lv-minv').value = v.minValue;
+    $('rc-lv-maxv').value = v.maxValue;
+    $('rc-lv-decay').value = v.decay;
+    $('rc-lv-grid').checked = !!v.grid;
+    $('rc-lv-axes').checked = !!v.axes;
+    viewLabels(v);
+  }
+
+  function viewLabels(v) {
+    const size = $('rc-lv-size-val');
+    const alpha = $('rc-lv-alpha-val');
+    if (size) size.textContent = Number(v.size).toFixed(2) + ' м';
+    if (alpha) alpha.textContent = Number(v.alpha).toFixed(2);
+  }
+
+  function viewChanged() {
+    if (!window.RCLidarView) return;
+    const patch = {
+      size: Number($('rc-lv-size').value),
+      alpha: Number($('rc-lv-alpha').value),
+      color: $('rc-lv-color').value,
+      flatColor: $('rc-lv-flat').value,
+      minColor: $('rc-lv-min').value,
+      maxColor: $('rc-lv-max').value,
+      minValue: Number($('rc-lv-minv').value),
+      maxValue: Number($('rc-lv-maxv').value),
+      decay: Number($('rc-lv-decay').value),
+      grid: $('rc-lv-grid').checked,
+      axes: $('rc-lv-axes').checked
+    };
+    const saved = window.RCLidarView.setSettings(patch);
+    // Если границы Min/Max Value поменялись (нельзя max ≤ min), показываем исправленные.
+    viewLabels(saved);
+    $('rc-lv-minv').value = saved.minValue;
+    $('rc-lv-maxv').value = saved.maxValue;
+  }
+
+  function bindView() {
+    if (!window.RCLidarView || !$('rc-lv-size')) return;
+    ['rc-lv-size', 'rc-lv-alpha'].forEach((id) => $(id).addEventListener('input', viewChanged));
+    ['rc-lv-color', 'rc-lv-flat', 'rc-lv-min', 'rc-lv-max', 'rc-lv-minv', 'rc-lv-maxv',
+     'rc-lv-decay', 'rc-lv-grid', 'rc-lv-axes'].forEach((id) => $(id).addEventListener('change', viewChanged));
+    $('rc-lv-reset').addEventListener('click', () => {
+      window.RCLidarView.setSettings(window.RCLidarView.DEFAULTS);
+      viewPopulate();
+    });
   }
 
   async function refreshStatus() {
