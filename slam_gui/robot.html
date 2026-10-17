@@ -174,6 +174,8 @@
         <h2 id="swipe-title-text">Камеры и логи</h2>
         <small id="swipe-title-hint">свайп влево — назад к статистике</small>
       </div>
+      <!-- Маленькая кнопка ⚙: открывает окно настройки портов камер (видна только на вкладке камер). -->
+      <button id="cam-settings-open" class="swipe-close cam-gear" type="button" aria-controls="cam-settings-modal" aria-expanded="false" title="Настройка портов камер" hidden>⚙</button>
       <button id="swipe-battery-open" class="swipe-close battery-open" type="button" aria-controls="swipe-battery-view">АКБ</button>
       <span class="swipe-live" id="swipe-live">● LIVE</span>
     </header>
@@ -251,37 +253,8 @@
         </section>
       </section>
       <div id="swipe-cameras-view" class="swipe-view swipe-camera-view">
-      <!-- Настройка портов камер: отдельный порт для передней и задней -->
-      <section id="cam-settings" class="cam-settings" aria-label="Настройка камер">
-        <header class="cam-settings-head">
-          <div>
-            <b>Камеры: настройка портов</b>
-            <small id="cam-settings-current">передняя: авто · задняя: авто</small>
-          </div>
-          <button id="cam-settings-open" class="swipe-close" type="button" aria-controls="cam-settings-panel" aria-expanded="false">Настройка портов</button>
-        </header>
-        <div id="cam-settings-panel" class="cam-settings-panel" hidden>
-          <p class="cam-settings-hint">Выберите V4L2-устройство для каждой камеры. Путь <code>/dev/v4l/by-id/…</code> стабилен после перезагрузки; <code>/dev/video0</code> может меняться. Порты сохраняются в <code>.env</code> (RC_CAMERA_FRONT / RC_CAMERA_REAR) и применяются сразу без перезапуска. Настройка доступна без PIN.</p>
-          <div class="cam-settings-grid">
-            <label class="cam-settings-field">
-              <span>Передняя камера (CAM 0)</span>
-              <select id="cam-front-select" aria-label="Порт передней камеры"></select>
-              <small id="cam-front-hint" class="cam-settings-note">авто — /dev/video0</small>
-            </label>
-            <label class="cam-settings-field">
-              <span>Задняя камера (CAM 1)</span>
-              <select id="cam-rear-select" aria-label="Порт задней камеры"></select>
-              <small id="cam-rear-hint" class="cam-settings-note">авто — /dev/video1</small>
-            </label>
-          </div>
-          <div class="cam-settings-actions">
-            <button id="cam-scan" type="button">Обновить список</button>
-            <button id="cam-save" type="button" class="primary">Сохранить</button>
-            <button id="cam-reset" type="button" class="quiet">Сброс на авто</button>
-          </div>
-          <p id="cam-settings-msg" class="cam-settings-msg" role="status"></p>
-        </div>
-      </section>
+      <!-- Настройка портов камер (передняя/задняя) убрана в отдельное окно:
+           открывается маленькой кнопкой ⚙ в шапке. Здесь только камеры и логи. -->
       <!-- левая часть — две камеры друг над другом -->
       <div class="cam-stack">
         <section class="cam-card" aria-label="Камера 1 передняя">
@@ -392,6 +365,40 @@
         <p class="steer-footnote">Нужны источник master и свежая связь. Ноль задаёт «Калибровка» по оптодатчику D18 (прошивка v2); «0° вручную» — запасной вариант, если датчик снят: сначала выставьте колесо прямо руками. Ноль сбрасывается при перезапуске Arduino; поворот с экрана — в пределах ±32°.</p>
       </section>
     </div>
+    </div>
+
+    <!-- Окно настройки портов камер: открывается маленькой кнопкой ⚙ в шапке вкладки камер.
+         Закрывается кнопкой ✕, кликом по фону или Esc. -->
+    <div id="cam-settings-modal" class="cam-modal" hidden role="dialog" aria-modal="true" aria-labelledby="cam-settings-title">
+      <div class="cam-modal-backdrop" id="cam-modal-backdrop" aria-hidden="true"></div>
+      <div class="cam-modal-window">
+        <header class="cam-modal-head">
+          <div class="cam-modal-title">
+            <b id="cam-settings-title">Камеры · настройка портов</b>
+            <small id="cam-settings-current">передняя: авто · задняя: авто</small>
+          </div>
+          <button id="cam-modal-close" class="cam-modal-close" type="button" aria-label="Закрыть окно настройки камер">✕</button>
+        </header>
+        <p class="cam-settings-hint">Выберите V4L2-устройство для каждой камеры. Путь <code>/dev/v4l/by-id/…</code> стабилен после перезагрузки; <code>/dev/video0</code> может меняться. Порты сохраняются в <code>.env</code> (RC_CAMERA_FRONT / RC_CAMERA_REAR) и применяются сразу без перезапуска. Настройка доступна без PIN.</p>
+        <div class="cam-settings-grid">
+          <label class="cam-settings-field">
+            <span>Передняя камера (CAM 0)</span>
+            <select id="cam-front-select" aria-label="Порт передней камеры"></select>
+            <small id="cam-front-hint" class="cam-settings-note">авто — /dev/video0</small>
+          </label>
+          <label class="cam-settings-field">
+            <span>Задняя камера (CAM 1)</span>
+            <select id="cam-rear-select" aria-label="Порт задней камеры"></select>
+            <small id="cam-rear-hint" class="cam-settings-note">авто — /dev/video1</small>
+          </label>
+        </div>
+        <div class="cam-settings-actions">
+          <button id="cam-scan" type="button">Обновить список</button>
+          <button id="cam-save" type="button" class="primary">Сохранить</button>
+          <button id="cam-reset" type="button" class="quiet">Сброс на авто</button>
+        </div>
+        <p id="cam-settings-msg" class="cam-settings-msg" role="status"></p>
+      </div>
     </div>
   </div>
 
