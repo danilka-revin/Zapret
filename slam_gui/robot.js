@@ -1084,6 +1084,7 @@
     const cam2Chip = $('cam2-chip');
     const cam1Empty = $('cam1-empty');
     const cam2Empty = $('cam2-empty');
+    const camGearBtn = $('cam-settings-open');
     if (!page || !kiosk) return;
 
     let isOpen = false;
@@ -1105,6 +1106,8 @@
       if (cameraView) cameraView.hidden = showMotors || showBattery;
       if (motorView) motorView.hidden = !showMotors;
       if (batteryView) batteryView.hidden = !showBattery;
+      // Маленькая кнопка ⚙ настройки портов камер — только на вкладке камер.
+      if (camGearBtn) camGearBtn.hidden = activeSwipeView !== 'cameras';
       if (swipeTitle) swipeTitle.textContent = showMotors ? 'Руление и тяга' : (showBattery ? '4 · Аккумулятор' : 'Камеры и логи');
       if (swipeTitleHint) swipeTitleHint.textContent = showBattery
         ? 'Все банки · свайп вправо — назад к статистике'
@@ -1418,9 +1421,13 @@
       mOrigin = null; mView = null; mType = null;
     });
 
-    // Esc закрывает
+    // Esc закрывает: сначала окно настройки камер, потом сам свайп-экран
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && isOpen) { e.preventDefault(); closeSwipe(); }
+      if (e.key === 'Escape' && isOpen) {
+        e.preventDefault();
+        if (camSettingsOpen) { closeCamSettingsModal(); return; }
+        closeSwipe();
+      }
     });
 
     // также клик по оверлею вне? не нужно
@@ -1574,21 +1581,35 @@
       }
     }
 
+    // Окно настройки портов камер: маленькая кнопка ⚙ в шапке открывает
+    // отдельное окно; закрытие — ✕, клик по фону или Esc.
+    function openCamSettingsModal() {
+      const modal = $('cam-settings-modal');
+      if (!modal) return;
+      camSettingsOpen = true;
+      modal.hidden = false;
+      if (camGearBtn) camGearBtn.setAttribute('aria-expanded', 'true');
+      void fetchCamSettings();
+    }
+
+    function closeCamSettingsModal() {
+      const modal = $('cam-settings-modal');
+      if (!modal) return;
+      camSettingsOpen = false;
+      modal.hidden = true;
+      if (camGearBtn) camGearBtn.setAttribute('aria-expanded', 'false');
+    }
+
     function bindCamSettingsUI() {
-      const panel = $('cam-settings-panel');
       const btnOpen = $('cam-settings-open');
+      const btnClose = $('cam-modal-close');
+      const modalBackdrop = $('cam-modal-backdrop');
       const btnScan = $('cam-scan');
       const btnSave = $('cam-save');
       const btnReset = $('cam-reset');
-      if (btnOpen && panel) {
-        btnOpen.addEventListener('click', () => {
-          camSettingsOpen = !camSettingsOpen;
-          panel.hidden = !camSettingsOpen;
-          btnOpen.setAttribute('aria-expanded', camSettingsOpen ? 'true' : 'false');
-          btnOpen.textContent = camSettingsOpen ? 'Скрыть' : 'Настройка портов';
-          if (camSettingsOpen) void fetchCamSettings();
-        });
-      }
+      if (btnOpen) btnOpen.addEventListener('click', openCamSettingsModal);
+      if (btnClose) btnClose.addEventListener('click', closeCamSettingsModal);
+      if (modalBackdrop) modalBackdrop.addEventListener('click', closeCamSettingsModal);
       if (btnScan) btnScan.addEventListener('click', () => { void rescanCamPorts(); void fetchCamSettings(); });
       if (btnSave) btnSave.addEventListener('click', () => { void saveCamSettings(); });
       if (btnReset) btnReset.addEventListener('click', () => {

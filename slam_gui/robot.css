@@ -1695,14 +1695,20 @@ body.swipe-open .kiosk {
 .bms-setup-msg[data-tone="warn"] { color: #ffd18a; }
 .bms-setup-msg[data-tone="error"] { color: #ffb7ad; }
 
-/* ── Камеры: настройка портов (отдельный порт для передней и задней) ── */
-.cam-settings { border: 1px solid #2a4a3a; border-radius: 16px; background: #0f1a16; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
-.cam-settings-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; }
-.cam-settings-head > div { display: flex; flex-direction: column; gap: 2px; }
-.cam-settings-head b { color: #9fe36b; font-size: 17px; }
-.cam-settings-head small { color: var(--muted); font-size: 13px; font-weight: 700; }
-.cam-settings-panel { display: flex; flex-direction: column; gap: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
-.cam-settings-panel[hidden] { display: none; }
+/* ── Камеры: настройка портов — отдельное окно по кнопке ⚙ в шапке ── */
+/* Маленькая кнопка ⚙ рядом с «АКБ» (видна только на вкладке камер). */
+.cam-gear { padding: 10px 13px; font-size: 17px; line-height: 1; }
+/* Окно настройки: затемнение + карточка по центру свайп-экрана. */
+.cam-modal { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.cam-modal[hidden] { display: none !important; }
+.cam-modal-backdrop { position: absolute; inset: 0; background: rgba(3,6,10,.62); backdrop-filter: blur(6px) saturate(1.05); -webkit-backdrop-filter: blur(6px) saturate(1.05); }
+.cam-modal-window { position: relative; z-index: 1; width: min(720px, 100%); max-height: 100%; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding: 18px 20px 20px; border: 1px solid #2a4a3a; border-radius: 16px; background: #0f1a16; box-shadow: 0 24px 64px rgba(0,0,0,.55); }
+.cam-modal-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.cam-modal-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cam-modal-title b { color: #9fe36b; font-size: 17px; }
+.cam-modal-title small { color: var(--muted); font-size: 13px; font-weight: 700; }
+.cam-modal-close { flex: none; width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); font: 800 15px/1 var(--mono); cursor: pointer; transition: border-color .15s, color .15s; }
+.cam-modal-close:hover { border-color: #9fe36b; color: #c8f5a0; }
 .cam-settings-hint { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
 .cam-settings-hint code { padding: 2px 6px; border-radius: 6px; background: var(--bg-2); font: 12px var(--mono); }
 .cam-settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -1721,9 +1727,6 @@ body.swipe-open .kiosk {
 .cam-settings-msg[data-tone="ok"] { color: #b8f0c0; }
 .cam-settings-msg[data-tone="warn"] { color: #ffd18a; }
 .cam-settings-msg[data-tone="error"] { color: #ffb7ad; }
-.swipe-camera-view { gap: 14px; }
-.swipe-camera-view .cam-settings { flex: none; }
-.cam-stack { flex: 1 1 auto; }
 
 /* Главный экран: панель АКБ — кнопка на страницу 4. */
 .battery-panel[role="button"] { cursor: pointer; transition: border-color .15s, background .15s; }
