@@ -259,8 +259,8 @@ python_bin() {
 }
 
 prefix_pythonpath() {
-  local base="$1" version dir
-  version="$("$(python_bin)" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo 3.10)"
+  local base="$1" py="${2:-$(python_bin)}" version dir
+  version="$("$py" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo 3.10)"
   for dir in "$base/lib/python$version/site-packages" \
              "$base/lib/python3/dist-packages" \
              "$base/lib/python3/site-packages"; do
@@ -270,17 +270,28 @@ prefix_pythonpath() {
 
 # rclpy — это C-расширение: ему нужны не только PYTHONPATH, но и LD_LIBRARY_PATH
 # с библиотеками ROS 2. Поэтому проверяем так же, как работает робот: source
-# setup.bash и import rclpy интерпретатором приложения (.venv).
+# setup.bash и import rclpy интерпретатором приложения (.venv). Если .venv
+# создан другим Python (после обновления Ubuntu), пробуем и системный python3:
+# именно его видит ros2_lidar.sh как запасной движок.
 rclpy_ok() {
-  local base="$1" py
+  local base="$1" py seen=" "
   [[ -n "$base" ]] || return 1
-  py="$(python_bin)"
-  if [[ -f "$base/setup.bash" ]]; then
-    # shellcheck disable=SC1091
-    ( set +u; . "$base/setup.bash" >/dev/null 2>&1; "$py" -c 'import rclpy' ) >/dev/null 2>&1 && return 0
-  fi
-  PYTHONPATH="$(prefix_pythonpath "$base")${PYTHONPATH:-}" \
-  LD_LIBRARY_PATH="$base/lib:${LD_LIBRARY_PATH:-}" "$py" -c 'import rclpy' >/dev/null 2>&1
+  for py in "$(python_bin)" python3; do
+    [[ "$seen" == *" $py "* ]] && continue
+    seen+="$py "
+    if [[ "$py" == */* ]]; then
+      [[ -x "$py" ]] || continue
+    else
+      command -v "$py" >/dev/null 2>&1 || continue
+    fi
+    if [[ -f "$base/setup.bash" ]]; then
+      # shellcheck disable=SC1091
+      ( set +u; . "$base/setup.bash" >/dev/null 2>&1; "$py" -c 'import rclpy' ) >/dev/null 2>&1 && return 0
+    fi
+    PYTHONPATH="$(prefix_pythonpath "$base" "$py")${PYTHONPATH:-}" \
+    LD_LIBRARY_PATH="$base/lib:${LD_LIBRARY_PATH:-}" "$py" -c 'import rclpy' >/dev/null 2>&1 && return 0
+  done
+  return 1
 }
 
 ament_packages() {
@@ -1301,7 +1312,7 @@ main_setup() {
 
   RCLPY="нет"
   rclpy_ok "$PREFIX" && RCLPY="да"
-  [[ "$RCLPY" == "да" ]] || warn "rclpy не импортируется интерпретатором $(python_bin) — версия Python .venv должна совпадать с ROS 2 $DISTRO"
+  [[ "$RCLPY" == "да" ]] || warn "rclpy не импортируется ни из $(python_bin), ни из python3 — проверь, что версия Python .venv совпадает с ROS 2 $DISTRO"
   [[ $WRITE_ENV -eq 1 ]] && write_env
   [[ $DO_SERVICE -eq 1 ]] && install_service
 

@@ -80,6 +80,10 @@ DRIVERS: dict[str, Driver] = {
             "frame_id": "{frame_id}",
             "angle_compensate": True,
         },
+        # ВАЖНО: не 0. Пустое serial_baudrate:= — это параметр-строка, а узел
+        # объявляет int: драйвер падал сразу после старта. 115200 — скорость A1;
+        # для A2/A3/C1 её уточнит проба порта (см. probe_ports) или RC_LIDAR_BAUD.
+        baud=115200,
         apt="ros-{d}-rplidar-ros",
         source="https://github.com/Slamtec/rplidar_ros",
         note="скорость зависит от модели: 115200 (A1/A2M8), 256000 (A3/S1), 460800 (C1)",
@@ -96,6 +100,7 @@ DRIVERS: dict[str, Driver] = {
             "frame_id": "{frame_id}",
             "angle_compensate": True,
         },
+        baud=115200,
         # В rosdistro sllidar_ros2 нет — пакета ros-<d>-sllidar-ros2 не существует.
         apt="",
         source="https://github.com/Slamtec/sllidar_ros2",
@@ -110,7 +115,7 @@ DRIVERS: dict[str, Driver] = {
         params={
             "product_name": "LDLiDAR_LD06",
             "port_name": "{port}",
-            "port_baudrate": 230400,
+            "port_baudrate": "{baud}",
             "topic_name": "{topic}",
             "frame_id": "{frame_id}",
         },
@@ -127,7 +132,7 @@ DRIVERS: dict[str, Driver] = {
         params={
             "product_name": "LDLiDAR_LD19",
             "port_name": "{port}",
-            "port_baudrate": 230400,
+            "port_baudrate": "{baud}",
             "topic_name": "{topic}",
             "frame_id": "{frame_id}",
         },
@@ -143,7 +148,7 @@ DRIVERS: dict[str, Driver] = {
         params={
             "product_name": "LDLiDAR_STL27L",
             "port_name": "{port}",
-            "port_baudrate": 921600,
+            "port_baudrate": "{baud}",
             "topic_name": "{topic}",
             "frame_id": "{frame_id}",
         },
@@ -206,9 +211,14 @@ def get_driver(name: str) -> Optional[Driver]:
 def drivers_for_protocol(protocol: str) -> list[Driver]:
     """Все драйверы, умеющие этот протокол (для RC_LIDAR_PROTOCOL=rplidar и т. п.)."""
     key = (protocol or "auto").strip().lower()
-    if key in ("", "auto", "opencr"):
+    if key in ("", "auto"):
         return [DRIVERS[name] for name in DRIVER_ORDER]
     wanted = MODEL_ALIASES.get(key, key)
+    if wanted == "opencr":
+        # Явно выбранный OpenCR — это только turtlebot3_node: раньше «opencr»
+        # попадал в ветку auto, и план пытался открыть порт лидара чужими
+        # драйверами (rplidar_ros на /dev/ttyUSB*).
+        return [DRIVERS["opencr"]]
     out: list[Driver] = []
     for name in DRIVER_ORDER:
         driver = DRIVERS[name]
@@ -255,12 +265,18 @@ def reserved_ports() -> set[str]:
     Те же переменные, что и в веб-приложении (``robot_control/lidar.py``):
     лидар не должен перебирать порт мастера или аккумулятора.
     """
-    names = ("RC_SLAM_PORT", "RC_BMS_PORT")
+    names = ("RC_SLAM_PORT", "RC_BMS_PORT", "RC_SLAM_MASTER_PORT")
     values: list[str] = []
     for name in names:
         raw = (os.environ.get(name) or "").strip()
         if raw:
             values.append(raw)
+    # Как в robot_control/bms_setup.py: при RC_SLAM_SOURCE=master (по умолчанию)
+    # мастер руления — /dev/ttyACM0, даже если RC_SLAM_PORT ещё не записан.
+    # Открытие этого порта перезагружает Arduino, поэтому лидар его не трогает.
+    source = (os.environ.get("RC_SLAM_SOURCE") or "master").strip().lower()
+    if source == "master" and not (os.environ.get("RC_SLAM_PORT") or "").strip():
+        values.append("/dev/ttyACM0")
     for name in ("RC_SLAM_PORTS", "RC_LIDAR_EXCLUDE"):
         raw = os.environ.get(name) or ""
         values.extend(item.strip() for item in raw.replace(";", ",").split(","))
@@ -336,6 +352,8 @@ def build_plan(
     ports: str | Iterable[str] | None = None,
     installed: Optional[set[str]] = None,
     scores: Optional[dict[str, float]] = None,
+    bauds: Optional[dict[str, int]] = None,
+    baud_override: int = 0,
     only_first_port: bool = False,
 ) -> list[PlanItem]:
     """Порядок попыток запуска драйверов лидара.
@@ -344,29 +362,54 @@ def build_plan(
     ``rplidar``, ``turtlebot3``…). ``installed`` — набор ROS 2-пакетов: драйверы
     без своего пакета всё равно попадают в план, но помечаются ``installed:
     False`` — оператор видит, чего не хватает, а не «лидар не найден».
-    ``scores`` — результат быстрой проверки порта (:mod:`zapret_lidar.frames`):
-    чем выше, тем раньше драйвер попробуют.
+    ``scores`` — результат быстрой проверки порта (:mod:`zapret_lidar.probe`):
+    чем выше, тем раньше драйвер попробуют. ``bauds`` — найденная проверкой
+    скорость для ключа ``протокол@порт`` (RPLIDAR A2/A3/C1 иначе получил бы
+    скорость A1). ``baud_override`` (``RC_LIDAR_BAUD`` / ``baud:=``) важнее
+    и пробы, и значения по умолчанию.
     """
     scores = scores or {}
+    bauds = bauds or {}
     port_list = candidate_ports(ports)
-    # Порт OpenCR — не лидар: если отдельного USB-устройства лидара нет, а порт
-    # робота есть, вариант «лидар на плате» проверяется тоже.
-    opencr_ports = [port for port in port_list if port.startswith("/dev/ttyACM")]
     plan: list[PlanItem] = []
     for driver in drivers_for_protocol(model):
         is_installed = True if installed is None else driver.package in installed
         driver_ports: list[str]
         if driver.needs_port:
-            driver_ports = list(port_list)
             if driver.name == "opencr":
-                # Драйвер платы робота: свой порт у него есть и без лидара.
-                extra = [port for port in opencr_ports if port not in driver_ports]
+                # Плата робота — только /dev/ttyACM*: у лидара на USB-переходнике
+                # другой драйвер. Иначе turtlebot3_node открывал бы порт лидара.
+                driver_ports = [port for port in port_list
+                                if port.startswith("/dev/ttyACM")]
                 primary = [OPENC_R_PORT] if os.path.exists(OPENC_R_PORT) else []
-                driver_ports = list(dict.fromkeys(primary + driver_ports + extra))
+                driver_ports = list(dict.fromkeys(primary + driver_ports))
+            else:
+                driver_ports = list(port_list)
         else:
             driver_ports = [""]
+        if driver.name == "opencr" and not driver_ports:
+            # ttyACM не нашёлся (например, кабель ещё не подключён): оставляем
+            # одну попытку на стандартном порту, чтобы статус объяснял причину,
+            # а не показывал пустой план.
+            driver_ports = [OPENC_R_PORT]
         for port in driver_ports:
-            baud = driver.baud
+            # Скорость, на которой порт реально отдал кадры этого лидара.
+            detected = 0
+            for protocol in driver.protocols:
+                detected = int(bauds.get("%s@%s" % (protocol, port), 0) or 0)
+                if detected:
+                    break
+            if baud_override:
+                rates = [int(baud_override)]
+            elif detected:
+                rates = [detected]
+            elif driver.name in ("rplidar", "sllidar"):
+                # RPLIDAR A1/A2M8 — 115200, A3/S1 — 256000, C1 — 460800.
+                # Без пробы (нет pyserial, порт занят, autoprobe:=false)
+                # перебираем все: иначе A3 молча не поднимался бы на «A1».
+                rates = [115200, 256000, 460800]
+            else:
+                rates = [driver.baud]
             score = 0.0
             for protocol in driver.protocols:
                 score = max(score, scores.get("%s@%s" % (protocol, port), 0.0))
@@ -374,9 +417,10 @@ def build_plan(
                 # Пакета нет — такая попытка не сработает, но её место в плане
                 # сохраняем: в статусе видно, что именно надо доустановить.
                 score -= 100.0
-            plan.append(PlanItem(driver=driver, port=port, baud=baud,
-                                 score=score + _static_priority(driver),
-                                 installed=is_installed))
+            for baud in rates:
+                plan.append(PlanItem(driver=driver, port=port, baud=baud,
+                                     score=score + _static_priority(driver),
+                                     installed=is_installed))
         if only_first_port and driver.needs_port and driver_ports:
             break
     plan.sort(key=lambda item: -item.score)
@@ -419,7 +463,12 @@ def driver_command(
                                 prefix=prefix, driver=driver))
     pairs: list[tuple[str, str]] = []
     for key, value in driver.params.items():
-        pairs.append((key, _substitute(str(value), port=port, baud=rate, topic=topic,
+        raw = str(value)
+        if "{baud}" in raw and not rate:
+            # Неизвестная скорость лучше значения драйвера по умолчанию, чем
+            # пустой serial_baudrate:= (узел объявляет int и падает).
+            continue
+        pairs.append((key, _substitute(raw, port=port, baud=rate, topic=topic,
                                        frame_id=frame_id, prefix=prefix, driver=driver)))
     param_file = driver.param_file
     if param_file:

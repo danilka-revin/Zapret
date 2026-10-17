@@ -27,6 +27,7 @@ from launch.conditions import UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def _vendor_launch(context):
@@ -67,15 +68,18 @@ def generate_launch_description():
         name="lidar_supervisor",
         output="screen",
         condition=UnlessCondition(use_vendor),
+        # Типы задаём явно: launch_ros разбирает подстановки по правилам YAML,
+        # и «baud:=256000» ещё работает, а пустое значение или «autostart:=1»
+        # приходило строкой — узел падал на объявлении параметра-числа/bool.
         parameters=[{
-            "model": model,
-            "port": port,
-            "baud": baud,
-            "scan_topic": scan_topic,
-            "status_topic": status_topic,
-            "frame_id": frame_id,
-            "autostart": autostart,
-            "autoprobe": autoprobe,
+            "model": ParameterValue(model, value_type=str),
+            "port": ParameterValue(port, value_type=str),
+            "baud": ParameterValue(baud, value_type=int),
+            "scan_topic": ParameterValue(scan_topic, value_type=str),
+            "status_topic": ParameterValue(status_topic, value_type=str),
+            "frame_id": ParameterValue(frame_id, value_type=str),
+            "autostart": ParameterValue(autostart, value_type=bool),
+            "autoprobe": ParameterValue(autoprobe, value_type=bool),
         }],
     )
 

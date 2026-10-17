@@ -114,6 +114,9 @@ LAUNCH_COMMAND = "./scripts/ros2_lidar.sh"
 DESCRIBE_TTL_S = 3.0
 
 _lock = threading.Lock()
+#: Отдельный замок инициализации: мосты (лидар и экран) поднимаются в разных
+#: потоках почти одновременно, и два `rclpy.init()` подряд — это сбой второго.
+_init_lock = threading.Lock()
 _rclpy: Optional[Any] = None
 _rclpy_error: str = ""
 _prepared_prefix: Optional[Path] = None
@@ -533,6 +536,40 @@ def import_rclpy():
         raise RosUnavailable(missing_reason()) from exc
     _rclpy = rclpy
     _rclpy_error = ""
+    return rclpy
+
+
+def init_rclpy(module: Optional[Any] = None):
+    """Инициализирует rclpy, не перехватывая сигналы приложения.
+
+    ``rclpy.init()`` по умолчанию ставит C-обработчики SIGINT/SIGTERM на весь
+    процесс (и при SIGTERM сам гасит контексты ROS 2). Приложение — gunicorn
+    или киоск — ставит свои обработчики: после rclpy они либо не вызываются,
+    либо вызываются вместе с аварийным завершением ROS 2, и systemd добивает
+    процесс по SIGKILL. Мосту нужны только подписки, поэтому обработчики
+    сигналов не ставим. На старом rclpy без этой опции работает обычный init.
+
+    Возвращает модуль ``rclpy`` (его же можно передать в ``module``).
+    """
+    rclpy = module if module is not None else import_rclpy()
+    with _init_lock:
+        if rclpy.ok():
+            return rclpy
+        try:
+            from rclpy.signals import SignalHandlerOptions
+            rclpy.init(args=None, signal_handler_options=SignalHandlerOptions.NO)
+        except (ImportError, AttributeError, TypeError):
+            try:
+                rclpy.init(args=None)
+            except Exception:
+                if not rclpy.ok():
+                    raise
+        except Exception:
+            # Другой поток успел инициализировать контекст, пока мы ждали
+            # замок (или rclpy уже ругается на повторный init). Если контекст
+            # рабочий — это не ошибка; иначе исключение уходит наверх.
+            if not rclpy.ok():
+                raise
     return rclpy
 
 

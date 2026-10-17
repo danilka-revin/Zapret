@@ -11,6 +11,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -24,7 +25,7 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from . import drivers as drv
-from .probe import probe_ports, scores_for_plan
+from .probe import bauds_for_plan, probe_ports, scores_for_plan
 
 #: Как часто пересматривать план, если ничего не получается (с).
 RETRY_PAUSE_S = 5.0
@@ -33,10 +34,52 @@ RETRY_PAUSE_S = 5.0
 DEFAULT_PROBE_TIMEOUT_S = 8.0
 #: Через сколько секунд без точек считать драйвер вставшим (с).
 DEFAULT_SCAN_TIMEOUT_S = 3.0
+#: Сколько секунд держать результат проверки портов. Раньше порты проверялись
+#: заново каждые 5 с (и на живом потоке это занимало десятки секунд): таймер
+#: ROS 2 стоял, /scan не обрабатывался, состояние не публиковалось.
+PROBE_TTL_S = 20.0
+#: Сколько портов проверять за один пересмотр плана (и общий бюджет в probe.py).
+PROBE_PORT_LIMIT = 3
 
 
 def now() -> float:
     return time.time()
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    """Приводит значение параметра к bool.
+
+    ``ros2 launch`` передаёт значения из командной строки через YAML, а
+    ``--ros-args -p autostart:=false`` — уже bool. Но встречаются и строки
+    («false», «0», «нет») и числа: ``bool("false")`` — это True, из-за чего
+    супервизор запускал драйвер, когда его просили этого не делать.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value if value is not None else "").strip().lower()
+    if text in ("1", "true", "yes", "on", "да", "вкл"):
+        return True
+    if text in ("", "0", "false", "no", "off", "нет", "выкл"):
+        return False
+    return default
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    """int из параметра; битое значение не роняет узел, а даёт default."""
+    try:
+        return int(float(str(value).strip())) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    """float из параметра; битое значение не роняет узел, а даёт default."""
+    try:
+        return float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 class ScanWatch:
@@ -71,30 +114,52 @@ class LidarSupervisor(Node):
 
     def __init__(self) -> None:
         super().__init__("lidar_supervisor")
-        self.declare_parameter("model", "auto")
-        self.declare_parameter("port", "")
-        self.declare_parameter("baud", 0)
-        self.declare_parameter("scan_topic", drv.DEFAULT_SCAN_TOPIC)
-        self.declare_parameter("status_topic", drv.DEFAULT_STATUS_TOPIC)
-        self.declare_parameter("frame_id", "base_scan")
-        self.declare_parameter("probe_timeout", DEFAULT_PROBE_TIMEOUT_S)
-        self.declare_parameter("scan_timeout", DEFAULT_SCAN_TIMEOUT_S)
-        self.declare_parameter("autostart", True)
-        self.declare_parameter("autoprobe", True)
-        self.declare_parameter("tick", 1.0)
+        # dynamic_typing: значение из launch/--ros-args может прийти строкой
+        # («256000», «false») или числом. Без этого rclpy падал ещё в
+        # конструкторе с InvalidParameterTypeException — узел не поднимался
+        # вовсе, и «ros2 launch» завершался ошибкой через секунду.
+        from rcl_interfaces.msg import ParameterDescriptor
+        for name, default in (
+            ("model", "auto"),
+            ("port", ""),
+            ("baud", 0),
+            ("scan_topic", drv.DEFAULT_SCAN_TOPIC),
+            ("status_topic", drv.DEFAULT_STATUS_TOPIC),
+            ("frame_id", "base_scan"),
+            ("probe_timeout", DEFAULT_PROBE_TIMEOUT_S),
+            ("scan_timeout", DEFAULT_SCAN_TIMEOUT_S),
+            ("autostart", True),
+            ("autoprobe", True),
+            ("tick", 1.0),
+        ):
+            self.declare_parameter(name, default,
+                                   ParameterDescriptor(dynamic_typing=True))
 
-        self.model = str(self.get_parameter("model").value or "auto")
-        self.port_spec = str(self.get_parameter("port").value or "")
-        self.baud_override = int(self.get_parameter("baud").value or 0)
-        self.scan_topic = str(self.get_parameter("scan_topic").value or "/scan")
-        self.status_topic = str(self.get_parameter("status_topic").value
-                                or drv.DEFAULT_STATUS_TOPIC)
-        self.frame_id = str(self.get_parameter("frame_id").value or "base_scan")
-        self.probe_timeout = float(self.get_parameter("probe_timeout").value or 8.0)
-        self.scan_timeout = float(self.get_parameter("scan_timeout").value or 3.0)
-        self.autostart = bool(self.get_parameter("autostart").value)
-        self.autoprobe = bool(self.get_parameter("autoprobe").value)
-        tick = float(self.get_parameter("tick").value or 1.0)
+        def value(name: str) -> Any:
+            return self.get_parameter(name).value
+
+        self.model = str(value("model") or "auto").strip().lower() or "auto"
+        self.port_spec = str(value("port") or "").strip()
+        self.baud_override = max(0, _as_int(value("baud"), 0))
+        self.scan_topic = str(value("scan_topic") or drv.DEFAULT_SCAN_TOPIC).strip() \
+            or drv.DEFAULT_SCAN_TOPIC
+        self.status_topic = str(value("status_topic") or drv.DEFAULT_STATUS_TOPIC).strip() \
+            or drv.DEFAULT_STATUS_TOPIC
+        self.frame_id = str(value("frame_id") or "base_scan").strip() or "base_scan"
+        self.probe_timeout = max(1.0, _as_float(value("probe_timeout"),
+                                                DEFAULT_PROBE_TIMEOUT_S))
+        self.scan_timeout = max(0.5, _as_float(value("scan_timeout"),
+                                               DEFAULT_SCAN_TIMEOUT_S))
+        self.autostart = _as_bool(value("autostart"), True)
+        self.autoprobe = _as_bool(value("autoprobe"), True)
+        tick = max(0.2, _as_float(value("tick"), 1.0))
+        if self.scan_topic == self.status_topic:
+            # Иначе подписка и публикатор одного типа делят топик: состояние
+            # начинает приходить самому себе и «скан» путается со статусом.
+            self.get_logger().warning(
+                "scan_topic и status_topic совпадают (%s) — статус переехал в %s"
+                % (self.scan_topic, drv.DEFAULT_STATUS_TOPIC))
+            self.status_topic = drv.DEFAULT_STATUS_TOPIC
 
         self.watch = ScanWatch()
         self.plan: list[drv.PlanItem] = []
@@ -104,6 +169,11 @@ class LidarSupervisor(Node):
         self.hint = ""
         self.tried: list[dict[str, Any]] = []
         self.probes: dict[str, dict[str, Any]] = {}
+        self._probe_scores: dict[str, float] = {}
+        self._probe_bauds: dict[str, int] = {}
+        self._probe_key: tuple[str, ...] = ()
+        self._probe_at = 0.0
+        self._last_error = ""
         self.installed = drv.installed_packages(self._prefixes())
         self.process: Optional[subprocess.Popen] = None
         self.driver: Optional[drv.Driver] = None
@@ -124,13 +194,19 @@ class LidarSupervisor(Node):
         self.create_subscription(LaserScan, self.scan_topic, self._on_scan, qos_scan)
         self.publisher = self.create_publisher(String, self.status_topic, 10)
         self.create_service(Trigger, "~/rescan", self._on_rescan)
-        self.create_timer(max(0.2, tick), self._tick)
+        self.create_timer(tick, self._tick)
         self.get_logger().info(
             "супервизор лидара: топик %s, модель %s, порты: %s"
             % (self.scan_topic, self.model, ", ".join(self._ports()) or "автопоиск")
         )
 
     # ------------------------------ утилиты -------------------------------- #
+
+    def _remember(self, driver: str, port: str, note: str) -> None:
+        """Короткая история попыток для статуса (без роста памяти за сутки)."""
+        self.tried.append({"driver": driver, "port": port, "note": note})
+        if len(self.tried) > 40:
+            del self.tried[:-40]
 
     def _prefixes(self) -> list[Path]:
         out: list[Path] = []
@@ -185,19 +261,45 @@ class LidarSupervisor(Node):
 
     # --------------------------- план и запуск ----------------------------- #
 
-    def refresh_plan(self) -> None:
-        """Пересобирает план: порты, установленные пакеты, быстрая проверка порта."""
+    def refresh_plan(self, *, force_probe: bool = False) -> None:
+        """Пересобирает план: порты, установленные пакеты, быстрая проверка порта.
+
+        Проверка порта не повторяется на каждом тике: её результат живёт
+        ``PROBE_TTL_S`` секунд и переиспользуется, пока список портов не
+        изменится. Порт живого драйвера не трогаем — иначе проба не откроет
+        его, а статус покажет «лидар не опознан».
+        """
         ports = self._ports()
         self.installed = drv.installed_packages(self._prefixes())
-        scores: dict[str, float] = {}
-        if self.autoprobe and ports:
-            # Проверяем порты, только если лидар не задан вручную: на роботе это
-            # доли секунды, но порт занимается на время проверки.
-            self.probes = probe_ports(ports, limit=4)
-            scores = scores_for_plan(self.probes)
-        self.plan = drv.build_plan(model=self.model, ports=ports,
-                                   installed=self.installed, scores=scores)
+        if not self.autoprobe:
+            self.probes = {}
+            self._probe_scores = {}
+            self._probe_bauds = {}
+        elif ports and self._should_probe(ports, force_probe=force_probe):
+            # probe_ports ограничен и по числу портов, и по общему времени:
+            # при молчащем лидаре это доли секунды, при чужом потоке — не больше
+            # PROBE_BUDGET_S, а не минута на все скорости всех портов.
+            self.probes = probe_ports(ports, limit=PROBE_PORT_LIMIT)
+            self._probe_scores = scores_for_plan(self.probes)
+            self._probe_bauds = bauds_for_plan(self.probes)
+            self._probe_key = tuple(ports)
+            self._probe_at = time.monotonic()
+        self.plan = drv.build_plan(
+            model=self.model, ports=ports, installed=self.installed,
+            scores=self._probe_scores, bauds=self._probe_bauds,
+            baud_override=self.baud_override)
         self.plan_index = 0
+
+    def _should_probe(self, ports: list[str], *, force_probe: bool) -> bool:
+        """Пора ли снова читать порты (не занимая порт работающего драйвера)."""
+        if self.baud_override:      # скорость задана вручную — проба не нужна
+            return False
+        if self.process is not None and self.process.poll() is None:
+            return False            # порт держит наш драйвер
+        key = tuple(ports)
+        if force_probe or key != self._probe_key:
+            return True
+        return (time.monotonic() - self._probe_at) >= PROBE_TTL_S
 
     def start_next(self) -> None:
         """Запускает следующую попытку из плана (или сообщает, что нечего)."""
@@ -206,21 +308,26 @@ class LidarSupervisor(Node):
             item = self.plan[self.plan_index]
             self.plan_index += 1
             if not item.installed:
-                self.tried.append({"driver": item.driver.name, "port": item.port,
-                                   "note": "пакет %s не установлен" % item.driver.package})
+                self._remember(item.driver.name, item.port,
+                               "пакет %s не установлен" % item.driver.package)
                 continue
             if item.driver.needs_port and not item.port:
-                self.tried.append({"driver": item.driver.name, "port": "",
-                                   "note": "порт не найден"})
+                self._remember(item.driver.name, "", "порт не найден")
                 continue
-            self.launch(item)
-            return
+            if self.launch(item):
+                return
+            # Ошибка запуска (нет файла, порт исчез, нет прав) — не оставляем
+            # узел в состоянии «starting» навсегда: сразу пробуем следующий
+            # пункт плана, а затем уходим в failed и повторяем по таймеру.
         self.state = "failed"
         self.reason = self._failure_reason()
         self.hint = self._failure_hint()
+        # Пауза перед следующим пересмотром плана: без неё узел каждую секунду
+        # заново перебирал бы пустой план (нет портов/пакетов) и грузил CPU.
+        self._next_retry = now() + RETRY_PAUSE_S
 
-    def launch(self, item: drv.PlanItem) -> None:
-        """Запускает драйвер попытки и переводит состояние в «проверяю»."""
+    def launch(self, item: drv.PlanItem) -> bool:
+        """Запускает драйвер попытки. False — попытка не удалась, есть следующая."""
         prefix = self._ros_prefix()
         install = self._install_prefix()
         executable = drv.find_executable(item.driver, prefix=prefix, install=install)
@@ -232,9 +339,9 @@ class LidarSupervisor(Node):
                 if executable is not None:
                     break
         if executable is None and self.ros2_cli() is None:
-            self.tried.append({"driver": item.driver.name, "port": item.port,
-                               "note": "нет ни %s в lib/, ни команды ros2" % item.driver.executable})
-            return
+            self._remember(item.driver.name, item.port,
+                           "нет ни %s в lib/, ни команды ros2" % item.driver.executable)
+            return False
         argv = drv.driver_command(item.driver, port=item.port, baud=item.baud,
                                   topic=self.scan_topic, frame_id=self.frame_id,
                                   prefix=prefix, install=install, executable=executable)
@@ -244,12 +351,12 @@ class LidarSupervisor(Node):
             self.process = subprocess.Popen(  # noqa: S603 — argv собран из таблицы
                 argv, env=env, start_new_session=True,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                errors="replace",
             )
         except OSError as exc:
-            self.tried.append({"driver": item.driver.name, "port": item.port,
-                               "note": "не запустился: %s" % exc})
+            self._remember(item.driver.name, item.port, "не запустился: %s" % exc)
             self.process = None
-            return
+            return False
         self.driver = item.driver
         self.driver_port = item.port
         self.driver_baud = item.baud
@@ -257,21 +364,36 @@ class LidarSupervisor(Node):
         self.state = "probing"
         self.reason = "запускаю %s" % item.driver.title
         self.hint = ""
-        threading.Thread(target=self._drain, args=(self.process,), daemon=True).start()
+        threading.Thread(target=self._drain,
+                         args=(self.process, item.driver.package),
+                         daemon=True).start()
         self.get_logger().info(
             "пробую %s на %s (%s бод): %s"
             % (item.driver.title, item.port or "—", item.baud or "по умолчанию", " ".join(argv))
         )
+        return True
 
-    def _drain(self, process: Optional[subprocess.Popen]) -> None:
-        """Читает вывод драйвера в журнал супервизора (иначе он копится в трубе)."""
+    def _drain(self, process: Optional[subprocess.Popen], label: str = "driver") -> None:
+        """Читает вывод драйвера в журнал супервизора (иначе он копится в трубе).
+
+        Поток не должен падать от закрытого при остановке файла или битой
+        кодировки: исключение в фоновом потоке печатает traceback, а вывод
+        драйвера после этого никто не читает (труба забивается, драйвер встаёт).
+        """
         if process is None or process.stdout is None:
             return
-        for line in process.stdout:
-            text = line.rstrip()
-            if text:
-                self.get_logger().info("[%s] %s" % (self.driver.package if self.driver else "driver",
-                                                    text))
+        try:
+            for line in process.stdout:
+                text = line.rstrip()
+                if not text:
+                    continue
+                try:
+                    self.get_logger().info("[%s] %s" % (label, text))
+                except Exception:  # noqa: BLE001 — узел уже остановлен
+                    break
+        except (ValueError, OSError):
+            # Поток закрыт из stop_process() — это штатная остановка.
+            pass
 
     def stop_process(self) -> None:
         """Останавливает драйвер (вместе с группой процессов: он мог spawn'ить детей)."""
@@ -310,27 +432,70 @@ class LidarSupervisor(Node):
 
     def _on_rescan(self, request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
         """Сервис ``~/rescan``: кнопка «Пересканировать» в веб-панели."""
-        self.stop_process()
-        self.watch = ScanWatch()
-        self.tried = []
-        self.refresh_plan()
-        self.start_next()
-        response.success = True
-        response.message = "перебор драйверов перезапущен (состояние: %s)" % self.state
+        try:
+            self.stop_process()
+            self.watch = ScanWatch()
+            self.tried = []
+            self._probe_at = 0.0
+            self.refresh_plan(force_probe=True)
+            self.start_next()
+            response.success = True
+            response.message = "перебор драйверов перезапущен (состояние: %s)" % self.state
+        except Exception as exc:  # noqa: BLE001 — сервис не должен ронять узел
+            response.success = False
+            response.message = "пересканировать не удалось: %s" % exc
+            self.get_logger().error("rescan: %s", exc)
         return response
 
     def _tick(self) -> None:
-        """Раз в тик: присмотр за драйвером, переключение попыток, публикация статуса."""
+        """Раз в тик: присмотр за драйвером, переключение попыток, публикация.
+
+        Исключение в таймере rclpy не логируется, а завершает spin — узел
+        «умирает» молча. Поэтому любые сбои внутри тика гасим, останавливаем
+        драйвер и уходим в штатный повтор через ``RETRY_PAUSE_S``.
+        """
         if self._stop:
             return
+        try:
+            self._tick_once()
+        except Exception as exc:  # noqa: BLE001 — супервизор обязан жить дальше
+            text = "%s: %s" % (type(exc).__name__, exc)
+            if text != self._last_error:
+                self.get_logger().error("ошибка супервизора: %s", text)
+                self._last_error = text
+            self.stop_process()
+            self.watch = ScanWatch()
+            self.state = "failed"
+            self.reason = "сбой супервизора: %s" % text
+            self.hint = "перезапусти ./scripts/ros2_lidar.sh (журнал: var/lidar.log)"
+            self._next_retry = now() + RETRY_PAUSE_S
+        try:
+            self.publish_status()
+        except Exception as exc:  # noqa: BLE001 — публикация не должна ронять узел
+            self.get_logger().warning("не удалось опубликовать состояние: %s", exc)
+
+    def _tick_once(self) -> None:
         age = self.watch.age()
         if self.state in ("probing", "running"):
             dead = self.process is None or self.process.poll() is not None
             stale = age is None or age > self.scan_timeout
             elapsed = now() - self.started_at
-            if not dead and not stale:
-                self.state = "running"
-            elif self.state == "probing" and not dead and elapsed < self.probe_timeout:
+            if not stale:
+                # Скан идёт. Если процесс драйвера уже завершился, значит /scan
+                # публикует кто-то ещё (например, вендорский bringup): не
+                # запускаем второй драйвер на тот же порт и не воюем за него.
+                if dead:
+                    if self.state != "running":
+                        self.get_logger().warn(
+                            "%s молчит, но %s идёт — оставляю внешний драйвер"
+                            % ("процесс супервизора", self.scan_topic))
+                    self.stop_process()
+                    self.state = "running"
+                    if not self.reason:
+                        self.reason = "скан идёт из внешнего драйвера"
+                else:
+                    self.state = "running"
+            elif not dead and self.state == "probing" and elapsed < self.probe_timeout:
                 # Драйвер работает, но /scan ещё не пошёл: лидару нужно время на
                 # раскрутку (LDS-01 — до пары секунд), поэтому ждём таймаут.
                 pass
@@ -343,24 +508,25 @@ class LidarSupervisor(Node):
                     self.restarts += 1
                     self.state = "restarting"
                     self.reason = "драйвер встал: %s" % note
-                    self.refresh_plan()
                 else:
-                    self.tried.append({"driver": self.driver.name if self.driver else "?",
-                                       "port": self.driver_port,
-                                       "note": "нет %s за %.0f с (%s)"
-                                               % (self.scan_topic, self.probe_timeout, note)})
+                    self._remember(self.driver.name if self.driver else "?",
+                                   self.driver_port,
+                                   "нет %s за %.0f с (%s)"
+                                   % (self.scan_topic, self.probe_timeout, note))
+                # Сначала освобождаем порт, и только потом проверяем порты:
+                # probe_ports не должен натыкаться на собственный драйвер.
                 self.stop_process()
                 self.watch = ScanWatch()
-                if self.plan_index >= len(self.plan):
+                if self.plan_index >= len(self.plan) or self.state == "restarting":
                     self.refresh_plan()
                 self.start_next()
-        elif self.state in ("failed", "idle") and now() >= self._next_retry:
+        elif self.state == "failed" and now() >= self._next_retry:
             # Ничего не вышло: раз в RETRY_PAUSE_S пересобираем план — лидар могли
-            # воткнуть в другой порт, а пакет драйвера — доустановить.
+            # воткнуть в другой порт, а пакет драйвера — доустановить. Результат
+            # проверки портов кэшируется, поэтому это не блокирует узел.
             self._next_retry = now() + RETRY_PAUSE_S
             self.refresh_plan()
             self.start_next()
-        self.publish_status()
 
     # ------------------------------- статус -------------------------------- #
 
@@ -390,6 +556,8 @@ class LidarSupervisor(Node):
             "missing": missing,
             "tried": self.tried[-8:],
             "probes": self.probes,
+            "probe_age_s": (round(time.monotonic() - self._probe_at, 1)
+                            if self._probe_at else None),
             "plan": [item.as_dict() for item in self.plan[:8]],
             "at": now(),
         }
@@ -415,14 +583,22 @@ class LidarSupervisor(Node):
         """Почему не вышло: коротко и по делу, без «лидар не найден» на всё."""
         if not self.installed:
             return "в этом ROS 2 нет ни одного пакета драйвера лидара"
-        if not self._ports() and any(not item.installed for item in self.plan):
-            return "нет портов-кандидатов и не все пакеты драйверов установлены"
+        if not self._ports():
+            if self.model in ("opencr", "burger", "waffle"):
+                return ("не найден порт платы OpenCR (/dev/ttyACM0): проверь кабель "
+                        "и RC_SLAM_PORT")
+            return ("не найдено ни одного порта лидара (/dev/ttyUSB*, /dev/ttyACM*; "
+                    "порты мастера руления и BMS исключены)")
         tried = ", ".join(
             "%s@%s" % (item["driver"], item["port"] or "-") for item in self.tried[-5:]
         )
         return "ни один драйвер не отдал %s (%s)" % (self.scan_topic, tried or "попыток не было")
 
     def _failure_hint(self) -> str:
+        if not drv.drivers_for_protocol(self.model):
+            return ("модель лидара «%s» неизвестна: укажи auto, lds01, rplidar, "
+                    "ld06, ld19, stl27l или opencr (RC_LIDAR_PROTOCOL / --model)"
+                    % self.model)
         missing = sorted({item.driver.package for item in self.plan if not item.installed})
         hint = self._missing_hint(missing)
         if hint:
@@ -430,6 +606,9 @@ class LidarSupervisor(Node):
         extra = ("проверь, что лидар подключён и не занят другой программой "
                  "(в том числе прошлым запуском драйвера), и запусти "
                  "`ros2 topic hz %s` для проверки" % self.scan_topic)
+        if not self._ports():
+            return ("подключи лидар USB-кабелем (или проверь RC_LIDAR_PORT) и запусти "
+                    "`ros2 topic hz %s` для проверки" % self.scan_topic)
         if self.probes and not any(report.get("protocol") for report in self.probes.values()):
             extra = ("на портах %s не видно ни одного известного лидара: %s"
                      % (", ".join(self.probes), extra))
@@ -449,24 +628,49 @@ def _terminate(node: LidarSupervisor, signum: int, _frame: Any) -> None:
 
 def main(argv: Optional[list[str]] = None) -> int:
     """Точка входа узла (``ros2 run zapret_lidar supervisor_node``)."""
-    rclpy.init(args=argv)
-    node = LidarSupervisor()
-    signal.signal(signal.SIGTERM, lambda signum, frame: _terminate(node, signum, frame))
-    signal.signal(signal.SIGINT, lambda signum, frame: _terminate(node, signum, frame))
+    try:
+        rclpy.init(args=argv)
+    except Exception as exc:  # noqa: BLE001 — DDS/окружение сломаны: понятная ошибка
+        print("не удалось инициализировать ROS 2: %s" % exc, file=sys.stderr)
+        return 1
+    try:
+        node = LidarSupervisor()
+    except Exception as exc:  # noqa: BLE001 — параметры/окружение: понятная ошибка
+        print("не удалось создать узел лидара: %s: %s" % (type(exc).__name__, exc),
+              file=sys.stderr)
+        try:
+            rclpy.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+        return 1
+    if threading.current_thread() is threading.main_thread():
+        # В фоновом потоке signal.signal() бросает ValueError; узел при этом
+        # должен продолжать работать (так его запускают тесты и сервисы).
+        signal.signal(signal.SIGTERM, lambda signum, frame: _terminate(node, signum, frame))
+        signal.signal(signal.SIGINT, lambda signum, frame: _terminate(node, signum, frame))
     try:
         if node.autostart:
-            node.refresh_plan()
+            node.refresh_plan(force_probe=True)
             node.start_next()
         else:
             node.state = "idle"
             node.reason = "автозапуск выключен (autostart:=false) — жду сервис ~/rescan"
         while rclpy.ok() and not node._stop:  # noqa: SLF001
-            rclpy.spin_once(node, timeout_sec=0.2)
+            try:
+                rclpy.spin_once(node, timeout_sec=0.2)
+            except Exception as exc:  # noqa: BLE001 — shutdown по SIGTERM и т. п.
+                if rclpy.ok():
+                    node.get_logger().warning("spin остановился: %s", exc)
+                break
     finally:
         node.stop_process()
-        node.destroy_node()
         try:
-            rclpy.shutdown()
+            node.destroy_node()
+        except Exception:  # noqa: BLE001 — узел уже уничтожен
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
         except Exception:  # noqa: BLE001 — второй shutdown в процессе
             pass
     return 0

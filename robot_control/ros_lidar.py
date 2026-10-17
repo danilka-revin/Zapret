@@ -44,6 +44,11 @@ SCAN_TIMEOUT_S = 2.0
 RESCAN_SERVICE = "/lidar_supervisor/rescan"
 
 
+def _init_rclpy(rclpy: Any) -> None:
+    """Инициализирует rclpy, не перехватывая SIGINT/SIGTERM приложения."""
+    ros_env.init_rclpy(rclpy)
+
+
 def _hz(stamps: list[float]) -> float:
     """Частота по отметкам времени сообщений (0.0, если их мало)."""
     if len(stamps) < 2:
@@ -88,6 +93,7 @@ class RosLidar:
         self.rescan_result = ""
         self._lock = threading.Lock()
         self._node: Any = None
+        self._executor: Any = None
         self._rescan_client: Any = None
         self._thread: Optional[threading.Thread] = None
         self._frame = frame
@@ -288,20 +294,45 @@ class RosLidar:
             rclpy = ros_env.import_rclpy()
             # Сначала init, потом узел: Node() без инициализированного контекста
             # падает («context is invalid») — подписка не поднималась никогда.
-            if not rclpy.ok():
-                rclpy.init(args=None)
+            # Сигналы приложения при этом не перехватываем (см. _init_rclpy).
+            _init_rclpy(rclpy)
             node = self._build_node(rclpy)
             self._node = node
             self.started = True
             log.info("Лидар: подписан на ROS 2 %s (состояние драйвера — %s)",
                      self.topic, self.status_topic)
-            rclpy.spin(node)
+            self._spin_node(rclpy, node)
         except Exception as exc:  # noqa: BLE001 — rclpy может упасть по десятку причин
             self.started = False
             self.error = "%s: %s" % (type(exc).__name__, exc)
             log.warning("Лидар: подписка на ROS 2 %s не удалась: %s", self.topic, exc)
         finally:
             self.started = False
+
+    def _spin_node(self, rclpy: Any, node: Any) -> None:
+        """Крутит узел в своём executor'е, а не в глобальном.
+
+        ``rclpy.spin()`` берёт глобальный executor процесса, а рядом в своём
+        потоке крутится мост бортового экрана (``slam_gui/backend.py``). Два
+        потока в одном глобальном executor'е гоняют его внутренние очереди и
+        роняют оба моста — в лучшем случае теряются сканы. Старый rclpy без
+        ``rclpy.executors`` работает как раньше.
+        """
+        try:
+            from rclpy.executors import SingleThreadedExecutor
+        except ImportError:  # pragma: no cover — очень старый/урезанный rclpy
+            rclpy.spin(node)
+            return
+        executor = SingleThreadedExecutor()
+        self._executor = executor
+        executor.add_node(node)
+        try:
+            executor.spin()
+        finally:
+            try:
+                executor.remove_node(node)
+            finally:
+                executor.shutdown()
 
     def _build_node(self, rclpy: Any):
         """Собирает узел ROS 2 с подписками на скан, состояние и таймером."""
@@ -390,8 +421,16 @@ class RosLidar:
     def stop(self) -> None:
         """Останавливает узел (нужен только тестам и перезапуску подписки)."""
         node, self._node = self._node, None
+        executor, self._executor = self._executor, None
         self.started = False
         self._rescan_client = None
+        if executor is not None:
+            # Останавливает spin в фоновом потоке: без этого поток продолжал бы
+            # ждать работу у уничтоженного узла.
+            try:
+                executor.shutdown()
+            except Exception:  # noqa: BLE001 — уже остановлен
+                pass
         if node is None:
             return
         try:
