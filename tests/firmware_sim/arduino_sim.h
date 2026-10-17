@@ -34,6 +34,24 @@
 #define OUTPUT 1
 #define INPUT_PULLUP 2
 #define RISING 3
+#define DEFAULT 1
+// На Mega 2560 аналоговые входы — это цифровые выводы 54…69.
+#define A0 54
+#define A1 55
+#define A2 56
+#define A3 57
+#define A4 58
+#define A5 59
+#define A6 60
+#define A7 61
+#define A8 62
+#define A9 63
+#define A10 64
+#define A11 65
+#define A12 66
+#define A13 67
+#define A14 68
+#define A15 69
 #define PROGMEM
 #define PSTR(s) (s)
 #define F(s) (s)
@@ -166,6 +184,13 @@ struct Board {
   // Модель руля: phys — где колесо на самом деле, в шагах от «прямо».
   long phys = 0;
   long phys_min = 0, phys_max = 0;
+  // Модель потенциометра на A0: движок жёстко связан с колесом (1:1),
+  // показывает угол (phys + pot_bias_steps) / phys_per_degree.
+  bool pot_present = true;
+  double pot_center_raw = 512.0;
+  double pot_counts_per_degree = 1023.0 / 270.0;
+  double pot_bias_steps = 0.0;
+  double phys_per_degree = 133.333333333333;
   bool opto_present = true;
   bool opto_stuck = false;
   long flag_lo = -200, flag_hi = 200;    // шаги, где датчик закрыт
@@ -256,6 +281,18 @@ struct Board {
   int digital_read(uint8_t pin) {
     if (pin == 18) return opto_active() ? LOW : HIGH;
     return level[pin];
+  }
+
+  int analog_read(uint8_t pin) {
+    if (pin == A0) {
+      if (!pot_present) return 1023;   // обрыв движка — вход прижат к 5 В
+      const double angle = ((double)phys + pot_bias_steps) / phys_per_degree;
+      double raw = pot_center_raw + pot_counts_per_degree * angle;
+      if (raw < 0.0) raw = 0.0;
+      if (raw > 1023.0) raw = 1023.0;
+      return (int)(raw + 0.5);
+    }
+    return analog[pin];
   }
 };
 
