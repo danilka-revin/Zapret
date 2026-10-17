@@ -829,6 +829,44 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                         "ros_rescan": result.get("ros_rescan") if isinstance(result, dict) else None,
                         "status": manager.get_status()})
 
+    # ------------------------ Настройки камер ------------------------- #
+    # Отдельные порты передней и задней камер. На борту (8090) можно менять
+    # без PIN и без перезапуска; пульт (8080) берёт скан по HTTP и только читает.
+    @app.get("/api/camera/settings")
+    def api_kiosk_camera_settings():
+        from .camera_settings import settings_payload as cam_settings_payload
+
+        result = cam_settings_payload()
+        result["canEdit"] = True
+        result["requiresPin"] = False
+        return jsonify(result)
+
+    @app.post("/api/camera/settings")
+    def api_kiosk_camera_settings_save():
+        from .camera_settings import apply_camera_settings
+
+        body = request.get_json(silent=True) or {}
+        try:
+            result = apply_camera_settings(body.get("settings") or body)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except OSError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        eventlog.record("ok", "камеры: передняя %s, задняя %s — сохранено в .env" % (
+            result["settings"].get("front") or "авто (/dev/video0)",
+            result["settings"].get("rear") or "авто (/dev/video1)"), source="камеры")
+        return jsonify(result)
+
+    @app.post("/api/camera/rescan")
+    def api_kiosk_camera_rescan():
+        from .camera_settings import describe_camera_ports
+        from .camera import CameraManager
+
+        mgr = CameraManager.get_instance()
+        # Обновляем список камер (проверяем наличие устройств)
+        ports = describe_camera_ports()
+        return jsonify({"ok": True, "ports": ports, "cameras": mgr.list_cameras()})
+
     # ---------------------- Остановка робота кнопкой --------------------- #
     # Кнопка на бортовом экране гасит всё то же, что ./scripts/stop.sh: пульт
     # 8080, этот экран 8090, супервизор лидара и окно киоска. Входа оператора

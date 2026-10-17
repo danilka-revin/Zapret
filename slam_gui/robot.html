@@ -251,6 +251,37 @@
         </section>
       </section>
       <div id="swipe-cameras-view" class="swipe-view swipe-camera-view">
+      <!-- Настройка портов камер: отдельный порт для передней и задней -->
+      <section id="cam-settings" class="cam-settings" aria-label="Настройка камер">
+        <header class="cam-settings-head">
+          <div>
+            <b>Камеры: настройка портов</b>
+            <small id="cam-settings-current">передняя: авто · задняя: авто</small>
+          </div>
+          <button id="cam-settings-open" class="swipe-close" type="button" aria-controls="cam-settings-panel" aria-expanded="false">Настройка портов</button>
+        </header>
+        <div id="cam-settings-panel" class="cam-settings-panel" hidden>
+          <p class="cam-settings-hint">Выберите V4L2-устройство для каждой камеры. Путь <code>/dev/v4l/by-id/…</code> стабилен после перезагрузки; <code>/dev/video0</code> может меняться. Порты сохраняются в <code>.env</code> (RC_CAMERA_FRONT / RC_CAMERA_REAR) и применяются сразу без перезапуска. Настройка доступна без PIN.</p>
+          <div class="cam-settings-grid">
+            <label class="cam-settings-field">
+              <span>Передняя камера (CAM 0)</span>
+              <select id="cam-front-select" aria-label="Порт передней камеры"></select>
+              <small id="cam-front-hint" class="cam-settings-note">авто — /dev/video0</small>
+            </label>
+            <label class="cam-settings-field">
+              <span>Задняя камера (CAM 1)</span>
+              <select id="cam-rear-select" aria-label="Порт задней камеры"></select>
+              <small id="cam-rear-hint" class="cam-settings-note">авто — /dev/video1</small>
+            </label>
+          </div>
+          <div class="cam-settings-actions">
+            <button id="cam-scan" type="button">Обновить список</button>
+            <button id="cam-save" type="button" class="primary">Сохранить</button>
+            <button id="cam-reset" type="button" class="quiet">Сброс на авто</button>
+          </div>
+          <p id="cam-settings-msg" class="cam-settings-msg" role="status"></p>
+        </div>
+      </section>
       <!-- левая часть — две камеры друг над другом -->
       <div class="cam-stack">
         <section class="cam-card" aria-label="Камера 1 передняя">

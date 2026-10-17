@@ -126,19 +126,75 @@ class CameraManager:
             cls._instance = CameraManager()
         return cls._instance
 
+    @classmethod
+    def reset_instance(cls) -> None:
+        """Сброс синглтона (для тестов)."""
+        if cls._instance is not None:
+            for dev in list(cls._instance.cameras.values()):
+                dev.stop()
+            cls._instance = None
+
+    def _resolve_device_path(self, cam_id: int, default: str) -> str:
+        """Путь камеры из .env (RC_CAMERA_FRONT/REAR) или дефолт."""
+        # Ленивый импорт, чтобы избежать цикла
+        try:
+            from .camera_settings import camera_front_from_env, camera_rear_from_env
+        except Exception:
+            return default
+        if cam_id == 0:
+            val = camera_front_from_env()
+            return val if val else default
+        if cam_id == 1:
+            val = camera_rear_from_env()
+            return val if val else default
+        return default
+
     def _init_devices(self) -> None:
-        """Поиск доступных V4L2 устройств (/dev/video*)."""
-        video_devs = sorted(glob.glob("/dev/video*"))
-        # Фильтруем четные или первые 2 устройства захвата
+        """Инициализация камер с учётом настроек портов."""
         cams_info = [
-            (0, "/dev/video0", "Камера передняя (CAM 0)"),
-            (1, "/dev/video1", "Камера задняя (CAM 1)"),
+            (0, self._resolve_device_path(0, "/dev/video0"), "Камера передняя (CAM 0)"),
+            (1, self._resolve_device_path(1, "/dev/video1"), "Камера задняя (CAM 1)"),
         ]
         for cam_id, dev_path, name in cams_info:
             dev = CameraDevice(cam_id, dev_path, name)
             self.cameras[cam_id] = dev
             if os.path.exists(dev_path):
                 dev.start()
+
+    def current_settings(self) -> dict[str, str]:
+        """Текущие настройки портов из окружения."""
+        try:
+            from .camera_settings import current_camera_settings
+
+            return current_camera_settings()
+        except Exception:
+            return {"front": "", "rear": ""}
+
+    def reconfigure(self, settings: dict[str, str]) -> dict[str, str]:
+        """Переключить камеры на новые порты без перезапуска процесса."""
+        # Нормализация уже выполнена в camera_settings, но подстрахуемся
+        front = (settings.get("front") or "").strip()
+        rear = (settings.get("rear") or "").strip()
+        with self.lock:
+            # Остановить старые устройства
+            for dev in list(self.cameras.values()):
+                dev.stop()
+            # Короткая пауза, чтобы потоки завершились
+            time.sleep(0.15)
+            self.cameras.clear()
+            cams_info = [
+                (0, front if front else "/dev/video0", "Камера передняя (CAM 0)"),
+                (1, rear if rear else "/dev/video1", "Камера задняя (CAM 1)"),
+            ]
+            for cam_id, dev_path, name in cams_info:
+                dev = CameraDevice(cam_id, dev_path, name)
+                self.cameras[cam_id] = dev
+                if os.path.exists(dev_path):
+                    dev.start()
+                else:
+                    # Устройство не подключено — оставляем объект для feed_frame
+                    log.info("Камера %s: порт %s не найден, жду подключения", cam_id, dev_path)
+            return {"front": front, "rear": rear}
 
     def get_camera(self, cam_id: int) -> Optional[CameraDevice]:
         return self.cameras.get(cam_id)
