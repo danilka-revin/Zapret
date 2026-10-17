@@ -1109,6 +1109,46 @@ def create_blueprint(state, guard=None) -> Blueprint:
             return jsonify({"ok": True})
         return jsonify({"ok": False, "error": "empty data"}), 400
 
+    @bp.get("/api/camera/settings")
+    @guard
+    def api_camera_settings():
+        from .camera_settings import settings_payload as cam_settings_payload
+
+        result = cam_settings_payload()
+        # На пульте (8080) настройки видны, но менять порт камер лучше на борту (8090)
+        result["canEdit"] = True
+        # Совместимость: фронтенд проверяет requiresPin для старых клиентов
+        result["requiresPin"] = False
+        result["hint"] = "Порт камер меняется на бортовом экране (8090): свайп «Камеры» → «Настройка камер». Здесь — просмотр и резервное сохранение."
+        return jsonify(result)
+
+    @bp.post("/api/camera/settings")
+    @guard
+    def api_camera_settings_save():
+        from .camera_settings import apply_camera_settings
+
+        body = request.get_json(silent=True) or {}
+        try:
+            result = apply_camera_settings(body.get("settings") or body)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except OSError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        eventlog.record("ok", "камеры (пульт): передняя %s, задняя %s — сохранено" % (
+            result["settings"].get("front") or "авто",
+            result["settings"].get("rear") or "авто"), source="камеры")
+        return jsonify(result)
+
+    @bp.post("/api/camera/rescan")
+    @guard
+    def api_camera_rescan():
+        from .camera_settings import describe_camera_ports
+        from .camera import CameraManager
+
+        mgr = CameraManager.get_instance()
+        ports = describe_camera_ports()
+        return jsonify({"ok": True, "ports": ports, "cameras": mgr.list_cameras()})
+
     @bp.get("/api/kiosk_logs")
     @guard
     def api_kiosk_logs():

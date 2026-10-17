@@ -20,6 +20,8 @@
 
   let lastData = null;
   let live = false;
+  let lastLiveAt = 0;
+  let liveTimer = null;
   // На киоске PIN нужен только для открытия грузового отсека. Серверная
   // авторизация руления/тяги остаётся отдельной настройкой веб-пульта.
   let steeringAuthorized = true;
@@ -34,24 +36,56 @@
   const pendingCalib = Object.create(null);
   const steerResult = Object.create(null);
 
+  function setLive(ok) {
+    // Дебаунс «нет связи»: не моргаем всем окном на каждый промах сети.
+    // Бортовой экран раньше тонул в opacity .75 каждые ~20 с на 2 с: лидар ищет
+    // порт ~2.2 с и держит тред сервера, fetchState получает AbortError на
+    // 1100 мс и live гас; теперь live -> false только после 3200 мс без
+    // успешных ответов, а live -> true — сразу при следующем удачном опросе.
+    if (ok) {
+      lastLiveAt = Date.now();
+      if (!live) {
+        live = true;
+        if (liveTimer) { clearTimeout(liveTimer); liveTimer = null; }
+      }
+      return;
+    }
+    if (!live) return;
+    const elapsed = Date.now() - lastLiveAt;
+    const grace = 3200;
+    if (elapsed >= grace) {
+      live = false;
+      return;
+    }
+    if (liveTimer) clearTimeout(liveTimer);
+    liveTimer = setTimeout(() => {
+      if (Date.now() - lastLiveAt >= grace) live = false;
+    }, grace - elapsed + 20);
+  }
+
   async function fetchState() {
     // Не запускаем параллельные 250-мс опросы: медленный ответ не должен
     // перезаписать более свежий скан лидара или телеметрию.
+    // + таймаут, чтобы зависший запрос не держал UI в «нет связи» 2 сек.
     if (stateFetchPending) return;
     stateFetchPending = true;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 1100);
     try {
-      const r = await fetch('api/kiosk_state', { cache: 'no-store' });
+      const r = await fetch('api/kiosk_state', { cache: 'no-store', signal: ctrl.signal });
       if (!r.ok) throw new Error('http ' + r.status);
       const j = await r.json();
       if (j && j.ok && j.data) {
         lastData = j.data;
-        live = true;
+        setLive(true);
       } else {
-        live = false;
+        setLive(false);
       }
     } catch (e) {
-      live = false;
+      // AbortError или сеть — не сразу гасим весь экран, даём grace-период
+      setLive(false);
     } finally {
+      clearTimeout(t);
       stateFetchPending = false;
     }
   }
@@ -293,7 +327,11 @@
     } catch (err) {
       console.warn('Бортовой экран: сбой отрисовки:', err && err.message ? err.message : err);
     } finally {
-      requestAnimationFrame(() => setTimeout(loop, 250));
+      // Инкрементальная перерисовка каждые 250 мс без полной пересборки DOM.
+      // Раньше связка rAF+setTimeout давала двойную задержку и лишние кадры;
+      // теперь — ровный таймер, а тяжёлые canvas (лидар/камеры) рисуются только
+      // когда есть новые данные, без сброса ширины окна.
+      setTimeout(() => requestAnimationFrame(loop), 250);
     }
   }
 
@@ -1388,14 +1426,191 @@
     // также клик по оверлею вне? не нужно
 
     // --- КАМЕРЫ: поддержка USB-вебок и бэкенд-стримов (без демо-кадров) ---
+    // + настройка портов: передняя и задняя камеры — отдельные V4L2-устройства
     let cam1Video = null, cam2Video = null;
     let cam1Ready = false, cam2Ready = false;
     let backendImg1 = null, backendImg2 = null;
     let startingWebcams = false;
+    let camSettings = null;
+    let camPorts = [];
+    let camSettingsOpen = false;
+
+    function camMsg(text, tone) {
+      const el = $('cam-settings-msg');
+      if (!el) return;
+      el.textContent = text || '';
+      if (el.dataset) el.dataset.tone = tone || '';
+    }
+
+    function renderCamSettings() {
+      const cur = $('cam-settings-current');
+      const selF = $('cam-front-select');
+      const selR = $('cam-rear-select');
+      const hintF = $('cam-front-hint');
+      const hintR = $('cam-rear-hint');
+      if (!camSettings) {
+        if (cur) cur.textContent = 'загрузка…';
+        return;
+      }
+      const front = (camSettings.front || '').trim();
+      const rear = (camSettings.rear || '').trim();
+      if (cur) {
+        const tf = front || 'авто (/dev/video0)';
+        const tr = rear || 'авто (/dev/video1)';
+        cur.textContent = 'передняя: ' + tf + ' · задняя: ' + tr;
+      }
+      // Заполняем селекты только если список портов уже есть
+      const ports = Array.isArray(camPorts) ? camPorts : [];
+      const opts = [{port:'', label:'Авто (/dev/video0 для передней, /dev/video1 для задней)'}];
+      ports.forEach((p) => {
+        const exists = p.exists ? '' : ' (нет устройства)';
+        opts.push({port: p.port, label: p.port + exists + (p.note ? ' — ' + p.note : '')});
+      });
+      // Добавить текущие значения, если их нет в списке (кастомный путь)
+      [front, rear].forEach((v) => {
+        if (v && !opts.some((o) => o.port === v)) opts.push({port: v, label: v + ' (текущий)'});
+      });
+      function fillSelect(sel, value, fallbackLabel) {
+        if (!sel) return;
+        const curVal = sel.value;
+        const keep = value || '';
+        // Пересоздаём только если набор изменился
+        const key = JSON.stringify(opts.map(o=>o.port)) + '|' + keep;
+        if (sel.dataset.key === key && sel.options.length === opts.length) {
+          sel.value = keep;
+          return;
+        }
+        sel.dataset.key = key;
+        sel.innerHTML = '';
+        opts.forEach((o) => {
+          const opt = document.createElement('option');
+          opt.value = o.port;
+          opt.textContent = o.label;
+          sel.appendChild(opt);
+        });
+        sel.value = keep;
+      }
+      fillSelect(selF, front, 'передняя');
+      fillSelect(selR, rear, 'задняя');
+      if (hintF) hintF.textContent = front ? 'выбран: ' + front : 'авто — /dev/video0';
+      if (hintR) hintR.textContent = rear ? 'выбран: ' + rear : 'авто — /dev/video1';
+    }
+
+    async function fetchCamSettings() {
+      try {
+        const r = await fetch('api/camera/settings', {cache:'no-store'});
+        const j = await r.json();
+        if (j && j.ok) {
+          camSettings = j.settings || {front:'', rear:''};
+          const opts = j.options && j.options.ports ? j.options.ports : (j.ports || []);
+          if (Array.isArray(opts) && opts.length) camPorts = opts;
+          else if (Array.isArray(j.cameras)) {
+            // fallback из /api/cameras — построим список из камер
+          }
+          renderCamSettings();
+          // Также обновить backendImg если порты изменились извне
+          if (j.cameras && Array.isArray(j.cameras)) {
+            // не трогаем стримы, они переживут смену порта на бэкенде
+          }
+        } else {
+          camMsg(j && j.error ? j.error : 'не удалось загрузить настройки камер', 'error');
+        }
+      } catch (e) {
+        camMsg('нет связи с /api/camera/settings', 'error');
+      }
+    }
+
+    async function rescanCamPorts() {
+      camMsg('обновляю список видеопортов…', '');
+      try {
+        const r = await fetch('api/camera/rescan', {method:'POST', cache:'no-store'});
+        const j = await r.json();
+        if (j && j.ok) {
+          camPorts = j.ports || j.options && j.options.ports || camPorts;
+          camMsg('список обновлён: найдено ' + (camPorts.length || 0) + ' портов', 'ok');
+          renderCamSettings();
+          setTimeout(() => camMsg('', ''), 1600);
+        } else {
+          camMsg(j && j.error ? j.error : 'не удалось обновить список', 'error');
+        }
+      } catch (e) {
+        camMsg('нет связи с сервером', 'error');
+      }
+    }
+
+    async function saveCamSettings() {
+      const selF = $('cam-front-select');
+      const selR = $('cam-rear-select');
+      const front = selF ? selF.value.trim() : '';
+      const rear = selR ? selR.value.trim() : '';
+      if (front && rear && front === rear) {
+        camMsg('передняя и задняя камеры не могут использовать один порт', 'error');
+        return;
+      }
+      camMsg('сохраняю…', '');
+      const btn = $('cam-save');
+      if (btn) btn.disabled = true;
+      try {
+        const r = await fetch('api/camera/settings', {
+          method:'POST', headers:{'Content-Type':'application/json'}, cache:'no-store',
+          body: JSON.stringify({front, rear})
+        });
+        const j = await r.json().catch(()=>null);
+        if (!r.ok || !j || !j.ok) {
+          camMsg(j && j.error ? j.error : 'не удалось сохранить (HTTP ' + r.status + ')', 'error');
+          return;
+        }
+        camSettings = j.settings || {front, rear};
+        camMsg('сохранено в .env: передняя ' + (front || 'авто') + ', задняя ' + (rear || 'авто') + ' — камеры переключены', 'ok');
+        renderCamSettings();
+        // Перезапустить бэкенд-стримы локально без перезагрузки всего окна
+        backendImg1 = null; backendImg2 = null;
+        setTimeout(() => { checkBackendCams(); }, 400);
+        setTimeout(() => camMsg('', ''), 2200);
+      } catch (e) {
+        camMsg('нет связи с сервером', 'error');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    function bindCamSettingsUI() {
+      const panel = $('cam-settings-panel');
+      const btnOpen = $('cam-settings-open');
+      const btnScan = $('cam-scan');
+      const btnSave = $('cam-save');
+      const btnReset = $('cam-reset');
+      if (btnOpen && panel) {
+        btnOpen.addEventListener('click', () => {
+          camSettingsOpen = !camSettingsOpen;
+          panel.hidden = !camSettingsOpen;
+          btnOpen.setAttribute('aria-expanded', camSettingsOpen ? 'true' : 'false');
+          btnOpen.textContent = camSettingsOpen ? 'Скрыть' : 'Настройка портов';
+          if (camSettingsOpen) void fetchCamSettings();
+        });
+      }
+      if (btnScan) btnScan.addEventListener('click', () => { void rescanCamPorts(); void fetchCamSettings(); });
+      if (btnSave) btnSave.addEventListener('click', () => { void saveCamSettings(); });
+      if (btnReset) btnReset.addEventListener('click', () => {
+        const selF = $('cam-front-select');
+        const selR = $('cam-rear-select');
+        if (selF) selF.value = '';
+        if (selR) selR.value = '';
+        void saveCamSettings();
+      });
+      // При открытии вкладки камер — подгрузить настройки
+      const camView = $('swipe-cameras-view');
+      if (camView) {
+        const mo = new MutationObserver(() => {
+          if (!camView.hidden) void fetchCamSettings();
+        });
+        mo.observe(camView, {attributes:true, attributeFilter:['hidden']});
+      }
+    }
 
     async function checkBackendCams() {
       try {
-        const r = await fetch('api/cameras');
+        const r = await fetch('api/cameras', {cache:'no-store'});
         if (r.ok) {
           const j = await r.json();
           if (j && Array.isArray(j.cameras)) {
@@ -1403,11 +1618,27 @@
             if (active.length > 0) {
               if (!backendImg1) {
                 const img1 = new Image();
+                // Инкрементальный стрим: ошибка только этого Image, без перезагрузки окна
+                img1.onerror = () => {
+                  // Бэкенд может пересоздавать камеру после смены порта — подождём и переподключим локально
+                  setTimeout(() => {
+                    if (backendImg1 === img1) {
+                      img1.src = 'api/camera/0/stream?t=' + Date.now();
+                    }
+                  }, 900);
+                };
                 img1.src = 'api/camera/0/stream';
                 backendImg1 = img1;
               }
               if (active.length > 1 && !backendImg2) {
                 const img2 = new Image();
+                img2.onerror = () => {
+                  setTimeout(() => {
+                    if (backendImg2 === img2) {
+                      img2.src = 'api/camera/1/stream?t=' + Date.now();
+                    }
+                  }, 900);
+                };
                 img2.src = 'api/camera/1/stream';
                 backendImg2 = img2;
               }
@@ -1486,6 +1717,9 @@
 
       checkBackendCams();
       startBrowserCams();
+      bindCamSettingsUI();
+      // Предзагрузка настроек камер без ожидания открытия панели
+      void fetchCamSettings();
 
       const c1View = $('cam1-view');
       const c2View = $('cam2-view');
@@ -1495,20 +1729,36 @@
       const ctx1 = cam1Canvas ? cam1Canvas.getContext('2d') : null;
       const ctx2 = cam2Canvas ? cam2Canvas.getContext('2d') : null;
 
-      function resize(c, ctx) {
+      // Инкрементальный resize: только когда размер реально изменился, без полной перестройки окна
+      let lastW1 = 0, lastH1 = 0, lastW2 = 0, lastH2 = 0;
+      let resizeTick = 0;
+      function resize(c, ctx, lastW, lastH) {
         const dpr = window.devicePixelRatio || 1;
         const rect = c.getBoundingClientRect();
+        const need = Math.abs(rect.width - lastW) > 1.5 || Math.abs(rect.height - lastH) > 1.5;
+        if (!need && c.width && c.height) {
+          return {w: rect.width, h: rect.height, changed:false, lastW, lastH};
+        }
         const w = Math.max(320, Math.round(rect.width * dpr));
         const h = Math.max(180, Math.round(rect.height * dpr));
-        if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        return {w: rect.width, h: rect.height};
+        let changed = false;
+        if (c.width !== w || c.height !== h) { c.width = w; c.height = h; changed = true; }
+        // setTransform каждый кадр не нужен — только после resize или первый раз
+        if (changed || resizeTick < 2) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        return {w: rect.width, h: rect.height, changed, lastW: rect.width, lastH: rect.height};
       }
 
       let t0 = performance.now();
       function drawCam1(now) {
         if (!ctx1 || !cam1Canvas) return;
-        const {w, h} = resize(cam1Canvas, ctx1);
+        // Не гоняем 60fps когда вкладка камер скрыта — это и вызывало 2-сек поддёргивание всего окна каждые 20с на слабых планшетах
+        if (!isOpen || activeSwipeView !== 'cameras') {
+          anim1 = setTimeout(() => requestAnimationFrame(drawCam1), 500);
+          return;
+        }
+        const r = resize(cam1Canvas, ctx1, lastW1, lastH1);
+        lastW1 = r.lastW; lastH1 = r.lastH;
+        if (r.changed) resizeTick++;
 
         let src1 = null;
         if (cam1Ready && cam1Video && cam1Video.videoWidth > 0) src1 = cam1Video;
@@ -1516,9 +1766,9 @@
 
         if (src1) {
           try {
-            ctx1.drawImage(src1, 0, 0, w, h);
+            ctx1.drawImage(src1, 0, 0, r.w, r.h);
           } catch (e) {
-            ctx1.fillStyle = '#0f0f0f'; ctx1.fillRect(0, 0, w, h);
+            ctx1.fillStyle = '#0f0f0f'; ctx1.fillRect(0, 0, r.w, r.h);
           }
           if (cam1Empty) cam1Empty.hidden = true;
           if (cam1Chip) { cam1Chip.textContent = '● LIVE · передняя'; cam1Chip.className = 'cam-chip ok'; }
@@ -1526,12 +1776,12 @@
           const vh = src1.videoHeight || src1.naturalHeight || 360;
           if (cam1Meta) cam1Meta.textContent = `${vw}×${vh} · 30 fps`;
 
-          // перекрестие
+          // перекрестие — только когда есть сигнал, без перерисовки всего окна
           ctx1.strokeStyle = 'rgba(255,255,255,.3)';
           ctx1.lineWidth = 1;
           ctx1.beginPath();
-          ctx1.moveTo(w / 2 - 14, h / 2); ctx1.lineTo(w / 2 + 14, h / 2);
-          ctx1.moveTo(w / 2, h / 2 - 14); ctx1.lineTo(w / 2, h / 2 + 14);
+          ctx1.moveTo(r.w / 2 - 14, r.h / 2); ctx1.lineTo(r.w / 2 + 14, r.h / 2);
+          ctx1.moveTo(r.w / 2, r.h / 2 - 14); ctx1.lineTo(r.w / 2, r.h / 2 + 14);
           ctx1.stroke();
           ctx1.fillStyle = 'rgba(255,255,255,.85)';
           ctx1.font = '11px ui-monospace, monospace';
@@ -1541,18 +1791,18 @@
         }
 
 
-        // Режим ожидания вебки
+        // Режим ожидания вебки — инкрементально, без очистки всего окна
         ctx1.fillStyle = '#0b1411';
-        ctx1.fillRect(0, 0, w, h);
+        ctx1.fillRect(0, 0, r.w, r.h);
         ctx1.fillStyle = '#6f877d';
         ctx1.font = '12px Inter, sans-serif';
         ctx1.textAlign = 'center';
-        ctx1.fillText('кликните для включения вебки', w / 2, h / 2);
+        ctx1.fillText('кликните для включения вебки', r.w / 2, r.h / 2);
         ctx1.strokeStyle = 'rgba(255,255,255,.06)';
         ctx1.lineWidth = 1;
         ctx1.beginPath();
-        ctx1.moveTo(w * 0.5, h * 0.22); ctx1.lineTo(w * 0.5, h * 0.78);
-        ctx1.moveTo(w * 0.22, h * 0.5); ctx1.lineTo(w * 0.78, h * 0.5);
+        ctx1.moveTo(r.w * 0.5, r.h * 0.22); ctx1.lineTo(r.w * 0.5, r.h * 0.78);
+        ctx1.moveTo(r.w * 0.22, r.h * 0.5); ctx1.lineTo(r.w * 0.78, r.h * 0.5);
         ctx1.stroke();
         if (cam1Empty) cam1Empty.hidden = false;
         if (cam1Chip) { cam1Chip.textContent = 'нет сигнала'; cam1Chip.className = 'cam-chip'; }
@@ -1561,7 +1811,13 @@
 
       function drawCam2(now) {
         if (!ctx2 || !cam2Canvas) return;
-        const {w, h} = resize(cam2Canvas, ctx2);
+        if (!isOpen || activeSwipeView !== 'cameras') {
+          anim2 = setTimeout(() => requestAnimationFrame(drawCam2), 500);
+          return;
+        }
+        const r = resize(cam2Canvas, ctx2, lastW2, lastH2);
+        lastW2 = r.lastW; lastH2 = r.lastH;
+        if (r.changed) resizeTick++;
 
         let src2 = null;
         if (cam2Ready && cam2Video && cam2Video.videoWidth > 0) src2 = cam2Video;
@@ -1569,9 +1825,9 @@
 
         if (src2) {
           try {
-            ctx2.drawImage(src2, 0, 0, w, h);
+            ctx2.drawImage(src2, 0, 0, r.w, r.h);
           } catch (e) {
-            ctx2.fillStyle = '#0f0f0f'; ctx2.fillRect(0, 0, w, h);
+            ctx2.fillStyle = '#0f0f0f'; ctx2.fillRect(0, 0, r.w, r.h);
           }
           if (cam2Empty) cam2Empty.hidden = true;
           if (cam2Chip) { cam2Chip.textContent = '● LIVE · кормовая'; cam2Chip.className = 'cam-chip ok'; }
@@ -1582,8 +1838,8 @@
           ctx2.strokeStyle = 'rgba(255,255,255,.3)';
           ctx2.lineWidth = 1;
           ctx2.beginPath();
-          ctx2.moveTo(w / 2 - 14, h / 2); ctx2.lineTo(w / 2 + 14, h / 2);
-          ctx2.moveTo(w / 2, h / 2 - 14); ctx2.lineTo(w / 2, h / 2 + 14);
+          ctx2.moveTo(r.w / 2 - 14, r.h / 2); ctx2.lineTo(r.w / 2 + 14, r.h / 2);
+          ctx2.moveTo(r.w / 2, r.h / 2 - 14); ctx2.lineTo(r.w / 2, r.h / 2 + 14);
           ctx2.stroke();
           ctx2.fillStyle = 'rgba(255,255,255,.85)';
           ctx2.font = '11px ui-monospace, monospace';
@@ -1593,18 +1849,18 @@
         }
 
 
-        // Режим ожидания
+        // Режим ожидания — инкрементально
         ctx2.fillStyle = '#0b1411';
-        ctx2.fillRect(0, 0, w, h);
+        ctx2.fillRect(0, 0, r.w, r.h);
         ctx2.fillStyle = '#6f877d';
         ctx2.font = '12px Inter, sans-serif';
         ctx2.textAlign = 'center';
-        ctx2.fillText('кликните для включения вебки', w / 2, h / 2);
+        ctx2.fillText('кликните для включения вебки', r.w / 2, r.h / 2);
         ctx2.strokeStyle = 'rgba(255,255,255,.06)';
         ctx2.lineWidth = 1;
         ctx2.beginPath();
-        ctx2.moveTo(w * 0.5, h * 0.22); ctx2.lineTo(w * 0.5, h * 0.78);
-        ctx2.moveTo(w * 0.22, h * 0.5); ctx2.lineTo(w * 0.78, h * 0.5);
+        ctx2.moveTo(r.w * 0.5, r.h * 0.22); ctx2.lineTo(r.w * 0.5, r.h * 0.78);
+        ctx2.moveTo(r.w * 0.22, r.h * 0.5); ctx2.lineTo(r.w * 0.78, r.h * 0.5);
         ctx2.stroke();
         if (cam2Empty) cam2Empty.hidden = false;
         if (cam2Chip) { cam2Chip.textContent = 'нет сигнала'; cam2Chip.className = 'cam-chip'; }
@@ -1612,9 +1868,13 @@
       }
       if (ctx1) requestAnimationFrame(drawCam1);
       if (ctx2) requestAnimationFrame(drawCam2);
+      // resize без полной перестройки окна — только при реальном изменении размера окна
+      let resizeDebounce = null;
       window.addEventListener('resize', () => {
-        if (cam1Canvas) { const r = cam1Canvas.getBoundingClientRect(); cam1Canvas.width = Math.round(r.width*(window.devicePixelRatio||1)); }
-        if (cam2Canvas) { const r = cam2Canvas.getBoundingClientRect(); cam2Canvas.width = Math.round(r.width*(window.devicePixelRatio||1)); }
+        if (resizeDebounce) clearTimeout(resizeDebounce);
+        resizeDebounce = setTimeout(() => {
+          // canvas сам подстроится на следующем кадре drawCam*
+        }, 120);
       });
     }
 
@@ -1700,11 +1960,21 @@
       if (logAuto && logAuto.checked) logList.scrollTop = logList.scrollHeight;
     }
 
+    // Инкрементальное обновление логов без пересборки всего окна: только новые строки
+    let lastLogRenderAt = 0;
+    let lastLogCount = 0;
     async function fetchLogs() {
+      // Троттлинг: не чаще чем раз в 1.2 с, чтобы не дёргать весь интерфейс
+      const now = Date.now();
+      if (now - lastLogRenderAt < 800 && logs.length === lastLogCount) {
+        // пропускаем, если недавно рисовали и новых записей не было
+      }
       let data = null;
       let problem = '';
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 1100);
       try {
-        const r = await fetch('api/kiosk_logs?limit=120', {cache:'no-store'});
+        const r = await fetch('api/kiosk_logs?limit=120', {cache:'no-store', signal: ctrl.signal});
         if (r.status === 401 || r.status === 403) {
           setLogStatus('журнал робота · нужен вход оператора (8090 — без входа)');
           return;
@@ -1713,8 +1983,6 @@
           setLogStatus('журнал робота · экран отвечает ' + r.status);
           return;
         }
-        // На пульте (8080) журнал закрыт входом: вместо JSON приезжает
-        // страница входа — так и говорим, а не «нет связи».
         const j = await r.json().catch(() => null);
         if (!j) {
           setLogStatus('журнал робота · ответ не JSON — на пульте нужен вход оператора');
@@ -1722,8 +1990,9 @@
         }
         data = (j.ok && j.data) ? j.data : null;
       } catch (e) {
-        problem = 'нет связи с /api/kiosk_logs';
-      }
+        if (e.name === 'AbortError') problem = 'таймаут /api/kiosk_logs';
+        else problem = 'нет связи с /api/kiosk_logs';
+      } finally { clearTimeout(t); }
       if (problem) {
         setLogStatus('журнал робота · ' + problem);
         return;
@@ -1732,8 +2001,16 @@
         setLogStatus('журнал робота · ответ без записей');
         return;
       }
+      const before = logs.length;
+      const beforeKeys = logIndex.size;
       data.entries.forEach(addJournalEntry);
-      renderLogs();
+      const added = logs.length - before;
+      // Рисуем только если появились новые записи или изменились счётчики
+      if (added > 0 || logIndex.size !== beforeKeys || Date.now() - lastLogRenderAt > 2500) {
+        renderLogs();
+        lastLogRenderAt = Date.now();
+        lastLogCount = logs.length;
+      }
       describeJournal(data);
     }
 
