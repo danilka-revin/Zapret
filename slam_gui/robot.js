@@ -229,7 +229,6 @@
     const canvas = $('lidar-canvas');
     const pts = lidarPoints(d);
     const has = pts.length > 0;
-    const near = has ? Math.min.apply(null, pts.map((p) => p.r)) : null;
     const visibleCount = pts.filter((point) => point.r <= LIDAR_RANGE_M).length;
 
     const source = has ? lidarSourceText(d) : '';
@@ -237,7 +236,6 @@
       ? 'в реальном времени · ' + pts.length + ' точек · на карте: ' + visibleCount + '/' + pts.length + (source ? ' · ' + source : '')
       : 'нет скана');
     setText($('lidar-count'), has ? String(pts.length) : '—');
-    setText($('lidar-near'), near == null ? '—' : fmt(near, 2) + ' м');
     const empty = $('lidar-empty');
     if (empty) {
       empty.hidden = has;
@@ -299,9 +297,25 @@
     }
   }
 
+  // Дальность в карточке — радиус обзора карты: меняется при зуме щипком,
+  // колесом или кнопками «+ −» и сразу возвращается к 10 м по «⊙».
+  function bindLidarRange() {
+    const canvas = $('lidar-canvas');
+    if (!canvas || !window.RCLidarView) return;
+    window.RCLidarView.attach(canvas);
+    canvas.addEventListener('rc-lidar-view', (event) => {
+      const r = event.detail && event.detail.radius;
+      setText($('lidar-range'), Number.isFinite(+r) ? fmtRange(+r) + ' м' : '—');
+    });
+  }
+  function fmtRange(m) {
+    return m < 1 ? m.toFixed(2) : (m < 10 ? m.toFixed(1) : String(Math.round(m)));
+  }
+
   function boot() {
     fetchState();
     setInterval(fetchState, POLL_MS);
+    bindLidarRange();
     loop();
     initKioskControls();
     initSwipePage();
@@ -739,10 +753,8 @@
           }
         }
         const countEl = document.getElementById('lidar-count');
-        const nearEl = document.getElementById('lidar-near');
         const metaEl = document.getElementById('lidar-meta');
         if (countEl) countEl.textContent = '—';
-        if (nearEl) nearEl.textContent = '—';
         if (metaEl) metaEl.textContent = 'карта сброшена';
         const emptyEl = document.getElementById('lidar-empty');
         if (emptyEl) { emptyEl.textContent = 'карта сброшена — ждём новый скан'; emptyEl.hidden = false; }

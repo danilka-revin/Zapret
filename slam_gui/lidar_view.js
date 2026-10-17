@@ -18,6 +18,7 @@
   if (window.RCLidarView) return;
 
   const STORAGE_KEY = 'rc_lidar_view_v1';
+  const POS_KEY_PREFIX = 'rc_lidar_pos_v1:';  // зум и сдвиг карты (по id канвы)
   const R_DEFAULT = 10;        // м: радиус обзора по умолчанию (как прежняя дальность карты)
   const R_MIN = 0.5;           // м: максимальный зум
   const R_MAX = 40;            // м: максимальный отдалённый вид
@@ -82,6 +83,31 @@
 
   let settings = load();
 
+  // Зум и сдвиг карты сохраняются, чтобы перерисовка или перезагрузка экрана
+  // не возвращали вид к 10 м. Запись отложена: при перетаскивании не пишем на каждый кадр.
+  function posKey(view) {
+    return POS_KEY_PREFIX + (view.canvas && view.canvas.id ? view.canvas.id : 'lidar');
+  }
+
+  function loadPos(view) {
+    let raw = null;
+    try { raw = JSON.parse(localStorage.getItem(posKey(view)) || 'null'); } catch (e) { raw = null; }
+    if (!raw || typeof raw !== 'object') return;
+    view.radius = num(raw.radius, R_MIN, R_MAX, R_DEFAULT);
+    view.px = Number.isFinite(Number(raw.px)) ? Number(raw.px) : 0;
+    view.py = Number.isFinite(Number(raw.py)) ? Number(raw.py) : 0;
+  }
+
+  function savePosSoon(view) {
+    if (view.saveTimer) clearTimeout(view.saveTimer);
+    view.saveTimer = setTimeout(() => {
+      view.saveTimer = null;
+      try {
+        localStorage.setItem(posKey(view), JSON.stringify({ radius: view.radius, px: view.px, py: view.py }));
+      } catch (e) { /* режим без хранилища — вид просто не сохранится */ }
+    }, 250);
+  }
+
   function getSettings() { return Object.assign({}, settings); }
 
   function setSettings(patch) {
@@ -94,7 +120,7 @@
   /* ------------------------------------------------------------ вид */
 
   function makeView(canvas) {
-    return {
+    const view = {
       canvas,
       radius: R_DEFAULT,  // м: расстояние от центра до края канвы по меньшей стороне
       px: 0, py: 0,       // м: мировая точка в центре канвы (сдвиг при перетаскивании)
@@ -102,8 +128,20 @@
       frames: [],         // история для Decay Time: [{t, pts}]
       lastKey: '',
       pointers: new Map(),
-      pinchDist: 0
+      pinchDist: 0,
+      saveTimer: null
     };
+    loadPos(view);
+    return view;
+  }
+
+  // Текущая дальность обзора (радиус, м) — экран показывает её рядом с картой.
+  function notifyView(view) {
+    const c = view.canvas;
+    if (!c || typeof c.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') return;
+    try {
+      c.dispatchEvent(new CustomEvent('rc-lidar-view', { detail: { radius: view.radius } }));
+    } catch (e) { /* старые браузеры без CustomEvent — подпись просто не обновится */ }
   }
 
   function localPoint(view, event) {
@@ -147,6 +185,7 @@
     view.px = world.x - (L1.cy - anchor.y) / L1.k;
     view.py = world.y - (L1.cx - anchor.x) / L1.k;
     redraw(view);
+    savePosSoon(view);
   }
 
   function resetView(view) {
@@ -154,6 +193,7 @@
     view.px = 0;
     view.py = 0;
     redraw(view);
+    savePosSoon(view);
   }
 
   function frameKey(pts, stamp) {
@@ -214,6 +254,7 @@
     const release = (event) => {
       view.pointers.delete(event.pointerId);
       if (view.pointers.size < 2) view.pinchDist = 0;
+      savePosSoon(view);
     };
     c.addEventListener('pointerup', release);
     c.addEventListener('pointercancel', release);
@@ -465,6 +506,10 @@
     drawPoints(ctx, view, L, frames, now);
     drawRobot(ctx, view, L);
     drawInfo(ctx, view, L, step);
+    if (view.lastRadius !== view.radius) {
+      view.lastRadius = view.radius;
+      notifyView(view);
+    }
   }
 
   function redrawAll() {

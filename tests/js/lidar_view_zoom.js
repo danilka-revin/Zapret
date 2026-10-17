@@ -20,6 +20,8 @@ const sandbox = {
     setItem: (k, v) => { store[k] = String(v); },
   },
   devicePixelRatio: 1,
+  setTimeout,
+  clearTimeout,
   document: { createElement: () => ({ setAttribute() {}, appendChild() {}, addEventListener() {} }) },
 };
 sandbox.window = sandbox;
