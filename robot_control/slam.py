@@ -502,6 +502,8 @@ def _drive_command(source, body):
 
 #: Статика интерфейса: имя файла → endpoint. Отдаётся только этот список.
 ASSETS = {
+    # общий слой дизайна «NOTHING» — подключается после основной таблицы страницы
+    "nothing.css": "nothing_css",
     "main.css": "main_css",
     "main.js": "main_js",
     "styles.css": "styles_css",
