@@ -538,7 +538,10 @@ body.soc-crit .kpi-sub { color: var(--err); }
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
   color: var(--muted); margin: 0; font-size: 20px;
+  /* Подпись не должна перекрывать карту: иначе щипок и колесо до канвы не доходят. */
+  pointer-events: none;
 }
+.lidar-empty[hidden] { display: none; }
 .robot-marker {
   position: absolute;
   left: 50%; top: 50%;
@@ -552,7 +555,7 @@ body.soc-crit .kpi-sub { color: var(--err); }
   min-width: 0;
   margin: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 .lidar-stats > div {
@@ -560,23 +563,24 @@ body.soc-crit .kpi-sub { color: var(--err); }
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: 14px;
-  padding: 10px 18px;
+  padding: 10px 14px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
 }
 .lidar-stats dt {
   color: var(--muted);
-  font-size: 14px;
+  font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 1.5px;
+  letter-spacing: .6px;
   font-weight: 700;
   margin: 0;
 }
 .lidar-stats dd {
   margin: 0;
-  font-size: 36px;
+  font-size: 28px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   color: var(--text);
