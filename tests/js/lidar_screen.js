@@ -239,7 +239,7 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
                open: byId('swipe-page').classList.contains('is-open'),
                title: byId('swipe-title-text').textContent };
     }
-    byId('battery-open').click(); navigation.push(state());
+    byId('battery-panel').click(); navigation.push(state());
     global._openSwipe('motors'); navigation.push(state());
     byId('swipe-battery-open').click(); navigation.push(state());
     byId('swipe-close').click(); navigation.push(state());
