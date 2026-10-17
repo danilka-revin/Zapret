@@ -15,7 +15,7 @@
 //
 // Команды приходят от мастера по I2C (он пересылает строки монитора всем
 // колёсам, как проверенный скетч) и с собственного USB 115200 — так модуль
-// можно проверить на столе отдельно: k, c, d, h, s, g, z, p, w, t, b.
+// можно проверить на столе отдельно: k, q, c, d, h, s, g, z, p, w, t, b.
 // Мастер раз в 250 мс забирает кадр состояния (до 32 байт):
 //   "ток_шаг,цель_шаг,состояние,об/мин×10,тяга%\n"
 #ifndef NODE_ADDRESS
@@ -51,6 +51,7 @@ const uint8_t STEP_PUL_PIN = 6;      // TB6600 PUL
 const uint8_t STEP_DIR_PIN = 7;      // TB6600 DIR
 const uint8_t STEP_ENA_PIN = 8;      // TB6600 ENA
 const uint8_t OPTO_PIN = 18;         // оптодатчик нуля руля (INPUT_PULLUP)
+const uint8_t POT_PIN = A0;          // потенциометр положения колеса (ADC0; на Mega это вывод 54)
 
 // ---- уровни сигналов (как в проверенном скетче) ----
 const uint8_t STEP_DIR_PLUS_LEVEL = LOW;       // LOW — «вправо» (f), шаги растут
@@ -66,9 +67,10 @@ const uint16_t STEP_PERIOD_US = 100;           // рабочий ход: 10 кГ
 const uint16_t CALIB_STEP_PERIOD_US = 2000;    // точный подход к датчику: 500 Гц ≈ 3,75°/с
 const float STEER_LIMIT_DEG = 32.0f;           // предел абсолютной команды w (как у сервера)
 const float MANUAL_MOVE_LIMIT_DEG = 360.0f;    // предел одной ручной команды d / c
+const float STEER_TRAVEL_LIMIT_DEG = 125.0f;   // предел хода от нуля: упор потенциометра ±130°
 
 // ---- калибровка по оптодатчику (команда k) ----
-const float CALIB_HALF_RANGE_DEG = 135.0f;     // ход руля ±135° (270° всего): быстрый поиск вправо 135°, затем влево 270°
+const float CALIB_HALF_RANGE_DEG = 125.0f;     // поиск вправо 125°, затем влево 250°: 5° запаса до упора потенциометра ±130°
 const float CALIB_SLOW_SEARCH_DEGREES = 20.0f; // медленный подход к кромке — не дальше
 const uint8_t CALIB_SLOW_PASSES = 3;           // подходов к КАЖДОЙ кромке; ноль — среднее по всем подходам
 const float CALIB_MAX_EDGE_SPREAD_DEG = 2.0f;  // разброс кромок между подходами больше — ошибка 6, ноль не ставим
@@ -82,6 +84,24 @@ const bool CALIB_ZERO_AT_CENTER = true;
 const float CALIB_ZERO_OFFSET_DEG = 0.0f;      // поправка, если «прямо» ≠ нулю датчика
 const uint32_t CALIB_TIMEOUT_MS = 120000UL;    // страховка: дольше — ошибка (3 подхода на кромку)
 const uint8_t OPTO_DEBOUNCE_TICKS = 3;         // 3 тика по 50 мкс подряд = срабатывание
+
+// ---- потенциометр положения колеса (команда q) ----
+// Линейный 10 кОм, 270°: крайние выводы — 5 В и GND платы, движок — A0.
+// Питание от 5 В той же платы: измерение ратиометрическое, просадка 5 В не
+// меняет угол. A0 свободен на всех четырёх платах (D2–D8, D18, I2C D20/D21 заняты).
+const int16_t POT_ADC_MAX = 1023;
+const int16_t POT_RAIL_MARGIN = 4;               // 0…4 и 1019…1023 — обрыв, КЗ или упор
+const float POT_NOMINAL_COUNTS_PER_DEG = 1023.0f / 270.0f;  // 270° на весь ход
+const uint16_t POT_SAMPLE_PERIOD_MS = 10;        // один отсчёт АЦП раз в 10 мс
+const uint8_t POT_FILTER_SHIFT = 2;              // EMA 1/4: шум АЦП падает вчетверо
+const float POT_CORRECTION_DEADBAND_DEG = 0.7f;  // меньше — мотор не дёргаем
+const uint8_t POT_CORRECTION_MAX_PASSES = 3;     // поправок на один поворот
+const uint16_t POT_CORRECTION_SETTLE_MS = 60;    // механика успокаивается после стопа
+const float POT_RESYNC_DEG = 0.25f;              // счётчик шагов привязать к датчику
+const float POT_CAL_POINT_DEG = 60.0f;           // автокалибровка наклона: −60° и +60°
+const float POT_CAL_MIN_COUNTS_PER_DEG = 1.5f;   // проверка правдоподобия наклона
+const float POT_CAL_MAX_COUNTS_PER_DEG = 8.0f;
+const uint32_t POT_CAL_TIMEOUT_MS = 30000UL;
 
 // ---- тяга BLDC ----
 const uint8_t TACH_PULSES_PER_REV = 1;         // импульсов SC на оборот колеса
@@ -140,6 +160,7 @@ const uint16_t STATUS_OPTO = 0x08;
 const uint16_t STATUS_CYCLE = 0x10;
 const uint16_t STATUS_HOME_OPTO = 0x20;
 const uint16_t STATUS_V2 = 0x40;       // признак кадра этой версии
+const uint16_t STATUS_POT = 0x80;      // потенциометр откалиброван, доводка включена
 // биты 8–11: код ошибки калибровки, биты 12–15: счётчик кадров слейва
 
 bool zero_set = false;
@@ -379,8 +400,314 @@ void startMotor(int32_t target, uint16_t period_us, uint8_t watch) {
 }
 
 // ---------------------------------------------------------------------------
-// Калибровка по оптодатчику. Флажок находится быстрым ходом в пределах ±135°
-// от старта (вправо 135°, потом влево 270°). Затем каждая кромка снимается
+// Потенциометр положения колеса — абсолютный датчик угла на A0.
+//
+// Ноль запоминается автоматически, когда задан ноль руля (k или z). Команда q
+// измеряет наклон: колесо едет в 0°, −60° и +60°, по двум точкам считается
+// «отсчётов АЦП на градус». Только после q включается доводка: после каждого
+// поворота прошивка сравнивает угол с потенциометром и делает до
+// POT_CORRECTION_MAX_PASSES поправок. Без q датчик показывает угол по номиналу
+// 1023/270, но в управление не вмешивается.
+const uint16_t POT_CAL_SETTLE_MS = 120;   // механика успокаивается после остановки
+const uint8_t POT_CAL_SAMPLES = 8;        // отсчётов АЦП на точку калибровки
+
+const uint8_t POT_CAL_IDLE = 0;
+const uint8_t POT_CAL_TO_ZERO = 1;        // в 0° перед замерами
+const uint8_t POT_CAL_TO_MINUS = 2;       // в −60°
+const uint8_t POT_CAL_TO_PLUS = 3;        // в +60°
+const uint8_t POT_CAL_BACK = 4;           // обратно в 0°
+
+int16_t pot_raw = 0;                      // фильтрованное значение АЦП 0…1023
+bool pot_sampled = false;
+bool pot_railed = false;                  // 0/1023 — обрыв, КЗ или упор
+bool pot_zero_valid = false;              // есть привязка к нулю руля
+bool pot_calibrated = false;              // наклон измерен командой q
+float pot_zero_raw = 0.0f;                // АЦП в 0° руля
+float pot_counts_per_degree = POT_NOMINAL_COUNTS_PER_DEG;
+uint32_t last_pot_sample_ms = 0;
+uint8_t pot_cal_state = POT_CAL_IDLE;
+uint32_t pot_cal_started_ms = 0;
+uint32_t pot_cal_wait_ms = 0;
+float pot_cal_zero_raw = 0.0f;
+float pot_cal_minus_raw = 0.0f;
+float pot_cal_plus_raw = 0.0f;
+bool pot_cal_ok = false;
+bool feedback_pending = false;            // после поворота ждём доводку
+uint8_t feedback_passes = 0;
+uint32_t feedback_wait_ms = 0;
+int32_t feedback_target_step = 0;
+
+bool potRawOnRail(int16_t raw) {
+  return raw <= POT_RAIL_MARGIN || raw >= POT_ADC_MAX - POT_RAIL_MARGIN;
+}
+
+int16_t potReadAverage(uint8_t count) {
+  if (count == 0) count = 1;
+  uint16_t sum = 0;
+  for (uint8_t i = 0; i < count; ++i) sum += (uint16_t)analogRead(POT_PIN);
+  return (int16_t)((sum + count / 2) / count);
+}
+
+// Свежий замер после остановки: фильтр не успевает за ходом, поэтому для
+// доводки берём среднее из четырёх отсчётов сразу, без EMA.
+int16_t potMeasureRaw() {
+  const int16_t raw = potReadAverage(4);
+  pot_raw = raw;
+  pot_sampled = true;
+  pot_railed = potRawOnRail(raw);
+  return raw;
+}
+
+// Один отсчёт раз в POT_SAMPLE_PERIOD_MS + экспоненциальный фильтр 1/4.
+// 10 мс при 75°/с — это 0,75° запаздывания, а шум АЦП падает вчетверо.
+void updatePot() {
+  const uint32_t now = millis();
+  if ((uint32_t)(now - last_pot_sample_ms) < POT_SAMPLE_PERIOD_MS) return;
+  last_pot_sample_ms = now;
+  const int16_t raw = (int16_t)analogRead(POT_PIN);
+  if (!pot_sampled) {
+    pot_raw = raw;
+    pot_sampled = true;
+  } else {
+    pot_raw = (int16_t)(((int32_t)pot_raw * ((1 << POT_FILTER_SHIFT) - 1) + raw +
+                         (1 << (POT_FILTER_SHIFT - 1))) >> POT_FILTER_SHIFT);
+  }
+  pot_railed = potRawOnRail(pot_raw);
+}
+
+float potAngleDeg() {
+  if (!pot_zero_valid || pot_counts_per_degree == 0.0f) return 0.0f;
+  return ((float)pot_raw - pot_zero_raw) / pot_counts_per_degree;
+}
+
+bool potFeedbackAllowed() {
+  return pot_calibrated && pot_zero_valid && !pot_railed && zero_set;
+}
+
+// Ноль руля задан (k или z) — запомнить, где стоит движок потенциометра.
+// Наклон (отсчёты/градус), измеренный q, при повторном нуле сохраняется.
+void potCaptureZero() {
+  const int16_t raw = potReadAverage(POT_CAL_SAMPLES);
+  pot_raw = raw;
+  pot_sampled = true;
+  if (potRawOnRail(raw)) {
+    pot_zero_valid = false;
+    pot_calibrated = false;
+    pot_railed = true;
+    note(PSTR("потенциометр A0: %d — на краю, доводка выключена"), (int)raw);
+    return;
+  }
+  pot_zero_raw = raw;
+  pot_zero_valid = true;
+  pot_railed = false;
+  if (!pot_calibrated) pot_counts_per_degree = POT_NOMINAL_COUNTS_PER_DEG;
+  note(PSTR("потенциометр A0: 0° = %d, %s"), (int)raw,
+       pot_calibrated ? "наклон сохранён" : "q — точная калибровка");
+}
+
+void potBootNote() {
+  const int16_t raw = potReadAverage(POT_CAL_SAMPLES);
+  pot_raw = raw;
+  pot_sampled = true;
+  pot_railed = potRawOnRail(raw);
+  if (pot_railed) {
+    note(PSTR("потенциометр A0: %d — на краю, проверьте провод"), (int)raw);
+  } else {
+    note(PSTR("потенциометр A0: %d — ноль: k/z, калибровка: q"), (int)raw);
+  }
+}
+
+void potPrintStatus() {
+  potMeasureRaw();                     // p — свежий замер, а не фильтр с задержкой
+  if (pot_zero_valid && !pot_railed) {
+    char angle[16];
+    formatFixed(lroundf(potAngleDeg() * 100.0f), 2, angle, sizeof(angle));
+    note(PSTR("Потенциометр A0: %d = %s°%s"), (int)pot_raw, angle,
+         pot_calibrated ? " (наклон измерен)" : " (номинал, q)");
+  } else if (pot_railed) {
+    note(PSTR("Потенциометр A0: %d — на краю, проверьте провод"), (int)pot_raw);
+  } else {
+    note(PSTR("Потенциометр A0: %d — нет нуля (k или z), затем q"), (int)pot_raw);
+  }
+}
+
+void startPotCalMove(uint8_t state, float degrees) {
+  pot_cal_state = state;
+  pot_cal_wait_ms = 0;
+  startMotor(degreesToSteps(degrees), STEP_PERIOD_US, OPTO_WATCH_NONE);
+}
+
+bool startPotCalibration() {
+  if (drive_active) {
+    note(PSTR("потенциометр: включена тяга — сначала b или s"));
+    return false;
+  }
+  if (calib_state != CAL_IDLE) {
+    note(PSTR("потенциометр: идёт калибровка руля"));
+    return false;
+  }
+  if (pot_cal_state != POT_CAL_IDLE) {
+    note(PSTR("калибровка потенциометра уже идёт"));
+    return false;
+  }
+  if (!zero_set) {
+    note(PSTR("потенциометр: сначала ноль — k (по датчику) или z"));
+    return false;
+  }
+  if (motorBusy() || cycle_active) {
+    note(PSTR("потенциометр: сначала остановите колесо (s)"));
+    return false;
+  }
+  if (pot_railed) {
+    note(PSTR("потенциометр A0: %d — на краю, проверьте провод"), (int)pot_raw);
+    return false;
+  }
+  feedback_pending = false;
+  resume_allowed = false;
+  move_report_pending = false;
+  pot_cal_ok = false;
+  pot_cal_started_ms = millis();
+  note(PSTR("Калибровка потенциометра: 0°, −%d°, +%d°..."),
+       (int)POT_CAL_POINT_DEG, (int)POT_CAL_POINT_DEG);
+  startPotCalMove(POT_CAL_TO_ZERO, 0.0f);
+  return true;
+}
+
+void updatePotCalibration() {
+  if (pot_cal_state == POT_CAL_IDLE) return;
+  if ((uint32_t)(millis() - pot_cal_started_ms) > POT_CAL_TIMEOUT_MS) {
+    pot_cal_state = POT_CAL_IDLE;
+    haltMotor();
+    noInterrupts();
+    target_step = current_step;
+    interrupts();
+    note(PSTR("ОШИБКА потенциометра: не уложилась по времени"));
+    return;
+  }
+  if (motorBusy()) {
+    pot_cal_wait_ms = 0;
+    return;
+  }
+  if (pot_cal_wait_ms == 0) {
+    pot_cal_wait_ms = millis() + POT_CAL_SETTLE_MS;
+    if (pot_cal_wait_ms == 0) pot_cal_wait_ms = 1;
+    return;
+  }
+  if ((int32_t)(millis() - pot_cal_wait_ms) < 0) return;
+
+  switch (pot_cal_state) {
+    case POT_CAL_TO_ZERO:
+      pot_cal_zero_raw = (float)potReadAverage(POT_CAL_SAMPLES);
+      startPotCalMove(POT_CAL_TO_MINUS, -POT_CAL_POINT_DEG);
+      break;
+    case POT_CAL_TO_MINUS:
+      pot_cal_minus_raw = (float)potReadAverage(POT_CAL_SAMPLES);
+      startPotCalMove(POT_CAL_TO_PLUS, POT_CAL_POINT_DEG);
+      break;
+    case POT_CAL_TO_PLUS: {
+      pot_cal_plus_raw = (float)potReadAverage(POT_CAL_SAMPLES);
+      const float slope = (pot_cal_plus_raw - pot_cal_minus_raw) /
+                          (2.0f * POT_CAL_POINT_DEG);
+      const float magnitude = fabsf(slope);
+      const bool rails = potRawOnRail((int16_t)pot_cal_zero_raw) ||
+                         potRawOnRail((int16_t)pot_cal_minus_raw) ||
+                         potRawOnRail((int16_t)pot_cal_plus_raw);
+      if (rails || magnitude < POT_CAL_MIN_COUNTS_PER_DEG ||
+          magnitude > POT_CAL_MAX_COUNTS_PER_DEG) {
+        pot_cal_ok = false;
+        pot_calibrated = false;
+        pot_zero_valid = false;
+        note(PSTR("ОШИБКА потенциометра: нет сигнала или неверный ход"));
+      } else {
+        pot_cal_ok = true;
+        pot_zero_raw = pot_cal_zero_raw;
+        pot_counts_per_degree = slope;
+        pot_zero_valid = true;
+        pot_calibrated = true;
+        char text[16];
+        formatFixed(lroundf(slope * 100.0f), 2, text, sizeof(text));
+        note(PSTR("Потенциометр: %s отсч/°, 0° = %d"), text, (int)pot_cal_zero_raw);
+      }
+      startPotCalMove(POT_CAL_BACK, 0.0f);
+      break;
+    }
+    case POT_CAL_BACK:
+      pot_cal_state = POT_CAL_IDLE;
+      if (pot_cal_ok) {
+        note(PSTR("Потенциометр: калибровка завершена, доводка включена"));
+      }
+      break;
+    default:
+      pot_cal_state = POT_CAL_IDLE;
+      break;
+  }
+}
+
+// После поворота: сравнить угол с потенциометром и до 3 раз довернуть.
+// error = измерено − цель; чтобы уменьшить измеренное, колесо едет на −error.
+// Затем счётчик шагов привязывается к измеренному углу, чтобы deg= в
+// телеметрии было реальным положением колеса.
+void updateFeedback() {
+  if (!feedback_pending) return;
+  if (calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE || cycle_active) {
+    feedback_pending = false;
+    return;
+  }
+  if (motorBusy()) {
+    feedback_wait_ms = 0;
+    return;
+  }
+  const uint32_t now = millis();
+  if (feedback_wait_ms == 0) {
+    feedback_wait_ms = now + POT_CORRECTION_SETTLE_MS;
+    if (feedback_wait_ms == 0) feedback_wait_ms = 1;
+    return;
+  }
+  if ((int32_t)(now - feedback_wait_ms) < 0) return;
+
+  potMeasureRaw();
+  const float actual = potAngleDeg();
+  const float wanted = (float)feedback_target_step / STEPS_PER_DEGREE;
+  const float error = actual - wanted;
+  if (!pot_railed && fabsf(error) > POT_CORRECTION_DEADBAND_DEG &&
+      feedback_passes < POT_CORRECTION_MAX_PASSES) {
+    ++feedback_passes;
+    char text[16];
+    formatFixed(lroundf(error * 100.0f), 2, text, sizeof(text));
+    note(PSTR("Потенциометр: доводка %s° (проход %d/%d)"), text,
+         (int)feedback_passes, (int)POT_CORRECTION_MAX_PASSES);
+    const int32_t correction = degreesToSteps(-error);
+    if (correction != 0) {
+      target_step = stepNow() + correction;
+      startMotor(target_step, STEP_PERIOD_US, OPTO_WATCH_NONE);
+      feedback_wait_ms = 0;
+      return;
+    }
+  }
+
+  const float step_angle = (float)stepNow() / STEPS_PER_DEGREE;
+  if (pot_zero_valid && !pot_railed &&
+      fabsf(actual - step_angle) > POT_RESYNC_DEG) {
+    noInterrupts();
+    current_step = degreesToSteps(actual);
+    interrupts();
+  }
+  noInterrupts();
+  target_step = feedback_target_step;
+  interrupts();
+  if (feedback_passes > 0) {
+    char text[16];
+    formatFixed(lroundf(error * 100.0f), 2, text, sizeof(text));
+    note(PSTR("Потенциометр: остаток %s°"), text);
+  }
+  feedback_pending = false;
+  feedback_passes = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Калибровка по оптодатчику. Флажок находится быстрым ходом в пределах ±125°
+// от старта (вправо 125°, потом влево 250°; упор потенциометра — ±130°).
+// Затем каждая кромка снимается
 // CALIB_SLOW_PASSES раз медленным подходом снаружи: справа налево и слева направо,
 // вперемешку. Ноль — середина между средними кромками (или кромка, см.
 // CALIB_ZERO_AT_CENTER) плюс CALIB_ZERO_OFFSET_DEG. Разброс кромок больше
@@ -388,7 +715,7 @@ void startMotor(int32_t target, uint16_t period_us, uint8_t watch) {
 void copyCalibErrorText(uint8_t error, char* out, size_t out_size) {
   const char* text;
   switch (error) {
-    case CAL_ERR_NOT_FOUND: text = PSTR("датчик не найден в ±135° от старта"); break;
+    case CAL_ERR_NOT_FOUND: text = PSTR("датчик не найден в ±125° от старта"); break;
     case CAL_ERR_STUCK: text = PSTR("датчик не освобождается (залип или флажок шире 30°)"); break;
     case CAL_ERR_EDGE: text = PSTR("кромка не найдена при медленном подходе"); break;
     case CAL_ERR_SPREAD: text = PSTR("кромки расходятся между подходами"); break;
@@ -414,10 +741,16 @@ bool startCalibration() {
     note(PSTR("Калибровка уже запущена!"));
     return false;
   }
+  if (pot_cal_state != POT_CAL_IDLE) {
+    note(PSTR("сначала дождитесь калибровки потенциометра или s"));
+    return false;
+  }
   cycle_active = false;
   resume_allowed = false;
   move_report_pending = false;
+  feedback_pending = false;
   zero_set = false;
+  pot_zero_valid = false;
   home_source = HOME_NONE;
   calib_error = CAL_OK;
   calib_started_ms = millis();
@@ -442,6 +775,8 @@ void failCalibration(uint8_t error) {
   calib_error = error;
   zero_set = false;
   home_source = HOME_NONE;
+  pot_zero_valid = false;
+  feedback_pending = false;
   char text[112];
   copyCalibErrorText(error, text, sizeof(text));
   note(PSTR("ОШИБКА калибровки: %s"), text);
@@ -596,6 +931,7 @@ void updateCalibration() {
       calib_error = CAL_OK;
       zero_set = true;
       home_source = HOME_OPTO;
+      potCaptureZero();
       note(PSTR("Калибровка ЗАВЕРШЕНА! Точка 0 установлена по датчику."));
       break;
     default:
@@ -616,11 +952,26 @@ bool steeringAllowed() {
     note(PSTR("идёт калибровка — дождитесь конца или отправьте s"));
     return false;
   }
+  if (pot_cal_state != POT_CAL_IDLE) {
+    note(PSTR("идёт калибровка потенциометра — s для отмены"));
+    return false;
+  }
   return true;
 }
 
 void startPlainMove(int32_t target, bool report) {
+  const int32_t limit = degreesToSteps(STEER_TRAVEL_LIMIT_DEG);
+  if (target > limit || target < -limit) {
+    char text[16];
+    formatDegrees(target, text, sizeof(text));
+    note(PSTR("цель %s° вне хода ±%d°"), text, (int)STEER_TRAVEL_LIMIT_DEG);
+    return;
+  }
   cycle_active = false;
+  feedback_pending = potFeedbackAllowed();
+  feedback_target_step = target;
+  feedback_passes = 0;
+  feedback_wait_ms = 0;
   startMotor(target, STEP_PERIOD_US, OPTO_WATCH_NONE);
   resume_allowed = true;
   move_report_pending = report && motorBusy();
@@ -628,12 +979,20 @@ void startPlainMove(int32_t target, bool report) {
 
 void startCycle(float degrees) {
   haltMotor();
-  cycle_start_step = stepNow();
-  cycle_end_step = cycle_start_step + degreesToSteps(degrees);
+  const int32_t start = stepNow();
+  const int32_t delta = degreesToSteps(degrees);
+  const int32_t limit = degreesToSteps(STEER_TRAVEL_LIMIT_DEG);
+  if (start + delta > limit || start - delta < -limit) {
+    note(PSTR("качание %d° выходит за ход ±%d°"), (int)degrees, (int)STEER_TRAVEL_LIMIT_DEG);
+    return;
+  }
+  cycle_start_step = start;
+  cycle_end_step = start + delta;
   cycle_to_end = true;
   cycle_active = true;
   resume_allowed = false;
   move_report_pending = false;
+  feedback_pending = false;
   startMotor(cycle_end_step, STEP_PERIOD_US, OPTO_WATCH_NONE);
   char text[16];
   formatFixed(lroundf(degrees * 100.0f), 2, text, sizeof(text));
@@ -670,11 +1029,14 @@ void updateMoveReport() {
 }
 
 bool setZeroHere() {
-  if (drive_active || calib_state != CAL_IDLE) {
-    note(PSTR("ноль не задан: %s"), drive_active ? "включена тяга" : "идёт калибровка");
+  if (drive_active || calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE) {
+    note(PSTR("ноль не задан: %s"),
+         drive_active ? "включена тяга"
+                      : (calib_state != CAL_IDLE ? "идёт калибровка" : "идёт калибровка потенциометра"));
     return false;
   }
   cycle_active = false;
+  feedback_pending = false;
   haltMotor();
   noInterrupts();
   current_step = 0;
@@ -685,6 +1047,7 @@ bool setZeroHere() {
   calib_error = CAL_OK;
   resume_allowed = false;
   move_report_pending = false;
+  potCaptureZero();
   note(PSTR("ОБНУЛЕНА. Ноль задан вручную в текущем положении."));
   return true;
 }
@@ -692,7 +1055,8 @@ bool setZeroHere() {
 // ---------------------------------------------------------------------------
 // Тяга BLDC: только при заданном нуле и стоящем руле, с watchdog 650 мс.
 bool localDriveAllowed() {
-  return zero_set && !motorBusy() && calib_state == CAL_IDLE && !cycle_active;
+  return zero_set && !motorBusy() && calib_state == CAL_IDLE &&
+         pot_cal_state == POT_CAL_IDLE && !cycle_active;
 }
 
 void applyDriveCommand(int8_t percent) {
@@ -769,6 +1133,7 @@ uint16_t moduleStatus() {
   if (optoActive()) status |= STATUS_OPTO;
   if (cycle_active) status |= STATUS_CYCLE;
   if (zero_set && home_source == HOME_OPTO) status |= STATUS_HOME_OPTO;
+  if (potFeedbackAllowed()) status |= STATUS_POT;
   status |= (uint16_t)(calib_error & 0x0F) << 8;
   return status;
 }
@@ -782,12 +1147,14 @@ void printModuleStatus() {
   const char* state = calib_state != CAL_IDLE ? "КАЛИБРОВКА" : (cycle_active ? "ЦИКЛ" : (motorBusy() ? "ДВИЖ" : "СТОИТ"));
   note(PSTR("Текущий: %s° | Целевой: %s° [%s] · ноль %s · датчик %s · тяга %d%%"),
        current, target, state, zero, optoActive() ? "закрыт" : "свободен", (int)drive_percent);
+  potPrintStatus();
 }
 
 // Команды одного рулевого модуля. Мастер выполняет их для FL и пересылает те
 // же строки слейвам (как проверенный скетч), слейв принимает их по I2C и со
 // своего USB — так любой модуль можно проверить на столе по одному.
 //   k | calib      калибровка по оптодатчику
+//   q              калибровка потенциометра A0: 0°, −60°, +60° (доводка по датчику)
 //   z | zero       ноль в текущем положении (вручную)
 //   h              в ноль           s   стоп всего (руль, калибровка, цикл, тяга)
 //   g              продолжить поворот, прерванный s
@@ -798,11 +1165,17 @@ void printModuleStatus() {
 //   p              состояние
 void stopEverything() {
   const bool cycling = cycle_active;
+  const bool pot_cal = pot_cal_state != POT_CAL_IDLE;
   if (calib_state != CAL_IDLE) failCalibration(CAL_ERR_ABORTED);
   cycle_active = false;
   haltMotor();
   stopDriveLocal();
   move_report_pending = false;
+  feedback_pending = false;
+  if (pot_cal) {
+    pot_cal_state = POT_CAL_IDLE;
+    note(PSTR("калибровка потенциометра прервана"));
+  }
   if (cycling) resume_allowed = false;
   char angle[16];
   formatDegrees(stepNow(), angle, sizeof(angle));
@@ -819,6 +1192,8 @@ void handleModuleCommand(char* line) {
 
   if (strcasecmp_P(command, PSTR("k")) == 0 || strcasecmp_P(command, PSTR("calib")) == 0) {
     startCalibration();
+  } else if (strcasecmp_P(command, PSTR("q")) == 0) {
+    startPotCalibration();
   } else if (strcasecmp_P(command, PSTR("s")) == 0) {
     stopEverything();
   } else if (strcasecmp_P(command, PSTR("z")) == 0 || strcasecmp_P(command, PSTR("zero")) == 0) {
@@ -942,6 +1317,8 @@ void steeringSetup() {
   analogWrite(BLDC_SPEED_PIN, 0);
 
   pinMode(OPTO_PIN, INPUT_PULLUP);
+  pinMode(POT_PIN, INPUT);          // без подтяжки: потенциометр — делитель 5 В/GND
+  analogReference(DEFAULT);         // опора АЦП = 5 В платы, как питание потенциометра
   digitalWrite(STEP_PUL_PIN, LOW);
   digitalWrite(STEP_DIR_PIN, STEP_DIR_PLUS_LEVEL);
   digitalWrite(STEP_ENA_PIN, STEP_ENABLE_LEVEL);  // как в проверенном скетче: сразу HIGH
@@ -952,14 +1329,18 @@ void steeringSetup() {
   setupStepTimer();
   last_rpm_ms = millis();
   last_drive_command_ms = millis();
+  last_pot_sample_ms = millis();
 }
 
 void steeringLoop() {
   updateDriveWatchdog();
+  updatePot();
   updateRpm();
   updateCalibration();
+  updatePotCalibration();
   updateCycle();
   updateMoveReport();
+  updateFeedback();
   txPump();
 }
 // ============================ STEERING CORE END ============================
@@ -1063,8 +1444,9 @@ void setup() {
   steeringSetup();
   refreshFrame();
   last_frame_ms = millis();
-  note(PSTR("--- SLAVE %s, I2C %d: руль v%u, датчик нуля D18; ноль не задан — k или z ---"),
+  note(PSTR("--- SLAVE %s, I2C %d: руль v%u, датчики: ноль D18, пот A0; ноль не задан — k или z ---"),
        MODULE_ID, (int)NODE_ADDRESS, (unsigned)FIRMWARE_PROTOCOL);
+  potBootNote();
 }
 
 void loop() {

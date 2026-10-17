@@ -151,6 +151,24 @@ static void calibrate_fr(double timeout_ms = 30000) {
   CHECK(wait_until(fr_idle, timeout_ms), "калибровка не закончилась за %.0f мс", timeout_ms);
 }
 
+static bool fr_settled() {
+  return FR::calib_state == FR::CAL_IDLE && FR::pot_cal_state == FR::POT_CAL_IDLE &&
+         !FR::motorBusy() && !FR::feedback_pending;
+}
+
+static bool fr_pot_idle() {
+  return FR::pot_cal_state == FR::POT_CAL_IDLE && !FR::motorBusy();
+}
+
+static void calibrate_pot_fr() {
+  board_fr.serial.send("q");
+  sim::run_for_ms(2);
+  CHECK(FR::pot_cal_state != FR::POT_CAL_IDLE, "q не запустила калибровку потенциометра");
+  CHECK(wait_until(fr_pot_idle, 30000), "калибровка потенциометра не закончилась");
+  CHECK(FR::pot_calibrated && FR::pot_zero_valid, "потенциометр не откалиброван: cal=%d zero=%d",
+        FR::pot_calibrated, FR::pot_zero_valid);
+}
+
 static void scenario_boot() {
   boot({&board_fr});
   CHECK(board_fr.level[8] == HIGH, "ENA должен быть HIGH сразу после включения");
@@ -158,6 +176,8 @@ static void scenario_boot() {
   CHECK(board_fr.mode[18] == INPUT_PULLUP, "D18 — INPUT_PULLUP");
   CHECK(!FR::zero_set, "ноль после включения не задан");
   CHECK(has(board_fr, "--- SLAVE FR, I2C 2"), "приветствие слейва: %s", board_fr.serial.output.c_str());
+  CHECK(has(board_fr, "потенциометр A0: 512"), "потенциометр A0 прочитан: %s",
+        board_fr.serial.output.c_str());
   CHECK(board_fr.level[5] == HIGH && board_fr.analog[3] == 0, "BLDC: тормоз включён, PWM 0");
 }
 
@@ -185,10 +205,10 @@ static void scenario_calib_right() {
   board_fr.phys = 3000;                  // флажок левее: вправо 135° пусто, потом влево
   boot({&board_fr});
   calibrate_fr();
-  CHECK(has(board_fr, "справа датчика нет, ищу влево на 270°"), "переход к поиску влево");
+  CHECK(has(board_fr, "справа датчика нет, ищу влево на 250°"), "переход к поиску влево");
   CHECK(has(board_fr, "датчик найден слева"), "датчик найден поиском влево");
   CHECK(FR::zero_set && std::labs(board_fr.phys) <= 1, "ноль найден: phys=%ld", board_fr.phys);
-  CHECK(std::labs(board_fr.phys_max - (3000 + 18000)) <= 2, "сначала прошёл вправо 135°: max=%ld", board_fr.phys_max);
+  CHECK(std::labs(board_fr.phys_max - (3000 + 16667)) <= 2, "сначала прошёл вправо 125°: max=%ld", board_fr.phys_max);
   check_signals(board_fr);
 }
 
@@ -215,7 +235,7 @@ static void scenario_calib_out_of_range() {
   CHECK(!FR::zero_set && FR::calib_error == FR::CAL_ERR_NOT_FOUND, "ошибка «не найден»: err=%d",
         FR::calib_error);
   CHECK(has(board_fr, "ОШИБКА калибровки: датчик не найден"), "текст ошибки");
-  CHECK(std::labs(board_fr.phys - (-19000 - 18000)) <= 2, "вправо 135° и влево 270°: phys=%ld",
+  CHECK(std::labs(board_fr.phys - (-19000 - 16667)) <= 2, "вправо 125° и влево 250°: phys=%ld",
         board_fr.phys);
   CHECK(!FR::motorBusy(), "мотор остановлен");
 }
@@ -225,11 +245,11 @@ static void scenario_calib_no_sensor() {
   boot({&board_fr});
   calibrate_fr();
   CHECK(FR::calib_error == FR::CAL_ERR_NOT_FOUND && !FR::zero_set, "без датчика — ошибка");
-  CHECK(std::labs(board_fr.phys_max - 18000) <= 2 && std::labs(board_fr.phys_min + 18000) <= 2,
-        "ход поиска +135°/−270° (±135° от старта): min=%ld max=%ld", board_fr.phys_min,
+  CHECK(std::labs(board_fr.phys_max - 16667) <= 2 && std::labs(board_fr.phys_min + 16667) <= 2,
+        "ход поиска +125°/−250° (±125° от старта): min=%ld max=%ld", board_fr.phys_min,
         board_fr.phys_max);
   sim::run_for_ms(200);
-  CHECK(std::labs(board_fr.phys + 18000) <= 2 && !FR::motorBusy(), "после ошибки колесо стоит");
+  CHECK(std::labs(board_fr.phys + 16667) <= 2 && !FR::motorBusy(), "после ошибки колесо стоит");
 }
 
 static void scenario_calib_stuck() {
@@ -365,6 +385,12 @@ static void scenario_moves() {
   CHECK(has(board_fr, "Ошибка направления! f или b"), "неверное направление");
   CHECK(board_fr.phys == 2333, "ошибочные команды не двигают колесо");
 
+  board_fr.serial.send("d 200 f");
+  sim::run_for_ms(5);
+  CHECK(has(board_fr, "вне хода ±125°"), "предел хода отклоняет d 200: %s",
+        board_fr.serial.output.c_str());
+  CHECK(board_fr.phys == 2333, "предел хода не двигает колесо");
+
   board_fr.serial.send("h");
   CHECK(wait_until([] { return !FR::motorBusy() && FR::stepNow() == 0; }, 1000), "h → 0");
   CHECK(board_fr.phys == 0, "колесо прямо: phys=%ld", board_fr.phys);
@@ -373,6 +399,68 @@ static void scenario_moves() {
   CHECK(has(board_fr, "Текущий: 0.00° | Целевой: 0.00° [СТОИТ] · ноль по датчику"), "p: %s",
         board_fr.serial.output.c_str());
   check_signals(board_fr);
+}
+
+static void scenario_pot_calibration() {
+  board_fr.phys = 2500;                  // колесо не в нуле: q сначала едет в 0
+  boot({&board_fr});
+  calibrate_fr();
+  CHECK(FR::pot_zero_valid && !FR::pot_calibrated,
+        "после k ноль потенциометра есть, наклон ещё нет");
+  CHECK(has(board_fr, "потенциометр A0: 0° = 512"), "ноль потенциометра записан: %s",
+        board_fr.serial.output.c_str());
+  calibrate_pot_fr();
+  CHECK(std::labs(board_fr.phys) <= 1, "q вернула колесо в 0: phys=%ld", board_fr.phys);
+  CHECK(std::fabs(FR::pot_counts_per_degree - 1023.0 / 270.0) < 0.05,
+        "наклон %.4f отсч/°", FR::pot_counts_per_degree);
+  CHECK(FR::moduleStatus() & FR::STATUS_POT, "бит STATUS_POT в кадре состояния");
+  CHECK(has(board_fr, "Потенциометр: 3.78 отсч/°, 0° = 512"),
+        "наклон и ноль напечатаны: %s", board_fr.serial.output.c_str());
+  CHECK(has(board_fr, "калибровка завершена, доводка включена"), "сообщение о завершении q");
+  board_fr.serial.send("p");
+  sim::run_for_ms(5);
+  CHECK(has(board_fr, "Потенциометр A0: 512 = 0.00° (наклон измерен)"), "p: %s",
+        board_fr.serial.output.c_str());
+}
+
+static void scenario_pot_feedback() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  board_fr.pot_bias_steps = 600;         // датчик показывает на 4.5° больше колеса
+  board_fr.serial.send("w 10");
+  sim::run_for_ms(2);
+  CHECK(wait_until(fr_settled, 3000), "w 10 с доводкой не закончилась");
+  CHECK(std::fabs(FR::potAngleDeg() - 10.0f) < 0.8f,
+        "доводка вывела датчик на 10°: %.2f (phys=%ld)", FR::potAngleDeg(), board_fr.phys);
+  CHECK(has(board_fr, "Потенциометр: доводка"), "сообщение о доводке: %s",
+        board_fr.serial.output.c_str());
+  CHECK(has(board_fr, "Потенциометр: остаток"), "сообщение об остатке");
+  CHECK(std::labs(FR::stepNow() - 1333) <= 10, "счётчик привязан к датчику: %ld",
+        (long)FR::stepNow());
+  board_fr.serial.send("w 0");
+  sim::run_for_ms(2);
+  CHECK(wait_until(fr_settled, 3000), "w 0 с доводкой не закончилась");
+  CHECK(std::fabs(FR::potAngleDeg()) < 0.8f, "доводка вернула на 0: %.2f", FR::potAngleDeg());
+  CHECK(std::labs(FR::stepNow()) <= 10, "счётчик снова в нуле: %ld", (long)FR::stepNow());
+}
+
+static void scenario_pot_unplugged() {
+  board_fr.pot_present = false;
+  boot({&board_fr});
+  CHECK(has(board_fr, "потенциометр A0: 1023 — на краю"), "boot без датчика: %s",
+        board_fr.serial.output.c_str());
+  calibrate_fr();
+  CHECK(FR::zero_set && !FR::pot_zero_valid && !FR::pot_calibrated,
+        "без потенциометра ноль руля есть, доводки нет");
+  board_fr.serial.send("q");
+  sim::run_for_ms(5);
+  CHECK(FR::pot_cal_state == FR::POT_CAL_IDLE, "q без датчика отклонена");
+  CHECK(has(board_fr, "на краю, проверьте провод"), "сообщение об обрыве");
+  board_fr.serial.send("w 10");
+  CHECK(wait_until([] { return !FR::motorBusy() && FR::stepNow() == 1333; }, 1000),
+        "повороты без потенциометра работают, сейчас %ld", (long)FR::stepNow());
+  CHECK(board_fr.phys == 1333, "phys=%ld", board_fr.phys);
 }
 
 static void scenario_swing() {
@@ -511,6 +599,12 @@ static bool all_idle() {
 }
 
 static bool all_zero() { return M::zero_set && node_fr::zero_set && node_rl::zero_set && node_rr::zero_set; }
+
+static bool all_pot_idle() {
+  return M::pot_cal_state == M::POT_CAL_IDLE && node_fr::pot_cal_state == node_fr::POT_CAL_IDLE &&
+         node_rl::pot_cal_state == node_rl::POT_CAL_IDLE && node_rr::pot_cal_state == node_rr::POT_CAL_IDLE &&
+         !M::motorBusy() && !node_fr::motorBusy() && !node_rl::motorBusy() && !node_rr::motorBusy();
+}
 
 static void calibrate_all() {
   board_fl.phys = -3000;
@@ -659,6 +753,10 @@ static void scenario_system_broadcast() {
 
 static void scenario_tlm_dump() {
   calibrate_all();
+  board_fl.serial.send("q");
+  sim::run_for_ms(5);
+  CHECK(wait_until(all_pot_idle, 30000), "калибровка потенциометров всех колёс");
+  sim::run_for_ms(600);                  // мастер опросит слейвов: pot=1 в кадрах
   board_fl.serial.send("w FR 12.5");
   sim::run_for_ms(700);
   std::fwrite(board_fl.serial.output.data(), 1, board_fl.serial.output.size(), stdout);
@@ -735,6 +833,9 @@ static const Scenario SCENARIOS[] = {
     {"calib_passes_averaged", scenario_calib_passes_averaged},
     {"calib_spread_error", scenario_calib_spread_error},
     {"moves", scenario_moves},
+    {"pot_calibration", scenario_pot_calibration},
+    {"pot_feedback", scenario_pot_feedback},
+    {"pot_unplugged", scenario_pot_unplugged},
     {"swing", scenario_swing},
     {"pause_resume", scenario_pause_resume},
     {"zero_manual", scenario_zero_manual},

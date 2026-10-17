@@ -66,13 +66,19 @@ def test_pins_levels_and_speeds_match_the_tested_sketch():
     assert _const(reference, "DIR") == _const(core, "STEP_DIR_PIN") == "7"
     assert _const(reference, "ENA") == _const(core, "STEP_ENA_PIN") == "8"
     assert _const(reference, "OPTO_PIN") == _const(core, "OPTO_PIN") == "18"
+    # Потенциометр положения колеса: A0 на всех четырёх платах (Mega: 54),
+    # аналоговый вход свободен от D2–D8, D18 и I2C D20/D21.
+    assert _const(core, "POT_PIN") == "A0"
+    assert int(_const(core, "STATUS_POT"), 0) == 0x80
+    assert int(_const(core, "POT_ADC_MAX")) == 1023
+    assert float(_const(core, "STEER_TRAVEL_LIMIT_DEG")) == 125.0
     assert _const(reference, "STEP_PERIOD_US") == _const(core, "STEP_PERIOD_US") == "100"
     assert _const(reference, "CALIB_STEP_PERIOD_US") == _const(core, "CALIB_STEP_PERIOD_US") == "2000"
     assert float(_const(reference, "STEPS_PER_DEGREE")) == float(_const(core, "STEPS_PER_DEGREE"))
-    # Эталон проверен на железе с поиском вправо 100° / влево 200°. Новый ход руля ±135°
-    # задан явно (ход 270°, колесо может уйти на 135° в обе стороны) — это осознанное отличие.
+    # Эталон проверен на железе с поиском вправо 100° / влево 200°. У нового руля
+    # потенциометр с упором ±130°: ищем ±125°, чтобы не упираться в его край.
     assert float(_const(reference, "CALIB_SEARCH_DEGREES")) == 100.0
-    assert float(_const(core, "CALIB_HALF_RANGE_DEG")) == 135.0
+    assert float(_const(core, "CALIB_HALF_RANGE_DEG")) == 125.0
     assert int(_const(core, "CALIB_SLOW_PASSES")) == 3          # подходов на кромку, ноль — среднее
     assert float(_const(core, "CALIB_MAX_EDGE_SPREAD_DEG")) == 2.0
     assert float(_const(reference, "CALIB_SLOW_SEARCH_DEGREES")) == float(
@@ -88,7 +94,7 @@ def test_pins_levels_and_speeds_match_the_tested_sketch():
 def test_master_accepts_monitor_commands_of_the_tested_sketch():
     master = _text(MASTER)
     core = _core(MASTER)
-    for command in ("k", "s", "g", "h", "z", "d", "c"):
+    for command in ("k", "q", "s", "g", "h", "z", "d", "c"):
         assert 'PSTR("%s")' % command in master
     for message in ("Калибровка уже запущена!", "Цель достигнута. Угол:", "ПАУЗА. Угол:",
                     "Шаблон: d [градусы] [f/b]", "Ошибка направления! f или b", "ОБНУЛЕНА.",
@@ -144,7 +150,7 @@ def test_firmware_simulation_scenarios(simulator):
     result = subprocess.run([str(simulator)], capture_output=True, text=True, timeout=600)
     report = result.stdout + "\n" + result.stderr[-6000:]
     assert result.returncode == 0, report
-    assert "26/26 сценариев прошли" in result.stdout, report
+    assert "29/29 сценариев прошли" in result.stdout, report
 
 
 def test_server_parses_simulated_master_telemetry(simulator):
@@ -170,6 +176,7 @@ def test_server_parses_simulated_master_telemetry(simulator):
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
         assert frame["firmware"] == 2 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] == 0.0
+        assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False
     assert any("FR: Калибровка ЗАВЕРШЕНА!" in line for line in messages)
 
@@ -191,6 +198,7 @@ def test_server_parses_simulated_master_telemetry(simulator):
     motors = {motor["id"]: motor for motor in source.read(now=100.2)["motors"]}
     assert all(motor["homed"] and motor["online"] for motor in motors.values())
     assert motors["FR"]["homeSource"] == "opto"
+    assert motors["FR"]["pot"] is True
 
 
 def _avr_toolchain_available() -> bool:

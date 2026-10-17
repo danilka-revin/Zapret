@@ -5,6 +5,8 @@ static sim::Board& sim_board = SIM_BOARD;
 inline void pinMode(uint8_t pin, uint8_t mode) { sim_board.pin_mode(pin, mode); }
 inline void digitalWrite(uint8_t pin, uint8_t level) { sim_board.digital_write(pin, level); }
 inline int digitalRead(uint8_t pin) { return sim_board.digital_read(pin); }
+inline int analogRead(uint8_t pin) { return sim_board.analog_read(pin); }
+inline void analogReference(uint8_t) {}
 inline void analogWrite(uint8_t pin, int value) { sim_board.analog[pin] = value; }
 inline uint8_t digitalPinToInterrupt(uint8_t pin) { return pin == 2 ? 4 : 0xFF; }
 inline void attachInterrupt(uint8_t, void (*fn)(), int) { sim_board.tach_fn = fn; }

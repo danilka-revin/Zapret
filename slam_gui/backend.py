@@ -228,7 +228,7 @@ class NoSource:
 
     def read(self):
         motors = [{"id": mid, "title": MODULE_TITLES[mid], "angle": None, "rpm": None,
-                   "temp": None, "homed": None, "online": False, "fault": None}
+                   "temp": None, "homed": None, "online": False, "fault": None, "pot": None}
                   for mid in MODULE_NAMES.values()]
         battery = {"soc": None, "volts": None, "amps": None, "watts": None,
                    "remainingWh": None, "rangeKm": None, "state": None, "level": None,
@@ -307,6 +307,9 @@ def parse_master_line(line):
             "opto": fields.get("opto") == "1",
             "calibError": calib_error,
             "firmware": firmware,
+            # pot=1 — потенциометр A0 откалиброван (q), доводка положения включена.
+            # Поле появилось в прошивке v2 после руля; старые кадры его не содержат.
+            "pot": fields.get("pot") == "1",
         }
     except (KeyError, ValueError):
         return None
@@ -645,6 +648,7 @@ class MasterSource:
                                "calibError": error or 0,
                                "calibErrorText": CALIB_ERRORS.get(error) if error else None,
                                "firmware": frame.get("firmware"),
+                               "pot": frame.get("pot", False),
                                "online": True, "fault": None,
                                "moving": frame["moving"], "calibrating": frame["calib"],
                                "cycling": frame.get("cycle", False)})
@@ -652,7 +656,7 @@ class MasterSource:
                 motors.append({"id": mid, "title": MODULE_TITLES[mid], "angle": None,
                                "targetAngle": None, "rpm": None, "temp": None,
                                "drivePercent": None, "homed": None, "online": False, "fault": None,
-                               "moving": False, "calibrating": False})
+                               "pot": None, "moving": False, "calibrating": False})
         out = NoSource().read()              # АКБ и маршрут пока не передаются
         out["motors"] = motors
         out["drive"] = self.drive_status(now)
