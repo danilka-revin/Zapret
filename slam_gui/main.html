@@ -11,7 +11,6 @@
   <link rel="stylesheet" href="power.css" />
   <link rel="stylesheet" href="lidar_settings.css" />
   <link rel="stylesheet" href="summary.css" />
-  <link rel="stylesheet" href="nothing.css" />
 </head>
 <!--
   Основной экран робота (киоск). Только отображение состояния: управления здесь нет.
@@ -30,7 +29,7 @@
   Адреса: на дисплее робота — http://127.0.0.1:8080/ ; с планшета — http://<ip>:8080/ ;
   инженерный пульт — /console.
 -->
-<body class="nothing">
+<body>
   <div class="app">
     <aside class="side" aria-label="Меню">
       <div class="brand">
@@ -46,8 +45,6 @@
           <small>НТЦ АО «АВТОВАЗ»</small>
         </div>
       </div>
-
-      <div class="glyph" aria-hidden="true" style="padding: 0 8px 12px"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 
       <nav class="nav" aria-label="Разделы экрана">
         <a class="active" href="#" aria-current="true">
@@ -349,7 +346,7 @@
   // темы как на киоске 8090 — чёрно-белый дизайн по умолчанию
   (function(){
     const THEMES = [
-      {id:'bw', accent:'#d71921', bg:'#000000', panel:'#101012'},
+      {id:'bw', accent:'#ffffff', bg:'#070709', panel:'#141416'},
       {id:'rus', accent:'#9fe36b', bg:'#070d0a', panel:'#12201a'},
       {id:'lavender', accent:'#c9b3ff', bg:'#0a0a14', panel:'#181826'},
       {id:'ocean', accent:'#4fc3f7', bg:'#061018', panel:'#122636'},

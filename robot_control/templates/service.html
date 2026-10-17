@@ -4,14 +4,11 @@
 <section class="card">
   <div class="service-head">
     <div>
-      <span class="eyebrow"><span class="num">03</span>Сервис · кастомизация</span>
-      <h1 class="card-title ndot" style="margin:10px 0 0">Темы</h1>
-      <p class="muted" style="margin:8px 0 0">Тот же дизайн что на киоске 8090 — 20 тем. По умолчанию «Nothing»: чёрный фон, точечный шрифт, красный акцент. Выбор сохраняется в браузере (localStorage) и сразу применяется на всём операторе.</p>
+      <h1 class="card-title" style="margin:0">Сервис · Темы</h1>
+      <p class="muted" style="margin:6px 0 0">Тот же дизайн что на киоске 8090 — 20 тем. Выбор сохраняется в браузере (localStorage) и сразу применяется на всём операторе.</p>
     </div>
-    <span class="service-count"><b>20</b> видов</span>
+    <span class="service-count">20 видов</span>
   </div>
-
-  <hr class="dot-rule">
 
   <div id="service-themes" class="service-grid" role="list"></div>
 
@@ -30,7 +27,7 @@
 <script>
 (function(){
   const THEMES = [
-    {id:'bw',       name:'Nothing',       hint:'моно · красный',     accent:'#d71921', bg:'#000000', panel:'#101012'},
+    {id:'bw',       name:'Чёрно-белый',   hint:'как на киоске',      accent:'#ffffff', bg:'#070709', panel:'#141416'},
     {id:'rus',      name:'RUS SLAM',      hint:'оригинал лайм',      accent:'#9fe36b', bg:'#070d0a', panel:'#12201a'},
     {id:'lavender', name:'Lavender',      hint:'WEB TACTICS',        accent:'#c9b3ff', bg:'#0a0a14', panel:'#181826'},
     {id:'ocean',    name:'Ocean',         hint:'голубой',            accent:'#4fc3f7', bg:'#061018', panel:'#122636'},
@@ -38,7 +35,7 @@
     {id:'crimson',  name:'Crimson',       hint:'малиновый',          accent:'#ff4d6d', bg:'#120607', panel:'#241214'},
     {id:'nord',     name:'Nord',          hint:'скандинавский',      accent:'#88c0d0', bg:'#0b0f14', panel:'#15202e'},
     {id:'dracula',  name:'Dracula',       hint:'фиолетовый',         accent:'#bd93f9', bg:'#0e0e14', panel:'#1e1e2e'},
-    {id:'light',    name:'Светлая',       hint:'инверсия',           accent:'#0a0a0a', bg:'#f2f2f4', panel:'#ffffff'},
+    {id:'light',    name:'Светлая',       hint:'инверсия',           accent:'#0a0a0a', bg:'#f4f4f6', panel:'#ffffff'},
     {id:'cyber',    name:'Cyber',         hint:'неон циан',          accent:'#00ffcc', bg:'#050507', panel:'#10181e'},
     {id:'forest',   name:'Forest',        hint:'лес',                accent:'#7ddc52', bg:'#0a120a', panel:'#142814'},
     {id:'amber',    name:'Amber',         hint:'янтарь',             accent:'#ffb84d', bg:'#120e06', panel:'#241d0f'},
