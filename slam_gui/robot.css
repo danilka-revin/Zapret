@@ -1699,7 +1699,6 @@ body.swipe-open .kiosk {
 .battery-panel[role="button"]:active { transform: translateY(1px); }
 .battery-more { align-self: flex-start; margin-top: 2px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--text); font-size: 14px; font-weight: 800; }
 .battery-more[data-tone="warn"] { border-color: #7a5a22; color: #ffd18a; background: #1a150c; }
-.top-right .battery-open { border-color: #3c6143; color: #b8f0c0; }
 @media (max-width: 1200px) {
   .bms-columns { grid-template-columns: 1fr; }
   .bms-cell-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }

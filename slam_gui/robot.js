@@ -1166,10 +1166,10 @@
       else selectSwipeView('motors');
     };
     selectSwipeView('cameras');
-    ['battery-open', 'swipe-battery-open'].forEach((id) => {
-      const button = $(id);
+    {
+      const button = $('swipe-battery-open');
       if (button) button.addEventListener('click', () => openSwipe('battery'));
-    });
+    }
     // Вся панель АКБ на главном экране открывает страницу 4 — её не нужно искать.
     const batteryPanel = $('battery-panel');
     if (batteryPanel) {

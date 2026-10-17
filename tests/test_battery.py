@@ -193,7 +193,7 @@ def test_public_page_api_and_all_bank_csv(battery_app):
     assert banks[-1] == ["32", "3231", "15.5", "Да", "Прочитано"]
     page = client.get("/kiosk").text
     assert 'id="swipe-battery-view"' in page
-    assert 'id="battery-open"' in page
+    assert 'id="battery-panel"' in page
     assert 'href="api/battery/report.csv"' in page
     assert client.get("/battery.js").status_code == 200
     assert client.post("/api/battery", json={"chargeOn": False}).status_code == 405
