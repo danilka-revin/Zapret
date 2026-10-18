@@ -817,11 +817,13 @@ def start_lidar(*, testing: bool = False, port: int | None = None, force: bool =
     return manager
 
 
-def create_blueprint(state, guard=None) -> Blueprint:
+def create_blueprint(state, guard=None, *, csrf_header_ok=None,
+                     csrf_token_provider=None) -> Blueprint:
     """Маршруты интерфейса RUS SLAM.
 
     ``guard`` — декоратор авторизации пульта; без него маршруты открыты
-    (используется в тестах самого интерфейса).
+    (используется в тестах самого интерфейса). Команды навигации в веб-пульте
+    дополнительно проверяют CSRF-токен, прежде чем уйти на бортовой экран.
     """
     bp = Blueprint("slam", __name__)
     guard = guard or (lambda view: view)
@@ -850,7 +852,7 @@ def create_blueprint(state, guard=None) -> Blueprint:
 
     # The onboard process owns the map. The web process must never build a
     # second grid or race it when saving the same files.
-    from .map_peer import proxy_map
+    from .map_peer import proxy_map, proxy_navigation
 
     for suffix, methods in (("", ["GET"]), ("/settings", ["GET", "POST"]),
                             ("/reset", ["POST"]), ("/save", ["POST"])):
@@ -859,6 +861,55 @@ def create_blueprint(state, guard=None) -> Blueprint:
         bp.add_url_rule("/api/kiosk_map" + suffix,
                         endpoint="map_peer" + suffix.replace("/", "_"),
                         view_func=guard(map_view), methods=methods)
+
+    def navigation_proxy(suffix):
+        return proxy_navigation(peer_kiosk_url().removesuffix("/api/kiosk_state"), suffix)
+
+    @bp.get("/api/navigation/status")
+    @guard
+    def api_navigation_status():
+        response = navigation_proxy("/status")
+        if isinstance(response, tuple):
+            response_obj, status_code = response[0], response[1]
+        else:
+            response_obj, status_code = response, response.status_code
+        if csrf_token_provider and getattr(response_obj, "is_json", False):
+            payload = response_obj.get_json(silent=True)
+            if isinstance(payload, dict):
+                payload["csrfToken"] = csrf_token_provider()
+                return jsonify(payload), status_code, {"Cache-Control": "no-store"}
+        return response
+
+    @bp.post("/api/navigation/plan")
+    @guard
+    def api_navigation_plan():
+        return navigation_proxy("/plan")
+
+    def navigation_control_allowed():
+        if request.headers.get("X-Robot-Control") != "navigation":
+            return False
+        return csrf_header_ok is not None and bool(csrf_header_ok())
+
+    @bp.post("/api/navigation/start")
+    @guard
+    def api_navigation_start():
+        if not navigation_control_allowed():
+            return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
+        return navigation_proxy("/start")
+
+    @bp.post("/api/navigation/cancel")
+    @guard
+    def api_navigation_cancel():
+        if not navigation_control_allowed():
+            return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
+        return navigation_proxy("/cancel")
+
+    @bp.post("/api/navigation/estop")
+    @guard
+    def api_navigation_estop():
+        if not navigation_control_allowed():
+            return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
+        return navigation_proxy("/estop")
 
     # --------- экран киоска на борту робота: без авторизации -------- #
     # Открывается локально в киоск-браузере на роботе; телеметрия публична,
@@ -895,6 +946,8 @@ def create_blueprint(state, guard=None) -> Blueprint:
             "steeringControl": steering_control_info(state.source),
             "drive": snap.get("drive"),
             "masterMessages": snap.get("masterMessages") or [],
+            "estop": (snap.get("estop") if getattr(state.source, "name", "") == "master-peer"
+                      else estop_latch.latched()),
         }
         return jsonify({"ok": True, "data": public})
 
@@ -989,6 +1042,11 @@ def create_blueprint(state, guard=None) -> Blueprint:
     def api_estop():
         if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        if csrf_header_ok is not None and not csrf_header_ok():
+            return jsonify({"ok": False, "reason": "csrf_required"}), 400
+        if getattr(state.source, "name", "") == "master-peer":
+            from .map_peer import proxy_estop
+            return proxy_estop(peer_kiosk_url().removesuffix("/api/kiosk_state"))
         return jsonify(engage_estop(state.source))
 
     @bp.post("/api/estop/release")
@@ -997,6 +1055,11 @@ def create_blueprint(state, guard=None) -> Blueprint:
         """Снять E-STOP: PIN в теле запроса — та же проверка, что у замка."""
         if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        if csrf_header_ok is not None and not csrf_header_ok():
+            return jsonify({"ok": False, "reason": "csrf_required"}), 400
+        if getattr(state.source, "name", "") == "master-peer":
+            from .map_peer import proxy_estop
+            return proxy_estop(peer_kiosk_url().removesuffix("/api/kiosk_state"), release=True)
         body = request.get_json(silent=True) or {}
         result = state.vault.verify(str(body.get("pin", "")))
         note_pin_result(result, where="снятие E-STOP")
@@ -1027,7 +1090,12 @@ def create_blueprint(state, guard=None) -> Blueprint:
         # найден, не та скорость, порт занят вторым процессом робота и т. д.).
         snap["lidarStatus"] = lidar_status_payload(manager, points, demo)
         snap["cameras"] = CameraManager.get_instance().list_cameras()
-        snap["estop"] = estop_latch.latched()
+        if getattr(state.source, "name", "") != "master-peer":
+            snap["estop"] = estop_latch.latched()
+        else:
+            snap.setdefault("estop", None)  # read from the onboard kiosk peer
+        if csrf_token_provider:
+            snap["csrfToken"] = csrf_token_provider()
         return jsonify({"ok": True, "data": snap})
 
     @bp.post("/api/drive")

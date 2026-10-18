@@ -16,6 +16,13 @@ def latch_file(tmp_path, monkeypatch):
     return path
 
 
+def control_headers(client):
+    from robot_control.slam import DRIVE_COMMAND_HEADER_VALUE, STEERING_COMMAND_HEADER
+
+    token = client.get("/api/navigation/status").get_json()["csrfToken"]
+    return {STEERING_COMMAND_HEADER: DRIVE_COMMAND_HEADER_VALUE, "X-CSRF-Token": token}
+
+
 class RecordingSource:
     supports_drive = True
     name = "test"
@@ -77,12 +84,13 @@ def test_drive_works_after_release():
     assert status == 200 and src.drives == [10]
 
 
-def test_estop_route_needs_header_and_latches(client, operator):
+def test_estop_route_needs_header_and_csrf_and_latches(client, operator):
     login(client)
     assert client.post("/api/estop").status_code == 400
     from robot_control.slam import DRIVE_COMMAND_HEADER_VALUE, STEERING_COMMAND_HEADER
-    headers = {STEERING_COMMAND_HEADER: DRIVE_COMMAND_HEADER_VALUE}
-    resp = client.post("/api/estop", headers=headers)
+    drive_header = {STEERING_COMMAND_HEADER: DRIVE_COMMAND_HEADER_VALUE}
+    assert client.post("/api/estop", headers=drive_header).json["reason"] == "csrf_required"
+    resp = client.post("/api/estop", headers=control_headers(client))
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["ok"] is True and body["estop"] is True
@@ -93,8 +101,7 @@ def test_estop_route_needs_header_and_latches(client, operator):
 
 def test_release_route_requires_pin(client, operator):
     login(client)
-    from robot_control.slam import DRIVE_COMMAND_HEADER_VALUE, STEERING_COMMAND_HEADER
-    headers = {STEERING_COMMAND_HEADER: DRIVE_COMMAND_HEADER_VALUE}
+    headers = control_headers(client)
     client.post("/api/estop", headers=headers)
     resp = client.post("/api/estop/release", headers=headers, json={"pin": "0000"})
     assert resp.status_code == 403

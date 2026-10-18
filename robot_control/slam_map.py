@@ -630,6 +630,9 @@ class SlamMapService:
         self._saved_at = 0.0
         self._last_decay_at = 0.0
         self._last_save_at = 0.0
+        # Монотонная ревизия для навигации: цель нужно перепланировать, если
+        # карта изменилась между расчётом пути и отправкой моторам.
+        self._revision = 0
 
     # -- настройки ---------------------------------------------------------- #
     @property
@@ -656,6 +659,7 @@ class SlamMapService:
                 self._png_cache = None
                 self._dirty = True
                 self._png_stale = True
+                self._revision += 1
             self._save_settings_file()
             return {"settings": new.to_dict(), "mapReset": geometry_changed}
 
@@ -681,6 +685,7 @@ class SlamMapService:
                     self._png_cache = None
                     self._dirty = True
                     self._png_stale = True
+                    self._revision += 1
         except (OSError, ValueError):
             pass
 
@@ -698,6 +703,7 @@ class SlamMapService:
             self._updated_at = time.time() if stamp is None else stamp
             self._dirty = True
             self._png_stale = True
+            self._revision += 1
             self._maybe_decay()
         return True
 
@@ -731,6 +737,7 @@ class SlamMapService:
             self._updated_at = time.time()
             self._scans = 0
             self._points = 0
+            self._revision += 1
             saved = self.save() if save else {"ok": True, "paths": map_paths(self._directory)}
             return {"ok": True, "paths": saved.get("paths") or map_paths(self._directory),
                     "saved": bool(save), "savedAt": saved.get("savedAt", 0.0)}
@@ -799,3 +806,29 @@ class SlamMapService:
             if with_png:
                 payload["png"] = base64.b64encode(self.png()).decode("ascii")
             return payload
+
+    def navigation_snapshot(self) -> dict:
+        """Атомарный снимок сетки и позы для планировщика.
+
+        ``data`` — байты значений сетки (0…100, 255 — не исследовано). Снимок
+        копируется под тем же lock, чтобы поиск пути не увидел половину старой
+        и половину новой карты. В отличие от ``snapshot()``, PNG здесь не
+        кодируется: путь рассчитывается по occupancy grid.
+        """
+        with self._lock:
+            pose = self._pose.pose
+            return {
+                "data": bytes(self._grid.data),
+                "width": self._grid.width,
+                "height": self._grid.height,
+                "resolution": self._grid.res,
+                "origin": {"x": self._grid.origin[0], "y": self._grid.origin[1]},
+                "pose": {"x": pose[0], "y": pose[1], "yaw": pose[2]},
+                "quality": self._pose.quality,
+                "matched": self._pose.matched,
+                "scans": self._scans,
+                "points": self._points,
+                "updatedAt": self._updated_at,
+                "revision": self._revision,
+                "settings": self._settings.to_dict(),
+            }

@@ -87,6 +87,7 @@ from robot_control.slam import (
     steering_control_info,
 )
 from robot_control.slam_map import SlamMapService, map_paths
+from robot_control.navigation import NavigationError, NavigationService
 
 log = logging.getLogger("robot_control.kiosk")
 
@@ -577,6 +578,11 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     map_service = SlamMapService()
     map_service.load_settings_file()
     app.extensions["rc_map"] = map_service
+    # Владелец карты и UART — только бортовой процесс (8090). Пульт 8080
+    # использует прокси и не создаёт второго исполнителя моторов.
+    nav_lidar = None if config.testing else (app.extensions.get("rc_lidar") or LidarManager.get_instance())
+    navigation = NavigationService(map_service, getattr(state, "source", None), nav_lidar)
+    app.extensions["rc_navigation"] = navigation
 
     def _map_worker(stop_event: threading.Event) -> None:
         """Фоновая нить карты: впитывает сканы и перезаписывает файл карты.
@@ -625,6 +631,50 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     def kiosk_map_page():
         # Separate page works even when telemetry/swipe initialization fails.
         return _send("map.html")
+
+    @app.get("/api/navigation/status")
+    def api_navigation_status():
+        return jsonify(navigation.status()), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/navigation/plan")
+    def api_navigation_plan():
+        try:
+            return jsonify(navigation.plan(request.get_json(silent=True)))
+        except NavigationError as exc:
+            return jsonify(exc.payload()), exc.status
+
+    @app.post("/api/navigation/start")
+    def api_navigation_start():
+        if request.headers.get("X-Robot-Control") != "navigation":
+            return jsonify({"ok": False, "reason": "request_header_required",
+                            "error": "Запрос без заголовка X-Robot-Control: navigation"}), 400
+        try:
+            payload, status = navigation.start(request.get_json(silent=True))
+        except NavigationError as exc:
+            return jsonify(exc.payload()), exc.status
+        eventlog.record("ok", "автономная навигация запущена к (%.2f, %.2f) м" % (
+            payload["status"].get("goal", {}).get("x", 0),
+            payload["status"].get("goal", {}).get("y", 0)), source="навигация")
+        return jsonify(payload), status
+
+    @app.post("/api/navigation/cancel")
+    def api_navigation_cancel():
+        if request.headers.get("X-Robot-Control") != "navigation":
+            return jsonify({"ok": False, "reason": "request_header_required",
+                            "error": "Запрос без заголовка X-Robot-Control: navigation"}), 400
+        result = navigation.cancel("Маршрут отменён оператором.")
+        eventlog.record("warn", "маршрут навигации отменён оператором", source="навигация")
+        return jsonify(result), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/navigation/estop")
+    def api_navigation_estop():
+        if request.headers.get("X-Robot-Control") != "navigation":
+            return jsonify({"ok": False, "reason": "request_header_required",
+                            "error": "Запрос без заголовка X-Robot-Control: navigation"}), 400
+        navigation.cancel("E-STOP: маршрут отменён.")
+        result = engage_estop(getattr(state, "source", None))
+        result["status"] = navigation.status()
+        return jsonify(result), 200, {"Cache-Control": "no-store"}
 
     @app.get("/api/kiosk_logs")
     def api_kiosk_logs():
@@ -795,6 +845,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "error": "no source"}), 503
         if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        navigation.cancel("Ручное руление — автономный маршрут остановлен.")
         result, status = dispatch_steering_command(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
@@ -804,6 +855,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "error": "no source"}), 503
         if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        navigation.cancel("Ручная калибровка — автономный маршрут остановлен.")
         result, status = dispatch_steering_zero(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
@@ -814,6 +866,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "error": "no source"}), 503
         if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        navigation.cancel("Калибровка руля — автономный маршрут остановлен.")
         result, status = dispatch_steering_calibration(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
@@ -822,7 +875,9 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         """E-STOP с борта: без PIN (остановить может любой), снятие — только с PIN."""
         if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
-        return jsonify(engage_estop(state.source))
+        navigation.cancel("E-STOP: маршрут отменён.")
+        result = engage_estop(state.source)
+        return jsonify(result)
 
     @app.post("/api/estop/release")
     def api_estop_release():
@@ -841,6 +896,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "error": "no source"}), 503
         if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        navigation.cancel("Ручная тяга — автономный маршрут остановлен.")
         result, status = dispatch_drive_command(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
@@ -858,6 +914,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     @app.post("/api/lidar/settings")
     def api_kiosk_lidar_settings_save():
         body = request.get_json(silent=True) or {}
+        navigation.cancel("Настройки лидара меняются — навигация остановлена.")
         try:
             result = apply_lidar_settings(body.get("settings") or body)
         except ValueError as exc:
@@ -866,6 +923,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     @app.post("/api/lidar/rescan")
     def api_kiosk_lidar_rescan():
+        navigation.cancel("Лидар перезапускается — навигация остановлена.")
         manager = LidarManager.get_instance()
         result = manager.restart_search()
         return jsonify({"ok": True, "settings": manager.current_settings(),
@@ -891,6 +949,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     @app.post("/api/kiosk_map/settings")
     def api_kiosk_map_settings_save():
         body = request.get_json(silent=True) or {}
+        navigation.cancel("Настройки карты меняются — навигация остановлена.")
+        navigation.clear_plan()
         result = map_service.set_settings(body.get("settings") or body)
         settings = result["settings"]
         eventlog.record("ok", "карта: сетка %.2f м, дальность %.1f м%s" % (
@@ -904,6 +964,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     @app.post("/api/kiosk_map/reset")
     def api_kiosk_map_reset():
         """Сброс карты: сетка очищается, файл карты перезаписывается пустым."""
+        navigation.cancel("Карта сбрасывается — навигация остановлена.")
+        navigation.clear_plan()
         result = map_service.reset()
         paths = result.get("paths") or map_paths()
         eventlog.record("ok", "карта лидара сброшена, файл обновлён: %s" % paths.get("pgm"),
@@ -982,6 +1044,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     def api_kiosk_stop():
         if request.headers.get(STEERING_COMMAND_HEADER) != STOP_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "error": "Запрос не от кнопки остановки."}), 400
+        navigation.cancel("Система останавливается — маршрут отменён.")
         result = shutdown.stop_all(PROJECT_ROOT)
         if result.get("ok"):
             eventlog.record(

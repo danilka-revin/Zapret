@@ -97,6 +97,13 @@
     scanTimer: null,
     busy: false,
     scanBusy: false,
+    navigationBusy: false,
+    navigationTimer: null,
+    navigationStatus: null,
+    navigationPlan: null,
+    navigationCsrfToken: '',
+    selectingGoal: false,
+    selectionPointer: null,
     initialized: false,
     lastError: '',
   };
@@ -259,6 +266,56 @@
     ctx.restore();
   }
 
+  function drawNavigation(ctx, view) {
+    const plan = state.navigationPlan;
+    const points = plan && Array.isArray(plan.path) ? plan.path : [];
+    if (!points.length) return;
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(39, 193, 232, .96)';
+    ctx.lineWidth = 4;
+    ctx.shadowColor = 'rgba(0, 0, 0, .8)';
+    ctx.shadowBlur = 5;
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      if (!point || !Number.isFinite(+point.x) || !Number.isFinite(+point.y)) return;
+      const screen = worldToCanvas(+point.x, +point.y, view);
+      if (index === 0) ctx.moveTo(screen.x, screen.y);
+      else ctx.lineTo(screen.x, screen.y);
+    });
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    points.slice(1, -1).forEach((point) => {
+      const screen = worldToCanvas(+point.x, +point.y, view);
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#27c1e8';
+      ctx.fill();
+      ctx.strokeStyle = '#07131a';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    });
+    const goal = plan.goal || points[points.length - 1];
+    if (goal && Number.isFinite(+goal.x) && Number.isFinite(+goal.y)) {
+      const screen = worldToCanvas(+goal.x, +goal.y, view);
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, 9, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(39, 193, 232, .22)';
+      ctx.fill();
+      ctx.strokeStyle = '#27c1e8';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(screen.x - 5, screen.y);
+      ctx.lineTo(screen.x + 5, screen.y);
+      ctx.moveTo(screen.x, screen.y - 5);
+      ctx.lineTo(screen.x, screen.y + 5);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   /* Ноды живого скана: цвет, прозрачность и размер точки берём из настроек
    * отображения лидара (lidar_view.js — то же окно «Настройки лидара»):
    * Flat Color — один цвет, Range — градиент Min/Max Color по дальности,
@@ -371,6 +428,7 @@
     }
     // Сетка метров — как в RViz.
     drawGrid(ctx, view, width, height, pal);
+    drawNavigation(ctx, view);
     drawScan(ctx, view, snap.pose || { x: 0, y: 0, yaw: 0 }, width, height, pal);
     drawRobot(ctx, view, snap.pose || { x: 0, y: 0, yaw: 0 }, pal);
     // Подпись: как в ROS — кадр, сетка, масштаб.
@@ -570,6 +628,256 @@
     return body;
   }
 
+  function navigationMessage(text, tone) {
+    const el = $('nav-msg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.dataset.tone = tone || '';
+  }
+
+  function navigationPhaseLabel(phase) {
+    return ({
+      idle: 'ожидание', planned: 'маршрут готов', starting: 'запуск',
+      executing: 'едет', stopping: 'остановка', succeeded: 'достигнуто',
+      cancelled: 'отменён', blocked: 'заблокирован', error: 'ошибка',
+    })[phase] || phase || 'нет связи';
+  }
+
+  function selectedGoal() {
+    const xField = $('nav-goal-x');
+    const yField = $('nav-goal-y');
+    if (!xField || !yField || !String(xField.value).trim() || !String(yField.value).trim()) return null;
+    const x = Number(xField.value);
+    const y = Number(yField.value);
+    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+  }
+
+  function navigationGoalMatches(plan) {
+    const selected = selectedGoal();
+    const requested = plan && (plan.goalRequested || plan.goal);
+    return !!(selected && requested && Number.isFinite(+requested.x) && Number.isFinite(+requested.y)
+      && Math.abs(selected.x - +requested.x) <= 0.01
+      && Math.abs(selected.y - +requested.y) <= 0.01);
+  }
+
+  function renderNavigationStatus(status) {
+    if (!status || typeof status !== 'object') return;
+    state.navigationStatus = status;
+    if (Object.prototype.hasOwnProperty.call(status, 'plan')) {
+      state.navigationPlan = status.plan || null;
+      draw();
+    }
+    if (status.csrfToken) state.navigationCsrfToken = status.csrfToken;
+    const phase = String(status.phase || 'idle');
+    const badge = $('nav-status');
+    if (badge) {
+      badge.textContent = navigationPhaseLabel(phase);
+      badge.dataset.phase = phase;
+    }
+    const plan = state.navigationPlan;
+    const active = ['starting', 'executing', 'stopping'].includes(phase);
+    const start = $('nav-start');
+    const cancel = $('nav-cancel');
+    const planButton = $('nav-plan');
+    const estop = $('nav-estop');
+    if (start) start.disabled = !(status.canStart && plan && navigationGoalMatches(plan) && !state.navigationBusy);
+    if (cancel) cancel.disabled = !active || state.navigationBusy;
+    if (planButton) planButton.disabled = active || state.navigationBusy;
+    if (estop) estop.disabled = state.navigationBusy;
+    const summary = $('nav-route-summary');
+    if (summary) {
+      if (!plan || !Array.isArray(plan.path)) {
+        summary.textContent = 'траектория не рассчитана';
+      } else {
+        const pieces = [fmt(plan.distanceM, 2) + ' м', String(plan.waypoints || 0) + ' участ.' ];
+        if (active && Number.isFinite(+status.progress)) pieces.push(Math.round(+status.progress * 100) + '%');
+        summary.textContent = pieces.join(' · ') + ' · габарит ' + fmt(plan.footprintM, 2) + ' м';
+      }
+    }
+    const safety = $('nav-safety-note');
+    if (safety) {
+      safety.textContent = 'Поворота на месте нет: допустимы только прямые/крабовые отрезки ±28°. Неизвестные клетки запрещены. ' +
+        (status.enabled ? 'Автотяга разрешена конфигурацией, но требует актуальной готовности и подтверждения.'
+          : 'Автотяга выключена по умолчанию.');
+    }
+    let text = status.message || 'Состояние навигации обновлено.';
+    let tone = ['blocked', 'error'].includes(phase) ? 'err'
+      : (phase === 'planned' || status.reason ? 'warn' : (phase === 'succeeded' ? 'ok' : ''));
+    if (status.reason && !status.canStart && !active) text += ' ' + status.reason;
+    navigationMessage(text, tone);
+  }
+
+  async function refreshNavigation() {
+    if (state.navigationBusy) return;
+    const page = $('swipe-map-view');
+    if (page && page.hidden) return;
+    try {
+      const response = await fetch('api/navigation/status', { cache: 'no-store' });
+      const body = await response.json().catch(() => null);
+      if (!response.ok || !body || !body.ok) {
+        throw new Error((body && body.error) || ('HTTP ' + response.status));
+      }
+      renderNavigationStatus(body);
+    } catch (err) {
+      const badge = $('nav-status');
+      if (badge) { badge.textContent = 'нет связи'; badge.dataset.phase = 'error'; }
+      const start = $('nav-start');
+      if (start) start.disabled = true;
+      navigationMessage('Не удалось получить состояние навигации: ' + (err.message || err), 'err');
+    }
+  }
+
+  async function postNavigation(url, payload) {
+    const headers = { 'Content-Type': 'application/json', 'X-Robot-Control': 'navigation' };
+    if (state.navigationCsrfToken) headers['X-CSRF-Token'] = state.navigationCsrfToken;
+    const response = await fetch(url, {
+      method: 'POST', cache: 'no-store', headers,
+      body: JSON.stringify(payload || {}),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok || !body || !body.ok) {
+      const error = new Error((body && body.error) || ('HTTP ' + response.status));
+      error.payload = body;
+      error.status = response.status;
+      throw error;
+    }
+    return body;
+  }
+
+  function setGoalFromCanvas(event) {
+    const canvas = $('map-canvas');
+    if (!canvas || !state.snapshot) return;
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.max(320, Math.round(rect.width || 640));
+    const height = Math.max(240, Math.round(rect.height || 640));
+    const view = computeView(null, width, height, state.snapshot);
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const wx = view.originX + (x - view.x0) / view.scale;
+    const wy = view.originY + (view.y0 - y) / view.scale;
+    const gx = $('nav-goal-x');
+    const gy = $('nav-goal-y');
+    if (gx) gx.value = wx.toFixed(2);
+    if (gy) gy.value = wy.toFixed(2);
+    state.selectingGoal = false;
+    state.selectionPointer = null;
+    document.body.classList.remove('nav-selecting');
+    const pick = $('nav-select-goal');
+    if (pick) { pick.classList.remove('is-on'); pick.setAttribute('aria-pressed', 'false'); }
+    navigationMessage('Цель отмечена: X ' + wx.toFixed(2) + ' м, Y ' + wy.toFixed(2) + ' м. Постройте маршрут.', '');
+    const start = $('nav-start');
+    if (start) start.disabled = true;
+    draw();
+  }
+
+  async function planNavigation() {
+    const goal = selectedGoal();
+    if (!goal) {
+      navigationMessage('Укажите координаты X и Y или нажмите «Цель на карте».', 'warn');
+      return;
+    }
+    state.navigationBusy = true;
+    state.navigationPlan = null;
+    draw();
+    const button = $('nav-plan');
+    let refreshAfter = false;
+    if (button) { button.disabled = true; button.textContent = 'Считаю маршрут…'; }
+    try {
+      const body = await post('api/navigation/plan', { goal });
+      state.navigationPlan = body.plan || null;
+      renderNavigationStatus(body.status || {});
+      state.navigationPlan = body.plan || state.navigationPlan;
+      draw();
+      navigationMessage('Маршрут рассчитан. Проверьте траекторию на карте перед запуском.', 'ok');
+    } catch (err) {
+      state.navigationPlan = null;
+      state.navigationStatus = null;
+      draw();
+      navigationMessage('Не удалось построить маршрут: ' + (err.message || err), 'err');
+      refreshAfter = true;
+    } finally {
+      state.navigationBusy = false;
+      if (button) { button.disabled = false; button.textContent = 'Построить маршрут'; }
+      if (state.navigationStatus) renderNavigationStatus(state.navigationStatus);
+    }
+    if (refreshAfter) await refreshNavigation();
+  }
+
+  async function startNavigation() {
+    const goal = selectedGoal();
+    if (!goal || !navigationGoalMatches(state.navigationPlan)) {
+      navigationMessage('Сначала постройте маршрут до выбранной цели.', 'warn');
+      return;
+    }
+    const summary = state.navigationPlan
+      ? fmt(state.navigationPlan.distanceM, 2) + ' м, ' + (state.navigationPlan.waypoints || 0) + ' участков'
+      : 'маршрут';
+    if (!window.confirm('Запустить автономное движение по проверенному маршруту (' + summary + ')? Убедитесь, что зона свободна и E-STOP доступен.')) return;
+    state.navigationBusy = true;
+    const button = $('nav-start');
+    let refreshAfter = false;
+    if (button) button.disabled = true;
+    try {
+      const body = await postNavigation('api/navigation/start', { goal });
+      renderNavigationStatus(body.status || {});
+      navigationMessage((body.status && body.status.message) || 'Маршрут запущен.', 'warn');
+    } catch (err) {
+      const payload = err && err.payload;
+      if (payload && payload.code === 'plan_changed' && payload.plan) {
+        state.navigationPlan = payload.plan;
+        if (payload.status) renderNavigationStatus(payload.status);
+        else state.navigationStatus = null;
+        draw();
+        navigationMessage(err.message || 'Карта изменилась: проверьте обновлённый маршрут.', 'warn');
+        refreshAfter = !payload.status;
+      } else {
+        state.navigationStatus = null;
+        navigationMessage('Запуск отклонён: ' + (err.message || err), 'err');
+        refreshAfter = true;
+      }
+    } finally {
+      state.navigationBusy = false;
+      if (state.navigationStatus) renderNavigationStatus(state.navigationStatus);
+    }
+    if (refreshAfter) await refreshNavigation();
+  }
+
+  async function cancelNavigation() {
+    state.navigationBusy = true;
+    const button = $('nav-cancel');
+    if (button) button.disabled = true;
+    try {
+      const body = await postNavigation('api/navigation/cancel', {});
+      const status = body.status || body;
+      renderNavigationStatus(status);
+      navigationMessage(status.message || 'Команда остановки отправлена.', 'warn');
+    } catch (err) {
+      navigationMessage('Не удалось передать остановку: ' + (err.message || err), 'err');
+    } finally {
+      state.navigationBusy = false;
+      await refreshNavigation();
+    }
+  }
+
+  async function assertNavigationEstop() {
+    state.navigationBusy = true;
+    const button = $('nav-estop');
+    if (button) button.disabled = true;
+    try {
+      const body = await postNavigation('api/navigation/estop', {});
+      if (body.status) renderNavigationStatus(body.status);
+      navigationMessage(body.driveStopped
+        ? 'E-STOP взведён на борту; тяга остановлена.'
+        : 'E-STOP защёлкнут, но борт не подтвердил останов тяги — используйте физический выключатель.', 'err');
+    } catch (err) {
+      navigationMessage('E-STOP не подтверждён бортом: ' + (err.message || err) + '. Используйте физический выключатель.', 'err');
+    } finally {
+      state.navigationBusy = false;
+      if (button) button.disabled = false;
+      await refreshNavigation();
+    }
+  }
+
   async function resetMap() {
     if (state.busy) return;
     const button = $('map-reset');
@@ -579,6 +887,9 @@
     }
     try {
       const body = await post('api/kiosk_map/reset');
+      state.navigationPlan = null;
+      draw();
+      void refreshNavigation();
       msg('Карта очищена, файл обновлён: ' + ((body.paths && body.paths.pgm) || ''), 'ok');
       await fetchMap();
     } catch (err) {
@@ -620,6 +931,9 @@
     }
     try {
       const body = await post('api/kiosk_map/settings', { settings: collectSettings() });
+      state.navigationPlan = null;
+      draw();
+      void refreshNavigation();
       fillSettings(body.settings);
       msg(body.mapReset
         ? 'Настройки применены. Сетка изменилась — карта очищена, строим заново.'
@@ -672,12 +986,56 @@
         draw();
       });
     }
+    const planButton = $('nav-plan');
+    if (planButton) planButton.addEventListener('click', () => { void planNavigation(); });
+    const startButton = $('nav-start');
+    if (startButton) startButton.addEventListener('click', () => { void startNavigation(); });
+    const cancelButton = $('nav-cancel');
+    if (cancelButton) cancelButton.addEventListener('click', () => { void cancelNavigation(); });
+    const estopButton = $('nav-estop');
+    if (estopButton) estopButton.addEventListener('click', () => { void assertNavigationEstop(); });
+    const pickButton = $('nav-select-goal');
+    if (pickButton) pickButton.addEventListener('click', () => {
+      state.selectingGoal = !state.selectingGoal;
+      state.selectionPointer = null;
+      pickButton.classList.toggle('is-on', state.selectingGoal);
+      pickButton.setAttribute('aria-pressed', String(state.selectingGoal));
+      document.body.classList.toggle('nav-selecting', state.selectingGoal);
+      navigationMessage(state.selectingGoal
+        ? 'Нажмите на свободную клетку карты, чтобы поставить цель.'
+        : 'Выбор цели отменён.', state.selectingGoal ? 'warn' : '');
+    });
+    for (const id of ['nav-goal-x', 'nav-goal-y']) {
+      const input = $(id);
+      if (input) input.addEventListener('input', () => {
+        if (state.navigationStatus) renderNavigationStatus(state.navigationStatus);
+      });
+    }
+
     const canvas = $('map-canvas');
     if (canvas) {
       canvas.tabIndex = 0;
       const viewport = window.RCViewport ? window.RCViewport(canvas, (view) => {
         state.zoom = view.zoom; state.panX = view.x; state.panY = view.y; draw();
       }, { min: 0.4, max: 8 }) : null;
+      canvas.addEventListener('pointerdown', (event) => {
+        if (state.selectingGoal) state.selectionPointer = { x: event.clientX, y: event.clientY };
+      });
+      canvas.addEventListener('pointermove', (event) => {
+        if (state.selectionPointer && state.selectionPointer.moved !== true
+            && Math.hypot(event.clientX - state.selectionPointer.x,
+                          event.clientY - state.selectionPointer.y) > 8) {
+          state.selectionPointer.moved = true;
+        }
+      });
+      canvas.addEventListener('click', (event) => {
+        if (!state.selectingGoal) return;
+        if (state.selectionPointer && state.selectionPointer.moved) {
+          state.selectionPointer = null;
+          return;
+        }
+        setGoalFromCanvas(event);
+      });
       const zoom = (factor) => {
         if (viewport) viewport.zoomTo(viewport.state.zoom * factor);
         else { state.zoom = Math.max(0.4, Math.min(8, state.zoom * factor)); draw(); }
@@ -700,8 +1058,11 @@
     window.addEventListener('resize', () => draw());
     fillSettings(DEFAULTS);
     void fetchMap();
+    void refreshNavigation();
     if (state.timer) clearInterval(state.timer);
     state.timer = setInterval(() => { void fetchMap(); }, POLL_MS);
+    if (state.navigationTimer) clearInterval(state.navigationTimer);
+    state.navigationTimer = setInterval(() => { void refreshNavigation(); }, POLL_MS);
     // Отдельная страница /map: скан лидара никто не кладёт (на киоске это
     // делает robot.js), поэтому спрашиваем сами — ноды видны на карте сразу.
     const isKiosk = document.body && document.body.classList
@@ -719,6 +1080,7 @@
       init();
       draw();
       void fetchMap();
+      void refreshNavigation();
     },
     draw,
     setScan(points) {

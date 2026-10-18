@@ -1,6 +1,7 @@
 const state = {
   view: "dash",
   estop: false,
+  csrfToken: "",
   crab: false,
   vmax: 5,
   clearance: 0.70,
@@ -197,9 +198,10 @@ function applyEstopUi(on) {
   else if (state.mission === "FAULT") setMission("IDLE");
   publishCmd();
 }
-const ESTOP_HEADERS = { "Content-Type": "application/json", "X-Robot-Control": "drive" };
 async function postEstop(path, body) {
-  const r = await fetch(path, { method: "POST", headers: ESTOP_HEADERS, body: JSON.stringify(body || {}), cache: "no-store" });
+  const headers = { "Content-Type": "application/json", "X-Robot-Control": "drive" };
+  if (state.csrfToken) headers["X-CSRF-Token"] = state.csrfToken;
+  const r = await fetch(path, { method: "POST", headers, body: JSON.stringify(body || {}), cache: "no-store" });
   let j = null;
   try { j = await r.json(); } catch (e) { j = null; }
   return { status: r.status, body: j || {} };
@@ -208,7 +210,10 @@ async function syncEstopFromBoard() {
   try {
     const r = await fetch("api/state", { cache: "no-store" });
     const j = await r.json();
-    if (j && j.ok && j.data) applyEstopUi(!!j.data.estop);
+    if (j && j.ok && j.data) {
+      state.csrfToken = j.data.csrfToken || state.csrfToken;
+      applyEstopUi(!!j.data.estop);
+    }
   } catch (e) {
     /* борт не ответил: остаёмся с локальным состоянием, без выдуманной защёлки */
   }

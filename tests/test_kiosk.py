@@ -284,6 +284,14 @@ def test_kiosk_drive_is_available_without_pin_and_accepts_only_bounded_percent(k
     assert source.commands == [-12.5, 0]
 
 
+def test_kiosk_state_exposes_the_current_estop_latch(kiosk_client):
+    from robot_control import estop
+
+    expected = estop.latch("test E-STOP")
+    body = kiosk_client.get("/api/kiosk_state").get_json()
+    assert body["data"]["estop"] == expected
+
+
 def test_telemetry_has_no_cargo_or_audit_data(kiosk_client):
     """В киоске нет ни замка отсека, ни журнала — только АКБ, шасси, лидар."""
     body = kiosk_client.get("/api/kiosk_state").get_json()

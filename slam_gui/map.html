@@ -53,6 +53,28 @@
             <p class="map-file" id="map-file">файл: —</p>
             <p class="map-quality" id="map-quality">сопоставление сканов: —</p>
 
+            <section class="nav-panel" aria-label="Навигация робота">
+              <header class="nav-panel-head">
+                <b>Навигация</b>
+                <span id="nav-status" class="nav-status" data-phase="idle">ожидание</span>
+              </header>
+              <p class="nav-hint">Нажмите «Цель на карте» и укажите свободную клетку. Сначала постройте маршрут и проверьте его на карте.</p>
+              <div class="nav-goal-grid">
+                <label class="nav-coordinate"><span>X, м</span><input id="nav-goal-x" type="number" step="0.05" inputmode="decimal" placeholder="0.00" /></label>
+                <label class="nav-coordinate"><span>Y, м</span><input id="nav-goal-y" type="number" step="0.05" inputmode="decimal" placeholder="0.00" /></label>
+                <button type="button" id="nav-select-goal" class="map-btn nav-pick">Цель на карте</button>
+              </div>
+              <div class="nav-actions">
+                <button type="button" id="nav-plan" class="map-btn map-btn--primary">Построить маршрут</button>
+                <button type="button" id="nav-start" class="map-btn nav-start" disabled>Поехать</button>
+                <button type="button" id="nav-cancel" class="map-btn" disabled>Остановить маршрут</button>
+                <button type="button" id="nav-estop" class="map-btn map-btn--danger nav-estop" aria-label="Взвести аварийную остановку">E-STOP</button>
+              </div>
+              <p class="nav-route-summary" id="nav-route-summary">траектория не рассчитана</p>
+              <p class="nav-msg" id="nav-msg" role="status" aria-live="polite">Навигация ещё не проверена.</p>
+              <p class="nav-safety-note" id="nav-safety-note">Текущая прошивка не умеет разворот на месте: доступны только прямые/крабовые отрезки в пределах ±28°. Неисследованные клетки считаются запретными. Автотяга выключена по умолчанию.</p>
+            </section>
+
             <section id="map-settings" class="map-settings" hidden aria-label="Настройки карты">
               <label class="map-field">
                 <span>Разрешение сетки</span>
