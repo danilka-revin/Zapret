@@ -48,6 +48,10 @@
               <input type="color" id="rc-lv-min" /></label>
             <label>Max Color — на дальности
               <input type="color" id="rc-lv-max" /></label>
+            <label>Рассчитываемый угол колеса — контур
+              <input type="color" id="rc-wheel-target-color" value="#36c275" /></label>
+            <label>Фактический угол колеса — заливка
+              <input type="color" id="rc-wheel-actual-color" value="#e35d6a" /></label>
             <label>Min Value, м
               <input type="number" id="rc-lv-minv" min="0" max="50" step="0.5" /></label>
             <label>Max Value, м
@@ -58,6 +62,7 @@
             <label class="rc-lidar-check"><input type="checkbox" id="rc-lv-axes" /> Axes — оси X (красная) и Y (зелёная)</label>
           </div>
           <div class="rc-lidar-actions">
+            <button type="button" class="rc-lidar-btn" id="rc-wheel-colors-reset">Сбросить цвета колёс</button>
             <button type="button" class="rc-lidar-btn" id="rc-lv-reset">Сбросить отображение</button>
           </div>
         </fieldset>` : '';
@@ -289,6 +294,7 @@
   }
 
   function bindView() {
+    if (window.RCRobotModel) window.RCRobotModel.bindColors('rc-wheel-target-color', 'rc-wheel-actual-color', 'rc-wheel-colors-reset');
     if (!window.RCLidarView || !$('rc-lv-size')) return;
     ['rc-lv-size', 'rc-lv-alpha'].forEach((id) => $(id).addEventListener('input', viewChanged));
     ['rc-lv-color', 'rc-lv-flat', 'rc-lv-min', 'rc-lv-max', 'rc-lv-minv', 'rc-lv-maxv',

@@ -475,6 +475,40 @@ def plan_grid_path(snapshot: dict, goal_x: Any, goal_y: Any, *,
     }
 
 
+def _route_goals(body: dict, x: float, y: float) -> list[dict]:
+    points = body.get("goals", [{"x": x, "y": y}])
+    if not isinstance(points, list) or not 1 <= len(points) <= 20:
+        raise NavigationError("invalid_goals", "Укажите от 1 до 20 точек маршрута", 400)
+    result = []
+    for point in points:
+        if not isinstance(point, dict):
+            raise NavigationError("invalid_goals", "Точка должна содержать X и Y", 400)
+        result.append({"x": _number(point.get("x"), "X"), "y": _number(point.get("y"), "Y")})
+    if abs(result[-1]["x"] - x) > 0.01 or abs(result[-1]["y"] - y) > 0.01:
+        raise NavigationError("invalid_goals", "Последняя точка должна совпадать с целью", 400)
+    return result
+
+
+def plan_route(snapshot: dict, goals: list[dict], *, footprint_m: float) -> dict:
+    """Plan every leg on the same map, preserving the chassis heading."""
+    current = dict(snapshot)
+    path = []
+    distance = 0.0
+    for index, goal in enumerate(goals):
+        try:
+            leg = plan_grid_path(current, goal["x"], goal["y"], footprint_m=footprint_m)
+        except NavigationError as exc:
+            raise NavigationError(exc.code, "Точка %d: %s" % (index + 1, exc.message), exc.status) from exc
+        path.extend(leg["path"] if not path else leg["path"][1:])
+        distance += leg["distanceM"]
+        if distance > MAX_PLAN_DISTANCE_M * 1.5:
+            raise NavigationError("route_too_long", "Суммарный путь длиннее разрешённых %.0f м" % (MAX_PLAN_DISTANCE_M * 1.5), 409)
+        current["pose"] = {**snapshot["pose"], **leg["goal"]}
+    leg.update(path=path, distanceM=round(distance, 2), waypoints=max(0, len(path) - 1),
+               goalsRequested=[dict(g) for g in goals])
+    return leg
+
+
 def _plans_equivalent(preview: Optional[dict], current: dict,
                      waypoint_tolerance_m: float = 0.12) -> bool:
     """Require a fresh operator preview when replanning changes the route."""
@@ -742,11 +776,12 @@ class NavigationService:
             raise NavigationError("invalid_goal", "Цель должна содержать координаты X и Y", 400)
         x = _number(goal.get("x"), "X")
         y = _number(goal.get("y"), "Y")
+        goals = _route_goals(body, x, y)
         if self.active:
             raise NavigationError("navigation_active", "Сначала остановите текущую поездку", 409)
         try:
             snapshot = self._snapshot()
-            plan = plan_grid_path(snapshot, x, y, footprint_m=self.footprint_m)
+            plan = plan_route(snapshot, goals, footprint_m=self.footprint_m)
         except NavigationError as exc:
             with self._lock:
                 if not self.active:
@@ -791,12 +826,15 @@ class NavigationService:
             preview = self._plan
         if not preview:
             raise NavigationError("plan_required", "Сначала постройте маршрут и проверьте его на карте", 409)
+        goals = _route_goals(body, x, y)
+        if goals != preview.get("goalsRequested", goals):
+            raise NavigationError("plan_mismatch", "Точки изменились; постройте маршрут заново", 409)
         preview_goal = preview.get("goalRequested") or {}
         if (abs(float(preview_goal.get("x", math.inf)) - x) > 0.01
                 or abs(float(preview_goal.get("y", math.inf)) - y) > 0.01):
             raise NavigationError("plan_mismatch", "Цель отличается от проверенного маршрута; постройте новый план", 409)
         try:
-            plan = plan_grid_path(snapshot, x, y, footprint_m=self.footprint_m)
+            plan = plan_route(snapshot, goals, footprint_m=self.footprint_m)
         except NavigationError as exc:
             with self._lock:
                 if self._plan is preview:
@@ -944,7 +982,8 @@ class NavigationService:
             with self._lock:
                 self._bridge = bridge
             initial = self._fresh_snapshot(cancel)
-            plan = plan_grid_path(initial, goal["x"], goal["y"], footprint_m=self.footprint_m)
+            remaining_goals = [dict(g) for g in (confirmed_plan or {}).get("goalsRequested", [goal])]
+            plan = plan_route(initial, remaining_goals, footprint_m=self.footprint_m)
             requested_goal = goal.get("requested") or {"x": goal["x"], "y": goal["y"]}
             plan["goalRequested"] = {"x": round(float(requested_goal["x"]), 3),
                                      "y": round(float(requested_goal["y"]), 3)}
@@ -974,7 +1013,9 @@ class NavigationService:
                 pose = snapshot["pose"]
                 current = (float(pose["x"]), float(pose["y"]))
                 distance_to_goal = math.hypot(goal["x"] - current[0], goal["y"] - current[1])
-                if distance_to_goal <= DEFAULT_WAYPOINT_TOLERANCE_M:
+                while len(remaining_goals) > 1 and math.hypot(remaining_goals[0]["x"] - current[0], remaining_goals[0]["y"] - current[1]) <= DEFAULT_WAYPOINT_TOLERANCE_M:
+                    remaining_goals.pop(0)
+                if len(remaining_goals) == 1 and distance_to_goal <= DEFAULT_WAYPOINT_TOLERANCE_M:
                     self._brake(bridge, "navigation_goal")
                     self._set_state(phase="succeeded", message="Цель достигнута.", progress=1.0,
                                     waypoint=segment_index, totalWaypoints=plan["waypoints"])
@@ -984,7 +1025,7 @@ class NavigationService:
 
                 # Перестраиваем путь от текущей позы: карта обновляется живым
                 # лидаром, а неизученное/новое препятствие не обходится вслепую.
-                plan = plan_grid_path(snapshot, goal["x"], goal["y"], footprint_m=self.footprint_m)
+                plan = plan_route(snapshot, remaining_goals, footprint_m=self.footprint_m)
                 requested_goal = goal.get("requested") or {"x": goal["x"], "y": goal["y"]}
                 plan["goalRequested"] = {"x": round(float(requested_goal["x"]), 3),
                                          "y": round(float(requested_goal["y"]), 3)}

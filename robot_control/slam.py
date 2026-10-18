@@ -506,6 +506,7 @@ ASSETS = {
     "main.js": "main_js",
     # карта лидара в стиле RViz (зум, сетка, Decay Time) — общая для пульта и бортового экрана
     "lidar_view.js": "lidar_view_js",
+    "robot_model.js": "robot_model_js",
     "map.css": "map_css",
     "map_view.js": "map_view_js",
     "viewport.js": "viewport_js",

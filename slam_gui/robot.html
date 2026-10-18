@@ -39,7 +39,7 @@
           <span>Функции</span>
         </button>
         <a id="k-map-open" class="k-ctrl-btn" href="/map">Карта</a>
-        <a id="k-route-open" class="k-ctrl-btn" href="/route">Маршрут</a>
+        <a id="k-route-open" class="k-ctrl-btn" href="/map">Маршрут</a>
         <button id="k-cameras-open" class="k-ctrl-btn" type="button" aria-controls="swipe-cameras-view">Камеры</button>
         <time class="clock" id="clock">--:--</time>
       </div>
@@ -369,7 +369,12 @@
                 <span>Высота: <b>30 см</b></span>
                 <span>Лидар: <b>спереди (+35 см)</b></span>
               </div>
-              <p class="nav-hint">Нажмите прямо на карту (или «Цель на карте») либо введите X/Y. Движение по маршруту открывается в отдельном окне.</p>
+              <p class="nav-hint">Добавляйте точки кликом по карте или введите X/Y и нажмите «Добавить». Порядок точек определяет путь. Предпросмотр не включает привод.</p>
+              <ol id="nav-point-list" class="nav-point-list" aria-label="Точки маршрута"></ol>
+              <div class="nav-actions nav-point-actions">
+                <button type="button" id="nav-add-point" class="map-btn">Добавить X/Y</button>
+                <button type="button" id="nav-clear-points" class="map-btn">Очистить точки</button>
+              </div>
               <div class="nav-goal-grid">
                 <label class="nav-coordinate"><span>X, м</span><input id="nav-goal-x" type="number" step="0.05" inputmode="decimal" placeholder="0.00" /></label>
                 <label class="nav-coordinate"><span>Y, м</span><input id="nav-goal-y" type="number" step="0.05" inputmode="decimal" placeholder="0.00" /></label>
@@ -381,13 +386,20 @@
                 <button type="button" id="nav-cancel" class="map-btn" disabled>Остановить маршрут</button>
                 <button type="button" id="nav-estop" class="map-btn map-btn--danger nav-estop" aria-label="Взвести аварийную остановку">E-STOP</button>
               </div>
-              <button type="button" id="nav-open-route-window" class="map-btn map-btn--route nav-open-win">Окно движения по маршруту</button>
+              <button type="button" id="nav-preview" class="map-btn map-btn--route nav-open-win">▶ Предпросмотр пути</button>
               <p class="nav-route-summary" id="nav-route-summary">траектория не рассчитана</p>
               <p class="nav-msg" id="nav-msg" role="status" aria-live="polite">Навигация ещё не проверена.</p>
               <p class="nav-safety-note" id="nav-safety-note">Габариты робота 75×60×30 см, лидар спереди. Текущая прошивка не умеет разворот на месте: доступны прямые/крабовые отрезки в пределах ±28°. Автотяга выключена по умолчанию.</p>
             </section>
 
             <section id="map-settings" class="map-settings" hidden aria-label="Настройки карты">
+              <fieldset class="map-wheel-colors">
+                <legend>Углы колёс</legend>
+                <p class="map-note">Контур — рассчитываемый (целевой) угол; заливка — фактический по телеметрии. Цвета применяются сразу и сохраняются в этом браузере.</p>
+                <label class="map-field"><span>Рассчитываемый угол</span><input type="color" id="map-wheel-target-color" value="#36c275" /></label>
+                <label class="map-field"><span>Фактический угол</span><input type="color" id="map-wheel-actual-color" value="#e35d6a" /></label>
+                <button type="button" id="map-wheel-colors-reset" class="map-btn">Сбросить цвета колёс</button>
+              </fieldset>
               <label class="map-field">
                 <span>Разрешение сетки</span>
                 <select id="map-set-resolution">
@@ -780,7 +792,7 @@
     </div>
   </div>
 
-  <script src="lidar_view.js"></script>
+  <script src="/robot_model.js"></script><script src="lidar_view.js"></script>
   <script src="viewport.js"></script>
   <script src="camera_view.js"></script>
   <script src="map_view.js"></script>
