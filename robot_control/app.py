@@ -308,7 +308,12 @@ def create_app(config: Config | None = None) -> Flask:
             master_role="peer",
         )
         app.extensions["rc_slam"] = slam_state
-        app.register_blueprint(create_blueprint(slam_state, guard=login_required))
+        app.register_blueprint(create_blueprint(
+            slam_state,
+            guard=login_required,
+            csrf_header_ok=csrf_header_ok,
+            csrf_token_provider=lambda: csrf_signer.dumps("csrf"),
+        ))
         log.info(
             "интерфейс RUS SLAM подключён (источник данных: %s)",
             getattr(slam_state.source, "name", "?"),

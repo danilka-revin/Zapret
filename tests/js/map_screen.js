@@ -174,6 +174,15 @@ global.fetch = async (url, options) => {
   if (/kiosk_map\/settings/.test(text)) {
     return reply(payload.settingsReply || { ok: true, settings: payload.settings, mapReset: false });
   }
+  if (/api\/navigation\/status/.test(text)) {
+    return reply(payload.navigationStatus || {
+      ok: true, phase: 'idle', message: 'Ожидание цели', canStart: false,
+      reason: 'автотяга выключена', enabled: false, plan: null,
+    });
+  }
+  if (/api\/navigation\/plan/.test(text)) {
+    return reply(payload.navigationPlanReply || { ok: false, error: 'plan fixture missing' });
+  }
   return reply(payload.snapshot || payload);
 };
 
@@ -235,6 +244,26 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
   const themeAfter = { attr: themeAttr(), label: byId('map-theme-toggle').textContent,
                        pressed: byId('map-theme-toggle').getAttribute('aria-pressed') };
 
+  let navigation = null;
+  if (payload.navigationTest) {
+    // На карте (800×600, 30×30 м) точка X=1 м, Y=0 находится в (419.2, 300).
+    byId('nav-select-goal').click();
+    const canvas = byId('map-canvas');
+    (canvas.events.click || []).forEach((listener) => listener({ clientX: 419.2, clientY: 300 }));
+    await sleep(5);
+    byId('nav-plan').click();
+    await sleep(20);
+    navigation = {
+      goalX: byId('nav-goal-x').value,
+      goalY: byId('nav-goal-y').value,
+      summary: byId('nav-route-summary').textContent,
+      phase: byId('nav-status').textContent,
+      message: byId('nav-msg').textContent,
+      startDisabled: byId('nav-start').disabled,
+      planCalls: calls.filter((call) => /api\/navigation\/plan/.test(call.url)),
+    };
+  }
+
   console.log(JSON.stringify({
     stats,
     themeBefore,
@@ -245,6 +274,7 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
     afterReset,
     afterSave,
     afterApply,
+    navigation,
     calls,
     renderErrors,
   }, null, 2));

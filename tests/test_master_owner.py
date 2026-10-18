@@ -22,7 +22,7 @@ def _backend():
     return slam.load_backend()
 
 
-def _snapshot(angle_fr=12.5, linked=True):
+def _snapshot(angle_fr=12.5, linked=True, estop=None):
     motors = [
         {"id": mid, "title": mid, "angle": angle_fr if mid == "FR" else 0.0,
          "targetAngle": angle_fr if mid == "FR" else 0.0, "online": True,
@@ -35,6 +35,7 @@ def _snapshot(angle_fr=12.5, linked=True):
         "linkOk": linked,
         "mode": "МАСТЕР НА СВЯЗИ" if linked else None,
         "steeringControl": {"available": True, "source": "master"},
+        "estop": estop,
     }}
 
 
@@ -66,10 +67,13 @@ def test_peer_source_reads_owner_snapshot_and_never_opens_port(monkeypatch, tmp_
     monkeypatch.setenv("RC_SLAM_PEER_URL", "http://127.0.0.1:9/api/kiosk_state")
     peer = make_source("master", master_role="peer")
     assert isinstance(peer, backend.MasterPeerSource)
-    peer._fetch = lambda: _snapshot()
+    onboard_estop = {"reason": "test", "since": 1.0, "corrupt": False}
+    peer._fetch = lambda: _snapshot(estop=onboard_estop)
     time.sleep(0.4)
 
-    motors = {m["id"]: m for m in peer.read()["motors"]}
+    telemetry = peer.read()
+    motors = {m["id"]: m for m in telemetry["motors"]}
+    assert telemetry["estop"] == onboard_estop
     assert motors["FR"]["angle"] == 12.5
     assert motors["FR"]["online"] is True
     assert steering_control_info(peer)["available"] is False
@@ -88,6 +92,7 @@ def test_peer_refuses_commands_and_reports_offline_when_owner_is_down():
     out = peer.read()
     assert out["linkOk"] is False
     assert all(m["online"] is False for m in out["motors"])
+    assert out["estop"] == {"unknown": True}
     assert "refused" in out["peer"]["error"]
 
 

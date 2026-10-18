@@ -221,6 +221,69 @@
 :root[data-map-theme="light"] .map-msg[data-tone="warn"] { color: #a15c00; }
 :root[data-map-theme="light"] .map-msg[data-tone="err"] { color: #a8434d; }
 
+/* Навигация: постановка цели на карте, preview пути, supervised start/stop. */
+.nav-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--map-line-2);
+  border-radius: 12px;
+  background: var(--map-bg-2);
+}
+.nav-panel-head { display: flex; align-items: center; gap: 8px; }
+.nav-panel-head b { font-size: 14px; font-weight: 900; }
+.nav-status {
+  margin-left: auto;
+  padding: 4px 8px;
+  border: 1px solid var(--map-line-2);
+  border-radius: 999px;
+  color: var(--map-muted);
+  font: 800 10px/1.2 var(--map-mono);
+  text-transform: uppercase;
+}
+.nav-status[data-phase="planned"], .nav-status[data-phase="executing"],
+.nav-status[data-phase="starting"] { color: #85c9ff; border-color: rgba(85, 169, 235, .55); }
+.nav-status[data-phase="succeeded"] { color: #8bd5a6; border-color: rgba(83, 180, 116, .5); }
+.nav-status[data-phase="blocked"], .nav-status[data-phase="error"] { color: var(--map-accent-strong); border-color: rgba(192, 80, 90, .65); }
+.nav-hint, .nav-msg, .nav-route-summary, .nav-safety-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--map-muted);
+}
+.nav-goal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.nav-coordinate { display: flex; flex-direction: column; gap: 4px; }
+.nav-coordinate span { color: var(--map-muted); font: 800 10px/1.2 var(--map-mono); }
+.nav-coordinate input {
+  width: 100%; min-width: 0; padding: 9px 10px; border-radius: 8px;
+  border: 1px solid var(--map-line-2); background: var(--map-panel);
+  color: var(--map-text); font: 700 13px/1.2 var(--map-mono);
+}
+.nav-coordinate input:focus { outline: 2px solid rgba(85, 169, 235, .45); outline-offset: 1px; }
+.nav-pick { grid-column: 1 / -1; }
+.nav-pick.is-on { border-color: #55a9eb; color: #85c9ff; box-shadow: 0 0 0 2px rgba(85, 169, 235, .16); }
+.nav-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.nav-start { border-color: rgba(83, 180, 116, .55); color: #8bd5a6; }
+.nav-estop { color: var(--map-text); background: rgba(192, 80, 90, .34); border-color: rgba(192, 80, 90, .9); }
+.nav-estop:hover { background: rgba(192, 80, 90, .55); }
+.nav-actions .map-btn { min-height: 40px; padding: 9px 8px; font-size: 11px; }
+.nav-actions .map-btn:disabled { opacity: .42; }
+.nav-route-summary { color: var(--map-text); font: 700 11px/1.35 var(--map-mono); }
+.nav-msg[data-tone="ok"] { color: #8bd5a6; }
+.nav-msg[data-tone="warn"] { color: #ffc46b; }
+.nav-msg[data-tone="err"] { color: var(--map-accent-strong); }
+.nav-safety-note { padding-top: 7px; border-top: 1px solid var(--map-line); }
+.nav-selecting #map-canvas { cursor: crosshair; }
+:root[data-map-theme="light"] .nav-status[data-phase="planned"],
+:root[data-map-theme="light"] .nav-status[data-phase="executing"],
+:root[data-map-theme="light"] .nav-status[data-phase="starting"] { color: #075b94; }
+:root[data-map-theme="light"] .nav-status[data-phase="succeeded"],
+:root[data-map-theme="light"] .nav-msg[data-tone="ok"] { color: #216b38; }
+:root[data-map-theme="light"] .nav-msg[data-tone="warn"] { color: #a15c00; }
+:root[data-map-theme="light"] .nav-msg[data-tone="err"] { color: #a8434d; }
+:root[data-map-theme="light"] .nav-start { color: #216b38; }
+
 @media (max-width: 1200px) {
   .map-stage { grid-template-columns: 1fr; grid-template-rows: minmax(240px, 1fr) auto; overflow: auto; }
   .map-side { max-height: 48vh; }

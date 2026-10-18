@@ -720,6 +720,9 @@ class MasterPeerSource:
             error = self.error
         out = NoSource().read()
         if not fresh:
+            # Не выдаём потерю связи за гарантированно снятый E-STOP: UI
+            # должен консервативно считать состояние борта неизвестным/запертым.
+            out["estop"] = {"unknown": True}
             out["peer"] = {"url": self.peer_url, "error": error or "нет связи с бортовым экраном"}
             return out
         out["motors"] = data.get("motors") or out["motors"]
@@ -727,6 +730,7 @@ class MasterPeerSource:
         out["masterMessages"] = data.get("masterMessages") or []
         out["linkOk"] = bool(data.get("linkOk"))
         out["mode"] = data.get("mode")
+        out["estop"] = data.get("estop")
         out["peer"] = {"url": self.peer_url, "error": ""}
         return out
 
