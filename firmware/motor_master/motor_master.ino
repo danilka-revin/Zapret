@@ -1732,9 +1732,12 @@ void setup() {
   Serial.begin(115200);
   Wire.begin();
   Wire.setClock(I2C_CLOCK_HZ);
-#if defined(WIRE_HAS_TIMEOUT)
+  // Безусловный вызов: макрос WIRE_HAS_TIMEOUT ядро arduino:avr не определяет
+  // (проверено на 1.8.8 — там есть только WIRE_HAS_END), поэтому под #if вызов
+  // молча вырезался и таймаут TWI оставался выключен (twi_timeout_us = 0):
+  // зависшая шина (слейв удержал SDA, помеха) вешала loop() в Wire навсегда.
+  // Сам метод есть в ядре arduino:avr начиная с 1.8.3.
   Wire.setWireTimeout(3000, true);  // зависшая шина I2C не останавливает loop()
-#endif
   steeringSetup();
   last_telemetry_ms = millis();
   note(PSTR("--- MASTER: руль v%u, датчики: ноль D18, пот A0; ноль не задан — k или z ---"),

@@ -91,6 +91,21 @@ def test_pins_levels_and_speeds_match_the_tested_sketch():
     assert "Wire.setClock(400000)" in reference and _const(_text(MASTER), "I2C_CLOCK_HZ") == "400000"
 
 
+def test_wire_timeout_is_actually_enabled_on_avr():
+    """Таймаут I2C должен доходить до железа, а не вырезаться препроцессором.
+
+    Ядро arduino:avr (проверено на 1.8.8) макрос WIRE_HAS_TIMEOUT не
+    определяет — есть только WIRE_HAS_END, а метод setWireTimeout существует
+    с ядра 1.8.3. Под `#if defined(WIRE_HAS_TIMEOUT)` вызов молча исчезал, и
+    twi оставался с twi_timeout_us = 0: зависшая шина вешала loop() навсегда.
+    Симуляция этого не ловила: её заглушка Wire метод имеет в любом случае.
+    """
+    for path in (MASTER, NODE):
+        text = _text(path)
+        assert "#if defined(WIRE_HAS_TIMEOUT)" not in text, path
+        assert "Wire.setWireTimeout(3000, true)" in text, path
+
+
 def test_master_accepts_monitor_commands_of_the_tested_sketch():
     master = _text(MASTER)
     core = _core(MASTER)

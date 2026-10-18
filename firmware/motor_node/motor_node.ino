@@ -1439,6 +1439,10 @@ void readSerialLines() {
 void setup() {
   Serial.begin(115200);
   Wire.begin(NODE_ADDRESS);
+  // Как и у мастера: макрос WIRE_HAS_TIMEOUT ядро arduino:avr не определяет,
+  // поэтому вызов — безусловный (метод есть с ядра 1.8.3). Сброс TWI по
+  // таймауту не даёт слейву навсегда остаться с подвешенной шиной.
+  Wire.setWireTimeout(3000, true);
   Wire.onReceive(onCommandReceived);
   Wire.onRequest(onFrameRequested);
   steeringSetup();
