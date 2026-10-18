@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Экран робота</title>
-  <meta name="theme-color" content="#070709" />
+  <meta name="theme-color" content="#000000" />
   <link rel="stylesheet" href="robot.css" />
   <link rel="stylesheet" href="map.css" />
   <link rel="stylesheet" href="lidar_settings.css" />
@@ -102,7 +102,7 @@
                 <small>м/с</small>
               </div>
               <span class="body-end body-rear">КОРМА</span>
-              <span class="body-drag-hint" aria-hidden="true">← камеры · логи &nbsp;|&nbsp; карта · поворот модулей →</span>
+              <span class="body-drag-hint" aria-hidden="true">← камеры · логи &nbsp;|&nbsp; поворот модулей →</span>
             </div>
 
             <div class="axle axle-fr" aria-hidden="true"><div class="wheel" id="wheel-FR" data-tone="idle"><i class="wheel-dir"></i></div></div>
@@ -160,10 +160,10 @@
       </div>
     </div>
     <!-- Разные направления: вправо — поворот модулей, влево — камеры и логи.
-         Дальше вправо от «камер и логов» — карта лидара. -->
+         Карта лидара свайпом не открывается — только кнопкой «Карта». -->
     <div class="swipe-hint-bar" id="swipe-hint-bar" aria-hidden="true">
       <span class="swipe-hint-dot"></span>
-      <span>← камеры · логи &nbsp;|&nbsp; карта · поворот модулей →</span>
+      <span>← камеры · логи &nbsp;|&nbsp; поворот модулей →</span>
       <span class="swipe-hint-dot"></span>
     </div>
   </div>
@@ -176,7 +176,7 @@
       <button id="swipe-close" class="swipe-close" type="button" aria-label="Назад к статистике">← Назад</button>
       <div class="swipe-title">
         <h2 id="swipe-title-text">Камеры и логи</h2>
-        <small id="swipe-title-hint">свайп влево — назад к статистике</small>
+        <small id="swipe-title-hint">камеры и журнал · свайп вправо — назад к статистике</small>
       </div>
       <!-- Маленькая кнопка ⚙: открывает окно настройки портов камер (видна только на вкладке камер). -->
       <button id="cam-settings-open" class="swipe-close cam-gear" type="button" aria-controls="cam-settings-modal" aria-expanded="false" title="Настройка портов камер" hidden>⚙</button>
@@ -316,10 +316,10 @@
       </div>
 
       <!-- ============ КАРТА ЛИДАРА: живая карта как в ROS ============ -->
-      <!-- Страница идёт сразу после «Камер и логов»: свайп вправо — сюда.
-           Карту строит сервер тем же лидаром, что читает экран; файл карты
-           (PGM + YAML как у ROS и PNG) лежит на рабочем столе, сброс карты
-           файл не удаляет — перезаписывает. -->
+      <!-- Открывается только кнопкой («Карта» в шапке или «Функции → Карта»),
+           свайпом на эту страницу не попасть. Карту строит сервер тем же
+           лидаром, что читает экран; файл карты (PGM + YAML как у ROS и PNG)
+           лежит на рабочем столе, сброс карты файл не удаляет — перезаписывает. -->
       <section id="swipe-map-view" class="swipe-view map-view" hidden aria-label="Карта лидара">
         <div class="map-stage">
           <div class="map-canvas-wrap">
@@ -345,6 +345,7 @@
             </dl>
 
             <div class="map-actions">
+              <button type="button" id="map-theme-toggle" class="map-btn map-btn--theme" aria-pressed="false" title="Тёмная или светлая карта">Светлая карта</button>
               <button type="button" id="map-reset" class="map-btn map-btn--danger">Сбросить карту</button>
               <button type="button" id="map-save" class="map-btn">Сохранить карту</button>
               <button type="button" id="map-zoom-out" class="map-btn" aria-label="Отдалить карту">−</button>

@@ -285,12 +285,15 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
     global._openSwipe('cameras'); navigation.push(state());
   }
 
-  /* Свайп-жест: с «камер и логов» вправо открывается «карта лидара». */
+  /* Свайп-жест: карта лидара свайпом больше не открывается. С «камер и
+   * логов» горизонтальный жест просто закрывает страницу, а карта остаётся
+   * доступной только кнопкой. */
   const mapNavigation = [];
   if (screen === 'robot' && payload.mapSwipe) {
     const page = byId('swipe-page');
     function swipeState() {
-      return { map: !byId('swipe-map-view').hidden,
+      return { open: byId('swipe-page').classList.contains('is-open'),
+               map: !byId('swipe-map-view').hidden,
                cameras: !byId('swipe-cameras-view').hidden,
                motors: !byId('swipe-motors-view').hidden,
                title: byId('swipe-title-text').textContent,
@@ -308,9 +311,7 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
     byId('ctrl-overlay').hidden = true;   // панель функций закрыта — как на борту
     global._openSwipe('cameras');
     mapNavigation.push(swipeState());
-    dragMouse(120, 520);            // вправо: ждём «карта лидара»
-    mapNavigation.push(swipeState());
-    dragMouse(520, 120);            // влево: назад к «камерам и логам»
+    dragMouse(120, 520);            // вправо: страница закрывается, не карта
     mapNavigation.push(swipeState());
   }
 

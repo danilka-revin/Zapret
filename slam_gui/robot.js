@@ -666,7 +666,7 @@
 
     // ========================= ТЕМЫ: 20 видов =========================
     const THEMES = [
-      {id:'bw',       name:'Чёрно-белый',   hint:'как на скрине',      accent:'#ffffff', bg:'#070709', panel:'#141416'},
+      {id:'red',      name:'Чёрно-красный', hint:'базовый',            accent:'#d71921', bg:'#000000', panel:'#101012'},
       {id:'rus',      name:'RUS SLAM',      hint:'оригинал лайм',      accent:'#9fe36b', bg:'#070d0a', panel:'#12201a'},
       {id:'lavender', name:'Lavender',      hint:'WEB TACTICS',        accent:'#c9b3ff', bg:'#0a0a14', panel:'#181826'},
       {id:'ocean',    name:'Ocean',         hint:'голубой',            accent:'#4fc3f7', bg:'#061018', panel:'#122636'},
@@ -687,9 +687,16 @@
       {id:'peach',    name:'Peach',         hint:'персик',             accent:'#ffb088', bg:'#14100a', panel:'#2a2018'},
       {id:'ice',      name:'Ice',           hint:'лёд',                accent:'#7dd3e0', bg:'#0a1418', panel:'#14272e'},
     ];
-    let currentTheme = 'bw';
-    try { currentTheme = localStorage.getItem('kiosk_theme') || currentTheme; } catch(e) {}
+    // Чёрно-красный — базовое оформление экрана, как было до «20 тем».
+    // Сохранённое старшее значение 'bw' (бывшая тема по умолчанию) считаем
+    // этим же базовым оформлением.
+    let currentTheme = 'red';
+    try {
+      const saved = localStorage.getItem('kiosk_theme');
+      if (saved && saved !== 'bw') currentTheme = saved;
+    } catch(e) {}
     function applyTheme(id) {
+      if (id === 'bw') id = 'red';
       const t = THEMES.find(x => x.id === id);
       if (!t) return;
       currentTheme = id;
@@ -795,13 +802,13 @@
             }
             ctx.setTransform(dpr,0,0,dpr,0,0);
             ctx.clearRect(0,0,w,h);
-            ctx.fillStyle = '#101a16';
+            ctx.fillStyle = '#101012';
             ctx.fillRect(0,0,w,h);
-            ctx.fillStyle = '#6f877d';
+            ctx.fillStyle = '#8b8b93';
             ctx.font = '12px Inter, sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('карта сброшена', w/2, h/2);
-            ctx.strokeStyle = '#2b4037';
+            ctx.strokeStyle = '#2a2428';
             ctx.lineWidth = 1;
             ctx.beginPath(); ctx.arc(w/2, h/2, Math.min(w,h)/2 - 10, 0, Math.PI*2); ctx.stroke();
           }
@@ -1033,7 +1040,7 @@
     if (btnResetMap) btnResetMap.addEventListener('click', showReset);
     if (btnMapView) {
       btnMapView.addEventListener('click', () => {
-        // Карта лидара — отдельная страница свайп-экрана: открываем её сразу.
+        // Карта лидара — страница внутри киоска: открываем её только кнопкой.
         closeOverlay();
         if (window._openSwipe) window._openSwipe('map');
       });
@@ -1127,10 +1134,9 @@
       if (activeSwipeView === 'motors' && !showMotors) void stopDrive();
       activeSwipeView = showMotors ? 'motors'
         : (showBattery ? 'battery' : (showMap ? 'map' : 'cameras'));
-      // Карта приходит справа (свайп вправо от «камер и логов»), как руление.
+      // Карта открывается кнопкой справа, как руление; свайпом на неё не попасть.
       activeSwipeDirection = (showMotors || showMap) ? 'right' : 'left';
       page.dataset.openDirection = activeSwipeDirection;
-      page.classList.toggle('is-camera-page', activeSwipeView === 'cameras');
       if (cameraView) cameraView.hidden = showMotors || showBattery || showMap;
       if (motorView) motorView.hidden = !showMotors;
       if (batteryView) batteryView.hidden = !showBattery;
@@ -1146,8 +1152,8 @@
         swipeTitleHint.textContent = showBattery
           ? 'Все банки · свайп вправо — назад к статистике'
           : (showMotors ? 'свайп влево — назад к статистике'
-            : (showMap ? 'карта строится лидаром · свайп вправо — назад к статистике'
-              : 'свайп вправо — карта лидара'));
+            : (showMap ? 'карта строится лидаром · закрыть кнопкой «← Назад»'
+              : 'камеры и журнал · свайп вправо — назад к статистике'));
       }
       if (!showBattery) setText($('swipe-live'), '● LIVE');
       if (window.RCCameraView && activeSwipeView !== 'cameras') window.RCCameraView.setActive(false);
@@ -1256,13 +1262,13 @@
     });
     page.addEventListener('dragstart', (e) => e.preventDefault());
 
-    // Страницы свайп-экрана и переходы между ними.
-    // Слева от статистики — «камеры и логи», дальше вправо — «карта лидара»
-    // (её карта строится лидаром в реальном времени). Справа от статистики —
-    // «руление и тяга». Свайп по странице уводит на соседнюю или закрывает её.
+    // Страницы свайп-экрана. Слева от статистики — «камеры и логи», справа —
+    // «руление и тяга». Между собой страницы больше не перелистываются:
+    // карта лидара открывается только кнопкой («Карта» в шапке или
+    // «Функции → Карта лидара»), свайпом на неё не попасть.
     const SWIPE_NEXT = {
-      cameras: { right: 'map', left: null },
-      map: { right: null, left: 'cameras' },
+      cameras: { right: null, left: null },
+      map: { right: null, left: null },
       motors: { right: null, left: null },
       battery: { right: null, left: null },
     };
@@ -1281,8 +1287,8 @@
     function gestureDirection(dx) {
       return dx > 0 ? 'right' : 'left';
     }
-    // Что делает свайп в сторону dir на странице view: 'close' — закрыть
-    // страницу, 'next' — перейти на соседнюю (карта лидара после камер).
+    // Что делает свайп в сторону dir на странице view: соседних страниц нет,
+    // поэтому любой горизонтальный жест просто закрывает открытую страницу.
     function gestureFor(view, dir) {
       const table = SWIPE_NEXT[view] || { right: null, left: null };
       const next = table[dir];
@@ -1354,11 +1360,13 @@
     }
 
     function tStart(x, y) {
+      if (isOpen && activeSwipeView === 'map') return;
       tStartX = x; tStartY = y; tTracking = true; dragging = false; dragType = null;
       tDragView = null; tDragFrom = null;
     }
     function tMove(x, y) {
       if (!tTracking) return;
+      if (isOpen && activeSwipeView === 'map') { tTracking = false; return; }
       const dx = x - tStartX;
       const dy = y - tStartY;
       if (!dragging) {
@@ -1444,6 +1452,9 @@
     }, {passive: true});
     page.addEventListener('touchstart', (event) => {
       if (event.touches.length !== 1) return;
+      // Карта открывается и закрывается только кнопками: свайп на ней не
+      // перелистывает страницы и не тянет панель.
+      if (isOpen && activeSwipeView === 'map') return;
       if (event.target.closest && event.target.closest('input, button, select, textarea, .cam-viewport, .map-canvas-wrap')) return;
       tStart(event.touches[0].clientX, event.touches[0].clientY);
     }, {passive: true});
@@ -1471,11 +1482,14 @@
     });
     page.addEventListener('mousedown', (event) => {
       if (event.button !== 0) return;
+      // На странице карты нет свайп-навигации — только кнопки.
+      if (isOpen && activeSwipeView === 'map') return;
       if (event.target.closest && event.target.closest('input, button, select, textarea, .cam-viewport, .map-canvas-wrap')) return;
       mStart(event.clientX, event.clientY, 'page');
     });
     window.addEventListener('mousemove', (event) => {
       if (!mTracking) return;
+      if (isOpen && activeSwipeView === 'map') { mTracking = false; mDragging = false; return; }
       const dx = event.clientX - mStartX;
       const dy = event.clientY - mStartY;
       if (!mDragging) {

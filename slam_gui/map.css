@@ -1,14 +1,62 @@
-/* Shared map panel; standalone web page is always dark. */
-.map-page { --bg:#070709; --bg-2:#0f0f12; --panel:#141416; --panel-2:#1a1a1c; --line:#2d2d2f; --text:#f3f3f5; --muted:#a3a3ad; --mono:ui-monospace,monospace; margin:0; background:var(--bg); color:var(--text); font:14px system-ui,sans-serif; color-scheme:dark; }
-.map-page * { box-sizing:border-box; }
-.map-page-head { display:flex; align-items:center; flex-wrap:wrap; gap:16px; padding:12px 20px; }
-.map-page-head h1 { margin:0; font-size:20px; }
-.map-page-head a { color:#b7e9a2; padding:12px; }
-.map-page-head span { color:var(--muted); }
-.map-page main { height:calc(100dvh - 84px); min-height:400px; padding:0 16px 16px; }
+/* Shared map panel; standalone web page is black-red, with a dark/light choice.
+ *
+ * Вся палитра — в переменных --map-*: страница /map и карта внутри бортового
+ * экрана переключаются одной кнопкой «Светлая карта» / «Тёмная карта».
+ * Выбор хранится в localStorage (kiosk_map_theme) и общий для обеих страниц.
+ */
+:root {
+  --map-bg: #050506;
+  --map-bg-2: #0d0b0e;
+  --map-panel: #111013;
+  --map-panel-2: #191519;
+  --map-line: #2a2428;
+  --map-line-2: #3a3035;
+  --map-text: #f5f2f4;
+  --map-muted: #a2949a;
+  --map-accent: #d71921;
+  --map-accent-strong: #ff4d4d;
+  --map-canvas: #08070a;
+  --map-overlay: rgba(8, 7, 10, .82);
+  --map-overlay-border: rgba(255, 255, 255, .14);
+  --map-glow: rgba(215, 25, 33, .35);
+  --map-mono: ui-monospace, monospace;
+}
+:root[data-map-theme="light"] {
+  --map-bg: #f3f1f2;
+  --map-bg-2: #e9e4e6;
+  --map-panel: #ffffff;
+  --map-panel-2: #f7f4f5;
+  --map-line: #e2dcde;
+  --map-line-2: #cfc6c9;
+  --map-text: #141013;
+  --map-muted: #6d6065;
+  --map-accent: #c1121f;
+  --map-accent-strong: #d71921;
+  --map-canvas: #ffffff;
+  --map-overlay: rgba(255, 255, 255, .88);
+  --map-overlay-border: rgba(20, 10, 14, .16);
+  --map-glow: rgba(193, 18, 31, .28);
+}
+
+.map-page {
+  margin: 0;
+  background: var(--map-bg);
+  color: var(--map-text);
+  font: 14px system-ui, sans-serif;
+  color-scheme: dark;
+}
+:root[data-map-theme="light"] .map-page { color-scheme: light; }
+.map-page * { box-sizing: border-box; }
+.map-page-head { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 12px 20px; }
+.map-page-head h1 { margin: 0; font-size: 20px; }
+.map-page-head a { color: var(--map-accent-strong); padding: 12px; }
+.map-page-head span { color: var(--map-muted); }
+.map-page main { height: calc(100dvh - 84px); min-height: 400px; padding: 0 16px 16px; }
 /* ======================= КАРТА ЛИДАРА (страница свайпа) ======================= */
-/* Сетка занятости — как в ROS: белый свободно, чёрный препятствие, серый
-   «не видели». Робот — треугольник, поверх карты — живой скан лидара. */
+/* Сетка занятости — как в ROS: цвет клеток подбирает map_view.js под тему
+   (тёмная: свободно — почти чёрный, препятствие — красный, «не видели» —
+   тёмно-серый; светлая: белый / чёрный / серый). Робот — треугольник,
+   поверх карты — живой скан лидара. */
 .map-view {
   height: 100%;
   min-height: 0;
@@ -24,8 +72,8 @@
 }
 .map-canvas-wrap {
   position: relative;
-  background: #0d1210;
-  border: 1px solid var(--line);
+  background: var(--map-canvas);
+  border: 1px solid var(--map-line);
   border-radius: 16px;
   overflow: hidden;
   min-height: 0;
@@ -42,16 +90,16 @@
   left: 12px;
   padding: 5px 12px;
   border-radius: 999px;
-  background: rgba(10, 18, 15, .82);
-  border: 1px solid var(--line-2);
-  color: var(--muted);
-  font: 800 12px/1 var(--mono);
+  background: var(--map-overlay);
+  border: 1px solid var(--map-overlay-border);
+  color: var(--map-muted);
+  font: 800 12px/1 var(--map-mono);
   letter-spacing: 1.2px;
 }
 .map-badge[data-tone="live"] {
-  color: #9fe36b;
-  border-color: rgba(159, 227, 107, .5);
-  box-shadow: 0 0 12px rgba(159, 227, 107, .28);
+  color: var(--map-accent-strong);
+  border-color: rgba(215, 25, 33, .55);
+  box-shadow: 0 0 12px var(--map-glow);
 }
 .map-legend {
   position: absolute;
@@ -59,16 +107,16 @@
   bottom: 12px;
   padding: 4px 10px;
   border-radius: 8px;
-  background: rgba(10, 18, 15, .78);
-  color: var(--muted);
-  font: 600 11px/1.3 var(--mono);
+  background: var(--map-overlay);
+  color: var(--map-muted);
+  font: 600 11px/1.3 var(--map-mono);
 }
 .map-empty {
   position: absolute;
   inset: auto 0 50% 0;
   margin: 0;
   text-align: center;
-  color: var(--muted);
+  color: var(--map-muted);
   font-size: 15px;
   font-weight: 700;
 }
@@ -77,15 +125,16 @@
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  background: var(--panel);
-  border: 1px solid var(--line);
+  background: var(--map-panel);
+  border: 1px solid var(--map-line);
   border-radius: 16px;
   overflow-y: auto;
   min-height: 0;
+  color: var(--map-text);
 }
 .map-side-head { display: flex; flex-direction: column; gap: 4px; }
 .map-side-head b { font-size: 16px; font-weight: 900; letter-spacing: .4px; }
-.map-side-head span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.map-side-head span { color: var(--map-muted); font-size: 12px; font-weight: 700; }
 .map-stats {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -94,12 +143,12 @@
 }
 .map-stats > div {
   padding: 8px 10px;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
+  background: var(--map-bg-2);
+  border: 1px solid var(--map-line);
   border-radius: 10px;
 }
 .map-stats dt {
-  color: var(--muted);
+  color: var(--map-muted);
   font-size: 10px;
   font-weight: 800;
   letter-spacing: .6px;
@@ -107,30 +156,37 @@
 }
 .map-stats dd {
   margin: 3px 0 0;
-  font: 700 14px/1.2 var(--mono);
+  font: 700 14px/1.2 var(--map-mono);
   word-break: break-word;
 }
 .map-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .map-btn {
   padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid var(--line-2);
-  background: var(--bg-2);
-  color: var(--text);
+  border: 1px solid var(--map-line-2);
+  background: var(--map-bg-2);
+  color: var(--map-text);
   font: 800 13px/1.2 system-ui, sans-serif;
   cursor: pointer;
-  transition: background .15s, border-color .15s, opacity .15s;
+  transition: background .15s, border-color .15s, opacity .15s, color .15s;
 }
-.map-btn:hover { background: var(--panel-2); border-color: var(--muted); }
+.map-btn:hover { background: var(--map-panel-2); border-color: var(--map-muted); }
 .map-btn:disabled { opacity: .5; cursor: default; }
-.map-btn--danger { border-color: rgba(255, 90, 90, .45); color: #ff8a8a; }
-.map-btn--danger:hover { background: rgba(255, 90, 90, .12); }
-.map-btn--primary { border-color: rgba(159, 227, 107, .5); color: #9fe36b; }
-.map-btn.is-on { border-color: rgba(159, 227, 107, .6); color: #9fe36b; }
+.map-btn--theme {
+  grid-column: 1 / -1;
+  border-color: rgba(215, 25, 33, .55);
+  color: var(--map-accent-strong);
+  background: var(--map-bg-2);
+}
+.map-btn--theme:hover { border-color: var(--map-accent-strong); background: var(--map-panel-2); }
+.map-btn--danger { border-color: rgba(255, 90, 90, .45); color: var(--map-accent-strong); }
+.map-btn--danger:hover { background: rgba(215, 25, 33, .12); }
+.map-btn--primary { border-color: rgba(215, 25, 33, .55); color: var(--map-accent-strong); }
+.map-btn.is-on { border-color: var(--map-accent); color: var(--map-accent-strong); }
 .map-file, .map-quality {
   margin: 0;
-  color: var(--muted);
-  font: 600 11px/1.4 var(--mono);
+  color: var(--map-muted);
+  font: 600 11px/1.4 var(--map-mono);
   word-break: break-all;
 }
 .map-settings {
@@ -138,28 +194,30 @@
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
+  background: var(--map-bg-2);
+  border: 1px solid var(--map-line);
   border-radius: 12px;
 }
 .map-field { display: flex; flex-direction: column; gap: 5px; }
-.map-field > span { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .4px; }
+.map-field > span { color: var(--map-muted); font-size: 11px; font-weight: 800; letter-spacing: .4px; }
 .map-field select {
   padding: 9px 10px;
   border-radius: 9px;
-  border: 1px solid var(--line-2);
-  background: var(--panel);
-  color: var(--text);
+  border: 1px solid var(--map-line-2);
+  background: var(--map-panel);
+  color: var(--map-text);
   font: 600 13px/1.2 system-ui, sans-serif;
 }
-.map-toggle { display: flex; align-items: flex-start; gap: 8px; color: var(--text); font-size: 12px; font-weight: 600; }
-.map-toggle input { margin-top: 2px; }
+.map-toggle { display: flex; align-items: flex-start; gap: 8px; color: var(--map-text); font-size: 12px; font-weight: 600; }
+.map-toggle input { margin-top: 2px; accent-color: var(--map-accent); }
 .map-settings-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.map-note { color: var(--muted); font-size: 11px; font-weight: 600; }
-.map-msg { margin: 0; min-height: 16px; font-size: 12px; font-weight: 700; color: var(--muted); }
-.map-msg[data-tone="ok"] { color: #9fe36b; }
+.map-note { color: var(--map-muted); font-size: 11px; font-weight: 600; }
+.map-msg { margin: 0; min-height: 16px; font-size: 12px; font-weight: 700; color: var(--map-muted); }
+.map-msg[data-tone="ok"] { color: var(--map-text); }
 .map-msg[data-tone="warn"] { color: #ffc46b; }
-.map-msg[data-tone="err"] { color: #ff8a8a; }
+.map-msg[data-tone="err"] { color: var(--map-accent-strong); }
+:root[data-map-theme="light"] .map-msg[data-tone="warn"] { color: #a15c00; }
+:root[data-map-theme="light"] .map-msg[data-tone="err"] { color: #b01924; }
 
 @media (max-width: 1200px) {
   .map-stage { grid-template-columns: 1fr; grid-template-rows: minmax(240px, 1fr) auto; overflow: auto; }
@@ -170,5 +228,5 @@
   .map-stats { grid-template-columns: 1fr 1fr; }
   .map-actions { grid-template-columns: 1fr; }
 }
-.map-view [hidden] { display:none !important; }
-.map-badge[data-tone="err"] { color:#ffb5b5; border-color:#8c4545; }
+.map-view [hidden] { display: none !important; }
+.map-badge[data-tone="err"] { color: #ffb5b5; border-color: #8c4545; }

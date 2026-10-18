@@ -38,9 +38,9 @@
     size: 0.08,           // Size (m): размер точки, м
     alpha: 1,             // Alpha
     color: 'range',       // Color Transformer: 'range' (AxisColor) | 'flat' (Flat Color)
-    flatColor: '#9fe36b', // Flat Color
-    minColor: '#ff5a36',  // Min Color: у препятствия
-    maxColor: '#5fd3ff',  // Max Color: на Max Value
+    flatColor: '#ff4d4d', // Flat Color — базовый красный экрана
+    minColor: '#ff2b2b',  // Min Color: у препятствия
+    maxColor: '#ffffff',  // Max Color: на Max Value
     minValue: 0,          // Min Value, м
     maxValue: 10,         // Max Value, м
     decay: 0,             // Decay Time, с (0 — только текущий скан)
@@ -342,7 +342,7 @@
     for (let x = Math.ceil(x0 / step) * step; x <= x1; x += step) {
       const sy = L.cy - (x - view.px) * L.k;
       const isMajor = Math.abs(Math.round(x / major) * major - x) < step / 1000;
-      ctx.strokeStyle = isMajor ? 'rgba(160,190,172,0.22)' : 'rgba(160,190,172,0.10)';
+      ctx.strokeStyle = isMajor ? 'rgba(214,204,209,0.22)' : 'rgba(214,204,209,0.10)';
       ctx.beginPath();
       ctx.moveTo(0, sy);
       ctx.lineTo(L.w, sy);
@@ -352,7 +352,7 @@
     for (let y = Math.ceil(y0 / step) * step; y <= y1; y += step) {
       const sx = L.cx - (y - view.py) * L.k;
       const isMajor = Math.abs(Math.round(y / major) * major - y) < step / 1000;
-      ctx.strokeStyle = isMajor ? 'rgba(160,190,172,0.22)' : 'rgba(160,190,172,0.10)';
+      ctx.strokeStyle = isMajor ? 'rgba(214,204,209,0.22)' : 'rgba(214,204,209,0.10)';
       ctx.beginPath();
       ctx.moveTo(sx, 0);
       ctx.lineTo(sx, L.h);
@@ -365,8 +365,8 @@
     const ox = L.cx + view.py * L.k;    // экран робота
     const oy = L.cy + view.px * L.k;
     const maxR = Math.hypot(L.w, L.h) / L.k + Math.hypot(view.px, view.py);
-    ctx.strokeStyle = 'rgba(160,190,172,0.28)';
-    ctx.fillStyle = 'rgba(150,170,160,0.9)';
+    ctx.strokeStyle = 'rgba(214,204,209,0.28)';
+    ctx.fillStyle = 'rgba(226,214,220,0.9)';
     ctx.font = '11px system-ui, sans-serif';
     ctx.lineWidth = 1;
     for (let m = step; m <= maxR; m += step) {
@@ -421,14 +421,14 @@
     const oy = L.cy + view.px * L.k;
     const hw = (TRACK_M / 2) * L.k;     // полуколея, px
     const hl = (WHEELBASE_M / 2) * L.k; // полубаза, px
-    ctx.fillStyle = 'rgba(70,100,84,0.55)';
-    ctx.strokeStyle = '#8fc3a2';
+    ctx.fillStyle = 'rgba(80,66,72,0.55)';
+    ctx.strokeStyle = '#ffb8be';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.rect(ox - hw, oy - hl, hw * 2, hl * 2);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = '#3c4a43';
+    ctx.fillStyle = '#3a3035';
     const ww = WHEEL_WID_M * L.k;
     const wl = WHEEL_LEN_M * L.k;
     const wy = (TRACK_M / 2 + 0.02) * L.k;   // колёса чуть наружу от корпуса
@@ -443,7 +443,7 @@
     });
     // Нос: треугольник над передним краем, всегда читается даже в масштабе 40 м.
     const nose = oy - hl - 2;
-    ctx.fillStyle = '#e6efe9';
+    ctx.fillStyle = '#f4f4f6';
     ctx.beginPath();
     ctx.moveTo(ox, nose - 8);
     ctx.lineTo(ox - 5, nose);
@@ -478,7 +478,7 @@
   }
 
   function drawInfo(ctx, view, L, step) {
-    ctx.fillStyle = 'rgba(150,170,160,0.9)';
+    ctx.fillStyle = 'rgba(226,214,220,0.9)';
     ctx.font = '11px system-ui, sans-serif';
     const label = 'Fixed Frame: base_link · сетка ' + fmtM(step) + ' · радиус ' + fmtM(view.radius);
     ctx.fillText(label, 8, L.h - 8);

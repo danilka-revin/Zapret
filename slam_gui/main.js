@@ -671,7 +671,7 @@
       try {
         ctx.drawImage(videoSource, 0, 0, cw, ch);
       } catch (e) {
-        ctx.fillStyle = '#0b1411';
+        ctx.fillStyle = '#0a0a0b';
         ctx.fillRect(0, 0, cw, ch);
       }
       ctx.strokeStyle = 'rgba(255,255,255,.2)';
@@ -683,12 +683,12 @@
 
       ctx.fillStyle = 'rgba(0,0,0,.45)';
       ctx.fillRect(0, ch - 18, cw, 18);
-      ctx.fillStyle = '#9fe36b';
+      ctx.fillStyle = '#ff4d4d';
       ctx.font = '700 10px Inter, sans-serif';
       ctx.textAlign = 'left';
       ctx.fillText(isRear ? 'CAM 1 · задняя' : 'CAM 0 · передняя', 8, ch - 5);
       ctx.textAlign = 'right';
-      ctx.fillStyle = '#dbe7e1';
+      ctx.fillStyle = '#f4f4f6';
       ctx.font = '10px ui-monospace, monospace';
       const vw = videoSource.videoWidth || videoSource.naturalWidth || 640;
       const vh = videoSource.videoHeight || videoSource.naturalHeight || 360;
@@ -696,9 +696,9 @@
       return;
     }
 
-    ctx.fillStyle = '#0b1411';
+    ctx.fillStyle = '#0a0a0b';
     ctx.fillRect(0, 0, cw, ch);
-    ctx.fillStyle = '#6f877d';
+    ctx.fillStyle = '#8b8b93';
     ctx.font = '11px Inter, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('кликните для включения вебки', cw / 2, ch / 2);

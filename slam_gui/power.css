@@ -68,7 +68,7 @@
 .rc-stop-state { min-height: 18px; margin: 14px 0 0; color: #c4b3b0; font-size: 12.5px; line-height: 1.5; }
 .rc-stop-state[data-tone="warn"] { color: #ffd79a; }
 .rc-stop-state[data-tone="error"] { color: #ffb4a8; }
-.rc-stop-state[data-tone="ok"] { color: #a9e3b4; }
+.rc-stop-state[data-tone="ok"] { color: #f4f4f6; }
 .rc-stop-log {
   max-height: 130px;
   overflow: auto;

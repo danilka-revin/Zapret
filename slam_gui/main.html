@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>RUS SLAM — основной экран робота</title>
-  <meta name="theme-color" content="#0a120f" />
+  <meta name="theme-color" content="#000000" />
   <link rel="stylesheet" href="main.css" />
   <link rel="stylesheet" href="steering.css" />
   <link rel="stylesheet" href="update.css" />
@@ -349,10 +349,10 @@
   </script>
   <script src="summary.js"></script>
   <script>
-  // темы как на киоске 8090 — чёрно-белый дизайн по умолчанию
+  // темы как на киоске 8090 — чёрно-красный дизайн по умолчанию
   (function(){
     const THEMES = [
-      {id:'bw', accent:'#ffffff', bg:'#070709', panel:'#141416'},
+      {id:'red', accent:'#d71921', bg:'#000000', panel:'#101012'},
       {id:'rus', accent:'#9fe36b', bg:'#070d0a', panel:'#12201a'},
       {id:'lavender', accent:'#c9b3ff', bg:'#0a0a14', panel:'#181826'},
       {id:'ocean', accent:'#4fc3f7', bg:'#061018', panel:'#122636'},
@@ -374,12 +374,13 @@
       {id:'ice', accent:'#7dd3e0', bg:'#0a1418', panel:'#14272e'}
     ];
     function apply(id){
-      if (!THEMES.some(t=>t.id===id)) id='bw';
+      if (id === 'bw') id = 'red';
+      if (!THEMES.some(t=>t.id===id)) id='red';
       document.body.setAttribute('data-theme', id);
       try{ localStorage.setItem('kiosk_theme', id); localStorage.setItem('rc_theme', id);}catch(e){}
       document.querySelectorAll('.side-theme').forEach(b=> b.classList.toggle('is-active', b.dataset.theme===id));
     }
-    try{ apply(localStorage.getItem('kiosk_theme')||localStorage.getItem('rc_theme')||'bw'); }catch(e){ apply('bw'); }
+    try{ apply(localStorage.getItem('kiosk_theme')||localStorage.getItem('rc_theme')||'red'); }catch(e){ apply('red'); }
     const cont = document.getElementById('side-themes');
     const toggle = document.getElementById('side-themes-toggle');
     if (cont){
