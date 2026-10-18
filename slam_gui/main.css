@@ -8,7 +8,9 @@
  * ========================================================================== */
 
 :root {
-  /* Базовое оформление — чёрный + красный (как было до набора тем). */
+  /* Базовое оформление — чёрный + приглушённый красный (как было до набора тем).
+     Акцент мягче прежнего #d71921, а весь текст — белый: --accent-strong и
+     --err отвечали за красный текст, теперь они белые. */
   --bg: #000000;
   --panel: #101012;
   --panel-2: #17171a;
@@ -17,11 +19,11 @@
   --line-2: #2e2e34;
   --text: #f4f4f6;
   --muted: #8b8b93;
-  --accent: #d71921;
-  --accent-strong: #ff4d4d;
+  --accent: #c0505a;
+  --accent-strong: #f4f4f6;
   --ok: #f4f4f6;
   --warn: #ffc46b;
-  --err: #ff4d4d;
+  --err: #f4f4f6;
   --idle: #6f6f74;
   --radius: 16px;
   --gap: 10px;
@@ -30,7 +32,7 @@
 }
 
 /* 20 тем — как на киоске robot.html, переключаются через body[data-theme] */
-body[data-theme="red"] { --bg:#000000; --side:#0a0a0b; --panel:#101012; --panel-2:#17171a; --line:#232327; --line-2:#2e2e34; --text:#f4f4f6; --muted:#8b8b93; --accent:#d71921; --accent-strong:#ff4d4d; }
+body[data-theme="red"] { --bg:#000000; --side:#0a0a0b; --panel:#101012; --panel-2:#17171a; --line:#232327; --line-2:#2e2e34; --text:#f4f4f6; --muted:#8b8b93; --accent:#c0505a; --accent-strong:#f4f4f6; }
 body[data-theme="rus"] { --bg:#070d0a; --side:#0f1a15; --panel:#12201a; --panel-2:#172921; --line:#233a30; --line-2:#2b4439; --text:#edf4ef; --muted:#8aa496; --accent:#9fe36b; }
 body[data-theme="lavender"] { --bg:#0a0a14; --side:#13131d; --panel:#181826; --panel-2:#1f1f30; --line:#2a2a3a; --line-2:#34344a; --text:#ece8ff; --muted:#9a96b2; --accent:#c9b3ff; }
 body[data-theme="ocean"] { --bg:#061018; --side:#0d1c26; --panel:#122636; --panel-2:#162f42; --line:#1e3a4d; --line-2:#25465d; --text:#e6f2ff; --muted:#8aa8c0; --accent:#4fc3f7; }
@@ -38,7 +40,7 @@ body[data-theme="sunset"] { --bg:#120a06; --side:#1c120a; --panel:#241a0f; --pan
 body[data-theme="crimson"] { --bg:#120607; --side:#1c0a0c; --panel:#241214; --panel-2:#30181c; --line:#3a2024; --line-2:#4a2a30; --text:#ffe6ea; --muted:#b8969e; --accent:#ff4d6d; }
 body[data-theme="nord"] { --bg:#0b0f14; --side:#111821; --panel:#15202e; --panel-2:#1b2a3a; --line:#23374d; --line-2:#2c435e; --text:#e6eef6; --muted:#8aa0b8; --accent:#88c0d0; }
 body[data-theme="dracula"] { --bg:#0e0e14; --side:#171722; --panel:#1e1e2e; --panel-2:#252538; --line:#2e2e44; --line-2:#3a3a52; --text:#f0eaff; --muted:#9a96b8; --accent:#bd93f9; }
-body[data-theme="light"] { --bg:#f4f4f6; --side:#ececee; --panel:#ffffff; --panel-2:#f7f7f8; --line:#e2e2e6; --line-2:#d4d4d8; --text:#0a0a0a; --muted:#6e6e74; --accent:#0a0a0a; }
+body[data-theme="light"] { --bg:#f4f4f6; --side:#ececee; --panel:#ffffff; --panel-2:#f7f7f8; --line:#e2e2e6; --line-2:#d4d4d8; --text:#0a0a0a; --muted:#6e6e74; --accent:#0a0a0a; --accent-strong:#0a0a0a; --err:#0a0a0a; }
 body[data-theme="cyber"] { --bg:#050507; --side:#0a0e12; --panel:#10181e; --panel-2:#142026; --line:#1e3338; --line-2:#234042; --text:#e6fffe; --muted:#8ab0b0; --accent:#00ffcc; }
 body[data-theme="forest"] { --bg:#0a120a; --side:#0f1f10; --panel:#142814; --panel-2:#1a321a; --line:#234423; --line-2:#2c542c; --text:#e8ffe8; --muted:#8ab48a; --accent:#7ddc52; }
 body[data-theme="amber"] { --bg:#120e06; --side:#1a150a; --panel:#241d0f; --panel-2:#2e2514; --line:#3a2f1a; --line-2:#4a3c20; --text:#fff6e0; --muted:#b8a882; --accent:#ffb84d; }
@@ -62,7 +64,7 @@ body {
   padding: var(--gap);
   overflow: hidden;
   background:
-    radial-gradient(1200px 700px at 12% -12%, #2a0b0f 0%, transparent 60%),
+    radial-gradient(1200px 700px at 12% -12%, #1a1014 0%, transparent 60%),
     var(--bg);
   color: var(--text);
   font-family: Inter, "Segoe UI", system-ui, Arial, sans-serif;
@@ -76,8 +78,8 @@ body {
 /* переход по пункту меню подсвечивает раздел один раз */
 :target { animation: target-flash 1.4s ease-out 1; }
 @keyframes target-flash {
-  from { box-shadow: 0 0 0 3px rgba(215, 25, 33, .7); }
-  to   { box-shadow: 0 0 0 0 rgba(215, 25, 33, 0); }
+  from { box-shadow: 0 0 0 3px rgba(192, 80, 90, .7); }
+  to   { box-shadow: 0 0 0 0 rgba(192, 80, 90, 0); }
 }
 
 /* ------------------------------------------------------------- раскладка */
@@ -187,9 +189,9 @@ body {
   white-space: nowrap;
 }
 .chip.ok   { color: var(--ok);     background: var(--panel-2); border-color: var(--line-2); }
-.chip.move { color: var(--accent-strong); background: rgba(215, 25, 33, .14); border-color: rgba(215, 25, 33, .45); }
+.chip.move { color: var(--text);   background: rgba(192, 80, 90, .14); border-color: rgba(192, 80, 90, .45); }
 .chip.warn { color: var(--warn);   background: rgba(255, 196, 107, .12); border-color: rgba(255, 196, 107, .4); }
-.chip.err  { color: var(--err);    background: rgba(215, 25, 33, .16); border-color: rgba(215, 25, 33, .5); }
+.chip.err  { color: var(--text);   background: rgba(192, 80, 90, .16); border-color: rgba(192, 80, 90, .5); }
 .chip.idle { color: var(--idle); }
 
 /* ------------------------------------------------------------ меню слева */
@@ -224,8 +226,8 @@ body {
   text-decoration: none;
 }
 .nav a:hover { background: var(--panel-2); color: var(--text); }
-.nav a.active { background: var(--panel-2); color: var(--accent); border: 1px solid var(--accent); }
-.nav a.active .ico { color: var(--accent); }
+.nav a.active { background: var(--panel-2); color: var(--text); border: 1px solid var(--accent); }
+.nav a.active .ico { color: var(--text); }
 .ico { flex: none; }
 
 .nav-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
@@ -378,8 +380,8 @@ body {
   background: var(--idle);
   box-shadow: 0 0 0 4px rgba(139, 139, 147, .18);
 }
-.side-status.ok .pulse  { background: var(--accent-strong); box-shadow: 0 0 0 4px rgba(215, 25, 33, .2); }
-.side-status.err .pulse { background: var(--err); box-shadow: 0 0 0 4px #ff6a5522; }
+.side-status.ok .pulse  { background: var(--accent-strong); box-shadow: 0 0 0 4px rgba(192, 80, 90, .2); }
+.side-status.err .pulse { background: var(--err); box-shadow: 0 0 0 4px #f4f4f622; }
 
 /* оператор смены */
 
@@ -445,7 +447,7 @@ body {
   font-size: 12.5px;
 }
 .route-line b { color: var(--text); font-size: 14px; font-weight: 700; }
-.route-arrow { margin: 0 6px; color: var(--accent); font-weight: 700; }
+.route-arrow { margin: 0 6px; color: var(--text); font-weight: 700; }
 
 .top-status {
   flex: none;
@@ -458,10 +460,10 @@ body {
   flex: 0 1 auto;
   max-width: 100%;
   padding: 6px clamp(10px, 1vw, 14px);
-  border: 1px solid rgba(215,25,33,.45);
+  border: 1px solid rgba(192,80,90,.45);
   border-radius: 999px;
-  background: rgba(215,25,33,.12);
-  color: var(--accent-strong);
+  background: rgba(192,80,90,.12);
+  color: var(--text);
   font-size: clamp(11px, .9vw, 12.5px);
   font-weight: 800;
   line-height: 1.25;
@@ -489,10 +491,10 @@ body {
   min-width: 0;
   min-height: 36px;
   padding: 7px 14px;
-  border: 1px solid rgba(215,25,33,.55);
+  border: 1px solid rgba(192,80,90,.55);
   border-radius: 12px;
-  background: rgba(215,25,33,.14);
-  color: #ffd6d6;
+  background: rgba(192,80,90,.14);
+  color: #f4f4f6;
   font-size: 14px;
   font-weight: 700;
 }
@@ -893,7 +895,7 @@ body {
 }
 .lidar-empty[hidden] { display: none; }
 /* ручное управление (R): лидар обведён красным, подсказка и команда в шапке панели */
-.lidar.is-control { outline: 2px solid #e04a3a; outline-offset: -2px; }
+.lidar.is-control { outline: 2px solid #c0505a; outline-offset: -2px; }
 .drive-hint {
   margin-left: auto;
   color: var(--muted);
@@ -1012,7 +1014,7 @@ body {
   left: 10px;
   padding: 3px 8px;
   border-radius: 999px;
-  background: rgba(255,90,85,.92);
+  background: rgba(192,80,90,.92);
   color: #fff;
   font-size: 10px;
   font-weight: 800;

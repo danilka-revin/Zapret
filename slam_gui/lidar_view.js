@@ -422,7 +422,7 @@
     const hw = (TRACK_M / 2) * L.k;     // полуколея, px
     const hl = (WHEELBASE_M / 2) * L.k; // полубаза, px
     ctx.fillStyle = 'rgba(80,66,72,0.55)';
-    ctx.strokeStyle = '#ffb8be';
+    ctx.strokeStyle = '#f4f4f6';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.rect(ox - hw, oy - hl, hw * 2, hl * 2);

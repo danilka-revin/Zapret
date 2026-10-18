@@ -5,9 +5,12 @@
  * Экран получает готовый кадр (PNG в base64) и рисует его как в ROS:
  *   • сетка занятости: белый — свободно, чёрный — препятствие, серый — не видели;
  *     для тёмной темы карта перекрашивается (свободно — почти чёрный,
- *     препятствие — красный, «не видели» — тёмно-серый);
+ *     препятствие — приглушённый красный, «не видели» — тёмно-серый);
  *   • робот — треугольник с курсом, как модель в RViz;
- *   • поверх карты — живой скан лидара (текущие точки), как «LaserScan» в RViz;
+ *   • поверх карты — живой скан лидара (текущие точки), как «LaserScan» в RViz.
+ *     Ноды рисуются цветом, размером и прозрачностью, настроенными у лидара
+ *     (окно «Настройки лидара» → «Отображение карты»: Flat Color или
+ *     Min/Max Color, Size, Alpha), поэтому видны на карте в любом стиле;
  *   • сверху — статус MAPPING, как у карты в ROS.
  *
  * Настройки карты (сетка, дальность, чувствительность, забывание старых
@@ -42,27 +45,32 @@
 
   // Палитра карты. Выбор «тёмная / светлая» общий для страницы /map и карты
   // внутри бортового экрана и хранится в localStorage.
+  // Ноды живого скана по умолчанию рисуются цветом, настроенным у лидара
+  // (lidar_view.js: Flat Color или Min/Max Color) — см. scanStyle(). Цвета
+  // ниже остаются запасными, когда модуль лидара не загружен (отдельная
+  // страница /map без lidar_view.js): белые точки на тёмной карте и тёмные
+  // на светлой, чтобы ноды были видны всегда.
   const THEME_KEY = 'kiosk_map_theme';
   const MAP_THEMES = {
     dark: {
       bg: '#08070a',
       grid: 'rgba(255, 255, 255, .07)',
       text: 'rgba(226, 214, 220, .78)',
-      scan: 'rgba(255, 154, 160, .92)',
-      robot: 'rgba(215, 25, 33, .95)',
-      robotStroke: '#ffd9dc',
+      scan: 'rgba(244, 244, 246, .92)',
+      robot: 'rgba(192, 80, 90, .95)',
+      robotStroke: '#ffffff',
       // Значения сетки занятости с сервера: 254 — свободно, 0 — препятствие,
       // 205 — «не видели». Перекрашиваем PNG под тёмную тему.
       free: [18, 14, 20],
-      occupied: [255, 77, 77],
+      occupied: [192, 80, 90],
       unknown: [42, 36, 46],
     },
     light: {
       bg: '#ffffff',
       grid: 'rgba(20, 10, 14, .10)',
       text: 'rgba(30, 20, 24, .72)',
-      scan: 'rgba(193, 18, 31, .90)',
-      robot: 'rgba(215, 25, 33, .95)',
+      scan: 'rgba(30, 20, 24, .88)',
+      robot: 'rgba(192, 80, 90, .95)',
       robotStroke: '#3a0b0f',
       free: [255, 255, 255],
       occupied: [23, 18, 21],
@@ -86,7 +94,9 @@
     panX: 0,
     panY: 0,
     timer: null,
+    scanTimer: null,
     busy: false,
+    scanBusy: false,
     initialized: false,
     lastError: '',
   };
@@ -249,10 +259,65 @@
     ctx.restore();
   }
 
+  /* Ноды живого скана: цвет, прозрачность и размер точки берём из настроек
+   * отображения лидара (lidar_view.js — то же окно «Настройки лидара»):
+   * Flat Color — один цвет, Range — градиент Min/Max Color по дальности,
+   * Size — размер точки в метрах, как в RViz. Тогда ноды на карте видны
+   * ровно тем цветом, который настроен у лидара. Без модуля лидара
+   * (отдельная страница /map) остаётся запасной цвет темы. */
+  function lidarDisplay() {
+    if (!window.RCLidarView || typeof window.RCLidarView.getSettings !== 'function') return null;
+    try {
+      const settings = window.RCLidarView.getSettings();
+      return settings && typeof settings === 'object' ? settings : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function hexToRgb(hex) {
+    if (typeof hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(hex)) return null;
+    const n = parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  function scanStyle(settings) {
+    if (!settings) return null;
+    const alpha = Number.isFinite(+settings.alpha) ? Math.min(1, Math.max(0.1, +settings.alpha)) : 1;
+    const sizeM = Number.isFinite(+settings.size) ? +settings.size : 0.08;
+    if (settings.color === 'flat') {
+      const rgb = hexToRgb(settings.flatColor);
+      if (!rgb) return null;
+      return {
+        alpha,
+        sizeM,
+        colorOf: () => 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')',
+      };
+    }
+    const a = hexToRgb(settings.minColor);
+    const b = hexToRgb(settings.maxColor);
+    if (!a || !b) return null;
+    const lo = Number(settings.minValue);
+    const hi = Number(settings.maxValue);
+    const span = Number.isFinite(lo) && Number.isFinite(hi) && hi > lo ? hi - lo : 1;
+    return {
+      alpha,
+      sizeM,
+      colorOf: (r) => {
+        const t = Math.min(1, Math.max(0, (r - lo) / span));
+        const mix = (i) => Math.round(a[i] + (b[i] - a[i]) * t);
+        return 'rgb(' + mix(0) + ',' + mix(1) + ',' + mix(2) + ')';
+      },
+    };
+  }
+
   function drawScan(ctx, view, pose, width, height, pal) {
     if (!state.scan.length) return;
-    ctx.fillStyle = pal.scan;
-    const dot = Math.max(1.5, Math.min(4, view.scale * 0.05));
+    const style = scanStyle(lidarDisplay());
+    const dot = style
+      ? Math.max(2, Math.min(10, style.sizeM * view.scale))   // Size (m) как в RViz
+      : Math.max(2, Math.min(4, view.scale * 0.05));          // запасной размер темы
+    if (style) ctx.globalAlpha = style.alpha;
     const cos = Math.cos(pose.yaw);
     const sin = Math.sin(pose.yaw);
     state.scan.forEach((point) => {
@@ -263,8 +328,10 @@
       const my = pose.y + lx * sin + ly * cos;
       const p = worldToCanvas(mx, my, view);
       if (p.x < -4 || p.y < -4 || p.x > width + 4 || p.y > height + 4) return;
+      ctx.fillStyle = style ? style.colorOf(point.r) : pal.scan;
       ctx.fillRect(p.x - dot / 2, p.y - dot / 2, dot, dot);
     });
+    if (style) ctx.globalAlpha = 1;
   }
 
   function draw() {
@@ -463,6 +530,32 @@
     }
   }
 
+  /* Живой скан для отдельной страницы /map: на бортовом экране точки кладёт
+   * robot.js, а здесь берём их из api/lidar — тогда ноды лидара видны на
+   * карте и на отдельной странице, а не только на киоске. */
+  async function fetchScan() {
+    if (state.scanBusy) return;
+    const page = $('swipe-map-view');
+    if (page && page.hidden) return;
+    state.scanBusy = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch('api/lidar', { cache: 'no-store', signal: controller.signal });
+      if (!response.ok) return;
+      const body = await response.json();
+      const points = body && Array.isArray(body.scan) ? body.scan : [];
+      state.scan = points.filter((point) =>
+        point && Number.isFinite(point.a) && Number.isFinite(point.r) && point.r >= 0);
+      if (state.snapshot) draw();
+    } catch (err) {
+      // Тихо: без скана карта просто не дополняется точками.
+    } finally {
+      clearTimeout(timeout);
+      state.scanBusy = false;
+    }
+  }
+
   async function post(url, payload) {
     const response = await fetch(url, {
       method: 'POST',
@@ -609,6 +702,15 @@
     void fetchMap();
     if (state.timer) clearInterval(state.timer);
     state.timer = setInterval(() => { void fetchMap(); }, POLL_MS);
+    // Отдельная страница /map: скан лидара никто не кладёт (на киоске это
+    // делает robot.js), поэтому спрашиваем сами — ноды видны на карте сразу.
+    const isKiosk = document.body && document.body.classList
+      && document.body.classList.contains('kiosk-body');
+    if (!isKiosk) {
+      void fetchScan();
+      if (state.scanTimer) clearInterval(state.scanTimer);
+      state.scanTimer = setInterval(() => { void fetchScan(); }, POLL_MS);
+    }
   }
 
   window.RCMapView = {

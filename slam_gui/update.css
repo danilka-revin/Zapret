@@ -8,18 +8,18 @@
   border: 1px solid #7a2a30;
   border-radius: 9px;
   background: #2a0d10;
-  color: #ffdcdc;
+  color: #f4f4f6;
   font: inherit;
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
   white-space: nowrap;
 }
-.rc-update-launch:hover { border-color: #d71921; background: #3a1418; }
+.rc-update-launch:hover { border-color: #c0505a; background: #3a1418; }
 .rc-update-launch.rc-update-floating { position: fixed; right: 16px; bottom: 16px; z-index: 12000; box-shadow: 0 8px 30px rgba(0,0,0,.45); }
 .rc-update-launch[data-state="available"] { animation: rc-update-pulse 1.8s ease-in-out infinite; border-color: #d3ae45; color: #ffeaac; }
-.rc-update-launch[data-state="busy"] { border-color: #ffb0b0; color: #ffd6d6; }
-.rc-update-launch[data-state="error"] { border-color: #a55353; color: #ffd4d4; }
+.rc-update-launch[data-state="busy"] { border-color: #c0505a; color: #f4f4f6; }
+.rc-update-launch[data-state="error"] { border-color: #a05058; color: #f4f4f6; }
 @keyframes rc-update-pulse { 50% { box-shadow: 0 0 0 4px rgba(211, 174, 69, .18); } }
 .rc-update-overlay {
   position: fixed;
@@ -60,7 +60,7 @@
 #rc-update-phase { line-height: 1.5; }
 #rc-update-percent { color: #c9b8be; font-variant-numeric: tabular-nums; }
 .rc-update-track { height: 8px; overflow: hidden; margin: 8px 0; border-radius: 99px; background: #2a2428; }
-.rc-update-track i { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #d71921, #ff6b6b); transition: width .25s ease; }
+.rc-update-track i { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #c0505a, #d98b93); transition: width .25s ease; }
 #rc-update-message { min-height: 18px; margin: 4px 0; color: #a2949a; font-size: 12px; line-height: 1.5; }
 .rc-update-log { max-height: 150px; overflow: auto; margin: 10px 0 0; padding: 10px; border-radius: 8px; background: #0a0a0b; color: #c9b8be; white-space: pre-wrap; font: 10px/1.45 ui-monospace, SFMono-Regular, monospace; }
 .rc-update-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 14px; }
@@ -68,8 +68,8 @@
   min-height: 36px; padding: 0 12px; border: 1px solid #3a3035; border-radius: 8px;
   background: #17171a; color: #f4f4f6; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
 }
-.rc-update-btn.primary { border-color: #7a2a30; background: #2a0d10; color: #ffe3e3; }
-.rc-update-btn:hover:not(:disabled) { border-color: #d71921; }
+.rc-update-btn.primary { border-color: #7a2a30; background: #2a0d10; color: #f4f4f6; }
+.rc-update-btn:hover:not(:disabled) { border-color: #c0505a; }
 .rc-update-btn:disabled { opacity: .42; cursor: not-allowed; }
 @media (max-width: 700px) {
   .rc-update-overlay { padding: 8px; }
