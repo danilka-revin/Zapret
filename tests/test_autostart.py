@@ -94,7 +94,8 @@ def autostart_file(home: Path) -> Path:
 # --------------------------------------------------------------- файлы скриптов --- #
 
 
-@pytest.mark.parametrize("name", ["autostart.sh", "make_shortcut.sh", "install_ubuntu.sh", "start_robot.sh"])
+@pytest.mark.parametrize("name", ["autostart.sh", "make_shortcut.sh", "install_ubuntu.sh", "start_robot.sh",
+                                  "sync_firmware_desktop.sh", "start_desktop.sh"])
 def test_script_is_in_place_and_runs(name):
     path = SCRIPTS / name
     assert path.is_file(), name
@@ -345,6 +346,55 @@ def test_make_shortcut_autostart_only_on_request(fake_host):
     result = run("make_shortcut.sh", "--no-autostart")
     assert result.returncode == 0, result.stderr
     assert not autostart_file(fake_host.root).exists()
+
+
+# ------------------------------------------------- прошивки на рабочем столе --- #
+
+FIRMWARE = Path(__file__).resolve().parent.parent / "firmware"
+
+
+def desktop_firmware(home: Path) -> tuple[Path, Path]:
+    desktop = home / "Desktop"
+    return desktop / "motor_master.ino", desktop / "motor_node.ino"
+
+
+def test_sync_firmware_desktop_copies_master_and_node(fake_host):
+    """На рабочем столе появляются обе прошивки — байт в байт как в репозитории."""
+    result = run("sync_firmware_desktop.sh")
+    assert result.returncode == 0, result.stderr
+    master, node = desktop_firmware(fake_host.root)
+    assert master.read_bytes() == (FIRMWARE / "motor_master" / "motor_master.ino").read_bytes()
+    assert node.read_bytes() == (FIRMWARE / "motor_node" / "motor_node.ino").read_bytes()
+    assert "мастер" in result.stdout and "нода" in result.stdout
+
+
+def test_sync_firmware_desktop_refreshes_after_update_and_keeps_fresh(fake_host):
+    """Новая версия прошивки заменяет копию; актуальная копия не переписывается."""
+    assert run("sync_firmware_desktop.sh").returncode == 0
+    master, node = desktop_firmware(fake_host.root)
+    master_mtime = master.stat().st_mtime_ns
+
+    # «Обновилась версия»: копия ноды на рабочем столе теперь старая.
+    node.write_text("// старая версия прошивки\n", encoding="utf-8")
+    result = run("sync_firmware_desktop.sh")
+    assert result.returncode == 0, result.stderr
+    assert node.read_bytes() == (FIRMWARE / "motor_node" / "motor_node.ino").read_bytes()
+    # Мастер не менялся — его файл не трогаем (даже время изменения то же).
+    assert master.stat().st_mtime_ns == master_mtime
+
+
+def test_desktop_launch_syncs_firmware(fake_host):
+    """Запуск через ярлык и создание ярлыка обновляют прошивки на рабочем столе."""
+    launcher = (SCRIPTS / "start_desktop.sh").read_text(encoding="utf-8")
+    assert "sync_firmware_desktop.sh" in launcher
+    assert launcher.index("sync_firmware_desktop.sh") < launcher.index("start_robot.sh")
+    shortcut = (SCRIPTS / "make_shortcut.sh").read_text(encoding="utf-8")
+    assert "sync_firmware_desktop.sh" in shortcut
+
+    result = run("make_shortcut.sh")
+    assert result.returncode == 0, result.stderr
+    master, node = desktop_firmware(fake_host.root)
+    assert master.is_file() and node.is_file(), "прошивки должны лежать рядом с ярлыком"
 
 
 # ---------------------------------------------------------------- установка --- #
