@@ -496,7 +496,9 @@ function inflatedOcc(ix, iy) {
 }
 function canDrive(ix, iy) {
   if (ix < 2 || iy < 2 || ix >= GRID_W - 2 || iy >= GRID_H - 2) return false;
-  if (grid[iy * GRID_W + ix] !== FREE) return false;
+  if (grid[iy * GRID_W + ix] === OCC) return false;
+  const p = cellXY(ix, iy);
+  if (occupied(p.x, p.y)) return false;
   if (inflatedOcc(ix, iy)) return false;
   if (cellClearance(ix, iy) < 0.36) return false;
   return true;
@@ -504,7 +506,7 @@ function canDrive(ix, iy) {
 function planPath(gx, gy) {
   const s = xyCell(state.x, state.y);
   const g = xyCell(gx, gy);
-  if (!canDrive(g.ix, g.iy) && grid[g.iy * GRID_W + g.ix] !== FREE) return [];
+  if (occupied(gx, gy) || grid[g.iy * GRID_W + g.ix] === OCC) return [];
   const W = GRID_W, H = GRID_H;
   const N = W * H;
   const came = new Int32Array(N).fill(-1);
@@ -597,11 +599,14 @@ function cellClearance(ix, iy) {
 }
 
 function snapToDriveable(x, y) {
-  const minClear = Math.max(0.55, state.clearance || 0.7);
+  if (!occupied(x, y) && bodyFree(x, y, state.yaw || 0)) {
+    return { x, y };
+  }
+  const minClear = Math.max(0.42, (state.clearance || 0.7) * 0.7);
   const ok = (px, py) => {
     const c = xyCell(px, py);
     if (occupied(px, py)) return false;
-    if (grid[c.iy * GRID_W + c.ix] !== FREE) return false;
+    if (grid[c.iy * GRID_W + c.ix] === OCC) return false;
     if (inflatedOcc(c.ix, c.iy)) return false;
     return cellClearance(c.ix, c.iy) >= minClear;
   };

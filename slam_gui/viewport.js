@@ -4,6 +4,8 @@
   window.RCViewport = function (element, changed, options) {
     const min = (options && options.min) || 1;
     const max = (options && options.max) || 8;
+    const threshold = (options && Number(options.dragThreshold)) || 0;
+    const canPan = options && typeof options.canPan === 'function' ? options.canPan : null;
     const state = { zoom: 1, x: 0, y: 0 };
     const pointers = new Map();
     function emit() { changed(state); }
@@ -29,15 +31,35 @@
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       if (e.target.closest && e.target.closest('button')) return;
       e.stopPropagation();
-      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (element.setPointerCapture) element.setPointerCapture(e.pointerId);
+      pointers.set(e.pointerId, {
+        x: e.clientX, y: e.clientY,
+        startX: e.clientX, startY: e.clientY,
+        dragging: threshold <= 0,
+      });
+      if (threshold <= 0 && element.setPointerCapture) {
+        try { element.setPointerCapture(e.pointerId); } catch (_) {}
+      }
     });
     element.addEventListener('pointermove', (e) => {
       const old = pointers.get(e.pointerId);
       if (!old) return;
+      if (pointers.size === 1) {
+        if (canPan && !canPan(e)) return;
+        if (!old.dragging) {
+          if (Math.hypot(e.clientX - old.startX, e.clientY - old.startY) <= threshold) return;
+          old.dragging = true;
+          if (element.setPointerCapture) {
+            try { element.setPointerCapture(e.pointerId); } catch (_) {}
+          }
+        }
+      }
       e.preventDefault(); e.stopPropagation();
       const before = Array.from(pointers.values());
-      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      pointers.set(e.pointerId, {
+        x: e.clientX, y: e.clientY,
+        startX: old.startX, startY: old.startY,
+        dragging: true,
+      });
       const after = Array.from(pointers.values());
       if (after.length === 2) {
         const distance = (a) => Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);

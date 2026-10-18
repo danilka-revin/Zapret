@@ -59,6 +59,7 @@
           Сервис
         </button>
         <a id="console-map-link" class="nav-map-link" href="/map">Карта лидара</a>
+        <a id="console-route-link" class="nav-map-link" href="/route">Движение по маршруту</a>
       </nav>
       <div class="side-status">
         <div><span class="pulse" id="link-pulse"></span>Связь с базой</div>
@@ -459,7 +460,12 @@
   <script src="/slam_auth.js"></script>
   <script>
     { const st = new URLSearchParams(location.search).get('st');
-      if (st) document.getElementById('console-map-link').href = '/map?st=' + encodeURIComponent(st); }
+      if (st) {
+        document.getElementById('console-map-link').href = '/map?st=' + encodeURIComponent(st);
+        const routeLink = document.getElementById('console-route-link');
+        if (routeLink) routeLink.href = '/route?st=' + encodeURIComponent(st);
+      }
+    }
   </script>
   <script src="console-core.js"></script>
   <script src="vision.js"></script>

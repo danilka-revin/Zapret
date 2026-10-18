@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#000000" />
+<title>Движение по маршруту · RUS SLAM</title>
+<link rel="stylesheet" href="map.css" />
+<script>
+  (function () {
+    var theme = 'dark';
+    try { theme = localStorage.getItem('kiosk_map_theme') === 'light' ? 'light' : 'dark'; } catch (e) {}
+    document.documentElement.setAttribute('data-map-theme', theme);
+  })();
+</script>
+</head>
+<body class="map-page route-standalone-page">
+<header class="map-page-head">
+  <a id="route-back-map" href="/map">← К карте лидара</a>
+  <a id="route-back-home" href="/">Главный экран</a>
+  <h1>Движение по маршруту</h1>
+  <span>Отдельное окно маршрута · габариты робота 75 × 60 × 30 см · лидар спереди</span>
+</header>
+<main class="route-standalone-main">
+  <div id="route-window" class="route-window route-window--standalone" role="region" aria-labelledby="route-win-title">
+    <section class="route-window-card">
+      <header class="route-win-head">
+        <div class="route-win-title-wrap">
+          <span class="route-win-dot" aria-hidden="true"></span>
+          <div>
+            <b id="route-win-title">Движение по маршруту</b>
+            <small id="route-win-sub">Робот 75 × 60 × 30 см · лидар спереди (+35 см) · автономная и демо-визуализация</small>
+          </div>
+        </div>
+        <div class="route-win-head-actions">
+          <span id="route-win-status" class="nav-status" data-phase="idle">ожидание</span>
+          <a class="map-btn" id="route-open-map" href="/map">Открыть карту</a>
+        </div>
+      </header>
+
+      <div class="route-win-body">
+        <div class="route-win-stage">
+          <canvas id="route-motion-canvas" aria-label="Визуализация движения робота 75×60×30 см по маршруту"></canvas>
+          <div class="route-win-hud-top">
+            <span class="route-hud-pill" id="route-hud-dims">Габариты: 75 × 60 × 30 см</span>
+            <span class="route-hud-pill route-hud-pill--lidar" id="route-hud-lidar">Лидар: спереди (+35 см)</span>
+            <span class="route-hud-pill" id="route-hud-steer">Колёса: 0°</span>
+          </div>
+          <div class="route-win-progress-bar" aria-hidden="true">
+            <div class="route-win-progress-fill" id="route-win-progress-fill" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <aside class="route-win-side" aria-label="Управление и телеметрия маршрута">
+          <div class="route-win-kpis">
+            <div class="route-kpi"><span>Длина пути</span><b id="route-kpi-dist">—</b></div>
+            <div class="route-kpi"><span>Участки</span><b id="route-kpi-wp">0 / 0</b></div>
+            <div class="route-kpi"><span>Прогресс</span><b id="route-kpi-pct">0%</b></div>
+            <div class="route-kpi"><span>Цель X / Y</span><b id="route-kpi-goal">—</b></div>
+            <div class="route-kpi"><span>Поза робота</span><b id="route-kpi-pose">0.00 / 0.00 м · 0°</b></div>
+            <div class="route-kpi"><span>Габариты и лидар</span><b>75×60×30 см · спереди</b></div>
+          </div>
+
+          <div class="route-win-goal-box">
+            <label class="nav-coordinate"><span>Цель X, м</span><input id="route-win-goal-x" type="number" step="0.05" inputmode="decimal" placeholder="1.50" /></label>
+            <label class="nav-coordinate"><span>Цель Y, м</span><input id="route-win-goal-y" type="number" step="0.05" inputmode="decimal" placeholder="0.00" /></label>
+            <button type="button" id="route-win-plan" class="map-btn map-btn--primary route-win-plan-btn">Построить маршрут</button>
+          </div>
+
+          <!-- Синхронные скрытые поля для совместимости с общим модулем map_view.js -->
+          <div hidden aria-hidden="true">
+            <input id="nav-goal-x" type="number" step="0.05" />
+            <input id="nav-goal-y" type="number" step="0.05" />
+            <button type="button" id="nav-plan">Построить маршрут</button>
+            <button type="button" id="nav-start" disabled>Поехать</button>
+            <button type="button" id="nav-cancel" disabled>Остановить маршрут</button>
+            <button type="button" id="nav-estop">E-STOP</button>
+            <span id="nav-status" data-phase="idle">ожидание</span>
+            <p id="nav-route-summary">траектория не рассчитана</p>
+            <p id="nav-msg"></p>
+          </div>
+
+          <div class="route-win-actions">
+            <button type="button" id="route-win-preview" class="map-btn map-btn--route">▶ Предпросмотр движения</button>
+            <button type="button" id="route-win-start" class="map-btn nav-start" disabled>Поехать</button>
+            <button type="button" id="route-win-cancel" class="map-btn" disabled>Остановить маршрут</button>
+            <button type="button" id="route-win-estop" class="map-btn map-btn--danger nav-estop">E-STOP</button>
+          </div>
+
+          <p class="route-win-msg" id="route-win-msg" role="status" aria-live="polite">Укажите цель на карте или введите координаты X и Y.</p>
+          <p class="nav-safety-note" id="nav-safety-note">Габариты робота 75×60×30 см, лидар установлен спереди (+35 см). Крабовый и прямой ход в пределах ±28°.</p>
+        </aside>
+      </div>
+    </section>
+  </div>
+</main>
+<script src="/slam_auth.js"></script><script src="viewport.js"></script><script src="/lidar_view.js"></script><script src="map_view.js"></script>
+<script>
+const token = new URLSearchParams(location.search).get('st');
+if (token) {
+  document.getElementById('route-back-map').href = '/map?st=' + encodeURIComponent(token);
+  document.getElementById('route-back-home').href = '/?st=' + encodeURIComponent(token);
+  document.getElementById('route-open-map').href = '/map?st=' + encodeURIComponent(token);
+}
+RCMapView.init();
+RCMapView.openRouteWindow();
+</script></body></html>

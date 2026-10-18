@@ -194,6 +194,38 @@ def test_navigation_goal_pick_and_plan_preview(tmp_path):
     assert nav["planCalls"][0]["body"]["goal"] == {"x": 1, "y": 0}
 
 
+def test_direct_map_click_sets_goal_and_opens_separate_route_window(tmp_path):
+    plan = {
+        "ok": True,
+        "path": [{"x": 1.25, "y": -0.5}, {"x": 1.0, "y": 0.0}],
+        "goal": {"x": 1.0, "y": 0.0},
+        "goalRequested": {"x": 1.0, "y": 0.0},
+        "distanceM": 0.56,
+        "waypoints": 1,
+        "footprintM": 0.42,
+    }
+    payload = {
+        "snapshot": snapshot(), "paths": PATHS,
+        "navigationTest": True, "directClickTest": True,
+        "navigationPlanReply": {
+            "ok": True, "plan": plan,
+            "status": {
+                "ok": True, "phase": "planned", "message": "Маршрут готов",
+                "canStart": True, "enabled": True, "reason": "", "plan": plan,
+                "progress": 0.0, "csrfToken": "signed-test-token",
+            },
+        },
+    }
+    report = run(tmp_path, payload)
+    nav = report["navigation"]
+    assert nav["goalX"] == "1.00" and nav["goalY"] == "0.00"
+    assert nav["routeWinGoalX"] == "1.00" and nav["routeWinGoalY"] == "0.00"
+    assert nav["routeWindowOpen"] is True
+    assert "0.56 м" in nav["routeKpiDist"]
+    assert "1.00 / 0.00" in nav["routeKpiGoal"]
+    assert report["renderErrors"] == [], report["renderErrors"]
+
+
 # ----------------------------------------------------------- свайп-навигация ---
 def run_map_swipe(tmp_path: Path) -> dict:
     """Прогон бортового экрана: свайп вправо на странице «камеры и логи»."""

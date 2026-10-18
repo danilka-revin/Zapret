@@ -246,16 +246,29 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
 
   let navigation = null;
   if (payload.navigationTest) {
-    // На карте (800×600, 30×30 м) точка X=1 м, Y=0 находится в (419.2, 300).
-    byId('nav-select-goal').click();
     const canvas = byId('map-canvas');
-    (canvas.events.click || []).forEach((listener) => listener({ clientX: 419.2, clientY: 300 }));
-    await sleep(5);
-    byId('nav-plan').click();
-    await sleep(20);
+    if (payload.directClickTest) {
+      // Прямой клик по карте без предварительного нажатия «Цель на карте»
+      (canvas.events.click || []).forEach((listener) => listener({ clientX: 419.2, clientY: 300 }));
+      await sleep(20);
+      byId('nav-open-route-window').click();
+      await sleep(10);
+    } else {
+      // На карте (800×600, 30×30 м) точка X=1 м, Y=0 находится в (419.2, 300).
+      byId('nav-select-goal').click();
+      (canvas.events.click || []).forEach((listener) => listener({ clientX: 419.2, clientY: 300 }));
+      await sleep(5);
+      byId('nav-plan').click();
+      await sleep(20);
+    }
     navigation = {
       goalX: byId('nav-goal-x').value,
       goalY: byId('nav-goal-y').value,
+      routeWinGoalX: byId('route-win-goal-x').value,
+      routeWinGoalY: byId('route-win-goal-y').value,
+      routeWindowOpen: !byId('route-window').hidden,
+      routeKpiDist: byId('route-kpi-dist').textContent,
+      routeKpiGoal: byId('route-kpi-goal').textContent,
       summary: byId('nav-route-summary').textContent,
       phase: byId('nav-status').textContent,
       message: byId('nav-msg').textContent,

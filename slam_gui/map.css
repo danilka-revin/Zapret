@@ -274,7 +274,277 @@
 .nav-msg[data-tone="warn"] { color: #ffc46b; }
 .nav-msg[data-tone="err"] { color: var(--map-accent-strong); }
 .nav-safety-note { padding-top: 7px; border-top: 1px solid var(--map-line); }
+#map-canvas { cursor: crosshair; }
 .nav-selecting #map-canvas { cursor: crosshair; }
+.map-page-head-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.map-page-head-actions a.map-btn {
+  text-decoration: none;
+  padding: 9px 12px;
+}
+.nav-robot-specs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--map-panel);
+  border: 1px solid var(--map-line);
+  font: 700 11px/1.3 var(--map-mono);
+  color: var(--map-muted);
+}
+.nav-robot-specs b { color: var(--map-text); }
+.map-btn--route {
+  border-color: rgba(39, 193, 232, .65);
+  background: rgba(39, 193, 232, .12);
+  color: #8ce5ff;
+}
+.map-btn--route:hover {
+  border-color: #27c1e8;
+  background: rgba(39, 193, 232, .22);
+}
+:root[data-map-theme="light"] .map-btn--route {
+  color: #055870;
+  border-color: rgba(5, 88, 112, .55);
+  background: rgba(39, 193, 232, .14);
+}
+.nav-open-win { width: 100%; }
+
+/* =================== ОТДЕЛЬНОЕ ОКНО ДВИЖЕНИЯ ПО МАРШРУТУ =================== */
+.route-window {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.route-window[hidden] { display: none !important; }
+.route-window-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 4, 7, .76);
+  backdrop-filter: blur(5px);
+}
+.route-window-card {
+  position: relative;
+  z-index: 1;
+  width: min(1180px, 96vw);
+  height: min(760px, 90dvh);
+  display: flex;
+  flex-direction: column;
+  background: var(--map-panel);
+  border: 1px solid var(--map-line-2);
+  border-radius: 18px;
+  box-shadow: 0 24px 72px rgba(0, 0, 0, .68), 0 0 0 1px rgba(39, 193, 232, .18);
+  overflow: hidden;
+  color: var(--map-text);
+}
+.route-window--standalone {
+  position: static;
+  padding: 0;
+  height: 100%;
+}
+.route-window--standalone .route-window-card {
+  width: 100%;
+  height: 100%;
+  box-shadow: none;
+}
+.route-standalone-main {
+  height: calc(100dvh - 76px);
+  min-height: 440px;
+  padding: 0 16px 16px;
+}
+.route-win-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  background: var(--map-bg-2);
+  border-bottom: 1px solid var(--map-line);
+}
+.route-win-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.route-win-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #27c1e8;
+  box-shadow: 0 0 10px rgba(39, 193, 232, .85);
+}
+.route-win-title-wrap b {
+  display: block;
+  font-size: 16px;
+  font-weight: 900;
+}
+.route-win-title-wrap small {
+  display: block;
+  color: var(--map-muted);
+  font-size: 11px;
+}
+.route-win-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.route-win-popout {
+  text-decoration: none;
+  font-size: 12px;
+  padding: 7px 11px;
+}
+.route-win-close {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 1px solid var(--map-line-2);
+  background: var(--map-panel);
+  color: var(--map-text);
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.route-win-close:hover { border-color: var(--map-accent); }
+.route-win-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 330px;
+  gap: 14px;
+  padding: 14px;
+  overflow: hidden;
+}
+.route-win-stage {
+  position: relative;
+  background: #070b10;
+  border: 1px solid var(--map-line-2);
+  border-radius: 14px;
+  overflow: hidden;
+  min-height: 280px;
+}
+.route-win-stage canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+.route-win-hud-top {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  pointer-events: none;
+}
+.route-hud-pill {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(8, 12, 18, .84);
+  border: 1px solid rgba(255, 255, 255, .14);
+  color: #e9f2f7;
+  font: 700 11px/1.2 var(--map-mono);
+}
+.route-hud-pill--lidar {
+  border-color: rgba(39, 193, 232, .55);
+  color: #7ee4ff;
+}
+.route-win-progress-bar {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 12px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .10);
+  overflow: hidden;
+  pointer-events: none;
+}
+.route-win-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #27c1e8, #53e2a1);
+  transition: width .18s ease-out;
+}
+.route-win-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  background: var(--map-bg-2);
+  border: 1px solid var(--map-line);
+  border-radius: 14px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.route-win-kpis {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.route-kpi {
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--map-panel);
+  border: 1px solid var(--map-line);
+}
+.route-kpi span {
+  display: block;
+  color: var(--map-muted);
+  font: 800 10px/1.2 var(--map-mono);
+  text-transform: uppercase;
+}
+.route-kpi b {
+  display: block;
+  margin-top: 3px;
+  font: 700 12px/1.25 var(--map-mono);
+  color: var(--map-text);
+}
+.route-win-goal-box {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--map-panel);
+  border: 1px solid var(--map-line);
+}
+.route-win-plan-btn { grid-column: 1 / -1; }
+.route-win-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.route-win-actions #route-win-preview { grid-column: 1 / -1; }
+.route-win-msg {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--map-muted);
+  font-weight: 600;
+}
+.route-win-msg[data-tone="ok"] { color: #8bd5a6; }
+.route-win-msg[data-tone="warn"] { color: #ffc46b; }
+.route-win-msg[data-tone="err"] { color: var(--map-accent-strong); }
+
+@media (max-width: 960px) {
+  .route-win-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(260px, 1fr) auto;
+    overflow-y: auto;
+  }
+}
 :root[data-map-theme="light"] .nav-status[data-phase="planned"],
 :root[data-map-theme="light"] .nav-status[data-phase="executing"],
 :root[data-map-theme="light"] .nav-status[data-phase="starting"] { color: #075b94; }

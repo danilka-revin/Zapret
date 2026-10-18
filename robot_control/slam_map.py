@@ -65,8 +65,9 @@ MATCH_POINTS = 80
 #: Сколько точек берётся на первом, грубом этапе сопоставления.
 MATCH_COARSE_POINTS = 32
 
-#: Каждый второй луч идёт в карту: denser не нужно, а работы вдвое меньше.
-SCAN_STRIDE = 2
+#: Каждый луч скана идёт в карту без пропусков, чтобы между лучами не оставалось
+#: ложных UNKNOWN-клеток, мешающих выбору цели на карте.
+SCAN_STRIDE = 1
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -235,6 +236,10 @@ class OccupancyGrid:
         data = self.data
         hit_step = settings.hit
         miss_keep = 1.0 - settings.miss
+        min_ix = width
+        max_ix = -1
+        min_iy = height
+        max_iy = -1
         for point in points[::SCAN_STRIDE]:
             try:
                 angle = float(point["a"])
@@ -259,6 +264,10 @@ class OccupancyGrid:
             iy1 = int(math.floor((end_y - origin_y) / res))
             if not (0 <= ix0 < width and 0 <= iy0 < height):
                 continue
+            min_ix = min(min_ix, ix0, max(0, ix1))
+            max_ix = max(max_ix, ix0, min(width - 1, ix1))
+            min_iy = min(min_iy, iy0, max(0, iy1))
+            max_iy = max(max_iy, iy0, min(height - 1, iy1))
             # Луч: клетки вдоль — свободные.
             steps = max(abs(ix1 - ix0), abs(iy1 - iy0))
             if steps:
@@ -287,6 +296,34 @@ class OccupancyGrid:
                     current = 0
                 value = 100.0 - (100.0 - current) * (1.0 - hit_step)
                 data[cell] = max(0, min(100, int(round(value))))
+                touched += 1
+        # Заполняем одиночные UNKNOWN-пропуски между расходящимися лучами,
+        # если по противоположным сторонам уже подтверждено свободное место.
+        if touched and min_ix < max_ix and min_iy < max_iy:
+            x_start = max(1, min_ix)
+            x_end = min(width - 2, max_ix)
+            y_start = max(1, min_iy)
+            y_end = min(height - 2, max_iy)
+            fill_indices = []
+            for iy in range(y_start, y_end + 1):
+                row = iy * width
+                for ix in range(x_start, x_end + 1):
+                    idx = row + ix
+                    if data[idx] != UNKNOWN:
+                        continue
+                    left = data[idx - 1]
+                    right = data[idx + 1]
+                    up = data[idx - width]
+                    down = data[idx + width]
+                    if any( PG <= v < UNKNOWN for v in (left, right, up, down)
+                            for PG in (PGM_OCCUPIED_PCT,) ):
+                        continue
+                    horiz_free = left <= PGM_FREE_PCT and right <= PGM_FREE_PCT
+                    vert_free = up <= PGM_FREE_PCT and down <= PGM_FREE_PCT
+                    if horiz_free or vert_free:
+                        fill_indices.append(idx)
+            for idx in fill_indices:
+                data[idx] = 0
                 touched += 1
         return touched
 
