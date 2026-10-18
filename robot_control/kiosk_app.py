@@ -621,6 +621,11 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     def kiosk():
         return _send(KIOSK_PAGE)
 
+    @app.get("/map")
+    def kiosk_map_page():
+        # Separate page works even when telemetry/swipe initialization fails.
+        return _send("map.html")
+
     @app.get("/api/kiosk_logs")
     def api_kiosk_logs():
         """Настоящий журнал событий робота для панели «Логи» на борту.
@@ -998,6 +1003,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
     for filename in ("robot.css", "robot.js", "battery.js", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "map_view.js",
+                     "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
                      "power.css", "power.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
         def _view(name=filename):

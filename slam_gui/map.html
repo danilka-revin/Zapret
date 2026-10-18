@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#070709" />
+<title>Карта лидара · RUS SLAM</title>
+<link rel="stylesheet" href="map.css" /></head>
+<body class="map-page">
+<header class="map-page-head"><a id="map-back" href="/">← Главный экран</a><h1>Карта лидара</h1><span>Общая карта бортового сервера</span></header>
+<main>      <section id="swipe-map-view" class="swipe-view map-view" aria-label="Карта лидара">
+        <div class="map-stage">
+          <div class="map-canvas-wrap">
+            <canvas id="map-canvas" aria-label="Карта лидара: сетка занятости"></canvas>
+            <span class="map-badge" id="map-badge" data-tone="idle">IDLE</span>
+            <span class="map-legend" aria-hidden="true">свободно · препятствие · не видели</span>
+            <p class="map-empty" id="map-empty" hidden>скана лидара нет — карта не растёт</p>
+          </div>
+
+          <aside class="map-side" aria-label="Состояние карты">
+            <header class="map-side-head">
+              <b>Карта лидара</b>
+              <span id="map-meta">ждём скан лидара</span>
+            </header>
+
+            <dl class="map-stats">
+              <div><dt>размер</dt><dd id="map-size">—</dd></div>
+              <div><dt>сетка</dt><dd id="map-res">—</dd></div>
+              <div><dt>изучено</dt><dd id="map-cov">—</dd></div>
+              <div><dt>препятствий</dt><dd id="map-occ">—</dd></div>
+              <div><dt>поза</dt><dd id="map-pose">—</dd></div>
+              <div><dt>сканов</dt><dd id="map-scans">—</dd></div>
+            </dl>
+
+            <div class="map-actions">
+              <button type="button" id="map-reset" class="map-btn map-btn--danger">Сбросить карту</button>
+              <button type="button" id="map-save" class="map-btn">Сохранить карту</button>
+              <button type="button" id="map-zoom-out" class="map-btn" aria-label="Отдалить карту">−</button>
+              <button type="button" id="map-zoom-in" class="map-btn" aria-label="Приблизить карту">+</button>
+              <button type="button" id="map-fit" class="map-btn">Вписать карту</button>
+              <button type="button" id="map-follow" class="map-btn">Вся карта</button>
+              <button type="button" id="map-settings-toggle" class="map-btn" aria-expanded="false" aria-controls="map-settings">Настройки карты</button>
+            </div>
+
+            <p class="map-file" id="map-file">файл: —</p>
+            <p class="map-quality" id="map-quality">сопоставление сканов: —</p>
+
+            <section id="map-settings" class="map-settings" hidden aria-label="Настройки карты">
+              <label class="map-field">
+                <span>Разрешение сетки</span>
+                <select id="map-set-resolution">
+                  <option value="0.05">0,05 м (мелко)</option>
+                  <option value="0.1">0,10 м</option>
+                  <option value="0.15">0,15 м</option>
+                  <option value="0.2">0,20 м (крупно)</option>
+                </select>
+              </label>
+              <label class="map-field">
+                <span>Размер карты</span>
+                <select id="map-set-size">
+                  <option value="10">10 × 10 м</option>
+                  <option value="20">20 × 20 м</option>
+                  <option value="30">30 × 30 м</option>
+                  <option value="40">40 × 40 м</option>
+                  <option value="60">60 × 60 м</option>
+                </select>
+              </label>
+              <label class="map-field">
+                <span>Дальность в карте</span>
+                <select id="map-set-range">
+                  <option value="4">4 м</option>
+                  <option value="6">6 м</option>
+                  <option value="8">8 м</option>
+                  <option value="10">10 м</option>
+                  <option value="12">12 м</option>
+                </select>
+              </label>
+              <label class="map-field">
+                <span>Чувствительность</span>
+                <select id="map-set-sensitivity">
+                  <option value="soft">мягко — стены видно сразу</option>
+                  <option value="normal">обычно</option>
+                  <option value="hard">жёстко — одиночные точки убираются</option>
+                </select>
+              </label>
+              <label class="map-field">
+                <span>Забывать препятствия</span>
+                <select id="map-set-decay">
+                  <option value="0">не забывать</option>
+                  <option value="30">через 30 с</option>
+                  <option value="60">через 60 с</option>
+                  <option value="300">через 5 мин</option>
+                </select>
+              </label>
+              <label class="map-toggle">
+                <input type="checkbox" id="map-set-matching" checked />
+                <span>Считать позу по скану (без этого карта едет вместе с роботом)</span>
+              </label>
+              <label class="map-toggle">
+                <input type="checkbox" id="map-set-autosave" checked />
+                <span>Перезаписывать файл карты на рабочем столе</span>
+              </label>
+              <label class="map-field">
+                <span>Как часто сохранять</span>
+                <select id="map-set-autosave-every">
+                  <option value="15">каждые 15 с</option>
+                  <option value="60">каждую минуту</option>
+                  <option value="300">каждые 5 мин</option>
+                </select>
+              </label>
+              <div class="map-settings-actions">
+                <button type="button" id="map-settings-apply" class="map-btn map-btn--primary">Применить</button>
+                <span class="map-note">Смена размера или разрешения очищает карту.</span>
+              </div>
+            </section>
+
+            <p class="map-msg" id="map-msg" role="status" aria-live="polite"></p>
+          </aside>
+        </div>
+      </section></main>
+<script src="/slam_auth.js"></script><script src="viewport.js"></script><script src="map_view.js"></script>
+<script>
+const token = new URLSearchParams(location.search).get('st');
+if (token) document.getElementById('map-back').href = '/?st=' + encodeURIComponent(token);
+RCMapView.init();
+</script></body></html>

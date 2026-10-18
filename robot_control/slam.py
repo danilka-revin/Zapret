@@ -506,6 +506,10 @@ ASSETS = {
     "main.js": "main_js",
     # карта лидара в стиле RViz (зум, сетка, Decay Time) — общая для пульта и бортового экрана
     "lidar_view.js": "lidar_view_js",
+    "map.css": "map_css",
+    "map_view.js": "map_view_js",
+    "viewport.js": "viewport_js",
+    "camera_view.js": "camera_view_js",
     "styles.css": "styles_css",
     "app.js": "app_js",
     "console.js": "console_js",
@@ -838,6 +842,23 @@ def create_blueprint(state, guard=None) -> Blueprint:
         return _send(CONSOLE_PAGE)
 
     bp.add_url_rule("/index.html", endpoint="console_page", view_func=guard(console))
+
+    @bp.get("/map")
+    @guard
+    def map_screen():
+        return _send("map.html")
+
+    # The onboard process owns the map. The web process must never build a
+    # second grid or race it when saving the same files.
+    from .map_peer import proxy_map
+
+    for suffix, methods in (("", ["GET"]), ("/settings", ["GET", "POST"]),
+                            ("/reset", ["POST"]), ("/save", ["POST"])):
+        def map_view(suffix=suffix):
+            return proxy_map(peer_kiosk_url().removesuffix("/api/kiosk_state"), suffix)
+        bp.add_url_rule("/api/kiosk_map" + suffix,
+                        endpoint="map_peer" + suffix.replace("/", "_"),
+                        view_func=guard(map_view), methods=methods)
 
     # --------- экран киоска на борту робота: без авторизации -------- #
     # Открывается локально в киоск-браузере на роботе; телеметрия публична,
