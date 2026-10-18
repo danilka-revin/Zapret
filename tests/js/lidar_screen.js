@@ -153,10 +153,25 @@ console.error = (...args) => {
 global.window = global;
 global.self = global;
 global._kioskBms = payload.bms || null;
-// main.js вешает обработчики на window: в браузере это событие, здесь — заглушка.
-global.addEventListener = () => {};
-global.removeEventListener = () => {};
-global.dispatchEvent = () => true;
+/* Обработчики window (в том числе перетаскивание мышью по свайп-странице)
+ * держим в своём реестре: жест «свайп вправо» должен проверяться по-настоящему,
+ * а не заглушкой. */
+const windowListeners = new Map();
+global.addEventListener = (name, fn) => {
+  if (!windowListeners.has(name)) windowListeners.set(name, []);
+  windowListeners.get(name).push(fn);
+};
+global.removeEventListener = (name, fn) => {
+  const list = windowListeners.get(name) || [];
+  const index = list.indexOf(fn);
+  if (index >= 0) list.splice(index, 1);
+};
+global.dispatchEvent = (event) => {
+  (windowListeners.get(event && event.type) || []).forEach((fn) => {
+    try { fn(event); } catch (err) { /* как в браузере: сбой обработчика не роняет страницу */ }
+  });
+  return true;
+};
 global.location = {
   search: '',
   hash: '',
@@ -179,6 +194,15 @@ global.getComputedStyle = () => ({ fontFamily: 'sans-serif', getPropertyValue: (
 global.requestAnimationFrame = (cb) => { rafQueue.push(cb); return rafQueue.length; };
 global.cancelAnimationFrame = () => {};
 global.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+/* Наблюдатель за атрибутами есть в браузере, в Node — нет. Экран следит им за
+ * показом вкладки камер, поэтому без заглушки весь блок падал с
+ * ReferenceError: MutationObserver is not defined. */
+global.MutationObserver = class {
+  constructor(callback) { this.callback = callback; this.targets = []; }
+  observe(target, options) { this.targets.push({ target, options }); }
+  disconnect() { this.targets = []; }
+  takeRecords() { return []; }
+};
 global.URLSearchParams = URLSearchParams;
 global.AbortController = class {
   constructor() { this.signal = { aborted: false }; }
@@ -249,6 +273,35 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
     global._openSwipe('cameras'); navigation.push(state());
   }
 
+  /* Свайп-жест: с «камер и логов» вправо открывается «карта лидара». */
+  const mapNavigation = [];
+  if (screen === 'robot' && payload.mapSwipe) {
+    const page = byId('swipe-page');
+    function swipeState() {
+      return { map: !byId('swipe-map-view').hidden,
+               cameras: !byId('swipe-cameras-view').hidden,
+               motors: !byId('swipe-motors-view').hidden,
+               title: byId('swipe-title-text').textContent,
+               hint: byId('swipe-title-hint').textContent,
+               direction: page.dataset.openDirection };
+    }
+    function dragMouse(fromX, toX) {
+      const target = { clientX: fromX, clientY: 400, button: 0,
+                       target: { closest: () => null } };
+      (page.events.mousedown || []).forEach((fn) => fn(target));
+      global.dispatchEvent({ type: 'mousemove', clientX: toX, clientY: 405,
+                             preventDefault() {} });
+      global.dispatchEvent({ type: 'mouseup', clientX: toX, clientY: 405 });
+    }
+    byId('ctrl-overlay').hidden = true;   // панель функций закрыта — как на борту
+    global._openSwipe('cameras');
+    mapNavigation.push(swipeState());
+    dragMouse(120, 520);            // вправо: ждём «карта лидара»
+    mapNavigation.push(swipeState());
+    dragMouse(520, 120);            // влево: назад к «камерам и логам»
+    mapNavigation.push(swipeState());
+  }
+
   const meta = byId('lidar-meta');
   const count = byId('lidar-count');
   const near = byId('lidar-near');
@@ -269,6 +322,7 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
   console.log(JSON.stringify({
     screen,
     navigation,
+    mapNavigation,
     soc: byId('k-soc').textContent,
     volts: byId('k-volts').textContent,
     batteryState: byId('k-soc-state').textContent,
