@@ -124,6 +124,7 @@ class SimWire {
     bus[addr] = this;
   }
   void setClock(uint32_t) {}
+  void setWireTimeout(uint32_t, bool) {}
   void onReceive(void (*fn)(int)) { on_receive = fn; }
   void onRequest(void (*fn)()) { on_request = fn; }
   void beginTransmission(uint8_t addr) {
