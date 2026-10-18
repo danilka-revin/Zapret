@@ -319,6 +319,10 @@
     step('chassis', () => renderChassis(d));
     step('lidar', () => renderLidar(d));
     step('steering', () => renderSteeringControls(d));
+    // Живой скан идёт и на страницу карты: там он рисуется поверх сетки.
+    step('map-scan', () => {
+      if (window.RCMapView) window.RCMapView.setScan(lidarPoints(d));
+    });
   }
 
   function loop() {
@@ -358,6 +362,8 @@
     initKioskControls();
     initSwipePage();
     initSteeringControls();
+    // Страница карты лидара: опрос сервера и кнопки (сброс, настройки).
+    if (window.RCMapView) window.RCMapView.init();
   }
 
   /* =======================================================================
@@ -401,6 +407,7 @@
     const themesBack = $('themes-back');
     const themesToStats = $('themes-to-stats');
     const btnResetMap = $('btn-reset-map');
+    const btnMapView = $('btn-map-view');
     const resetView = $('reset-view');
     const resetBack = $('reset-back');
     const resetCancel = $('reset-cancel');
@@ -760,8 +767,17 @@
       }
       if (resetConfirm) { resetConfirm.disabled = true; resetConfirm.textContent = 'Сбрасываю…'; }
       try {
-        try { await fetch('api/map/reset', { method: 'POST' }); } catch(e) {}
-        try { await fetch('api/kiosk_state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'reset_map' }) }); } catch(e) {}
+        // Сброс карты: сервер чистит сетку и перезаписывает файл карты на
+        // рабочем столе (файл не удаляется — обновляется). Старый адрес
+        // api/map/reset больше не существует, поэтому зовём api/kiosk_map/reset.
+        let resetOk = false;
+        let resetError = '';
+        try {
+          const response = await fetch('api/kiosk_map/reset', { method: 'POST' });
+          const body = await response.json().catch(() => null);
+          resetOk = !!(response.ok && body && body.ok);
+          if (!resetOk) resetError = (body && body.error) || ('HTTP ' + response.status);
+        } catch(e) { resetError = 'нет связи с сервером карты'; }
         try { localStorage.removeItem('lidar_map'); localStorage.removeItem('slam_grid'); localStorage.removeItem('kiosk_lidar'); } catch(e) {}
         try {
           if (window.grid && window.grid.fill) { window.grid.fill(0); if (window.explored !== undefined) window.explored = 0; if (window.distDirty !== undefined) window.distDirty = true; }
@@ -796,11 +812,17 @@
         if (metaEl) metaEl.textContent = 'карта сброшена';
         const emptyEl = document.getElementById('lidar-empty');
         if (emptyEl) { emptyEl.textContent = 'карта сброшена — ждём новый скан'; emptyEl.hidden = false; }
-        if (resetMsg) { resetMsg.textContent = 'Карта лидара сброшена'; resetMsg.className = 'reset-msg ok'; }
+        if (resetMsg) {
+          resetMsg.textContent = resetOk
+            ? 'Карта лидара сброшена, файл карты обновлён'
+            : ('Не удалось сбросить карту: ' + (resetError || 'ошибка сервера'));
+          resetMsg.className = 'reset-msg ' + (resetOk ? 'ok' : 'err');
+        }
         vibrate([20,40,20]);
         setTimeout(() => {
           hideResetToCtrl();
-          setMsg('Карта лидара сброшена', 'ok');
+          setMsg(resetOk ? 'Карта лидара сброшена' : ('Сброс не удался: ' + (resetError || 'ошибка')),
+                resetOk ? 'ok' : 'err');
           setTimeout(() => { if (pinMsg && pinMsg.textContent.includes('Карта')) setMsg('', ''); }, 1800);
         }, 900);
       } catch (e) {
@@ -1009,6 +1031,13 @@
     if (themesBack) themesBack.addEventListener('click', hideThemesToCtrl);
     if (themesToStats) themesToStats.addEventListener('click', closeOverlay);
     if (btnResetMap) btnResetMap.addEventListener('click', showReset);
+    if (btnMapView) {
+      btnMapView.addEventListener('click', () => {
+        // Карта лидара — отдельная страница свайп-экрана: открываем её сразу.
+        closeOverlay();
+        if (window._openSwipe) window._openSwipe('map');
+      });
+    }
     if (resetBack) resetBack.addEventListener('click', hideResetToCtrl);
     if (resetCancel) resetCancel.addEventListener('click', hideResetToCtrl);
     if (resetConfirmCheck) resetConfirmCheck.addEventListener('change', () => {
@@ -1085,6 +1114,7 @@
     const cam1Empty = $('cam1-empty');
     const cam2Empty = $('cam2-empty');
     const camGearBtn = $('cam-settings-open');
+    const mapView = $('swipe-map-view');
     if (!page || !kiosk) return;
 
     let isOpen = false;
@@ -1099,21 +1129,34 @@
     function selectSwipeView(name) {
       const showMotors = name === 'motors';
       const showBattery = name === 'battery';
+      const showMap = name === 'map';
       if (activeSwipeView === 'motors' && !showMotors) void stopDrive();
-      activeSwipeView = showMotors ? 'motors' : (showBattery ? 'battery' : 'cameras');
-      activeSwipeDirection = showMotors ? 'right' : 'left';
+      activeSwipeView = showMotors ? 'motors'
+        : (showBattery ? 'battery' : (showMap ? 'map' : 'cameras'));
+      // Карта приходит справа (свайп вправо от «камер и логов»), как руление.
+      activeSwipeDirection = (showMotors || showMap) ? 'right' : 'left';
       page.dataset.openDirection = activeSwipeDirection;
-      if (cameraView) cameraView.hidden = showMotors || showBattery;
+      if (cameraView) cameraView.hidden = showMotors || showBattery || showMap;
       if (motorView) motorView.hidden = !showMotors;
       if (batteryView) batteryView.hidden = !showBattery;
+      if (mapView) mapView.hidden = !showMap;
       // Маленькая кнопка ⚙ настройки портов камер — только на вкладке камер.
       if (camGearBtn) camGearBtn.hidden = activeSwipeView !== 'cameras';
-      if (swipeTitle) swipeTitle.textContent = showMotors ? 'Руление и тяга' : (showBattery ? '4 · Аккумулятор' : 'Камеры и логи');
-      if (swipeTitleHint) swipeTitleHint.textContent = showBattery
-        ? 'Все банки · свайп вправо — назад к статистике'
-        : (showMotors ? 'свайп влево — назад к статистике' : 'свайп вправо — назад к статистике');
+      if (swipeTitle) {
+        swipeTitle.textContent = showMotors ? 'Руление и тяга'
+          : (showBattery ? '4 · Аккумулятор'
+            : (showMap ? 'Карта лидара' : 'Камеры и логи'));
+      }
+      if (swipeTitleHint) {
+        swipeTitleHint.textContent = showBattery
+          ? 'Все банки · свайп вправо — назад к статистике'
+          : (showMotors ? 'свайп влево — назад к статистике'
+            : (showMap ? 'карта строится лидаром · свайп вправо — назад к статистике'
+              : 'свайп вправо — карта лидара'));
+      }
       if (!showBattery) setText($('swipe-live'), '● LIVE');
       if (isOpen && activeSwipeView === 'cameras') { startCamLoops(); fetchLogs(); }
+      if (showMap && window.RCMapView) window.RCMapView.draw();
     }
 
     function openSwipe(view) {
@@ -1192,40 +1235,62 @@
     });
     page.addEventListener('dragstart', (e) => e.preventDefault());
 
-    // На главном экране направления разделены: вправо — моторы, влево — камеры/логи.
-    // Возврат с каждой панели — обратным свайпом.
+    // Страницы свайп-экрана и переходы между ними.
+    // Слева от статистики — «камеры и логи», дальше вправо — «карта лидара»
+    // (её карта строится лидаром в реальном времени). Справа от статистики —
+    // «руление и тяга». Свайп по странице уводит на соседнюю или закрывает её.
+    const SWIPE_NEXT = {
+      cameras: { right: 'map', left: null },
+      map: { right: null, left: 'cameras' },
+      motors: { right: null, left: null },
+      battery: { right: null, left: null },
+    };
+
     let tStartX = 0, tStartY = 0, tTracking = false, dragging = false, dragType = null;
     let tDragView = null;
+    let tDragFrom = null;
+    let tDragDir = 'right';
 
     function directionForView(view) {
-      return view === 'motors' ? 'right' : 'left';
+      return (view === 'motors' || view === 'map') ? 'right' : 'left';
     }
     function signedSwipeDistance(dx, direction) {
       return direction === 'right' ? dx : -dx;
     }
-    function closeDirection() {
-      return activeSwipeDirection === 'right' ? 'left' : 'right';
+    function gestureDirection(dx) {
+      return dx > 0 ? 'right' : 'left';
     }
-    function isClosingSwipe(dx) {
-      return signedSwipeDistance(dx, closeDirection()) > 0;
+    // Что делает свайп в сторону dir на странице view: 'close' — закрыть
+    // страницу, 'next' — перейти на соседнюю (карта лидара после камер).
+    function gestureFor(view, dir) {
+      const table = SWIPE_NEXT[view] || { right: null, left: null };
+      const next = table[dir];
+      if (next) return { type: 'next', view: next };
+      return { type: 'close', view: view };
     }
     function swipeProgress(dx, vw, type, direction) {
       const distance = vw * 0.52;
-      const signed = signedSwipeDistance(dx, type === 'open' ? direction : closeDirection());
+      const signed = signedSwipeDistance(dx, direction);
       return Math.max(0, Math.min(1, type === 'open' ? signed / distance : 1 - signed / distance));
     }
-    function setPageProgress(px, direction) {
+    function setPageProgress(px, direction, type) {
       const progress = Math.max(0, Math.min(1, px));
-      const offset = (direction === 'right' ? -1 : 1) * (1 - progress) * 105;
+      // Лист едет за пальцем: при открытии — навстречу жесту, при закрытии и
+      // переходе на соседнюю страницу — по жесту.
+      const sign = type === 'open'
+        ? (direction === 'right' ? -1 : 1)
+        : (direction === 'right' ? 1 : -1);
+      const offset = sign * (1 - progress) * 105;
       if (sheet) sheet.style.transform = 'translateX(' + offset + '%)';
-      if (backdrop) backdrop.style.opacity = String(progress);
+      const shown = type === 'next' ? 1 : progress;
+      if (backdrop) backdrop.style.opacity = String(shown);
       if (kiosk) {
-        kiosk.style.transform = 'scale(' + (1 - progress * 0.015) + ')';
-        kiosk.style.filter = 'brightness(' + (1 - progress * 0.08) + ')';
+        kiosk.style.transform = 'scale(' + (1 - shown * 0.015) + ')';
+        kiosk.style.filter = 'brightness(' + (1 - shown * 0.08) + ')';
       }
     }
-    function beginDrag(direction) {
-      page.dataset.openDirection = direction;
+    function beginDrag(direction, keepResting) {
+      if (!keepResting) page.dataset.openDirection = direction;
       page.hidden = false;
       page.classList.add('is-open');
       if (sheet) sheet.style.transition = 'none';
@@ -1241,10 +1306,11 @@
       dragging = false;
       dragType = null;
       tDragView = null;
+      tDragFrom = null;
       if (hintBar) hintBar.style.opacity = '';
     }
     function dragCompletes(dx, vw, type, direction) {
-      const travelled = signedSwipeDistance(dx, type === 'open' ? direction : closeDirection());
+      const travelled = signedSwipeDistance(dx, direction);
       return travelled > vw * 0.18 || (Math.abs(dx) > 70 && travelled > 0);
     }
     function finishSwipe(type, view, shouldRemainOpen) {
@@ -1267,7 +1333,8 @@
     }
 
     function tStart(x, y) {
-      tStartX = x; tStartY = y; tTracking = true; dragging = false; dragType = null; tDragView = null;
+      tStartX = x; tStartY = y; tTracking = true; dragging = false; dragType = null;
+      tDragView = null; tDragFrom = null;
     }
     function tMove(x, y) {
       if (!tTracking) return;
@@ -1278,19 +1345,33 @@
         if (Math.abs(dx) < Math.abs(dy) * 1.1) { tTracking = false; return; }
         const overlay = $('ctrl-overlay');
         if (!isOpen && overlay && !overlay.hidden) { tTracking = false; return; }
-        if (isOpen && !isClosingSwipe(dx)) { tTracking = false; return; }
-        dragType = isOpen ? 'close' : 'open';
-        tDragView = dragType === 'open' ? (dx > 0 ? 'motors' : 'cameras') : activeSwipeView;
-        if (dragType === 'open') selectSwipeView(tDragView);
-        const direction = dragType === 'open' ? directionForView(tDragView) : activeSwipeDirection;
-        beginDrag(direction);
-        if (!isOpen) page.setAttribute('aria-hidden', 'false');
+        const dir = gestureDirection(dx);
+        if (!isOpen) {
+          dragType = 'open';
+          tDragView = dir === 'right' ? 'motors' : 'cameras';
+          selectSwipeView(tDragView);
+          beginDrag(directionForView(tDragView));
+          page.setAttribute('aria-hidden', 'false');
+        } else {
+          const gesture = gestureFor(activeSwipeView, dir);
+          dragType = gesture.type;
+          tDragView = gesture.view;
+          tDragFrom = activeSwipeView;
+          tDragDir = dir;
+          if (dragType === 'next') {
+            // Соседняя страница: содержимое меняется сразу, лист тянется за пальцем.
+            selectSwipeView(tDragView);
+            beginDrag(directionForView(tDragView));
+          } else {
+            beginDrag(activeSwipeDirection, true);
+          }
+        }
         document.body.classList.add('swipe-open');
       }
       const vw = window.innerWidth || 400;
-      const direction = dragType === 'open' ? directionForView(tDragView) : activeSwipeDirection;
+      const direction = dragType === 'open' ? directionForView(tDragView) : tDragDir;
       const progress = swipeProgress(dx, vw, dragType, direction);
-      setPageProgress(progress, direction);
+      setPageProgress(progress, direction, dragType);
       if (hintBar) hintBar.style.opacity = String(dragType === 'open' ? 1 - progress : progress);
     }
     function tEnd(x, y) {
@@ -1305,14 +1386,25 @@
         if (!isOpen) {
           if (dx > 65) openSwipe('motors');
           else if (dx < -65) openSwipe('cameras');
-        } else if (isClosingSwipe(dx) && Math.abs(dx) > 65) closeSwipe();
+        } else {
+          const gesture = gestureFor(activeSwipeView, gestureDirection(dx));
+          if (Math.abs(dx) <= 65) return;
+          if (gesture.type === 'next') selectSwipeView(gesture.view);
+          else closeSwipe();
+        }
         return;
       }
       const type = dragType;
       const view = tDragView;
-      const direction = type === 'open' ? directionForView(view) : activeSwipeDirection;
+      const from = tDragFrom;
+      const direction = type === 'open' ? directionForView(view) : tDragDir;
       const completed = dragCompletes(dx, vw, type, direction);
       endDragCleanup();
+      if (type === 'next') {
+        // Переход на соседнюю страницу: доводим жест или возвращаемся назад.
+        selectSwipeView(completed ? view : from);
+        return;
+      }
       finishSwipe(type, view, type === 'open' ? completed : !completed);
     }
 
@@ -1345,9 +1437,10 @@
 
     // Mouse drag mirrors touch behavior for desktop previews.
     let mTracking = false, mStartX = 0, mStartY = 0, mDragging = false, mType = null;
-    let mView = null, mOrigin = null;
+    let mView = null, mOrigin = null, mFrom = null, mDir = 'right';
     function mStart(x, y, origin) {
-      mStartX = x; mStartY = y; mTracking = true; mDragging = false; mType = null; mView = null; mOrigin = origin;
+      mStartX = x; mStartY = y; mTracking = true; mDragging = false; mType = null;
+      mView = null; mOrigin = origin; mFrom = null;
     }
     kiosk.addEventListener('mousedown', (event) => {
       if (event.button !== 0) return;
@@ -1369,12 +1462,24 @@
         if (Math.abs(dx) < Math.abs(dy) * 1.1) { mTracking = false; return; }
         const overlay = $('ctrl-overlay');
         if (!isOpen && overlay && !overlay.hidden) { mTracking = false; return; }
-        if (isOpen && !isClosingSwipe(dx)) { mTracking = false; return; }
-        mType = isOpen ? 'close' : 'open';
-        mView = mType === 'open' ? (dx > 0 ? 'motors' : 'cameras') : activeSwipeView;
-        if (mType === 'open') selectSwipeView(mView);
-        const direction = mType === 'open' ? directionForView(mView) : activeSwipeDirection;
-        page.dataset.openDirection = direction;
+        const dir = gestureDirection(dx);
+        if (!isOpen) {
+          mType = 'open';
+          mView = dir === 'right' ? 'motors' : 'cameras';
+          mDir = dir;
+          selectSwipeView(mView);
+          page.dataset.openDirection = directionForView(mView);
+        } else {
+          const gesture = gestureFor(activeSwipeView, dir);
+          mType = gesture.type;
+          mView = gesture.view;
+          mFrom = activeSwipeView;
+          mDir = dir;
+          if (mType === 'next') {
+            selectSwipeView(mView);
+            page.dataset.openDirection = directionForView(mView);
+          }
+        }
         page.hidden = false;
         page.classList.add('is-open');
         if (sheet) sheet.style.transition = 'none';
@@ -1388,8 +1493,8 @@
         if (!isOpen) page.setAttribute('aria-hidden', 'false');
       }
       const vw = window.innerWidth || 400;
-      const direction = mType === 'open' ? directionForView(mView) : activeSwipeDirection;
-      setPageProgress(swipeProgress(dx, vw, mType, direction), direction);
+      const direction = mType === 'open' ? directionForView(mView) : mDir;
+      setPageProgress(swipeProgress(dx, vw, mType, direction), direction, mType);
       if (hintBar) hintBar.style.opacity = String(mType === 'open'
         ? 1 - swipeProgress(dx, vw, mType, direction)
         : swipeProgress(dx, vw, mType, direction));
@@ -1403,6 +1508,8 @@
       const vw = window.innerWidth || 400;
       const type = mType;
       const view = mView;
+      const from = mFrom;
+      const dir = mDir;
       mTracking = false; mDragging = false; dragging = false; dragType = null;
       if (sheet) { sheet.style.transition = ''; sheet.style.transform = ''; }
       if (backdrop) { backdrop.style.transition = ''; backdrop.style.opacity = ''; }
@@ -1410,15 +1517,24 @@
       if (hintBar) hintBar.style.opacity = '';
       if (!wasDrag) {
         if (Math.abs(dx) < 80 || Math.abs(dx) < Math.abs(dy) * 1.1) { mOrigin = null; return; }
-        if (mOrigin === 'kiosk' && !isOpen) openSwipe(dx > 0 ? 'motors' : 'cameras');
-        else if (mOrigin === 'page' && isOpen && isClosingSwipe(dx)) closeSwipe();
+        if (mOrigin === 'kiosk' && !isOpen) {
+          openSwipe(dx > 0 ? 'motors' : 'cameras');
+        } else if (mOrigin === 'page' && isOpen) {
+          const gesture = gestureFor(activeSwipeView, gestureDirection(dx));
+          if (gesture.type === 'next') selectSwipeView(gesture.view);
+          else closeSwipe();
+        }
         mOrigin = null;
         return;
       }
-      const direction = type === 'open' ? directionForView(view) : activeSwipeDirection;
+      const direction = type === 'open' ? directionForView(view) : dir;
       const completed = dragCompletes(dx, vw, type, direction);
-      finishSwipe(type, view, type === 'open' ? completed : !completed);
-      mOrigin = null; mView = null; mType = null;
+      if (type === 'next') {
+        selectSwipeView(completed ? view : from);
+      } else {
+        finishSwipe(type, view, type === 'open' ? completed : !completed);
+      }
+      mOrigin = null; mView = null; mType = null; mFrom = null;
     });
 
     // Esc закрывает: сначала окно настройки камер, потом сам свайп-экран

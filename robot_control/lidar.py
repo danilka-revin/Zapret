@@ -2433,6 +2433,15 @@ class LidarManager:
                 return list(self.scan)
         return None
 
+    def scan_stamp(self) -> float:
+        """Время последнего скана (0 — скана ещё не было).
+
+        Карте нужно это, чтобы вписать каждый скан ровно один раз: опрос идёт
+        чаще, чем лидар отдаёт данные, и повторный тот же скан в карту не пишет.
+        """
+        with self.lock:
+            return self.scan_at
+
     def get_status(self) -> dict[str, Any]:
         """Статус работы лидара для API /api/lidar и подписи на экране."""
         now = time.time()

@@ -86,8 +86,12 @@ from robot_control.slam import (
     start_lidar,
     steering_control_info,
 )
+from robot_control.slam_map import SlamMapService, map_paths
 
 log = logging.getLogger("robot_control.kiosk")
+
+#: Как часто карта лидара впитывает очередной скан, с.
+MAP_POLL_S = 0.35
 
 #: Порт бортового экрана. 8080 занят пультом оператора, поэтому киоск живёт рядом.
 DEFAULT_PORT = 8090
@@ -566,6 +570,42 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         testing=config.testing, port=kiosk_port(),
     )
 
+    # --------------------- Карта лидара (страница экрана) ------------------ #
+    # Карта живёт в сервере: её строит тот же лидар, что читает экран, а файл
+    # карты перезаписывается на рабочем столе. Сброс карты файл не удаляет —
+    # он просто перезаписывается пустым, путь и имя остаются прежними.
+    map_service = SlamMapService()
+    map_service.load_settings_file()
+    app.extensions["rc_map"] = map_service
+
+    def _map_worker(stop_event: threading.Event) -> None:
+        """Фоновая нить карты: впитывает сканы и перезаписывает файл карты.
+
+        Каждый скан лидара вписывается ровно один раз (по времени прихода), а
+        не по каждому тику опроса: иначе одна и та же стена считалась бы
+        десятки раз подряд и карта «зарастала» лишним.
+        """
+        last_stamp = 0.0
+        while not stop_event.is_set():
+            try:
+                manager = LidarManager.get_instance()
+                if manager is not None:
+                    stamp = manager.scan_stamp()
+                    points = manager.get_scan()
+                    if points and stamp and stamp != last_stamp:
+                        last_stamp = stamp
+                        map_service.ingest(points)
+                map_service.maybe_autosave()
+            except Exception as exc:  # noqa: BLE001 — карта не должна ронять сервер
+                log.debug("карта лидара: %s", exc)
+            stop_event.wait(MAP_POLL_S)
+
+    if not config.testing:
+        map_stop = threading.Event()
+        app.extensions["rc_map_stop"] = map_stop
+        threading.Thread(target=_map_worker, args=(map_stop,),
+                         name="kiosk-map", daemon=True).start()
+
     def _send(name: str):
         from flask import send_from_directory
         response = send_from_directory(GUI_DIR, name)
@@ -829,6 +869,54 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                         "ros_rescan": result.get("ros_rescan") if isinstance(result, dict) else None,
                         "status": manager.get_status()})
 
+    # --------------------------- Карта лидара ---------------------------- #
+    # Страница «Карта лидара» на бортовом экране: живая карта (как в ROS),
+    # сброс, настройки и файл карты на рабочем столе. Всё это — чтение и
+    # запись файла, команд движения карта не даёт, поэтому PIN не нужен.
+    @app.get("/api/kiosk_map")
+    def api_kiosk_map():
+        """Снимок карты: настройки, статистика, поза и сама картинка (PNG)."""
+        return jsonify(map_service.snapshot()), 200, {"Cache-Control": "no-store"}
+
+    @app.get("/api/kiosk_map/settings")
+    def api_kiosk_map_settings():
+        return jsonify({"ok": True, "settings": map_service.settings.to_dict(),
+                        "paths": map_paths()})
+
+    @app.post("/api/kiosk_map/settings")
+    def api_kiosk_map_settings_save():
+        body = request.get_json(silent=True) or {}
+        result = map_service.set_settings(body.get("settings") or body)
+        settings = result["settings"]
+        eventlog.record("ok", "карта: сетка %.2f м, дальность %.1f м%s" % (
+            settings["resolution"], settings["max_range"],
+            " — карта очищена, сетка новая" if result.get("mapReset") else ""),
+            source="карта")
+        return jsonify({"ok": True, "settings": settings,
+                        "mapReset": bool(result.get("mapReset")),
+                        "paths": map_paths()})
+
+    @app.post("/api/kiosk_map/reset")
+    def api_kiosk_map_reset():
+        """Сброс карты: сетка очищается, файл карты перезаписывается пустым."""
+        result = map_service.reset()
+        paths = result.get("paths") or map_paths()
+        eventlog.record("ok", "карта лидара сброшена, файл обновлён: %s" % paths.get("pgm"),
+                        source="карта")
+        return jsonify({"ok": True, "paths": paths,
+                        "snapshot": map_service.snapshot(with_png=False)})
+
+    @app.post("/api/kiosk_map/save")
+    def api_kiosk_map_save():
+        """Сохранить карту на рабочий стол (PGM + YAML как у ROS и PNG)."""
+        result = map_service.save()
+        if not result.get("ok"):
+            eventlog.record("err", "карта: не удалось сохранить файл — %s" % result.get("error"),
+                            source="карта")
+            return jsonify(result), 500
+        eventlog.record("ok", "карта сохранена: %s" % result["paths"]["pgm"], source="карта")
+        return jsonify(result)
+
     # ------------------------ Настройки камер ------------------------- #
     # Отдельные порты передней и задней камер. На борту (8090) можно менять
     # без PIN и без перезапуска; пульт (8080) берёт скан по HTTP и только читает.
@@ -907,9 +995,10 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "source": getattr(getattr(state, "source", None), "name", None) if state else None,
         })
 
-    # статика (robot.css, robot.js и панель настроек лидара)
+    # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
     for filename in ("robot.css", "robot.js", "battery.js", "lidar_settings.css",
-                     "lidar_settings.js", "lidar_view.js", "power.css", "power.js"):
+                     "lidar_settings.js", "lidar_view.js", "map_view.js",
+                     "power.css", "power.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
         def _view(name=filename):
             return _send(name)

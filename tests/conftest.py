@@ -28,6 +28,14 @@ def isolated_estop_latch(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_map_files(tmp_path, monkeypatch):
+    """Файлы карты — во временную папку: тесты не трогают рабочий стол."""
+    monkeypatch.setenv("RC_MAP_DIR", str(tmp_path / "map"))
+    monkeypatch.setenv("RC_MAP_SETTINGS", str(tmp_path / "map_settings.json"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def clean_event_journal():
     """Журнал событий бортового экрана — состояние процесса, а не теста.
 
