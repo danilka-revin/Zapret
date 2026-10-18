@@ -58,6 +58,7 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 9h4M7 13h7M15 9h2"/><path d="M8 21h8"/></svg>
           Сервис
         </button>
+        <a id="console-map-link" class="nav-map-link" href="/map">Карта лидара</a>
       </nav>
       <div class="side-status">
         <div><span class="pulse" id="link-pulse"></span>Связь с базой</div>
@@ -456,6 +457,10 @@
     </div>
   </div>
   <script src="/slam_auth.js"></script>
+  <script>
+    { const st = new URLSearchParams(location.search).get('st');
+      if (st) document.getElementById('console-map-link').href = '/map?st=' + encodeURIComponent(st); }
+  </script>
   <script src="console-core.js"></script>
   <script src="vision.js"></script>
   <script src="app.js"></script>

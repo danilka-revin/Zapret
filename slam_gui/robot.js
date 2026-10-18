@@ -1107,12 +1107,6 @@
     const logClear = $('log-clear');
     const logCopy = $('log-copy');
     const logAuto = $('log-autoscroll');
-    const cam1Canvas = $('cam1-canvas');
-    const cam2Canvas = $('cam2-canvas');
-    const cam1Chip = $('cam1-chip');
-    const cam2Chip = $('cam2-chip');
-    const cam1Empty = $('cam1-empty');
-    const cam2Empty = $('cam2-empty');
     const camGearBtn = $('cam-settings-open');
     const mapView = $('swipe-map-view');
     if (!page || !kiosk) return;
@@ -1121,7 +1115,7 @@
     let activeSwipeView = 'cameras';
     let activeSwipeDirection = 'left';
     let camLoopsStarted = false;
-    let anim1 = null, anim2 = null;
+    let mapRefreshPending = false;
 
     const sheet = page.querySelector('.swipe-sheet');
     const backdrop = $('swipe-backdrop');
@@ -1136,6 +1130,7 @@
       // Карта приходит справа (свайп вправо от «камер и логов»), как руление.
       activeSwipeDirection = (showMotors || showMap) ? 'right' : 'left';
       page.dataset.openDirection = activeSwipeDirection;
+      page.classList.toggle('is-camera-page', activeSwipeView === 'cameras');
       if (cameraView) cameraView.hidden = showMotors || showBattery || showMap;
       if (motorView) motorView.hidden = !showMotors;
       if (batteryView) batteryView.hidden = !showBattery;
@@ -1155,8 +1150,30 @@
               : 'свайп вправо — карта лидара'));
       }
       if (!showBattery) setText($('swipe-live'), '● LIVE');
+      if (window.RCCameraView && activeSwipeView !== 'cameras') window.RCCameraView.setActive(false);
       if (isOpen && activeSwipeView === 'cameras') { startCamLoops(); fetchLogs(); }
-      if (showMap && window.RCMapView) window.RCMapView.draw();
+      if (showMap && isOpen && !page.hidden) refreshMapPage();
+    }
+
+    function refreshMapPage() {
+      if (mapRefreshPending) return;
+      mapRefreshPending = true;
+      // Never let rendering a still-hidden canvas abort page navigation.
+      // Wait for layout, then fetch immediately instead of waiting for polling.
+      requestAnimationFrame(() => {
+        mapRefreshPending = false;
+        if (!isOpen || activeSwipeView !== 'map') return;
+        try {
+          if (window.RCMapView) {
+            if (window.RCMapView.show) window.RCMapView.show();
+            else window.RCMapView.draw();
+          } else {
+            setText($('map-msg'), 'Не загружен модуль карты. Откройте карту кнопкой в шапке.');
+          }
+        } catch (err) {
+          setText($('map-msg'), 'Не удалось нарисовать карту: ' + (err.message || err));
+        }
+      });
     }
 
     function openSwipe(view) {
@@ -1176,10 +1193,12 @@
       document.body.classList.add('swipe-open');
       page.setAttribute('aria-hidden', 'false');
       if (hintBar) hintBar.style.opacity = '0';
+      if (activeSwipeView === 'map') refreshMapPage();
     }
     function closeSwipe() {
       if (!isOpen) return;
       isOpen = false;
+      if (window.RCCameraView) window.RCCameraView.setActive(false);
       if (activeSwipeView === 'motors') void stopDrive();
       page.classList.remove('is-open');
       document.body.classList.remove('swipe-open');
@@ -1196,6 +1215,8 @@
       else selectSwipeView('motors');
     };
     selectSwipeView('cameras');
+    const camerasOpen = $('k-cameras-open');
+    if (camerasOpen) camerasOpen.addEventListener('click', () => openSwipe('cameras'));
     {
       const button = $('swipe-battery-open');
       if (button) button.addEventListener('click', () => openSwipe('battery'));
@@ -1423,7 +1444,7 @@
     }, {passive: true});
     page.addEventListener('touchstart', (event) => {
       if (event.touches.length !== 1) return;
-      if (event.target.closest && event.target.closest('input, button, select, textarea')) return;
+      if (event.target.closest && event.target.closest('input, button, select, textarea, .cam-viewport, .map-canvas-wrap')) return;
       tStart(event.touches[0].clientX, event.touches[0].clientY);
     }, {passive: true});
     page.addEventListener('touchmove', (event) => {
@@ -1450,7 +1471,7 @@
     });
     page.addEventListener('mousedown', (event) => {
       if (event.button !== 0) return;
-      if (event.target.closest && event.target.closest('input, button, select, textarea')) return;
+      if (event.target.closest && event.target.closest('input, button, select, textarea, .cam-viewport, .map-canvas-wrap')) return;
       mStart(event.clientX, event.clientY, 'page');
     });
     window.addEventListener('mousemove', (event) => {
@@ -1548,12 +1569,8 @@
 
     // также клик по оверлею вне? не нужно
 
-    // --- КАМЕРЫ: поддержка USB-вебок и бэкенд-стримов (без демо-кадров) ---
+    // --- КАМЕРЫ: кадры бортового сервера, без захвата USB из браузера ---
     // + настройка портов: передняя и задняя камеры — отдельные V4L2-устройства
-    let cam1Video = null, cam2Video = null;
-    let cam1Ready = false, cam2Ready = false;
-    let backendImg1 = null, backendImg2 = null;
-    let startingWebcams = false;
     let camSettings = null;
     let camPorts = [];
     let camSettingsOpen = false;
@@ -1631,10 +1648,6 @@
             // fallback из /api/cameras — построим список из камер
           }
           renderCamSettings();
-          // Также обновить backendImg если порты изменились извне
-          if (j.cameras && Array.isArray(j.cameras)) {
-            // не трогаем стримы, они переживут смену порта на бэкенде
-          }
         } else {
           camMsg(j && j.error ? j.error : 'не удалось загрузить настройки камер', 'error');
         }
@@ -1687,8 +1700,10 @@
         camMsg('сохранено в .env: передняя ' + (front || 'авто') + ', задняя ' + (rear || 'авто') + ' — камеры переключены', 'ok');
         renderCamSettings();
         // Перезапустить бэкенд-стримы локально без перезагрузки всего окна
-        backendImg1 = null; backendImg2 = null;
-        setTimeout(() => { checkBackendCams(); }, 400);
+        if (window.RCCameraView) {
+          window.RCCameraView.setActive(false);
+          window.RCCameraView.setActive(isOpen && activeSwipeView === 'cameras');
+        }
         setTimeout(() => camMsg('', ''), 2200);
       } catch (e) {
         camMsg('нет связи с сервером', 'error');
@@ -1745,274 +1760,13 @@
       }
     }
 
-    async function checkBackendCams() {
-      try {
-        const r = await fetch('api/cameras', {cache:'no-store'});
-        if (r.ok) {
-          const j = await r.json();
-          if (j && Array.isArray(j.cameras)) {
-            const active = j.cameras.filter((c) => c.active || c.exists);
-            if (active.length > 0) {
-              if (!backendImg1) {
-                const img1 = new Image();
-                // Инкрементальный стрим: ошибка только этого Image, без перезагрузки окна
-                img1.onerror = () => {
-                  // Бэкенд может пересоздавать камеру после смены порта — подождём и переподключим локально
-                  setTimeout(() => {
-                    if (backendImg1 === img1) {
-                      img1.src = 'api/camera/0/stream?t=' + Date.now();
-                    }
-                  }, 900);
-                };
-                img1.src = 'api/camera/0/stream';
-                backendImg1 = img1;
-              }
-              if (active.length > 1 && !backendImg2) {
-                const img2 = new Image();
-                img2.onerror = () => {
-                  setTimeout(() => {
-                    if (backendImg2 === img2) {
-                      img2.src = 'api/camera/1/stream?t=' + Date.now();
-                    }
-                  }, 900);
-                };
-                img2.src = 'api/camera/1/stream';
-                backendImg2 = img2;
-              }
-            }
-          }
-        }
-      } catch (e) {}
-    }
-
-    async function startBrowserCams() {
-      if (startingWebcams || (cam1Ready && cam2Ready)) return;
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-      startingWebcams = true;
-      try {
-        let devs = [];
-        try {
-          const all = await navigator.mediaDevices.enumerateDevices();
-          devs = all.filter((d) => d.kind === 'videoinput');
-        } catch (e) {}
-
-        if (!cam1Ready) {
-          try {
-            const c1 = {
-              video: devs.length > 0
-                ? { deviceId: { ideal: devs[0].deviceId }, width: { ideal: 640 }, height: { ideal: 360 } }
-                : { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 360 } }
-            };
-            const s1 = await navigator.mediaDevices.getUserMedia(c1);
-            if (!cam1Video) {
-              cam1Video = document.createElement('video');
-              cam1Video.autoplay = true;
-              cam1Video.muted = true;
-              cam1Video.playsInline = true;
-              cam1Video.style.display = 'none';
-              document.body.appendChild(cam1Video);
-            }
-            cam1Video.srcObject = s1;
-            await cam1Video.play().catch(() => {});
-            cam1Ready = true;
-          } catch (e) {
-            console.warn('Передняя вебка не запустилась:', e);
-          }
-        }
-
-        if (devs.length > 1 && !cam2Ready) {
-          try {
-            const c2 = {
-              video: { deviceId: { exact: devs[1].deviceId }, width: { ideal: 640 }, height: { ideal: 360 } }
-            };
-            const s2 = await navigator.mediaDevices.getUserMedia(c2);
-            if (!cam2Video) {
-              cam2Video = document.createElement('video');
-              cam2Video.autoplay = true;
-              cam2Video.muted = true;
-              cam2Video.playsInline = true;
-              cam2Video.style.display = 'none';
-              document.body.appendChild(cam2Video);
-            }
-            cam2Video.srcObject = s2;
-            await cam2Video.play().catch(() => {});
-            cam2Ready = true;
-          } catch (e) {
-            console.warn('Задняя вебка не запустилась:', e);
-          }
-        }
-      } catch (e) {
-        console.warn('Ошибка доступа к вебкам:', e);
-      } finally {
-        startingWebcams = false;
-      }
-    }
-
     function startCamLoops() {
-      if (camLoopsStarted) return;
-      camLoopsStarted = true;
-
-      checkBackendCams();
-      startBrowserCams();
-      bindCamSettingsUI();
-      // Предзагрузка настроек камер без ожидания открытия панели
-      void fetchCamSettings();
-
-      const c1View = $('cam1-view');
-      const c2View = $('cam2-view');
-      if (c1View) c1View.addEventListener('click', () => { startBrowserCams(); checkBackendCams(); });
-      if (c2View) c2View.addEventListener('click', () => { startBrowserCams(); checkBackendCams(); });
-
-      const ctx1 = cam1Canvas ? cam1Canvas.getContext('2d') : null;
-      const ctx2 = cam2Canvas ? cam2Canvas.getContext('2d') : null;
-
-      // Инкрементальный resize: только когда размер реально изменился, без полной перестройки окна
-      let lastW1 = 0, lastH1 = 0, lastW2 = 0, lastH2 = 0;
-      let resizeTick = 0;
-      function resize(c, ctx, lastW, lastH) {
-        const dpr = window.devicePixelRatio || 1;
-        const rect = c.getBoundingClientRect();
-        const need = Math.abs(rect.width - lastW) > 1.5 || Math.abs(rect.height - lastH) > 1.5;
-        if (!need && c.width && c.height) {
-          return {w: rect.width, h: rect.height, changed:false, lastW, lastH};
-        }
-        const w = Math.max(320, Math.round(rect.width * dpr));
-        const h = Math.max(180, Math.round(rect.height * dpr));
-        let changed = false;
-        if (c.width !== w || c.height !== h) { c.width = w; c.height = h; changed = true; }
-        // setTransform каждый кадр не нужен — только после resize или первый раз
-        if (changed || resizeTick < 2) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        return {w: rect.width, h: rect.height, changed, lastW: rect.width, lastH: rect.height};
+      if (!camLoopsStarted) {
+        camLoopsStarted = true;
+        bindCamSettingsUI();
+        void fetchCamSettings();
       }
-
-      let t0 = performance.now();
-      function drawCam1(now) {
-        if (!ctx1 || !cam1Canvas) return;
-        // Не гоняем 60fps когда вкладка камер скрыта — это и вызывало 2-сек поддёргивание всего окна каждые 20с на слабых планшетах
-        if (!isOpen || activeSwipeView !== 'cameras') {
-          anim1 = setTimeout(() => requestAnimationFrame(drawCam1), 500);
-          return;
-        }
-        const r = resize(cam1Canvas, ctx1, lastW1, lastH1);
-        lastW1 = r.lastW; lastH1 = r.lastH;
-        if (r.changed) resizeTick++;
-
-        let src1 = null;
-        if (cam1Ready && cam1Video && cam1Video.videoWidth > 0) src1 = cam1Video;
-        else if (backendImg1 && backendImg1.complete && backendImg1.naturalWidth > 0) src1 = backendImg1;
-
-        if (src1) {
-          try {
-            ctx1.drawImage(src1, 0, 0, r.w, r.h);
-          } catch (e) {
-            ctx1.fillStyle = '#0f0f0f'; ctx1.fillRect(0, 0, r.w, r.h);
-          }
-          if (cam1Empty) cam1Empty.hidden = true;
-          if (cam1Chip) { cam1Chip.textContent = '● LIVE · передняя'; cam1Chip.className = 'cam-chip ok'; }
-          const vw = src1.videoWidth || src1.naturalWidth || 640;
-          const vh = src1.videoHeight || src1.naturalHeight || 360;
-          if (cam1Meta) cam1Meta.textContent = `${vw}×${vh} · 30 fps`;
-
-          // перекрестие — только когда есть сигнал, без перерисовки всего окна
-          ctx1.strokeStyle = 'rgba(255,255,255,.3)';
-          ctx1.lineWidth = 1;
-          ctx1.beginPath();
-          ctx1.moveTo(r.w / 2 - 14, r.h / 2); ctx1.lineTo(r.w / 2 + 14, r.h / 2);
-          ctx1.moveTo(r.w / 2, r.h / 2 - 14); ctx1.lineTo(r.w / 2, r.h / 2 + 14);
-          ctx1.stroke();
-          ctx1.fillStyle = 'rgba(255,255,255,.85)';
-          ctx1.font = '11px ui-monospace, monospace';
-          ctx1.fillText('CAM 1 · LIVE · ' + new Date().toLocaleTimeString('ru-RU'), 10, 18);
-          anim1 = requestAnimationFrame(drawCam1);
-          return;
-        }
-
-
-        // Режим ожидания вебки — инкрементально, без очистки всего окна
-        ctx1.fillStyle = '#0b1411';
-        ctx1.fillRect(0, 0, r.w, r.h);
-        ctx1.fillStyle = '#6f877d';
-        ctx1.font = '12px Inter, sans-serif';
-        ctx1.textAlign = 'center';
-        ctx1.fillText('кликните для включения вебки', r.w / 2, r.h / 2);
-        ctx1.strokeStyle = 'rgba(255,255,255,.06)';
-        ctx1.lineWidth = 1;
-        ctx1.beginPath();
-        ctx1.moveTo(r.w * 0.5, r.h * 0.22); ctx1.lineTo(r.w * 0.5, r.h * 0.78);
-        ctx1.moveTo(r.w * 0.22, r.h * 0.5); ctx1.lineTo(r.w * 0.78, r.h * 0.5);
-        ctx1.stroke();
-        if (cam1Empty) cam1Empty.hidden = false;
-        if (cam1Chip) { cam1Chip.textContent = 'нет сигнала'; cam1Chip.className = 'cam-chip'; }
-        anim1 = requestAnimationFrame(drawCam1);
-      }
-
-      function drawCam2(now) {
-        if (!ctx2 || !cam2Canvas) return;
-        if (!isOpen || activeSwipeView !== 'cameras') {
-          anim2 = setTimeout(() => requestAnimationFrame(drawCam2), 500);
-          return;
-        }
-        const r = resize(cam2Canvas, ctx2, lastW2, lastH2);
-        lastW2 = r.lastW; lastH2 = r.lastH;
-        if (r.changed) resizeTick++;
-
-        let src2 = null;
-        if (cam2Ready && cam2Video && cam2Video.videoWidth > 0) src2 = cam2Video;
-        else if (backendImg2 && backendImg2.complete && backendImg2.naturalWidth > 0) src2 = backendImg2;
-
-        if (src2) {
-          try {
-            ctx2.drawImage(src2, 0, 0, r.w, r.h);
-          } catch (e) {
-            ctx2.fillStyle = '#0f0f0f'; ctx2.fillRect(0, 0, r.w, r.h);
-          }
-          if (cam2Empty) cam2Empty.hidden = true;
-          if (cam2Chip) { cam2Chip.textContent = '● LIVE · кормовая'; cam2Chip.className = 'cam-chip ok'; }
-          const vw = src2.videoWidth || src2.naturalWidth || 640;
-          const vh = src2.videoHeight || src2.naturalHeight || 360;
-          if (cam2Meta) cam2Meta.textContent = `${vw}×${vh} · 30 fps`;
-
-          ctx2.strokeStyle = 'rgba(255,255,255,.3)';
-          ctx2.lineWidth = 1;
-          ctx2.beginPath();
-          ctx2.moveTo(r.w / 2 - 14, r.h / 2); ctx2.lineTo(r.w / 2 + 14, r.h / 2);
-          ctx2.moveTo(r.w / 2, r.h / 2 - 14); ctx2.lineTo(r.w / 2, r.h / 2 + 14);
-          ctx2.stroke();
-          ctx2.fillStyle = 'rgba(255,255,255,.85)';
-          ctx2.font = '11px ui-monospace, monospace';
-          ctx2.fillText('CAM 2 · LIVE · ' + new Date().toLocaleTimeString('ru-RU'), 10, 18);
-          anim2 = requestAnimationFrame(drawCam2);
-          return;
-        }
-
-
-        // Режим ожидания — инкрементально
-        ctx2.fillStyle = '#0b1411';
-        ctx2.fillRect(0, 0, r.w, r.h);
-        ctx2.fillStyle = '#6f877d';
-        ctx2.font = '12px Inter, sans-serif';
-        ctx2.textAlign = 'center';
-        ctx2.fillText('кликните для включения вебки', r.w / 2, r.h / 2);
-        ctx2.strokeStyle = 'rgba(255,255,255,.06)';
-        ctx2.lineWidth = 1;
-        ctx2.beginPath();
-        ctx2.moveTo(r.w * 0.5, r.h * 0.22); ctx2.lineTo(r.w * 0.5, r.h * 0.78);
-        ctx2.moveTo(r.w * 0.22, r.h * 0.5); ctx2.lineTo(r.w * 0.78, r.h * 0.5);
-        ctx2.stroke();
-        if (cam2Empty) cam2Empty.hidden = false;
-        if (cam2Chip) { cam2Chip.textContent = 'нет сигнала'; cam2Chip.className = 'cam-chip'; }
-        anim2 = requestAnimationFrame(drawCam2);
-      }
-      if (ctx1) requestAnimationFrame(drawCam1);
-      if (ctx2) requestAnimationFrame(drawCam2);
-      // resize без полной перестройки окна — только при реальном изменении размера окна
-      let resizeDebounce = null;
-      window.addEventListener('resize', () => {
-        if (resizeDebounce) clearTimeout(resizeDebounce);
-        resizeDebounce = setTimeout(() => {
-          // canvas сам подстроится на следующем кадре drawCam*
-        }, 120);
-      });
+      if (window.RCCameraView) window.RCCameraView.setActive(true);
     }
 
     // --- ЛОГИ: настоящий журнал робота (/api/kiosk_logs) ---
@@ -2545,12 +2299,12 @@
     // Не даём горизонтальному движению по слайдеру закрыть swipe-панель.
     ['pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mouseup'].forEach((name) => {
       panel.addEventListener(name, (event) => {
-        if (event.target.closest && event.target.closest('input, button, select, textarea')) event.stopPropagation();
+        if (event.target.closest && event.target.closest('input, button, select, textarea, .cam-viewport, .map-canvas-wrap')) event.stopPropagation();
       });
     });
     ['touchstart', 'touchmove', 'touchend'].forEach((name) => {
       panel.addEventListener(name, (event) => {
-        if (event.target.closest && event.target.closest('input, button, select, textarea')) event.stopPropagation();
+        if (event.target.closest && event.target.closest('input, button, select, textarea, .cam-viewport, .map-canvas-wrap')) event.stopPropagation();
       }, {passive: true});
     });
 

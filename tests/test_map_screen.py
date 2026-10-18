@@ -201,3 +201,25 @@ def test_map_page_is_after_cameras_in_markup(kiosk_client):
     map_view = page.index('id="swipe-map-view"')
     motors = page.index('id="swipe-motors-view"')
     assert cameras < map_view < motors
+
+
+@pytest.mark.parametrize("render_failure", [False, True])
+def test_functions_map_button_opens_before_rendering(tmp_path, render_failure):
+    payload_file = tmp_path / "map_opening.json"
+    payload_file.write_text(json.dumps({
+        "ok": True, "data": {}, "mapOpening": True,
+        "mapRenderFailure": render_failure,
+    }), encoding="utf-8")
+    result = subprocess.run([NODE, str(SWIPE_HARNESS), "robot", str(payload_file)],
+                            cwd=ROOT, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    for index, state in enumerate(report["mapOpening"], 1):
+        assert state["open"] is True
+        assert state["hidden"] is False
+        assert state["mapHidden"] is False
+        assert state["overlayHidden"] is True
+        assert state["title"] == "Карта лидара"
+        assert state["shows"] == index
+        if render_failure:
+            assert "test canvas unavailable" in state["message"]

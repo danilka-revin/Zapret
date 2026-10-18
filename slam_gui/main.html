@@ -55,6 +55,7 @@
           <svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
           <span class="nav-text">Сводка</span>
         </a>
+        <a href="/map" id="nav-map"><span class="nav-text">Карта лидара</span></a>
         <a id="console-link" href="/console">
           <svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 9h4M7 13h7M15 9h2"/><path d="M8 21h8"/></svg>
           <span class="nav-text">Сервис</span>
@@ -342,6 +343,10 @@
   <script src="/slam_auth.js"></script>
   <script src="lidar_view.js"></script>
   <script src="main.js"></script>
+  <script>
+    { const st = new URLSearchParams(location.search).get('st');
+      if (st) document.getElementById('nav-map').href = '/map?st=' + encodeURIComponent(st); }
+  </script>
   <script src="summary.js"></script>
   <script>
   // темы как на киоске 8090 — чёрно-белый дизайн по умолчанию

@@ -1,0 +1,174 @@
+/* Shared map panel; standalone web page is always dark. */
+.map-page { --bg:#070709; --bg-2:#0f0f12; --panel:#141416; --panel-2:#1a1a1c; --line:#2d2d2f; --text:#f3f3f5; --muted:#a3a3ad; --mono:ui-monospace,monospace; margin:0; background:var(--bg); color:var(--text); font:14px system-ui,sans-serif; color-scheme:dark; }
+.map-page * { box-sizing:border-box; }
+.map-page-head { display:flex; align-items:center; flex-wrap:wrap; gap:16px; padding:12px 20px; }
+.map-page-head h1 { margin:0; font-size:20px; }
+.map-page-head a { color:#b7e9a2; padding:12px; }
+.map-page-head span { color:var(--muted); }
+.map-page main { height:calc(100dvh - 84px); min-height:400px; padding:0 16px 16px; }
+/* ======================= КАРТА ЛИДАРА (страница свайпа) ======================= */
+/* Сетка занятости — как в ROS: белый свободно, чёрный препятствие, серый
+   «не видели». Робот — треугольник, поверх карты — живой скан лидара. */
+.map-view {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.map-stage {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 16px;
+  overflow: hidden;
+}
+.map-canvas-wrap {
+  position: relative;
+  background: #0d1210;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  min-height: 0;
+}
+.map-canvas-wrap canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+.map-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(10, 18, 15, .82);
+  border: 1px solid var(--line-2);
+  color: var(--muted);
+  font: 800 12px/1 var(--mono);
+  letter-spacing: 1.2px;
+}
+.map-badge[data-tone="live"] {
+  color: #9fe36b;
+  border-color: rgba(159, 227, 107, .5);
+  box-shadow: 0 0 12px rgba(159, 227, 107, .28);
+}
+.map-legend {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(10, 18, 15, .78);
+  color: var(--muted);
+  font: 600 11px/1.3 var(--mono);
+}
+.map-empty {
+  position: absolute;
+  inset: auto 0 50% 0;
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 700;
+}
+.map-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.map-side-head { display: flex; flex-direction: column; gap: 4px; }
+.map-side-head b { font-size: 16px; font-weight: 900; letter-spacing: .4px; }
+.map-side-head span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.map-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0;
+}
+.map-stats > div {
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.map-stats dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .6px;
+  text-transform: uppercase;
+}
+.map-stats dd {
+  margin: 3px 0 0;
+  font: 700 14px/1.2 var(--mono);
+  word-break: break-word;
+}
+.map-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.map-btn {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line-2);
+  background: var(--bg-2);
+  color: var(--text);
+  font: 800 13px/1.2 system-ui, sans-serif;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, opacity .15s;
+}
+.map-btn:hover { background: var(--panel-2); border-color: var(--muted); }
+.map-btn:disabled { opacity: .5; cursor: default; }
+.map-btn--danger { border-color: rgba(255, 90, 90, .45); color: #ff8a8a; }
+.map-btn--danger:hover { background: rgba(255, 90, 90, .12); }
+.map-btn--primary { border-color: rgba(159, 227, 107, .5); color: #9fe36b; }
+.map-btn.is-on { border-color: rgba(159, 227, 107, .6); color: #9fe36b; }
+.map-file, .map-quality {
+  margin: 0;
+  color: var(--muted);
+  font: 600 11px/1.4 var(--mono);
+  word-break: break-all;
+}
+.map-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.map-field { display: flex; flex-direction: column; gap: 5px; }
+.map-field > span { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .4px; }
+.map-field select {
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+  color: var(--text);
+  font: 600 13px/1.2 system-ui, sans-serif;
+}
+.map-toggle { display: flex; align-items: flex-start; gap: 8px; color: var(--text); font-size: 12px; font-weight: 600; }
+.map-toggle input { margin-top: 2px; }
+.map-settings-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.map-note { color: var(--muted); font-size: 11px; font-weight: 600; }
+.map-msg { margin: 0; min-height: 16px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.map-msg[data-tone="ok"] { color: #9fe36b; }
+.map-msg[data-tone="warn"] { color: #ffc46b; }
+.map-msg[data-tone="err"] { color: #ff8a8a; }
+
+@media (max-width: 1200px) {
+  .map-stage { grid-template-columns: 1fr; grid-template-rows: minmax(240px, 1fr) auto; overflow: auto; }
+  .map-side { max-height: 48vh; }
+  .map-stats { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 700px) {
+  .map-stats { grid-template-columns: 1fr 1fr; }
+  .map-actions { grid-template-columns: 1fr; }
+}
+.map-view [hidden] { display:none !important; }
+.map-badge[data-tone="err"] { color:#ffb5b5; border-color:#8c4545; }

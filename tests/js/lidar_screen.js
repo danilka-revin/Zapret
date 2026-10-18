@@ -236,6 +236,18 @@ global.clearInterval = () => {};
 /* Как в странице: сначала общий модуль карты (lidar_view.js), потом экран. */
 const viewFile = path.join(ROOT, 'slam_gui', 'lidar_view.js');
 vm.runInThisContext(fs.readFileSync(viewFile, 'utf8'), { filename: viewFile });
+let mapShows = 0;
+if (payload.mapOpening) {
+  global.RCMapView = {
+    init() {}, setScan() {},
+    draw() { throw new Error('hidden canvas must not be rendered during navigation'); },
+    show() {
+      if (byId('swipe-page').hidden) throw new Error('page is still hidden');
+      mapShows++;
+      if (payload.mapRenderFailure) throw new Error('test canvas unavailable');
+    },
+  };
+}
 const file = path.join(ROOT, 'slam_gui', screen === 'main' ? 'main.js' : 'robot.js');
 vm.runInThisContext(fs.readFileSync(file, 'utf8'), { filename: file });
 
@@ -302,6 +314,29 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
     mapNavigation.push(swipeState());
   }
 
+  const mapOpening = [];
+  if (screen === 'robot' && payload.mapOpening) {
+    const state = () => ({
+      open: byId('swipe-page').classList.contains('is-open'),
+      hidden: byId('swipe-page').hidden,
+      mapHidden: byId('swipe-map-view').hidden,
+      overlayHidden: byId('ctrl-overlay').hidden,
+      title: byId('swipe-title-text').textContent,
+      shows: mapShows,
+      message: byId('map-msg').textContent,
+    });
+    // Use the real Functions -> Map click handlers, not the internal navigation API.
+    byId('k-ctrl-btn').click();
+    byId('btn-map-view').click();
+    for (const cb of rafQueue.splice(0)) cb(Date.now());
+    mapOpening.push(state());
+    byId('swipe-close').click();
+    byId('k-ctrl-btn').click();
+    byId('btn-map-view').click();
+    for (const cb of rafQueue.splice(0)) cb(Date.now());
+    mapOpening.push(state());
+  }
+
   const meta = byId('lidar-meta');
   const count = byId('lidar-count');
   const near = byId('lidar-near');
@@ -323,6 +358,7 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
     screen,
     navigation,
     mapNavigation,
+    mapOpening,
     soc: byId('k-soc').textContent,
     volts: byId('k-volts').textContent,
     batteryState: byId('k-soc-state').textContent,

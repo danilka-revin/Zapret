@@ -48,8 +48,11 @@
     scan: [],
     follow: false,
     zoom: 1,
+    panX: 0,
+    panY: 0,
     timer: null,
     busy: false,
+    initialized: false,
     lastError: '',
   };
 
@@ -96,12 +99,12 @@
     let cy;
     if (state.follow) {
       // Следим за роботом: вид centered на текущей позе.
-      scale = Math.min(width, height) / 12 / state.zoom;   // 12 м поперёк экрана
+      scale = Math.min(width, height) / 12 * state.zoom;   // 12 м поперёк экрана
       cx = width / 2;
       cy = height / 2;
     } else {
       // Вся карта целиком в кадре.
-      scale = Math.min(width / Math.max(0.1, mapW), height / Math.max(0.1, mapH)) * 0.96;
+      scale = Math.min(width / Math.max(0.1, mapW), height / Math.max(0.1, mapH)) * 0.96 * state.zoom;
       cx = width / 2;
       cy = height / 2;
     }
@@ -118,7 +121,7 @@
       x0 = cx - mapW * scale / 2;
       y0 = cy + mapH * scale / 2;
     }
-    return { scale, x0, y0, originX, originY, mapW, mapH, centerX, centerY };
+    return { scale, x0: x0 + state.panX, y0: y0 + state.panY, originX, originY, mapW, mapH, centerX, centerY };
   }
 
   function drawRobot(ctx, view, pose) {
@@ -330,8 +333,10 @@
     const page = $('swipe-map-view');
     if (page && page.hidden) return;
     state.busy = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     try {
-      const response = await fetch('api/kiosk_map', { cache: 'no-store' });
+      const response = await fetch('api/kiosk_map', { cache: 'no-store', signal: controller.signal });
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const body = await response.json();
       if (!body || !body.ok) throw new Error('пустой ответ сервера');
@@ -343,8 +348,11 @@
     } catch (err) {
       state.lastError = String((err && err.message) || err);
       const meta = $('map-meta');
-      if (meta && !state.snapshot) meta.textContent = 'нет связи с сервером карты';
+      if (meta) meta.textContent = 'Нет связи с бортовым сервером карты · повторяем подключение';
+      const badge = $('map-badge');
+      if (badge) { badge.textContent = 'OFFLINE'; badge.dataset.tone = 'err'; }
     } finally {
+      clearTimeout(timeout);
       state.busy = false;
     }
   }
@@ -439,6 +447,8 @@
 
   /* ------------------------------------------------------------------ пуск */
   function init() {
+    if (state.initialized) return;
+    state.initialized = true;
     const reset = $('map-reset');
     if (reset) reset.addEventListener('click', () => { void resetMap(); });
     const save = $('map-save');
@@ -458,10 +468,27 @@
     }
     const canvas = $('map-canvas');
     if (canvas) {
-      canvas.addEventListener('wheel', (event) => {
-        event.preventDefault();
-        state.zoom = Math.max(0.4, Math.min(4, state.zoom * (event.deltaY > 0 ? 0.9 : 1.1)));
-        draw();
+      canvas.tabIndex = 0;
+      const viewport = window.RCViewport ? window.RCViewport(canvas, (view) => {
+        state.zoom = view.zoom; state.panX = view.x; state.panY = view.y; draw();
+      }, { min: 0.4, max: 8 }) : null;
+      const zoom = (factor) => {
+        if (viewport) viewport.zoomTo(viewport.state.zoom * factor);
+        else { state.zoom = Math.max(0.4, Math.min(8, state.zoom * factor)); draw(); }
+      };
+      for (const [id, factor] of [['map-zoom-in', 1.25], ['map-zoom-out', 0.8]]) {
+        const button = $(id);
+        if (button) button.addEventListener('click', () => zoom(factor));
+      }
+      const fit = $('map-fit');
+      if (fit) fit.addEventListener('click', () => {
+        state.follow = false;
+        if (follow) { follow.classList.remove('is-on'); follow.textContent = 'Вся карта'; }
+        if (viewport) viewport.reset();
+        else { state.zoom = 1; state.panX = state.panY = 0; draw(); }
+      });
+      if (!viewport) canvas.addEventListener('wheel', (event) => {
+        event.preventDefault(); zoom(event.deltaY > 0 ? 0.9 : 1.1);
       }, { passive: false });
     }
     window.addEventListener('resize', () => draw());
@@ -473,6 +500,11 @@
 
   window.RCMapView = {
     init,
+    show() {
+      init();
+      draw();
+      void fetchMap();
+    },
     draw,
     setScan(points) {
       state.scan = Array.isArray(points) ? points : [];

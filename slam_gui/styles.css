@@ -369,3 +369,6 @@ body.ui-large .csl-jrow{font-size:12.5px}
 body.ui-large .csl-chip{font-size:11px}
 *:focus-visible{outline:2px solid #d5ff45;outline-offset:2px}
 body.service-stand .csl-toolbar{border-color:#e4503e}
+
+nav .nav-map-link { display:flex; align-items:center; padding:11px 12px; border-radius:8px; color:#b7d6c7; text-decoration:none; }
+nav .nav-map-link:hover, nav .nav-map-link:focus-visible { background:#203029; color:#fff; }

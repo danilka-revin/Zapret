@@ -6,6 +6,7 @@
   <title>Экран робота</title>
   <meta name="theme-color" content="#070709" />
   <link rel="stylesheet" href="robot.css" />
+  <link rel="stylesheet" href="map.css" />
   <link rel="stylesheet" href="lidar_settings.css" />
   <link rel="stylesheet" href="power.css" />
 </head>
@@ -37,6 +38,8 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2" fill="var(--bg)"/><circle cx="15" cy="12" r="2" fill="var(--bg)"/><circle cx="11" cy="17" r="2" fill="var(--bg)"/></svg>
           <span>Функции</span>
         </button>
+        <a id="k-map-open" class="k-ctrl-btn" href="/map">Карта</a>
+        <button id="k-cameras-open" class="k-ctrl-btn" type="button" aria-controls="swipe-cameras-view">Камеры</button>
         <time class="clock" id="clock">--:--</time>
       </div>
     </header>
@@ -177,6 +180,7 @@
       </div>
       <!-- Маленькая кнопка ⚙: открывает окно настройки портов камер (видна только на вкладке камер). -->
       <button id="cam-settings-open" class="swipe-close cam-gear" type="button" aria-controls="cam-settings-modal" aria-expanded="false" title="Настройка портов камер" hidden>⚙</button>
+      <a id="swipe-map-open" class="swipe-close" href="/map">Карта</a>
       <button id="swipe-battery-open" class="swipe-close battery-open" type="button" aria-controls="swipe-battery-view">АКБ</button>
       <span class="swipe-live" id="swipe-live">● LIVE</span>
     </header>
@@ -264,11 +268,17 @@
             <span class="cam-chip" id="cam1-chip">нет сигнала</span>
           </header>
           <div class="cam-viewport" id="cam1-view">
-            <canvas id="cam1-canvas" aria-label="Камера 1"></canvas>
+            <canvas id="cam1-canvas" tabindex="0" aria-label="Камера 1"></canvas>
             <p class="cam-empty" id="cam1-empty">нет сигнала</p>
-            <span class="cam-rec" aria-hidden="true">● REC</span>
+            <div class="camera-tools" aria-label="Управление камерой 1">
+              <button type="button" id="cam1-out" aria-label="Отдалить камеру 1">−</button>
+              <output id="cam1-zoom" aria-live="polite">1×</output>
+              <button type="button" id="cam1-in" aria-label="Приблизить камеру 1">+</button>
+              <button type="button" id="cam1-reset">Сброс</button>
+              <button type="button" id="cam1-expand" aria-pressed="false">Развернуть</button>
+            </div>
           </div>
-          <footer class="cam-foot"><span id="cam1-meta">1920×1080 · 30 fps</span><span class="cam-dot ok"></span></footer>
+          <footer class="cam-foot"><span id="cam1-meta">ожидание кадра · зум: +/−, колесо или два пальца</span><span id="cam1-dot" class="cam-dot" aria-hidden="true"></span></footer>
         </section>
         <section class="cam-card" aria-label="Камера 2 кормовая">
           <header class="cam-head">
@@ -276,11 +286,17 @@
             <span class="cam-chip" id="cam2-chip">нет сигнала</span>
           </header>
           <div class="cam-viewport" id="cam2-view">
-            <canvas id="cam2-canvas" aria-label="Камера 2"></canvas>
+            <canvas id="cam2-canvas" tabindex="0" aria-label="Камера 2"></canvas>
             <p class="cam-empty" id="cam2-empty">нет сигнала</p>
-            <span class="cam-rec" aria-hidden="true">● REC</span>
+            <div class="camera-tools" aria-label="Управление камерой 2">
+              <button type="button" id="cam2-out" aria-label="Отдалить камеру 2">−</button>
+              <output id="cam2-zoom" aria-live="polite">1×</output>
+              <button type="button" id="cam2-in" aria-label="Приблизить камеру 2">+</button>
+              <button type="button" id="cam2-reset">Сброс</button>
+              <button type="button" id="cam2-expand" aria-pressed="false">Развернуть</button>
+            </div>
           </div>
-          <footer class="cam-foot"><span id="cam2-meta">1920×1080 · 30 fps</span><span class="cam-dot warn"></span></footer>
+          <footer class="cam-foot"><span id="cam2-meta">ожидание кадра · зум: +/−, колесо или два пальца</span><span id="cam2-dot" class="cam-dot" aria-hidden="true"></span></footer>
         </section>
       </div>
       <!-- правая колонка — логи на всю высоту -->
@@ -331,6 +347,9 @@
             <div class="map-actions">
               <button type="button" id="map-reset" class="map-btn map-btn--danger">Сбросить карту</button>
               <button type="button" id="map-save" class="map-btn">Сохранить карту</button>
+              <button type="button" id="map-zoom-out" class="map-btn" aria-label="Отдалить карту">−</button>
+              <button type="button" id="map-zoom-in" class="map-btn" aria-label="Приблизить карту">+</button>
+              <button type="button" id="map-fit" class="map-btn">Вписать карту</button>
               <button type="button" id="map-follow" class="map-btn">Вся карта</button>
               <button type="button" id="map-settings-toggle" class="map-btn" aria-expanded="false" aria-controls="map-settings">Настройки карты</button>
             </div>
@@ -671,6 +690,8 @@
   </div>
 
   <script src="lidar_view.js"></script>
+  <script src="viewport.js"></script>
+  <script src="camera_view.js"></script>
   <script src="map_view.js"></script>
   <script src="robot.js"></script>
   <script src="battery.js"></script>
