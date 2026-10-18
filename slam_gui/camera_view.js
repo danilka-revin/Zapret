@@ -56,7 +56,7 @@
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     canvas.width = Math.round(r.width * dpr); canvas.height = Math.round(r.height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#090d14'; ctx.fillRect(0, 0, r.width, r.height);
+    ctx.fillStyle = '#0a0a0b'; ctx.fillRect(0, 0, r.width, r.height);
     const v = camera.viewport.state;
     if (frame) {
       const fit = Math.min(r.width / frame.naturalWidth, r.height / frame.naturalHeight);

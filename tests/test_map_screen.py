@@ -15,7 +15,10 @@
 * сохранение зовёт ``api/kiosk_map/save``;
 * настройки уходят на сервер (``api/kiosk_map/settings``) вместе с выбранной
   чувствительностью и дальностью;
-* ошибка сервера не остаётся незамеченной — экран пишет об этом внизу панели.
+* ошибка сервера не остаётся незамеченной — экран пишет об этом внизу панели;
+* карта открывается только кнопкой: свайп с «камер и логов» её не открывает,
+  а страница камер использует общую чёрно-красную тему;
+* у карты есть тёмная и светлая тема, выбор сохраняется в localStorage.
 """
 
 from __future__ import annotations
@@ -162,8 +165,8 @@ def test_server_error_is_reported_to_operator(tmp_path):
 
 
 # ----------------------------------------------------------- свайп-навигация ---
-def swipe_map(tmp_path: Path) -> dict:
-    """Прогон бортового экрана: свайп вправо с «камер и логов» на карту."""
+def run_map_swipe(tmp_path: Path) -> dict:
+    """Прогон бортового экрана: свайп вправо на странице «камеры и логи»."""
     payload_file = tmp_path / "swipe_payload.json"
     payload_file.write_text(json.dumps({"ok": True, "data": {}, "mapSwipe": True}),
                              encoding="utf-8")
@@ -176,31 +179,51 @@ def swipe_map(tmp_path: Path) -> dict:
     return json.loads(result.stdout)
 
 
-def test_swipe_right_from_cameras_opens_map_page(tmp_path):
-    """Страница карты открывается свайпом вправо после «камер и логов»."""
-    states = swipe_map(tmp_path)["mapNavigation"]
-    assert len(states) == 3, states
+def test_swipe_does_not_open_map_page(tmp_path):
+    """Карта открывается только кнопкой: свайп с камер её не открывает."""
+    states = run_map_swipe(tmp_path)["mapNavigation"]
+    assert len(states) == 2, states
     # 1) открыта страница «камеры и логи»
+    assert states[0]["open"] is True
     assert states[0]["cameras"] is True and states[0]["map"] is False
     assert states[0]["title"] == "Камеры и логи"
-    # 2) свайп вправо — карта лидара
-    assert states[1]["map"] is True, states[1]
-    assert states[1]["cameras"] is False
-    assert states[1]["title"] == "Карта лидара"
-    assert states[1]["direction"] == "right"
-    assert "карта" in states[1]["hint"].lower()
-    # 3) свайп влево — назад к камерам и логам
-    assert states[2]["cameras"] is True and states[2]["map"] is False
-    assert states[2]["title"] == "Камеры и логи"
+    assert "карта" not in states[0]["hint"].lower()
+    # 2) свайп вправо просто закрывает страницу — карта так и не появилась
+    assert states[1]["open"] is False
+    assert states[1]["map"] is False, states[1]
+    assert states[1]["title"] == "Камеры и логи"
 
 
-def test_map_page_is_after_cameras_in_markup(kiosk_client):
-    """В разметке карта стоит сразу после «камер и логов»."""
+def test_map_view_stays_available_for_functions_button(kiosk_client):
+    """Страница карты остаётся в разметке: её открывает кнопка «Функции»."""
     page = kiosk_client.get("/kiosk").get_data(as_text=True)
-    cameras = page.index('id="swipe-cameras-view"')
-    map_view = page.index('id="swipe-map-view"')
-    motors = page.index('id="swipe-motors-view"')
-    assert cameras < map_view < motors
+    assert 'id="swipe-map-view"' in page
+    assert 'id="btn-map-view"' in page
+    # Отдельная кнопка «Карта» в шапке ведёт на самостоятельную страницу.
+    assert 'id="k-map-open" class="k-ctrl-btn" href="/map"' in page
+
+
+def test_camera_page_uses_common_black_red_theme():
+    """У «камер и логов» нет отдельной синей темы — общий чёрно-красный экран."""
+    css = (ROOT / "slam_gui" / "robot.css").read_text(encoding="utf-8")
+    assert "#swipe-page.is-camera-page" not in css
+    assert "#91c8ff" not in css
+    assert ".swipe-camera-view { color: var(--text); }" in css
+
+
+def test_map_has_dark_and_light_theme_switch(tmp_path):
+    """Карта переключается между тёмной и светлой, выбор сохраняется."""
+    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS})
+    assert report["themeBefore"]["attr"] == "dark"
+    assert report["themeBefore"]["label"] == "Светлая карта"
+    assert report["themeBefore"]["pressed"] == "false"
+    assert report["themeAfter"]["attr"] == "light"
+    assert report["themeAfter"]["label"] == "Тёмная карта"
+    assert report["themeAfter"]["pressed"] == "true"
+    css = (ROOT / "slam_gui" / "map.css").read_text(encoding="utf-8")
+    assert ':root[data-map-theme="light"]' in css
+    script = (ROOT / "slam_gui" / "map_view.js").read_text(encoding="utf-8")
+    assert "kiosk_map_theme" in script
 
 
 @pytest.mark.parametrize("render_failure", [False, True])

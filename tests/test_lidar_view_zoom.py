@@ -53,5 +53,5 @@ def test_display_settings_are_sanitized():
     assert settings["size"] == 0.5                      # верхняя граница Size
     assert settings["maxValue"] > settings["minValue"]  # Max Value не ниже Min Value
     assert settings["color"] == "range"                 # мусор — значение по умолчанию
-    assert settings["minColor"] == "#ff5a36"            # не HEX — значение по умолчанию
+    assert settings["minColor"] == "#ff2b2b"            # не HEX — значение по умолчанию
     assert result["settingsReset"] == "range"

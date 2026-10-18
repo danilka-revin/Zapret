@@ -4,6 +4,8 @@
  * лидара, считает позу и перезаписывает файл карты на рабочем столе.
  * Экран получает готовый кадр (PNG в base64) и рисует его как в ROS:
  *   • сетка занятости: белый — свободно, чёрный — препятствие, серый — не видели;
+ *     для тёмной темы карта перекрашивается (свободно — почти чёрный,
+ *     препятствие — красный, «не видели» — тёмно-серый);
  *   • робот — треугольник с курсом, как модель в RViz;
  *   • поверх карты — живой скан лидара (текущие точки), как «LaserScan» в RViz;
  *   • сверху — статус MAPPING, как у карты в ROS.
@@ -38,6 +40,36 @@
     hard: { hit: 0.85, miss: 0.45 },
   };
 
+  // Палитра карты. Выбор «тёмная / светлая» общий для страницы /map и карты
+  // внутри бортового экрана и хранится в localStorage.
+  const THEME_KEY = 'kiosk_map_theme';
+  const MAP_THEMES = {
+    dark: {
+      bg: '#08070a',
+      grid: 'rgba(255, 255, 255, .07)',
+      text: 'rgba(226, 214, 220, .78)',
+      scan: 'rgba(255, 154, 160, .92)',
+      robot: 'rgba(215, 25, 33, .95)',
+      robotStroke: '#ffd9dc',
+      // Значения сетки занятости с сервера: 254 — свободно, 0 — препятствие,
+      // 205 — «не видели». Перекрашиваем PNG под тёмную тему.
+      free: [18, 14, 20],
+      occupied: [255, 77, 77],
+      unknown: [42, 36, 46],
+    },
+    light: {
+      bg: '#ffffff',
+      grid: 'rgba(20, 10, 14, .10)',
+      text: 'rgba(30, 20, 24, .72)',
+      scan: 'rgba(193, 18, 31, .90)',
+      robot: 'rgba(215, 25, 33, .95)',
+      robotStroke: '#3a0b0f',
+      free: [255, 255, 255],
+      occupied: [23, 18, 21],
+      unknown: [215, 208, 211],
+    },
+  };
+
   const $ = (id) => document.getElementById(id);
   const setText = (el, text) => { if (el) el.textContent = text; };
 
@@ -45,6 +77,9 @@
     snapshot: null,
     image: null,
     imageKey: '',
+    rendered: null,
+    renderedKey: '',
+    theme: 'dark',
     scan: [],
     follow: false,
     zoom: 1,
@@ -73,9 +108,79 @@
     if (!pngBase64) return;
     if (pngBase64 === state.imageKey && state.image) return;
     state.imageKey = pngBase64;
+    state.rendered = null;
+    state.renderedKey = '';
     const image = new Image();
     image.onload = () => { state.image = image; draw(); };
     image.src = 'data:image/png;base64,' + pngBase64;
+  }
+
+  function palette() {
+    return MAP_THEMES[state.theme] || MAP_THEMES.dark;
+  }
+
+  /* Перекрасить серую карту сервера под выбранную тему. В Node-прогоне без
+   * настоящего canvas возвращаем исходную картинку — отрисовка не падает. */
+  function themedMapImage() {
+    const image = state.image;
+    if (!image || !image.complete || !image.naturalWidth) return image;
+    const key = state.imageKey + '|' + state.theme;
+    if (state.rendered && state.renderedKey === key) return state.rendered;
+    const pal = palette();
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const ctx = canvas.getContext && canvas.getContext('2d');
+      if (!ctx || typeof ctx.getImageData !== 'function' || typeof ctx.putImageData !== 'function') return image;
+      ctx.drawImage(image, 0, 0);
+      const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const pixels = frame && frame.data;
+      if (!pixels || !pixels.length) return image;
+      for (let i = 0; i < pixels.length; i += 4) {
+        const value = (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
+        const rgb = value >= 245 ? pal.free : (value <= 24 ? pal.occupied : pal.unknown);
+        pixels[i] = rgb[0];
+        pixels[i + 1] = rgb[1];
+        pixels[i + 2] = rgb[2];
+      }
+      ctx.putImageData(frame, 0, 0);
+      state.rendered = canvas;
+      state.renderedKey = key;
+      return canvas;
+    } catch (err) {
+      return image;
+    }
+  }
+
+  function updateThemeButton() {
+    const button = $('map-theme-toggle');
+    if (!button) return;
+    button.textContent = state.theme === 'dark' ? 'Светлая карта' : 'Тёмная карта';
+    button.setAttribute('aria-pressed', String(state.theme === 'light'));
+    button.setAttribute('title', state.theme === 'dark'
+      ? 'Переключить на светлую карту' : 'Переключить на тёмную карту');
+  }
+
+  function applyTheme(theme, persist) {
+    state.theme = theme === 'light' ? 'light' : 'dark';
+    try { document.documentElement.setAttribute('data-map-theme', state.theme); } catch (err) {}
+    // Цвет адресной строки мобильного браузера — под выбранную тему.
+    const meta = document.querySelector && document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', state.theme === 'light' ? '#f3f1f2' : '#000000');
+    if (persist) {
+      try { localStorage.setItem(THEME_KEY, state.theme); } catch (err) {}
+    }
+    state.rendered = null;
+    state.renderedKey = '';
+    updateThemeButton();
+    draw();
+  }
+
+  function loadTheme() {
+    let theme = 'dark';
+    try { theme = localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark'; } catch (err) {}
+    applyTheme(theme, false);
   }
 
   /* -------------------------------------------------------------- отрисовка */
@@ -124,7 +229,7 @@
     return { scale, x0: x0 + state.panX, y0: y0 + state.panY, originX, originY, mapW, mapH, centerX, centerY };
   }
 
-  function drawRobot(ctx, view, pose) {
+  function drawRobot(ctx, view, pose, pal) {
     const p = worldToCanvas(pose.x, pose.y, view);
     const size = 14;
     ctx.save();
@@ -136,17 +241,17 @@
     ctx.lineTo(0, size * 0.34);
     ctx.lineTo(-size * 0.62, size * 0.72);
     ctx.closePath();
-    ctx.fillStyle = 'rgba(255, 92, 46, .92)';
+    ctx.fillStyle = pal.robot;
     ctx.fill();
-    ctx.strokeStyle = '#ffd9c9';
+    ctx.strokeStyle = pal.robotStroke;
     ctx.lineWidth = 1.4;
     ctx.stroke();
     ctx.restore();
   }
 
-  function drawScan(ctx, view, pose, width, height) {
+  function drawScan(ctx, view, pose, width, height, pal) {
     if (!state.scan.length) return;
-    ctx.fillStyle = 'rgba(159, 227, 107, .85)';
+    ctx.fillStyle = pal.scan;
     const dot = Math.max(1.5, Math.min(4, view.scale * 0.05));
     const cos = Math.cos(pose.yaw);
     const sin = Math.sin(pose.yaw);
@@ -176,32 +281,33 @@
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
     }
+    const pal = palette();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#0d1210';
+    ctx.fillStyle = pal.bg;
     ctx.fillRect(0, 0, width, height);
     if (!snap) {
-      ctx.fillStyle = '#6f877d';
+      ctx.fillStyle = pal.text;
       ctx.font = '13px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('карта ещё не собрана', width / 2, height / 2);
       return;
     }
     const view = computeView(ctx, width, height, snap);
-    // Сама сетка занятости (картинка с сервера).
+    // Сама сетка занятости (картинка с сервера), перекрашенная под тему.
     if (state.image && state.image.complete && state.image.naturalWidth) {
       const destW = view.mapW * view.scale;
       const destH = view.mapH * view.scale;
       const topLeft = worldToCanvas(view.originX, view.originY + view.mapH, view);
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(state.image, topLeft.x, topLeft.y, destW, destH);
+      ctx.drawImage(themedMapImage(), topLeft.x, topLeft.y, destW, destH);
     }
     // Сетка метров — как в RViz.
-    drawGrid(ctx, view, width, height);
-    drawScan(ctx, view, snap.pose || { x: 0, y: 0, yaw: 0 }, width, height);
-    drawRobot(ctx, view, snap.pose || { x: 0, y: 0, yaw: 0 });
+    drawGrid(ctx, view, width, height, pal);
+    drawScan(ctx, view, snap.pose || { x: 0, y: 0, yaw: 0 }, width, height, pal);
+    drawRobot(ctx, view, snap.pose || { x: 0, y: 0, yaw: 0 }, pal);
     // Подпись: как в ROS — кадр, сетка, масштаб.
-    ctx.fillStyle = 'rgba(190, 205, 197, .85)';
+    ctx.fillStyle = pal.text;
     ctx.font = '11px ui-monospace, monospace';
     ctx.textAlign = 'left';
     const step = niceStep(view.scale);
@@ -216,13 +322,13 @@
     return steps[steps.length - 1];
   }
 
-  function drawGrid(ctx, view, width, height) {
+  function drawGrid(ctx, view, width, height, pal) {
     const step = niceStep(view.scale);
     const minX = view.originX + (0 - view.x0) / view.scale;
     const maxX = view.originX + (width - view.x0) / view.scale;
     const maxY = view.originY + (view.y0 - 0) / view.scale;
     const minY = view.originY + (view.y0 - height) / view.scale;
-    ctx.strokeStyle = 'rgba(150, 190, 170, .10)';
+    ctx.strokeStyle = pal.grid;
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let x = Math.ceil(minX / step) * step; x <= maxX; x += step) {
@@ -449,6 +555,13 @@
   function init() {
     if (state.initialized) return;
     state.initialized = true;
+    const themeButton = $('map-theme-toggle');
+    if (themeButton) {
+      themeButton.addEventListener('click', () => {
+        applyTheme(state.theme === 'dark' ? 'light' : 'dark', true);
+      });
+    }
+    loadTheme();
     const reset = $('map-reset');
     if (reset) reset.addEventListener('click', () => { void resetMap(); });
     const save = $('map-save');

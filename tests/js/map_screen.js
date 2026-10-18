@@ -227,8 +227,18 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
   // Живой скан: точки лидара рисуются поверх карты.
   global.RCMapView.setScan([{ a: 0, r: 2 }, { a: 1.57, r: 3 }]);
 
+  // Тема карты: по умолчанию тёмная, кнопка переключает на светлую.
+  const themeAttr = () => (global.document.documentElement.getAttribute('data-map-theme') || '');
+  const themeBefore = { attr: themeAttr(), label: byId('map-theme-toggle').textContent,
+                        pressed: byId('map-theme-toggle').getAttribute('aria-pressed') };
+  byId('map-theme-toggle').click();
+  const themeAfter = { attr: themeAttr(), label: byId('map-theme-toggle').textContent,
+                       pressed: byId('map-theme-toggle').getAttribute('aria-pressed') };
+
   console.log(JSON.stringify({
     stats,
+    themeBefore,
+    themeAfter,
     badge: byId('map-badge').textContent,
     badgeTone: byId('map-badge').dataset.tone,
     emptyHidden: byId('map-empty').hidden,
