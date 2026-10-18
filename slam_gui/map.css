@@ -565,3 +565,17 @@
 }
 .map-view [hidden] { display: none !important; }
 .map-badge[data-tone="err"] { color: var(--map-text); border-color: #8a5058; }
+
+/* Route editor uses the same panel, controls and theme as the live map. */
+.nav-point-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 220px; overflow-y: auto; }
+.nav-point-list:empty::before { content: 'Нет точек · нажмите на свободную область карты'; color: var(--map-muted); font-size: 12px; padding: 10px 0; }
+.nav-point-list li { display: flex; align-items: center; gap: 4px; padding: 6px; background: var(--map-panel-2); border: 1px solid var(--map-line); border-radius: 8px; }
+.nav-point-list li span { flex: 1; font: 12px var(--map-mono); color: var(--map-text); }
+.nav-point-list .map-btn { padding: 6px 9px; min-height: 34px; }
+.nav-point-actions { margin: 8px 0; }
+@media (max-width: 700px) { .nav-point-list .map-btn { min-height: 44px; min-width: 40px; } }
+
+.map-wheel-colors { margin: 0; padding: 12px; display: grid; gap: 10px; border: 1px solid var(--map-line); border-radius: 10px; }
+.map-wheel-colors legend { color: var(--map-text); font-weight: 700; padding: 0 5px; }
+.map-wheel-colors .map-note { margin: 0; line-height: 1.5; }
+.map-wheel-colors input[type="color"] { width: 100%; min-height: 40px; padding: 4px; background: var(--map-panel); border: 1px solid var(--map-line); border-radius: 8px; cursor: pointer; }

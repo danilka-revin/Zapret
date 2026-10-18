@@ -83,6 +83,7 @@ class El {
   addEventListener(name, listener) { (this.events[name] ||= []).push(listener); }
   removeEventListener() {}
   appendChild(child) { this.children.push(child); child.parentElement = this; return child; }
+  replaceChildren(...children) { this.children = children; }
   querySelector() { return null; }
   querySelectorAll() { return []; }
   getContext() { if (!this._ctx) this._ctx = makeCtx(this); return this._ctx; }
@@ -165,6 +166,7 @@ global.fetch = async (url, options) => {
   const method = (options && options.method) || 'GET';
   const body = options && options.body ? JSON.parse(options.body) : null;
   calls.push({ url: text, method, body });
+  if (/api\/state$/.test(text)) return reply(payload.robotState || { ok: false });
   if (/kiosk_map\/reset/.test(text)) {
     return reply(payload.reset || { ok: true, paths: payload.paths });
   }
@@ -192,6 +194,8 @@ global.setInterval = () => 0;
 global.clearInterval = () => {};
 
 /* ------------------------------------------------------------------ пуск */
+const modelFile = path.join(ROOT, 'slam_gui', 'robot_model.js');
+vm.runInThisContext(fs.readFileSync(modelFile, 'utf8'), { filename: modelFile });
 const file = path.join(ROOT, 'slam_gui', 'map_view.js');
 vm.runInThisContext(fs.readFileSync(file, 'utf8'), { filename: file });
 
@@ -200,6 +204,7 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
 (async function run() {
   // Страница открыта: карта должна приехать с сервера и заполнить статистику.
   byId('swipe-map-view').hidden = false;
+  byId('route-window').hidden = true;
   global.RCMapView.init();
   await sleep(20);
 
@@ -251,7 +256,9 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
       // Прямой клик по карте без предварительного нажатия «Цель на карте»
       (canvas.events.click || []).forEach((listener) => listener({ clientX: 419.2, clientY: 300 }));
       await sleep(20);
-      byId('nav-open-route-window').click();
+      byId('nav-plan').click();
+      await sleep(20);
+      byId('nav-preview').click();
       await sleep(10);
     } else {
       // На карте (800×600, 30×30 м) точка X=1 м, Y=0 находится в (419.2, 300).
@@ -261,7 +268,21 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
       byId('nav-plan').click();
       await sleep(20);
     }
+    let editedRoute = null;
+    if (payload.multiPointTest) {
+      byId('nav-goal-x').value = '2'; byId('nav-goal-y').value = '0.2';
+      byId('nav-add-point').click();
+      const added = byId('nav-point-list').children.length;
+      const invalidated = byId('nav-start').disabled;
+      byId('nav-point-list').children[1].children[1].click();
+      const reordered = byId('nav-point-list').children.map(row => row.children[0].textContent);
+      byId('nav-point-list').children[0].children[3].click();
+      const removed = byId('nav-point-list').children.length;
+      byId('nav-clear-points').click();
+      editedRoute = { added, invalidated, reordered, removed, cleared: byId('nav-point-list').children.length };
+    }
     navigation = {
+      editedRoute,
       goalX: byId('nav-goal-x').value,
       goalY: byId('nav-goal-y').value,
       routeWinGoalX: byId('route-win-goal-x').value,
@@ -273,12 +294,14 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
       phase: byId('nav-status').textContent,
       message: byId('nav-msg').textContent,
       startDisabled: byId('nav-start').disabled,
+      pointCount: byId('nav-point-list').children.length,
       planCalls: calls.filter((call) => /api\/navigation\/plan/.test(call.url)),
     };
   }
 
   console.log(JSON.stringify({
     stats,
+    robotModel: global.RCRobotModel.state(),
     themeBefore,
     themeAfter,
     badge: byId('map-badge').textContent,

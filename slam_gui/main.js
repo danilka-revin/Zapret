@@ -114,6 +114,7 @@
       const body = await res.json();
       if (!body || !body.ok || !body.data) throw new Error('пустой ответ сервера');
       link.data = body.data;
+      if (window.RCRobotModel) window.RCRobotModel.update(body.data);
       link.at = Date.now();
       link.error = '';
     } catch (err) {

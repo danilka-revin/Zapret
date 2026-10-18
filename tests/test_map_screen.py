@@ -194,7 +194,7 @@ def test_navigation_goal_pick_and_plan_preview(tmp_path):
     assert nav["planCalls"][0]["body"]["goal"] == {"x": 1, "y": 0}
 
 
-def test_direct_map_click_sets_goal_and_opens_separate_route_window(tmp_path):
+def test_direct_map_click_builds_route_in_same_map(tmp_path):
     plan = {
         "ok": True,
         "path": [{"x": 1.25, "y": -0.5}, {"x": 1.0, "y": 0.0}],
@@ -220,9 +220,10 @@ def test_direct_map_click_sets_goal_and_opens_separate_route_window(tmp_path):
     nav = report["navigation"]
     assert nav["goalX"] == "1.00" and nav["goalY"] == "0.00"
     assert nav["routeWinGoalX"] == "1.00" and nav["routeWinGoalY"] == "0.00"
-    assert nav["routeWindowOpen"] is True
-    assert "0.56 м" in nav["routeKpiDist"]
-    assert "1.00 / 0.00" in nav["routeKpiGoal"]
+    assert nav["routeWindowOpen"] is False
+    assert nav["pointCount"] == 1
+    assert "0.56 м" in nav["summary"]
+    assert nav["planCalls"][0]["body"]["goals"] == [{"x": 1, "y": 0}]
     assert report["renderErrors"] == [], report["renderErrors"]
 
 
@@ -308,3 +309,32 @@ def test_functions_map_button_opens_before_rendering(tmp_path, render_failure):
         assert state["shows"] == index
         if render_failure:
             assert "test canvas unavailable" in state["message"]
+
+
+def test_route_points_can_be_reordered_removed_and_cleared(tmp_path):
+    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS,
+                            "navigationTest": True, "multiPointTest": True})
+    edited = report["navigation"]["editedRoute"]
+    assert edited["added"] == 2
+    assert edited["invalidated"] is True
+    assert "2.00 / 0.20" in edited["reordered"][0]
+    assert edited["removed"] == 1
+    assert edited["cleared"] == 0
+    assert report["renderErrors"] == []
+
+
+def test_map_reads_actual_independent_wheel_telemetry(tmp_path):
+    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS, "robotState": {
+        "ok": True, "data": {"linkOk": True, "source": "master", "speedMps": 0.2,
+                              "drive": {"active": True},
+                              "motors": [{"id": id_, "angle": angle, "targetAngle": 80,
+                                          "online": True, "homed": True}
+                                         for id_, angle in zip(["FL", "FR", "RL", "RR"],
+                                                               [20, -15, 8, 0])]}}})
+    model = report["robotModel"]
+    assert [w["angle"] for w in model["wheels"]] == [20, -15, 8, 0]
+    assert model["driving"] is True
+    assert any(call["url"] == "api/state" for call in report["calls"])
+    assert all(call["method"] == "GET" for call in report["calls"]
+               if 'steer' in call["url"] or 'drive' in call["url"])
+    assert report["renderErrors"] == []

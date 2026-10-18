@@ -234,6 +234,8 @@ global.clearInterval = () => {};
 
 /* ------------------------------------------------------------- запуск */
 /* Как в странице: сначала общий модуль карты (lidar_view.js), потом экран. */
+const modelFile = path.join(ROOT, 'slam_gui', 'robot_model.js');
+vm.runInThisContext(fs.readFileSync(modelFile, 'utf8'), { filename: modelFile });
 const viewFile = path.join(ROOT, 'slam_gui', 'lidar_view.js');
 vm.runInThisContext(fs.readFileSync(viewFile, 'utf8'), { filename: viewFile });
 let mapShows = 0;

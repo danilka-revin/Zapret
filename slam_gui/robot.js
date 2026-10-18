@@ -77,6 +77,7 @@
       const j = await r.json();
       if (j && j.ok && j.data) {
         lastData = j.data;
+        if (window.RCRobotModel) window.RCRobotModel.update(j.data);
         setLive(true);
       } else {
         setLive(false);

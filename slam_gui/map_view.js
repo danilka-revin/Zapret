@@ -10,7 +10,7 @@
  *   • робот — корпус 75×60 см в масштабе карты с 4 колёсами и передним лидаром;
  *   • цель на карте ставится прямым кликом/тапом по карте или кнопкой «Цель на карте»,
  *     сразу отображается на карте и строит маршрут;
- *   • движение по маршруту вынесено в отдельное окно (#route-window и страница /route)
+ *   • редактор нескольких точек и предпросмотр пути прямо на карте; /route — совместимый отдельный вид
  *     с плавной анимацией проезда корпуса 75×60×30 см, поворота колёс и работы
  *     переднего лидара.
  */
@@ -91,10 +91,14 @@
     scanTimer: null,
     busy: false,
     scanBusy: false,
+    robotBusy: false,
+    robotTimer: null,
     navigationBusy: false,
     navigationTimer: null,
     navigationStatus: null,
     navigationPlan: null,
+    routeGoals: [],
+    routeTouched: false,
     navigationCsrfToken: '',
     goalPoint: null,
     lastUserMessage: '',
@@ -257,6 +261,14 @@
 
   /* Рисуем робот 75×60 см (высота 30 см) с 4 колёсами и лидаром спереди (+35 см). */
   function drawRobotChassis(ctx, screenX, screenY, yaw, scale, pal, steerRad) {
+    if (window.RCRobotModel) {
+      const options = { light: state.theme === 'light' };
+      if (state.previewActive) {
+        options.state = { wheels: ['FL', 'FR', 'RL', 'RR'].map(id => ({ id, angle: null, radians: null, targetAngle: steerRad * 180 / Math.PI, targetRadians: steerRad, homed: true })), estop: false };
+      }
+      window.RCRobotModel.draw(ctx, screenX, screenY, yaw, scale, options);
+      return;
+    }
     const lenPx = Math.max(18, ROBOT_LENGTH_M * scale);
     const widPx = Math.max(14, ROBOT_WIDTH_M * scale);
     const halfL = lenPx / 2;
@@ -338,7 +350,9 @@
 
   function drawRobot(ctx, view, pose, pal) {
     const p = worldToCanvas(pose.x, pose.y, view);
-    drawRobotChassis(ctx, p.x, p.y, pose.yaw || 0, view.scale, pal, 0);
+    if (window.RCRobotModel) {
+      window.RCRobotModel.draw(ctx, p.x, p.y, pose.yaw || 0, view.scale, { light: state.theme === 'light' });
+    } else drawRobotChassis(ctx, p.x, p.y, pose.yaw || 0, view.scale, pal, 0);
   }
 
   function drawGoalPin(ctx, screen, goal, isPlanned) {
@@ -381,6 +395,21 @@
   function drawNavigation(ctx, view) {
     const plan = state.navigationPlan;
     const points = plan && Array.isArray(plan.path) ? plan.path : [];
+    state.routeGoals.forEach((point, index) => {
+      const screen = worldToCanvas(point.x, point.y, view);
+      ctx.save(); ctx.fillStyle = '#c0505a';
+      ctx.beginPath(); ctx.arc(screen.x, screen.y, 12, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(index + 1), screen.x, screen.y); ctx.restore();
+    });
+    if (state.previewActive && points.length > 1) {
+      const motion = sampleRouteMotion(points, state.previewProgress, +(fallbackSnapshot().pose || {}).yaw || 0);
+      const screen = worldToCanvas(motion.x, motion.y, view);
+      drawRobotChassis(ctx, screen.x, screen.y, motion.yaw, view.scale, MAP_THEMES[state.theme], motion.steerRad);
+      ctx.save(); ctx.fillStyle = MAP_THEMES[state.theme].text;
+      ctx.font = '11px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('предпросмотр', screen.x, screen.y - Math.max(24, view.scale * .5)); ctx.restore();
+    }
     const activeGoal = (plan && plan.goal) || selectedGoal() || state.goalPoint;
     if (!points.length && !activeGoal) return;
 
@@ -390,7 +419,7 @@
 
     if (points.length >= 2) {
       // Габаритный коридор движения робота (ширина 60 см).
-      ctx.strokeStyle = 'rgba(39, 193, 232, .14)';
+      ctx.strokeStyle = 'rgba(192, 80, 90, .14)';
       ctx.lineWidth = Math.max(10, ROBOT_WIDTH_M * view.scale);
       ctx.beginPath();
       points.forEach((point, index) => {
@@ -402,7 +431,7 @@
       ctx.stroke();
 
       // Основная линия маршрута.
-      ctx.strokeStyle = 'rgba(39, 193, 232, .96)';
+      ctx.strokeStyle = 'rgba(192, 80, 90, .96)';
       ctx.lineWidth = 4;
       ctx.shadowColor = 'rgba(0, 0, 0, .8)';
       ctx.shadowBlur = 5;
@@ -581,6 +610,7 @@
     drawNavigation(ctx, view);
     drawScan(ctx, view, effectiveSnap.pose || { x: 0, y: 0, yaw: 0 }, width, height, pal);
     drawRobot(ctx, view, effectiveSnap.pose || { x: 0, y: 0, yaw: 0 }, pal);
+    if (window.RCRobotModel) window.RCRobotModel.drawStatus(ctx, width, height, { light: state.theme === 'light', bottom: 32 });
     ctx.fillStyle = pal.text;
     ctx.font = '11px ui-monospace, monospace';
     ctx.textAlign = 'left';
@@ -1024,9 +1054,16 @@
   }
 
   function startRoutePreview() {
-    const pts = currentRoutePoints();
-    if (pts.length < 2) {
-      routeWindowMessage('Сначала выберите цель на карте или введите координаты X и Y.', 'warn');
+    if (routeLocked()) return;
+    if (state.previewActive) {
+      state.previewActive = false;
+      if (state.previewRaf) cancelAnimationFrame(state.previewRaf);
+      navigationMessage('Предпросмотр остановлен. Привод не включался.', '', true);
+      draw(); return;
+    }
+    const pts = state.navigationPlan && state.navigationPlan.path || [];
+    if (pts.length < 2 || !navigationGoalMatches(state.navigationPlan)) {
+      navigationMessage('Сначала постройте маршрут через выбранные точки.', 'warn', true);
       return;
     }
     state.previewActive = true;
@@ -1034,18 +1071,20 @@
     state.previewProgress = 0;
     const btn = $('route-win-preview');
     if (btn) btn.textContent = '⟳ Повторить предпросмотр';
-    routeWindowMessage('Идёт предпросмотр движения робота 75×60×30 см (лидар спереди) по маршруту.', 'ok');
+    navigationMessage('Предпросмотр пути · привод выключен.', 'ok', true);
     const durationMs = Math.max(2600, Math.min(10000, pts.length * 1800));
     function stepFrame() {
       if (!state.previewActive) return;
       const elapsed = Date.now() - state.previewStartAt;
       state.previewProgress = Math.min(1, elapsed / durationMs);
       drawRouteWindow();
+      draw();
       if (state.previewProgress < 1) {
         state.previewRaf = requestAnimationFrame(stepFrame);
       } else {
         state.previewActive = false;
-        routeWindowMessage('Предпросмотр завершён: траектория проверена с учётом габарита 75×60×30 см и переднего лидара.', 'ok');
+        navigationMessage('Предпросмотр завершён. Это визуализация, а не гарантия безопасного проезда. Перед стартом проверьте зону.', 'ok', true);
+        draw();
       }
     }
     if (state.previewRaf) cancelAnimationFrame(state.previewRaf);
@@ -1054,6 +1093,11 @@
   }
 
   function openRouteWindow() {
+    if ($('nav-point-list')) {
+      const panel = $('nav-point-list').closest('.nav-panel');
+      if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      return;
+    }
     const win = $('route-window');
     if (!win) return;
     win.hidden = false;
@@ -1199,6 +1243,25 @@
     }
   }
 
+  // Standalone map has no main/robot poller. Reuse their read-only telemetry API.
+  async function fetchRobotState() {
+    if (!window.RCRobotModel || state.robotBusy) return;
+    state.robotBusy = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1800);
+    try {
+      const response = await fetch('api/state', { cache: 'no-store', signal: controller.signal });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const body = await response.json();
+      if (body && body.ok && body.data) window.RCRobotModel.update(body.data);
+    } catch (err) {
+      // Do not reset angles to zero or refresh the age on failed requests.
+    } finally {
+      clearTimeout(timeout); state.robotBusy = false;
+      draw(); drawRouteWindow();
+    }
+  }
+
   async function fetchScan() {
     if (state.scanBusy) return;
     const page = $('swipe-map-view');
@@ -1294,8 +1357,76 @@
     return state.goalPoint;
   }
 
+  function routeLocked() {
+    return state.navigationBusy || !!(state.navigationStatus && ['starting', 'executing', 'stopping'].includes(state.navigationStatus.phase));
+  }
+
+  function routeEdited() {
+    state.routeTouched = true;
+    state.navigationPlan = null;
+    state.previewActive = false;
+    if (state.previewRaf) cancelAnimationFrame(state.previewRaf);
+    const list = $('nav-point-list');
+    if (list) {
+      list.replaceChildren();
+      state.routeGoals.forEach((point, index) => {
+        const row = document.createElement('li');
+        const label = document.createElement('span');
+        label.textContent = (index + 1) + '.  ' + point.x.toFixed(2) + ' / ' + point.y.toFixed(2) + ' м';
+        row.appendChild(label);
+        [['↑', 'Выше', -1], ['↓', 'Ниже', 1], ['×', 'Удалить', 0]].forEach(([text, title, delta]) => {
+          const button = document.createElement('button');
+          button.type = 'button'; button.className = 'map-btn'; button.textContent = text;
+          button.setAttribute('aria-label', title + ' точку ' + (index + 1));
+          button.disabled = delta !== 0 && (index + delta < 0 || index + delta >= state.routeGoals.length);
+          button.addEventListener('click', () => {
+            if (routeLocked()) return;
+            if (delta === 0) state.routeGoals.splice(index, 1);
+            else [state.routeGoals[index], state.routeGoals[index + delta]] = [state.routeGoals[index + delta], state.routeGoals[index]];
+            routeEdited();
+          });
+          row.appendChild(button);
+        });
+        list.appendChild(row);
+      });
+    }
+    const last = state.routeGoals[state.routeGoals.length - 1];
+    if (last) setGoalInputs(last.x, last.y);
+    else {
+      state.goalPoint = null;
+      for (const id of ['nav-goal-x', 'nav-goal-y', 'route-win-goal-x', 'route-win-goal-y']) if ($(id)) $(id).value = '';
+      try { localStorage.removeItem(GOAL_STORAGE_KEY); } catch (err) {}
+    }
+    for (const id of ['nav-start', 'route-win-start']) if ($(id)) $(id).disabled = true;
+    setText($('nav-route-summary'), 'Точек: ' + state.routeGoals.length + ' · постройте маршрут');
+    navigationMessage('Точки изменены. Постройте маршрут для проверки пути.', 'warn', true);
+    draw();
+  }
+
+  function addRoutePoint(point) {
+    if (routeLocked()) return;
+    if (state.routeGoals.length >= 20) {
+      navigationMessage('В маршруте может быть не больше 20 точек.', 'warn', true);
+      return;
+    }
+    state.selectingGoal = false;
+    document.body.classList.remove('nav-selecting');
+    if ($('nav-select-goal')) {
+      $('nav-select-goal').classList.remove('is-on');
+      $('nav-select-goal').setAttribute('aria-pressed', 'false');
+    }
+    state.routeGoals.push({ x: +point.x.toFixed(2), y: +point.y.toFixed(2) });
+    routeEdited();
+  }
+
+  function routePayload(goal) {
+    return { goal: state.routeGoals.length ? state.routeGoals[state.routeGoals.length - 1] : goal,
+      goals: state.routeGoals.length ? state.routeGoals.map(p => ({ ...p })) : [goal] };
+  }
+
   function navigationGoalMatches(plan) {
-    const selected = selectedGoal();
+    const selected = state.routeGoals.length ? state.routeGoals[state.routeGoals.length - 1] : selectedGoal();
+    if (plan && plan.goalsRequested && JSON.stringify(plan.goalsRequested) !== JSON.stringify(routePayload(selected).goals)) return false;
     const requested = plan && (plan.goalRequested || plan.goal);
     return !!(selected && requested && Number.isFinite(+requested.x) && Number.isFinite(+requested.y)
       && Math.abs(selected.x - +requested.x) <= 0.01
@@ -1305,12 +1436,12 @@
   function renderNavigationStatus(status) {
     if (!status || typeof status !== 'object') return;
     state.navigationStatus = status;
-    if (status.goal && Number.isFinite(+status.goal.x) && Number.isFinite(+status.goal.y) && !selectedGoal()) {
+    if (!state.routeTouched && status.goal && Number.isFinite(+status.goal.x) && Number.isFinite(+status.goal.y) && !selectedGoal()) {
       setGoalInputs(+status.goal.x, +status.goal.y);
     }
     if (Object.prototype.hasOwnProperty.call(status, 'plan')) {
       if (status.plan || !state.navigationPlan) {
-        state.navigationPlan = status.plan || null;
+        state.navigationPlan = status.plan && (navigationGoalMatches(status.plan) || routeLocked()) ? status.plan : null;
       }
       draw();
       drawRouteWindow();
@@ -1326,6 +1457,9 @@
     }
     const plan = state.navigationPlan;
     const active = ['starting', 'executing', 'stopping'].includes(phase);
+    for (const id of ['nav-add-point', 'nav-clear-points', 'nav-preview']) {
+      if ($(id)) $(id).disabled = active || state.navigationBusy;
+    }
     const canStartNow = !!(status.canStart && plan && navigationGoalMatches(plan) && !state.navigationBusy);
     for (const id of ['nav-start', 'route-win-start']) {
       const start = $(id);
@@ -1417,7 +1551,7 @@
 
   function setGoalFromCanvas(event) {
     const canvas = $('map-canvas');
-    if (!canvas) return;
+    if (!canvas || routeLocked()) return;
     const snap = fallbackSnapshot();
     const rect = canvas.getBoundingClientRect();
     const width = Math.max(320, Math.round(rect.width || 640));
@@ -1427,6 +1561,7 @@
     const y = event.clientY - rect.top;
     const wx = view.originX + (x - view.x0) / view.scale;
     const wy = view.originY + (view.y0 - y) / view.scale;
+    if ($('nav-point-list')) { addRoutePoint({ x: wx, y: wy }); return; }
     setGoalInputs(wx, wy);
     if (state.navigationPlan && !navigationGoalMatches(state.navigationPlan)) {
       state.navigationPlan = null;
@@ -1454,7 +1589,8 @@
   }
 
   async function planNavigation(options) {
-    const goal = selectedGoal();
+    if (routeLocked()) return;
+    const goal = state.routeGoals.length ? state.routeGoals[state.routeGoals.length - 1] : selectedGoal();
     if (!goal) {
       navigationMessage('Укажите координаты X и Y или нажмите на карту.', 'warn', true);
       return;
@@ -1468,13 +1604,13 @@
     let refreshAfter = false;
     buttons.forEach((button) => { button.disabled = true; button.textContent = 'Считаю маршрут…'; });
     try {
-      const body = await post('api/navigation/plan', { goal });
+      const body = await post('api/navigation/plan', routePayload(goal));
       state.navigationPlan = body.plan || null;
       renderNavigationStatus(body.status || {});
       state.navigationPlan = body.plan || state.navigationPlan;
       draw();
       drawRouteWindow();
-      navigationMessage('Маршрут рассчитан. Проверьте траекторию на карте или в окне маршрута перед запуском.', 'ok', true);
+      navigationMessage('Маршрут рассчитан. Проверьте путь и порядок точек на карте перед запуском.', 'ok', true);
       if (options && options.openWindow) openRouteWindow();
       else if (isRouteWindowVisible()) startRoutePreview();
     } catch (err) {
@@ -1493,7 +1629,7 @@
   }
 
   async function startNavigation() {
-    const goal = selectedGoal();
+    const goal = state.routeGoals.length ? state.routeGoals[state.routeGoals.length - 1] : selectedGoal();
     if (!goal || !navigationGoalMatches(state.navigationPlan)) {
       navigationMessage('Сначала постройте маршрут до выбранной цели.', 'warn', true);
       return;
@@ -1502,6 +1638,9 @@
       ? fmt(state.navigationPlan.distanceM, 2) + ' м, ' + (state.navigationPlan.waypoints || 0) + ' участков'
       : 'маршрут';
     if (!window.confirm('Запустить автономное движение по проверенному маршруту (' + summary + ')? Убедитесь, что зона свободна и E-STOP доступен.')) return;
+    state.previewActive = false;
+    if (state.previewRaf) cancelAnimationFrame(state.previewRaf);
+    draw();
     state.navigationBusy = true;
     for (const id of ['nav-start', 'route-win-start']) {
       const button = $(id);
@@ -1509,7 +1648,7 @@
     }
     let refreshAfter = false;
     try {
-      const body = await postNavigation('api/navigation/start', { goal });
+      const body = await postNavigation('api/navigation/start', routePayload(goal));
       renderNavigationStatus(body.status || {});
       navigationMessage((body.status && body.status.message) || 'Маршрут запущен.', 'warn', true);
       openRouteWindow();
@@ -1721,6 +1860,20 @@
     if (closeWinBtn) closeWinBtn.addEventListener('click', () => closeRouteWindow());
     const winBackdrop = $('route-win-backdrop');
     if (winBackdrop) winBackdrop.addEventListener('click', () => closeRouteWindow());
+    if ($('nav-add-point')) $('nav-add-point').addEventListener('click', () => {
+      const x = $('nav-goal-x'), y = $('nav-goal-y');
+      if (!x.value.trim() || !y.value.trim() || !Number.isFinite(+x.value) || !Number.isFinite(+y.value)) {
+        navigationMessage('Введите обе координаты X и Y.', 'warn', true); return;
+      }
+      addRoutePoint({ x: +x.value, y: +y.value });
+    });
+    if ($('nav-clear-points')) $('nav-clear-points').addEventListener('click', () => {
+      if (routeLocked()) return;
+      state.routeGoals = []; state.goalPoint = null;
+      for (const id of ['nav-goal-x', 'nav-goal-y', 'route-win-goal-x', 'route-win-goal-y']) if ($(id)) $(id).value = '';
+      routeEdited();
+    });
+    if ($('nav-preview')) $('nav-preview').addEventListener('click', startRoutePreview);
     const previewBtn = $('route-win-preview');
     if (previewBtn) previewBtn.addEventListener('click', () => startRoutePreview());
 
@@ -1830,6 +1983,10 @@
     }
 
     window.addEventListener('resize', () => { draw(); drawRouteWindow(); });
+    if (window.RCRobotModel) {
+      window.RCRobotModel.bindColors('map-wheel-target-color', 'map-wheel-actual-color', 'map-wheel-colors-reset');
+      window.RCRobotModel.subscribe(() => { draw(); drawRouteWindow(); });
+    }
     fillSettings(DEFAULTS);
     void fetchMap();
     void refreshNavigation();
@@ -1841,6 +1998,9 @@
     const isKiosk = document.body && document.body.classList
       && document.body.classList.contains('kiosk-body');
     if (!isKiosk) {
+      void fetchRobotState();
+      if (state.robotTimer) clearInterval(state.robotTimer);
+      state.robotTimer = setInterval(() => { void fetchRobotState(); }, POLL_MS);
       void fetchScan();
       if (state.scanTimer) clearInterval(state.scanTimer);
       state.scanTimer = setInterval(() => { void fetchScan(); }, POLL_MS);

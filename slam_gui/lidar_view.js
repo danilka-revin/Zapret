@@ -422,6 +422,10 @@
   // Шасси в масштабе метра: корпус 75×60 см (высота 30 см), четыре колеса,
   // лидар спереди корпуса (+0.35 м по X) и нос-стрелка.
   function drawRobot(ctx, view, L) {
+    if (window.RCRobotModel) {
+      window.RCRobotModel.draw(ctx, L.cx + view.py * L.k, L.cy + view.px * L.k, Math.PI / 2, L.k);
+      return;
+    }
     const ox = L.cx + view.py * L.k;
     const oy = L.cy + view.px * L.k;
     const bodyHalfW = (ROBOT_WIDTH_M / 2) * L.k;   // 0.30 м полуширина, px
@@ -522,6 +526,7 @@
     drawPoints(ctx, view, L, frames, now);
     drawRobot(ctx, view, L);
     drawInfo(ctx, view, L, step);
+    if (window.RCRobotModel) window.RCRobotModel.drawStatus(ctx, L.w, L.h, { bottom: 28 });
     if (view.lastRadius !== view.radius) {
       view.lastRadius = view.radius;
       notifyView(view);
@@ -573,6 +578,8 @@
     const view = attach(canvas);
     if (view) resetView(view);
   }
+
+  if (window.RCRobotModel) window.RCRobotModel.subscribe(redrawAll);
 
   window.RCLidarView = {
     DEFAULTS: Object.assign({}, DEFAULTS),

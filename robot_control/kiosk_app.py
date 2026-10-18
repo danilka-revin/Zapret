@@ -1069,7 +1069,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
     for filename in ("robot.css", "robot.js", "battery.js", "lidar_settings.css",
-                     "lidar_settings.js", "lidar_view.js", "map_view.js",
+                     "lidar_settings.js", "lidar_view.js", "robot_model.js", "map_view.js",
                      "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
                      "power.css", "power.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
