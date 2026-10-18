@@ -1,6 +1,6 @@
-.rc-lidar-launch{appearance:none;display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 13px;border:1px solid #7a2a30;border-radius:9px;background:#2a0d10;color:#ffdcdc;font:inherit;font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap}
-.rc-lidar-launch:hover{border-color:#d71921;background:#3a1418}
-.rc-lidar-launch[data-state="bad"]{border-color:#d71921;color:#ffd4d4}
+.rc-lidar-launch{appearance:none;display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 13px;border:1px solid #7a2a30;border-radius:9px;background:#2a0d10;color:#f4f4f6;font:inherit;font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap}
+.rc-lidar-launch:hover{border-color:#c0505a;background:#3a1418}
+.rc-lidar-launch[data-state="bad"]{border-color:#c0505a;color:#f4f4f6}
 .rc-lidar-launch.rc-lidar-floating{position:fixed;right:16px;bottom:64px;z-index:11900}
 .rc-lidar-overlay{position:fixed;z-index:12600;inset:0;display:grid;place-items:center;padding:18px;background:rgba(0,0,0,.72);backdrop-filter:blur(5px)}
 .rc-lidar-overlay[hidden]{display:none}
@@ -13,16 +13,16 @@
 .rc-lidar-form{display:grid;gap:12px}.rc-lidar-form label{display:grid;gap:6px;font-size:12px;color:#e6e0e3}
 .rc-lidar-form input,.rc-lidar-form select{min-height:38px;padding:0 10px;border:1px solid #3a3035;border-radius:8px;background:#17171a;color:#f4f4f6;font:inherit}
 .rc-lidar-check{display:flex!important;grid-template-columns:none!important;flex-direction:row;align-items:center;gap:8px}.rc-lidar-check input{min-height:auto}
-.rc-lidar-msg{min-height:18px;margin:0;color:#a2949a;font-size:12px;line-height:1.5}.rc-lidar-msg[data-bad="1"]{color:#ff9c9c}
+.rc-lidar-msg{min-height:18px;margin:0;color:#a2949a;font-size:12px;line-height:1.5}.rc-lidar-msg[data-bad="1"]{color:#f4f4f6}
 .rc-lidar-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}
 .rc-lidar-btn{min-height:36px;padding:0 12px;border:1px solid #3a3035;border-radius:8px;background:#17171a;color:#f4f4f6;font:inherit;font-size:12px;font-weight:700;cursor:pointer}
-.rc-lidar-btn.primary{border-color:#7a2a30;background:#2a0d10;color:#ffe3e3}
+.rc-lidar-btn.primary{border-color:#7a2a30;background:#2a0d10;color:#f4f4f6}
 @media(max-width:700px){.rc-lidar-overlay{padding:8px}.rc-lidar-dialog{padding:14px}.rc-lidar-actions button{flex:1 1 140px}}
 /* Карта лидара (lidar_view.js): кнопки масштаба поверх канвы, касания — только для зума */
 .rc-lv-zoom{position:absolute;right:8px;bottom:8px;z-index:2;display:flex;gap:4px}
 .rc-lv-zoom button{appearance:none;width:30px;height:30px;padding:0;border:1px solid #3a3035;border-radius:8px;background:rgba(16,16,18,.86);color:#f4f4f6;font:700 16px/1 system-ui,sans-serif;cursor:pointer;touch-action:manipulation}
-.rc-lv-zoom button:hover{border-color:#d71921;background:rgba(58,20,24,.92)}
-.rc-lv-zoom button:focus-visible{outline:2px solid #d71921;outline-offset:1px}
+.rc-lv-zoom button:hover{border-color:#c0505a;background:rgba(58,20,24,.92)}
+.rc-lv-zoom button:focus-visible{outline:2px solid #c0505a;outline-offset:1px}
 .lidar-map canvas{touch-action:none;cursor:grab}
 .lidar-map canvas:active{cursor:grabbing}
 /* Блок «Отображение» в диалоге настроек лидара */
@@ -33,7 +33,7 @@
 .rc-lidar-grid2 label{display:grid;gap:6px;min-width:0;color:#e6e0e3;font-size:12px}
 .rc-lidar-grid2 input:not([type=checkbox]),.rc-lidar-grid2 select{min-height:36px;padding:0 8px;border:1px solid #3a3035;border-radius:8px;background:#17171a;color:#f4f4f6;font:inherit;min-width:0}
 .rc-lidar-grid2 input[type=color]{padding:2px;cursor:pointer}
-.rc-lidar-grid2 input[type=range]{padding:0;min-height:auto;accent-color:#d71921}
+.rc-lidar-grid2 input[type=range]{padding:0;min-height:auto;accent-color:#c0505a}
 .rc-lidar-grid2 .rc-lidar-check{display:flex;flex-direction:row;align-items:center;gap:8px}
 .rc-lidar-grid2 .rc-lidar-check input{min-height:auto}
 .rc-lidar-val{color:#c9b8be;font-variant-numeric:tabular-nums}

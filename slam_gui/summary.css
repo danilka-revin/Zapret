@@ -45,8 +45,8 @@
 
 .summary-actions .btn { min-height: 36px; }
 
-.btn-danger { color: var(--err); border-color: var(--err); }
-.btn-danger:hover { background: rgba(255, 90, 90, .08); }
+.btn-danger { color: var(--text); border-color: var(--accent); }
+.btn-danger:hover { background: rgba(192, 80, 90, .12); }
 
 .summary-state {
   margin: 0;

@@ -683,7 +683,7 @@
 
       ctx.fillStyle = 'rgba(0,0,0,.45)';
       ctx.fillRect(0, ch - 18, cw, 18);
-      ctx.fillStyle = '#ff4d4d';
+      ctx.fillStyle = '#f4f4f6';
       ctx.font = '700 10px Inter, sans-serif';
       ctx.textAlign = 'left';
       ctx.fillText(isRear ? 'CAM 1 · задняя' : 'CAM 0 · передняя', 8, ch - 5);

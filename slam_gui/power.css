@@ -12,14 +12,14 @@
   border: 1px solid #8a3d36;
   border-radius: 9px;
   background: #341814;
-  color: #ffdcd6;
+  color: #f4f4f6;
   font: inherit;
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
   white-space: nowrap;
 }
-.rc-stop-launch:hover:not(:disabled) { border-color: #c9584a; background: #431d18; }
+.rc-stop-launch:hover:not(:disabled) { border-color: #a85a60; background: #431d18; }
 .rc-stop-launch:disabled { opacity: .55; cursor: not-allowed; }
 .rc-stop-launch.rc-stop-floating {
   position: fixed;
@@ -28,8 +28,8 @@
   z-index: 12100;
   box-shadow: 0 8px 30px rgba(0, 0, 0, .45);
 }
-.rc-stop-launch[data-state="blocked"] { border-style: dashed; color: #d7b7b1; }
-.rc-stop-launch[data-state="stopped"] { border-color: #6d2f28; background: #26120f; color: #e7bdb6; }
+.rc-stop-launch[data-state="blocked"] { border-style: dashed; color: #f4f4f6; }
+.rc-stop-launch[data-state="stopped"] { border-color: #6d2f28; background: #26120f; color: #f4f4f6; }
 
 .rc-stop-overlay {
   position: fixed;
@@ -67,7 +67,7 @@
 .rc-stop-facts b { overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.45; }
 .rc-stop-state { min-height: 18px; margin: 14px 0 0; color: #c4b3b0; font-size: 12.5px; line-height: 1.5; }
 .rc-stop-state[data-tone="warn"] { color: #ffd79a; }
-.rc-stop-state[data-tone="error"] { color: #ffb4a8; }
+.rc-stop-state[data-tone="error"] { color: #f4f4f6; }
 .rc-stop-state[data-tone="ok"] { color: #f4f4f6; }
 .rc-stop-log {
   max-height: 130px;
@@ -93,8 +93,8 @@
   font-weight: 700;
   cursor: pointer;
 }
-.rc-stop-btn.danger { border-color: #9d4237; background: #4a1d17; color: #ffe1db; }
-.rc-stop-btn:hover:not(:disabled) { border-color: #c9584a; }
+.rc-stop-btn.danger { border-color: #9d4237; background: #4a1d17; color: #f4f4f6; }
+.rc-stop-btn:hover:not(:disabled) { border-color: #a85a60; }
 .rc-stop-btn:disabled { opacity: .45; cursor: not-allowed; }
 @media (max-width: 700px) {
   .rc-stop-overlay { padding: 8px; }
