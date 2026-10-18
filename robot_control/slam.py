@@ -850,6 +850,11 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     def map_screen():
         return _send("map.html")
 
+    @bp.get("/route")
+    @guard
+    def route_screen():
+        return _send("route.html")
+
     # The onboard process owns the map. The web process must never build a
     # second grid or race it when saving the same files.
     from .map_peer import proxy_map, proxy_navigation

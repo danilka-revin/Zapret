@@ -31,8 +31,12 @@ const WORLD = {
 };
 
 const LIDAR_FOV = Math.PI * 2;
-const LIDAR_BEAMS = 180;
+const LIDAR_BEAMS = 360;
 const LIDAR_MAX = 10;
+const ROBOT_LENGTH_M = 0.75;
+const ROBOT_WIDTH_M = 0.60;
+const ROBOT_HEIGHT_M = 0.30;
+const LIDAR_OFFSET_X_M = 0.35;
 const GRID_RES = 0.12;
 const GRID_W = 320;
 const GRID_H = 240;
@@ -86,7 +90,7 @@ function occupied(x, y) {
 }
 function bodyFree(x, y, yaw) {
   const c = Math.cos(yaw), s = Math.sin(yaw);
-  const hx = 0.46, hy = 0.28;
+  const hx = ROBOT_LENGTH_M / 2, hy = ROBOT_WIDTH_M / 2;
   for (const [lx, ly] of [[hx,0],[-hx,0],[0,hy],[0,-hy],[hx,hy],[hx,-hy],[-hx,hy],[-hx,-hy],[hx*0.5,hy],[hx*0.5,-hy],[-hx*0.5,hy],[-hx*0.5,-hy],[0,0]]) {
     const wx = x + c * lx - s * ly, wy = y + s * lx + c * ly;
     if (occupied(wx, wy)) return false;
@@ -302,8 +306,8 @@ function drawMap() {
     ctx.font = "9px Inter, sans-serif";
     ctx.fillText(st.kind === "load" ? "загрузка" : st.kind === "unload" ? "выгрузка" : "база", q.u, q.v + 22);
   });
-  /* корпус ~0.92×0.56 м — в тех же пикселях, что и сетка (scale px/м) */
-  drawRobotTop(ctx, rp.u, rp.v, state.yaw, 0.46 * scale);
+  /* корпус 0.75×0.60 м (высота 0.30 м), лидар спереди — в тех же пикселях, что и сетка */
+  drawRobotTop(ctx, rp.u, rp.v, state.yaw, 0.375 * scale);
   if (state.charging) {
     const dock = (WORLD.stations || []).find((s) => s.kind === "dock");
     if (dock && Math.hypot(dock.x - state.x, dock.y - state.y) < 1.2) {
@@ -507,6 +511,15 @@ function drawRobotTop(ctx, u, v, yaw, s) {
   ctx.fill();
   ctx.strokeStyle = "#101b17";
   ctx.lineWidth = 1;
+  ctx.stroke();
+
+  /* Лидар спереди корпуса (+35 см по оси X) */
+  ctx.fillStyle = "#27c1e8";
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = Math.max(1, s * 0.04);
+  ctx.beginPath();
+  ctx.arc(L * 0.88, 0, Math.max(2.5, s * 0.14), 0, Math.PI * 2);
+  ctx.fill();
   ctx.stroke();
 
   const layout = [

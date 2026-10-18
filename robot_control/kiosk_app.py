@@ -632,6 +632,10 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         # Separate page works even when telemetry/swipe initialization fails.
         return _send("map.html")
 
+    @app.get("/route")
+    def kiosk_route_page():
+        return _send("route.html")
+
     @app.get("/api/navigation/status")
     def api_navigation_status():
         return jsonify(navigation.status()), 200, {"Cache-Control": "no-store"}

@@ -34,6 +34,10 @@ OCCUPIED_MIN = 65
 PLAN_STEER_DEG = 28.0
 HARDWARE_STEER_DEG = 32.0
 DEFAULT_FOOTPRINT_M = 0.42
+DEFAULT_ROBOT_LENGTH_M = 0.75
+DEFAULT_ROBOT_WIDTH_M = 0.60
+DEFAULT_ROBOT_HEIGHT_M = 0.30
+DEFAULT_LIDAR_OFFSET_M = 0.35
 DEFAULT_QUALITY_MIN = 0.55
 DEFAULT_SPEED_MPS = 0.05
 DEFAULT_MAX_PERCENT = 4
@@ -103,6 +107,29 @@ def steering_deviation(angle: float, yaw: float) -> float:
     """Меньший угол до курса вперёд или назад (крабовый привод)."""
     delta = abs(_wrap_pi(angle - yaw))
     return min(delta, abs(math.pi - delta))
+
+
+def robot_dimensions_payload(
+    footprint_m: float = DEFAULT_FOOTPRINT_M,
+    *,
+    length_m: float = DEFAULT_ROBOT_LENGTH_M,
+    width_m: float = DEFAULT_ROBOT_WIDTH_M,
+    height_m: float = DEFAULT_ROBOT_HEIGHT_M,
+    lidar_offset_m: float = DEFAULT_LIDAR_OFFSET_M,
+) -> dict:
+    """Паспортные габариты робота (75 × 60 × 30 см) и положение переднего лидара."""
+    return {
+        "lengthM": round(length_m, 2),
+        "widthM": round(width_m, 2),
+        "heightM": round(height_m, 2),
+        "lengthCm": int(round(length_m * 100)),
+        "widthCm": int(round(width_m * 100)),
+        "heightCm": int(round(height_m * 100)),
+        "footprintM": round(footprint_m, 2),
+        "lidarMount": "front",
+        "lidarOffsetM": round(lidar_offset_m, 2),
+        "lidarOffsetCm": int(round(lidar_offset_m * 100)),
+    }
 
 
 def _cell(snapshot: dict, x: float, y: float) -> Optional[tuple[int, int]]:
@@ -193,6 +220,29 @@ def _inflated_blocked(snapshot: dict, footprint_m: float,
                 index = iy * width + ix
                 if values[index] == 255 and not inflated[index]:
                     blocked[index] = 0
+
+    # Если сканов лидара ещё не было (чистая карта без изученных клеток),
+    # разрешаем построить предпросмотр маршрута по сетке; аппаратный старт
+    # по-прежнему заблокирован в _preflight до прихода реальных сканов.
+    scans_count = int(snapshot.get("scans") or 0)
+    if scans_count == 0 and not any(v <= FREE_MAX for v in values):
+        for idx in range(width * height):
+            if values[idx] == 255 and not inflated[idx]:
+                blocked[idx] = 0
+    else:
+        # Убираем одиночные UNKNOWN-пропуски между соседними свободными лучами
+        # лидара внутри уже просканированной области (выпуклые границы free-зоны
+        # при этом не расширяются).
+        for iy in range(1, height - 1):
+            row = iy * width
+            for ix in range(1, width - 1):
+                idx = row + ix
+                if values[idx] != 255 or inflated[idx]:
+                    continue
+                horiz_free = values[idx - 1] <= FREE_MAX and values[idx + 1] <= FREE_MAX
+                vert_free = values[idx - width] <= FREE_MAX and values[idx + width] <= FREE_MAX
+                if horiz_free or vert_free:
+                    blocked[idx] = 0
     return blocked, values
 
 
@@ -268,10 +318,10 @@ def plan_grid_path(snapshot: dict, goal_x: Any, goal_y: Any, *,
     sx, sy = start_cell
     gx, gy = goal_cell
     goal_index = gy * width + gx
-    if values[goal_index] == 255 or values[goal_index] > FREE_MAX:
-        raise NavigationError("goal_not_free", "Цель должна быть на изученной свободной клетке", 409)
 
     blocked, _ = _inflated_blocked(snapshot, footprint_m, (start_x, start_y))
+    if (values[goal_index] == 255 or values[goal_index] > FREE_MAX) and blocked[goal_index]:
+        raise NavigationError("goal_not_free", "Цель должна быть на изученной свободной клетке", 409)
     start_index = sy * width + sx
     if blocked[start_index]:
         raise NavigationError("start_blocked", "Робот слишком близко к препятствию для безопасного старта", 409)
@@ -319,9 +369,10 @@ def plan_grid_path(snapshot: dict, goal_x: Any, goal_y: Any, *,
             if current == start_index:
                 dx_world = neighbor_world[0] - start_x
                 dy_world = neighbor_world[1] - start_y
-                angle = math.atan2(dy_world, dx_world)
-                if steering_deviation(angle, yaw) > math.radians(max_steer_deg):
-                    continue
+                if math.hypot(dx_world, dy_world) >= resolution * 1.5:
+                    angle = math.atan2(dy_world, dx_world)
+                    if steering_deviation(angle, yaw) > math.radians(max_steer_deg + 2.0):
+                        continue
             if not _line_is_clear(snapshot, blocked, current_world, neighbor_world):
                 continue
             tentative = cost + edge_cost
@@ -391,6 +442,21 @@ def plan_grid_path(snapshot: dict, goal_x: Any, goal_y: Any, *,
         simplified.append(raw_points[chosen])
         index = chosen
 
+    # Не оставляем в конце короткий «хвост» (< 0.12 м) после жадного разбиения:
+    # такой микросегмент иначе блокирует старт проверкой минимальной длины участка.
+    if len(simplified) >= 3:
+        tail_len = math.hypot(simplified[-1][0] - simplified[-2][0],
+                              simplified[-1][1] - simplified[-2][1])
+        if tail_len < 0.12:
+            prev_a = simplified[-3]
+            last_b = simplified[-1]
+            merged_len = math.hypot(last_b[0] - prev_a[0], last_b[1] - prev_a[1])
+            merged_angle = math.atan2(last_b[1] - prev_a[1], last_b[0] - prev_a[0])
+            if (merged_len <= max_segment_m * 1.25
+                    and steering_deviation(merged_angle, yaw) <= math.radians(max_steer_deg)
+                    and _line_is_clear(snapshot, blocked, prev_a, last_b)):
+                simplified[-2:] = [last_b]
+
     length = sum(math.hypot(b[0] - a[0], b[1] - a[1])
                  for a, b in zip(simplified, simplified[1:]))
     if length > route_limit_m:
@@ -405,6 +471,7 @@ def plan_grid_path(snapshot: dict, goal_x: Any, goal_y: Any, *,
         "mapRevision": int(snapshot.get("revision", 0)),
         "steerLimitDeg": max_steer_deg,
         "footprintM": round(footprint_m, 2),
+        "robotDimensions": robot_dimensions_payload(footprint_m),
     }
 
 
@@ -489,6 +556,10 @@ class NavigationService:
                 max_drive_percent = DEFAULT_MAX_PERCENT
         self.max_drive_percent = max(1, min(DEFAULT_MAX_PERCENT, int(max_drive_percent)))
         self.footprint_m = _env_float("RC_NAV_FOOTPRINT_M", DEFAULT_FOOTPRINT_M, 0.30, 2.0)
+        self.robot_length_m = _env_float("RC_ROBOT_LENGTH_M", DEFAULT_ROBOT_LENGTH_M, 0.30, 2.5)
+        self.robot_width_m = _env_float("RC_ROBOT_WIDTH_M", DEFAULT_ROBOT_WIDTH_M, 0.25, 2.0)
+        self.robot_height_m = _env_float("RC_ROBOT_HEIGHT_M", DEFAULT_ROBOT_HEIGHT_M, 0.10, 2.0)
+        self.lidar_offset_m = _env_float("RC_LIDAR_OFFSET_M", DEFAULT_LIDAR_OFFSET_M, 0.0, 1.5)
         self.quality_min = _env_float("RC_NAV_QUALITY_MIN", DEFAULT_QUALITY_MIN, 0.30, 0.95)
         self.scan_age_s = _env_float("RC_NAV_SCAN_AGE_S", DEFAULT_SCAN_AGE_S, 0.3, 2.0)
         self.clock = clock
@@ -653,6 +724,13 @@ class NavigationService:
             "diagnostics": diagnostics,
             "goal": dict(goal) if goal else None,
             "plan": plan,
+            "robotDimensions": robot_dimensions_payload(
+                self.footprint_m,
+                length_m=self.robot_length_m,
+                width_m=self.robot_width_m,
+                height_m=self.robot_height_m,
+                lidar_offset_m=self.lidar_offset_m,
+            ),
         })
         return state
 
@@ -673,7 +751,7 @@ class NavigationService:
             with self._lock:
                 if not self.active:
                     self._plan = None
-                    self._goal = None
+                    self._goal = {"x": round(x, 3), "y": round(y, 3)}
                     self._state = {
                         "phase": "blocked", "message": exc.message, "progress": 0.0,
                         "waypoint": 0, "totalWaypoints": 0, "updatedAt": self.clock(),

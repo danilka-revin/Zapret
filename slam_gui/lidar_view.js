@@ -28,11 +28,15 @@
   const GRID_MIN_PX = 24;      // шаг сетки не мельче этого на экране
   const STEPS = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20];   // «круглые» шаги, м
   const ARROW_M = 1.2;         // длина стрелок осей, м
-  // Геометрия шасси (robot_control/rus_core/kinematics.py: wheelbase, track)
+  // Габариты робота: 75 × 60 см и высота 30 см; лидар установлен спереди корпуса.
+  const ROBOT_LENGTH_M = 0.75;
+  const ROBOT_WIDTH_M = 0.60;
+  const ROBOT_HEIGHT_M = 0.30;
+  const LIDAR_OFFSET_X_M = 0.35;
   const WHEELBASE_M = 0.55;
   const TRACK_M = 0.46;
-  const WHEEL_LEN_M = 0.10;    // размер колеса вдоль оси, м (ориентир)
-  const WHEEL_WID_M = 0.06;    // поперёк оси, м (ориентир)
+  const WHEEL_LEN_M = 0.14;    // размер колеса вдоль оси, м
+  const WHEEL_WID_M = 0.07;    // поперёк оси, м
 
   const DEFAULTS = {
     size: 0.08,           // Size (m): размер точки, м
@@ -415,34 +419,46 @@
     ctx.fillText('Y', ox - len - 4, oy - 7);
   }
 
-  // Шасси в масштабе метра: корпус, четыре колеса и нос-стрелка (видна всегда).
+  // Шасси в масштабе метра: корпус 75×60 см (высота 30 см), четыре колеса,
+  // лидар спереди корпуса (+0.35 м по X) и нос-стрелка.
   function drawRobot(ctx, view, L) {
     const ox = L.cx + view.py * L.k;
     const oy = L.cy + view.px * L.k;
-    const hw = (TRACK_M / 2) * L.k;     // полуколея, px
-    const hl = (WHEELBASE_M / 2) * L.k; // полубаза, px
-    ctx.fillStyle = 'rgba(80,66,72,0.55)';
+    const bodyHalfW = (ROBOT_WIDTH_M / 2) * L.k;   // 0.30 м полуширина, px
+    const bodyHalfL = (ROBOT_LENGTH_M / 2) * L.k;  // 0.375 м полудлина, px
+    const wheelHalfX = (WHEELBASE_M / 2) * L.k;
+    const wheelHalfY = (TRACK_M / 2 + 0.02) * L.k;
+    ctx.fillStyle = 'rgba(80,66,72,0.58)';
     ctx.strokeStyle = '#f4f4f6';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1.2;
     ctx.beginPath();
-    ctx.rect(ox - hw, oy - hl, hw * 2, hl * 2);
+    ctx.rect(ox - bodyHalfW, oy - bodyHalfL, bodyHalfW * 2, bodyHalfL * 2);
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = '#3a3035';
     const ww = WHEEL_WID_M * L.k;
     const wl = WHEEL_LEN_M * L.k;
-    const wy = (TRACK_M / 2 + 0.02) * L.k;   // колёса чуть наружу от корпуса
     [-1, 1].forEach((front) => {
       [-1, 1].forEach((side) => {
-        const cx = ox - side * wy;               // side: +1 — левый борт (Y влево)
-        const cy = oy - front * hl;              // front: +1 — перед (X вперёд)
+        const cx = ox - side * wheelHalfY;       // side: +1 — левый борт (Y влево)
+        const cy = oy - front * wheelHalfX;      // front: +1 — перед (X вперёд)
         ctx.beginPath();
         ctx.rect(cx - ww / 2, cy - wl / 2, ww, wl);
         ctx.fill();
       });
     });
+    // Лидар установлен спереди корпуса (по оси +X).
+    const lidarY = oy - LIDAR_OFFSET_X_M * L.k;
+    const lidarR = Math.max(3, Math.min(7, 0.055 * L.k));
+    ctx.fillStyle = '#27c1e8';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(ox, lidarY, lidarR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
     // Нос: треугольник над передним краем, всегда читается даже в масштабе 40 м.
-    const nose = oy - hl - 2;
+    const nose = oy - bodyHalfL - 3;
     ctx.fillStyle = '#f4f4f6';
     ctx.beginPath();
     ctx.moveTo(ox, nose - 8);
@@ -480,7 +496,7 @@
   function drawInfo(ctx, view, L, step) {
     ctx.fillStyle = 'rgba(226,214,220,0.9)';
     ctx.font = '11px system-ui, sans-serif';
-    const label = 'Fixed Frame: base_link · сетка ' + fmtM(step) + ' · радиус ' + fmtM(view.radius);
+    const label = 'Fixed Frame: base_link · 75×60×30 см · лидар спереди · сетка ' + fmtM(step) + ' · радиус ' + fmtM(view.radius);
     ctx.fillText(label, 8, L.h - 8);
   }
 
