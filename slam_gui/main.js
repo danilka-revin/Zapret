@@ -137,6 +137,19 @@
 
   /* ------------------------------------------------------------ тревоги */
 
+  function masterPortHint(d) {
+    const info = d && d.masterPort;
+    if (!info) return '';
+    const configured = String(info.configured || '');
+    const active = String(info.active || '');
+    if (active) return ' · порт: ' + active;
+    const list = Array.isArray(info.candidates) ? info.candidates.filter(Boolean) : [];
+    const tried = list.length ? list.join(', ') : (configured || '—');
+    return ' · порт ' + (configured || '—') + ' не ответил' +
+      (tried && tried !== configured ? ' (проверены: ' + tried + ')' : '') +
+      ' — проверьте кабель и RC_SLAM_PORT';
+  }
+
   function buildAlerts(view) {
     if (!view.hasData) return [{ sev: 'warn', text: 'ожидание данных от робота' }];
     if (!view.live) {
@@ -150,7 +163,7 @@
     const crit = typeof th.criticalV === 'number' ? th.criticalV : DEFAULT_CRIT_V;
     const out = [];
 
-    if (d.linkOk === false) out.push({ sev: 'err', text: 'нет связи с бортом' });
+    if (d.linkOk === false) out.push({ sev: 'err', text: 'нет связи с бортом' + masterPortHint(d) });
     if (typeof b.volts === 'number') {
       if (b.volts < crit) out.push({ sev: 'err', text: 'АКБ ниже аварийного порога ' + fmt(crit, 1) + ' В' });
       else if (b.volts < low) out.push({ sev: 'warn', text: 'АКБ ниже порога предупреждения ' + fmt(low, 1) + ' В' });
