@@ -1985,25 +1985,70 @@
   }
 
   const STEER_IDS = ['FL', 'FR', 'RL', 'RR'];
+  /** Запасное значение, пока сервер не ответил: совпадает с прошивкой. */
+  const STEER_FALLBACK_LIMIT = 90;
   let steerPresetBusy = false;
   let steerPresetMessage = null;
   let steerPreviewMode = 'live';
   let steerPreviewTimer = null;
+  let steerLimitDeg = STEER_FALLBACK_LIMIT;
   const steerPreviewAngles = { FL: 0, FR: 0, RL: 0, RR: 0 };
 
   function steerClamp(value) {
     const n = Number(value);
     if (!Number.isFinite(n)) return null;
-    return Math.max(-32, Math.min(32, Math.round(n)));
+    if (window.RCSteerPresets && typeof window.RCSteerPresets.clampAngle === 'function') {
+      return window.RCSteerPresets.clampAngle(n);
+    }
+    return Math.max(-steerLimitDeg, Math.min(steerLimitDeg, Math.round(n)));
   }
 
   function steerPresetList() {
-    return window.RCSteerPresets && Array.isArray(window.RCSteerPresets.PRESETS)
-      ? window.RCSteerPresets.PRESETS : [];
+    if (!window.RCSteerPresets) return [];
+    if (typeof window.RCSteerPresets.list === 'function') return window.RCSteerPresets.list();
+    return Array.isArray(window.RCSteerPresets.PRESETS) ? window.RCSteerPresets.PRESETS : [];
   }
 
   function steerPresetById(id) {
+    if (window.RCSteerPresets && typeof window.RCSteerPresets.get === 'function') {
+      return window.RCSteerPresets.get(id);
+    }
     return steerPresetList().find((preset) => preset.id === id) || null;
+  }
+
+  /**
+   * Предел угла приходит с сервера (steeringControl.limitDeg) и расходится по
+   * ползункам, подписям и пресетам. Раньше число было зашито в HTML и в пяти
+   * местах JS: экран показывал один ход, а плата принимала другой — отсюда
+   * «кривое» руление. Теперь источник один, и пресет, который железо не тянет,
+   * честно помечен недоступным вместо тихой обрезки угла.
+   */
+  function syncSteerLimit(control) {
+    const presets = window.RCSteerPresets;
+    const reported = Number(control && control.limitDeg);
+    const next = Number.isFinite(reported) && reported > 0 ? Math.round(reported) : STEER_FALLBACK_LIMIT;
+    if (presets && typeof presets.setLimit === 'function') presets.setLimit(next);
+    const changed = next !== steerLimitDeg;
+    steerLimitDeg = next;
+    const text = presets && typeof presets.limitText === 'function' ? presets.limitText() : ('±' + next + '°');
+    document.querySelectorAll('[data-steer-limit]').forEach((element) => { element.textContent = text; });
+    [$('steer-master-slider')].concat(STEER_IDS.map((id) => $('steer-slider-' + id))).forEach((slider) => {
+      if (!slider) return;
+      slider.min = String(-next);
+      slider.max = String(next);
+      const value = steerClamp(slider.value);
+      if (value !== null && Number(slider.value) !== value) slider.value = String(value);
+    });
+    document.querySelectorAll('[data-steer-range-labels]').forEach((box) => {
+      const spans = box.querySelectorAll('span');
+      if (spans.length >= 3) {
+        spans[0].textContent = '−' + next + '° ← влево';
+        spans[2].textContent = 'вправо → +' + next + '°';
+      }
+    });
+    // Доступность пресетов зависит от предела: пересобираем кнопки при смене.
+    if (changed) buildSteerPresetButtons();
+    return changed;
   }
 
   function steerModeText(angle) {
@@ -2131,7 +2176,11 @@
         });
         setSteerPreviewAngles(angles, 'live');
         uniform = steerPreviewUniform();
-        if (slider && uniform !== null && !steerPresetBusy) slider.value = String(Math.round(uniform));
+        // Ползунок не трогаем, пока его держат: телеметрия вырывала ручку
+        // из-под пальца на середине жеста (опрос экрана — каждые 250 мс).
+        if (slider && uniform !== null && !steerPresetBusy && document.activeElement !== slider) {
+          slider.value = String(Math.round(uniform));
+        }
       }
       updateSteerDiagram();
       if (!complete) {
@@ -2155,7 +2204,11 @@
       const active = preset.available && uniform !== null && Math.abs(uniform - preset.angle) <= 1;
       button.classList.toggle('is-active', active);
       button.setAttribute('aria-pressed', String(active));
-      button.disabled = steerPresetBusy;
+      // Недоступный пресет остаётся нажимаемым: по нажатию экран показывает
+      // причину. Рабочий гаснет, пока команда всё равно была бы отклонена —
+      // кнопка не обещает того, чего сейчас сделать нельзя.
+      button.disabled = steerPresetBusy || (preset.available && !!reason);
+      if (preset.reason) button.title = preset.reason;
     });
 
     const now = Date.now();
@@ -2179,7 +2232,12 @@
     }
   }
 
-  function errorText(reason) {
+  function errorText(reason, detail) {
+    const limit = Number(detail && detail.limit);
+    const limitText = Number.isFinite(limit) && limit > 0
+      ? '±' + Math.round(limit) + '°'
+      : (window.RCSteerPresets && typeof window.RCSteerPresets.limitText === 'function'
+        ? window.RCSteerPresets.limitText() : '±' + steerLimitDeg + '°');
     const messages = {
       pin_required: 'PIN истёк · разблокируйте',
       control_not_supported: 'управление только на бортовом экране',
@@ -2187,7 +2245,7 @@
       serial_unavailable: 'порт мастера недоступен',
       not_homed: 'сначала калибровка или 0° вручную',
       module_busy: 'дождитесь остановки модуля / выключите тягу',
-      angle_limit: 'угол за пределами ±32°',
+      angle_limit: 'угол за пределами ' + limitText,
       command_queue_full: 'очередь команд занята',
       invalid_module: 'неизвестный модуль',
       invalid_angle: 'неверный угол',
@@ -2232,7 +2290,7 @@
           if (response.status === 401 || (result && result.reason === 'pin_required')) {
             setSteeringAuthorized(false);
           }
-          const message = errorText(result && result.reason);
+          const message = errorText(result && result.reason, result);
           steerResult[id] = { text: 'пресет: ' + message, error: true, until: Date.now() + 10000 };
           steerPresetMessage = {
             text: 'Остановлено на ' + id + ': ' + message + '. Остальные колёса не трогаем.',
@@ -2262,7 +2320,7 @@
     steerPresetBusy = false;
     scheduleSteerPreviewLive();
     steerPresetMessage = {
-      text: '«' + label + '»: ' + steerModeText(targets.FL) + '. Движение — кнопками ниже, удерживайте.',
+      text: '«' + label + '»: ' + steerModeText(targets.FL) + '. Движение — кнопками в самом низу экрана, удерживайте.',
       error: false, until: Date.now() + 10000
     };
     renderSteeringControls(lastData || {});
@@ -2337,7 +2395,7 @@
       icon.setAttribute('aria-hidden', 'true');
       const iconAngles = preset.available
         ? [preset.angle, preset.angle, preset.angle, preset.angle]
-        : [32, -32, 32, -32];
+        : [steerLimitDeg, -steerLimitDeg, steerLimitDeg, -steerLimitDeg];
       iconAngles.forEach((angle) => {
         const wheel = document.createElement('i');
         wheel.style.setProperty('--wheel-angle', angle + 'deg');
@@ -2350,7 +2408,10 @@
       button.appendChild(icon);
       button.appendChild(title);
       button.appendChild(hint);
-      button.addEventListener('click', () => { void chooseSteerPreset(preset); });
+      button.addEventListener('click', () => {
+        // Пресет берём свежим: предел мог прийти с сервера уже после отрисовки.
+        void chooseSteerPreset(steerPresetById(preset.id) || preset);
+      });
       grid.appendChild(button);
     });
   }
@@ -2361,6 +2422,9 @@
     const d = data || {};
     const control = d.steeringControl || {};
     const available = control.available === true;
+    // Предел руля берём из ответа сервера: ползунки, подписи и пресеты
+    // подстраиваются под то, что реально принимает плата.
+    syncSteerLimit(control);
     const source = String(control.source || d.source || 'unknown');
     const motors = Array.isArray(d.motors) ? d.motors : [];
     const drive = d.drive || {};
@@ -2440,12 +2504,18 @@
         steerResult[id] = { text: 'калибровка не началась · проверьте прошивку v2', error: true, until: now + 8000 };
       }
 
-      let value = pending ? pending.angle : (moving && target != null ? target : (current == null ? 0 : current));
-      value = Math.max(-32, Math.min(32, Math.round(value)));
+      let value = pending ? pending.angle
+        : (moving && target != null ? target
+          : (current != null ? current : Number(slider.value)));
+      const clamped = steerClamp(value);
+      value = clamped === null ? 0 : clamped;
       const dirty = card.dataset.steerDirty === 'true';
-      if (!dirty) slider.value = String(value);
+      // Нет свежих данных от колеса — ползунок не трогаем: раньше он прыгал в 0°
+      // и показывал цель, которой на борту не существует.
+      const hasData = !!pending || (moving && target != null) || current != null;
+      if (!dirty && hasData) slider.value = String(value);
       if (currentEl) currentEl.textContent = current == null ? '—' : Math.round(current) + '°';
-      // Ползунок ограничен ±32°, а при калибровке цель — до ±135°: показываем настоящую.
+      // Ползунок ограничен ходом руля, а при калибровке цель — до ±135°: показываем настоящую.
       if (targetEl) targetEl.textContent = (!dirty && busy && target != null ? Math.round(target) : Math.round(+slider.value || 0)) + '°';
 
       const ready = available && steeringAuthorized && online && homed && !busy && !pending && !zeroPending &&
@@ -2717,12 +2787,17 @@
       const slider = $('steer-slider-' + id);
       const output = $('steer-target-' + id);
       if (!card || !slider) return;
-      slider.value = String(Math.max(-32, Math.min(32, Math.round(value))));
+      const angle = steerClamp(value);
+      if (angle === null) return;
+      slider.value = String(angle);
       card.dataset.steerDirty = 'true';
       delete steerResult[id];
-      if (output) output.textContent = Math.round(+slider.value) + '°';
-      steerPreviewAngles[id] = Math.max(-32, Math.min(32, Math.round(value)));
+      if (output) output.textContent = angle + '°';
+      steerPreviewAngles[id] = angle;
       steerPreviewMode = 'manual';
+      // Без этого схема «замерзала» на ручном углу навсегда: после одного
+      // касания ползунка экран переставал показывать настоящие углы колёс.
+      scheduleSteerPreviewLive();
       updateSteerDiagram();
       renderSteeringControls(lastData || {});
     }
@@ -2735,7 +2810,20 @@
         if (window._openSteeringAuth) window._openSteeringAuth();
         return;
       }
-      const angle = Math.max(-32, Math.min(32, Number(slider.value)));
+      const angle = steerClamp(slider.value);
+      if (angle === null) return;
+      // Колесо уже стоит там, куда просит ползунок, — команда не нужна (иначе
+      // каждый щелчок по дорожке ползунка уходил в плату и возвращал «модуль
+      // занят»). Если фактический угол расходится с целью — отправляем: это
+      // рабочий способ докрутить колесо, которое не доехало.
+      const motor = ((lastData && lastData.motors) || []).find((m) => m && m.id === id) || null;
+      const currentAngle = motor && Number.isFinite(+motor.angle) ? +motor.angle : null;
+      if (motor && currentAngle !== null && !motor.moving && Math.abs(currentAngle - angle) <= 1) {
+        card.dataset.steerDirty = 'false';
+        steerResult[id] = { text: 'колесо уже на ' + angle + '°', error: false, until: Date.now() + 4000 };
+        renderSteeringControls(lastData || {});
+        return;
+      }
       const sendButton = panel.querySelector('[data-steer-send="' + id + '"]');
       if (sendButton) sendButton.disabled = true;
       try {
@@ -2749,7 +2837,7 @@
           if (response.status === 401 || (result && result.reason === 'pin_required')) {
             setSteeringAuthorized(false);
           }
-          steerResult[id] = { text: errorText(result && result.reason), error: true, until: Date.now() + 6000 };
+          steerResult[id] = { text: errorText(result && result.reason, result), error: true, until: Date.now() + 6000 };
           renderSteeringControls(lastData || {});
           if (response.status === 401 && window._openSteeringAuth) window._openSteeringAuth();
           return;
@@ -2784,7 +2872,7 @@
         const result = await response.json();
         if (!response.ok || !result || !result.ok) {
           if (response.status === 401 || (result && result.reason === 'pin_required')) setSteeringAuthorized(false);
-          steerResult[id] = { text: errorText(result && result.reason), error: true, until: Date.now() + 6000 };
+          steerResult[id] = { text: errorText(result && result.reason, result), error: true, until: Date.now() + 6000 };
           if (response.status === 401 && window._openSteeringAuth) window._openSteeringAuth();
           return;
         }
@@ -2824,7 +2912,7 @@
         if (!response.ok || !result || !result.ok) {
           if (response.status === 401 || (result && result.reason === 'pin_required')) setSteeringAuthorized(false);
           targets.forEach((target) => {
-            steerResult[target] = { text: errorText(result && result.reason), error: true, until: Date.now() + 6000 };
+            steerResult[target] = { text: errorText(result && result.reason, result), error: true, until: Date.now() + 6000 };
           });
           if (response.status === 401 && window._openSteeringAuth) window._openSteeringAuth();
           return;
@@ -2854,6 +2942,7 @@
         const angles = {};
         STEER_IDS.forEach((id) => { angles[id] = angle; });
         previewAllCards(angles);
+        scheduleSteerPreviewLive();
       });
     }
     const applyAllButton = $('steer-apply-all');

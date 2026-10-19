@@ -359,9 +359,26 @@ static void scenario_moves() {
         "w 12.5 → 1667 шагов, сейчас %ld", (long)FR::stepNow());
   CHECK(board_fr.phys == 1667, "колесо на 12.5°: phys=%ld", board_fr.phys);
 
-  board_fr.serial.send("w 40");
+  // Предел абсолютной команды — ±90° (STEER_LIMIT_DEG): боковой ход колесу
+  // доступен, угол вне предела его не двигает, возврат в рабочее положение — тоже.
+  board_fr.serial.send("w 90");
+  CHECK(wait_until([] { return !FR::motorBusy() && FR::stepNow() == 12000; }, 3000),
+        "w 90 → 12000 шагов, сейчас %ld", (long)FR::stepNow());
+  CHECK(board_fr.phys == 12000, "колесо на 90°: phys=%ld", board_fr.phys);
+
+  board_fr.serial.send("w 100");
   sim::run_for_ms(50);
-  CHECK(board_fr.phys == 1667 && has(board_fr, "угол вне ±32°"), "w 40 отклонена");
+  CHECK(board_fr.phys == 12000 && has(board_fr, "угол вне ±90°"), "w 100 отклонена");
+
+  board_fr.serial.send("w -90");
+  CHECK(wait_until([] { return !FR::motorBusy() && FR::stepNow() == -12000; }, 5000),
+        "w -90 → -12000 шагов, сейчас %ld", (long)FR::stepNow());
+  CHECK(board_fr.phys == -12000, "колесо на −90°: phys=%ld", board_fr.phys);
+
+  board_fr.serial.send("w 12.5");
+  CHECK(wait_until([] { return !FR::motorBusy() && FR::stepNow() == 1667; }, 5000),
+        "возврат на 12.5° после ±90°, сейчас %ld", (long)FR::stepNow());
+  CHECK(board_fr.phys == 1667, "колесо снова на 12.5°: phys=%ld", board_fr.phys);
 
   const int64_t started = sim::now_us;
   board_fr.serial.send("d 10 f");
@@ -695,10 +712,15 @@ static void scenario_system_server_commands() {
   CHECK(wait_until([] { return node_rr::calib_state == node_rr::CAL_IDLE; }, 30000) &&
         node_rr::home_source == node_rr::HOME_OPTO, "RR откалиброван заново");
   board_fl.serial.send("w XX 5");
-  board_fl.serial.send("w FL 40");
+  board_fl.serial.send("w FL 100");
   sim::run_for_ms(20);
   CHECK(has(board_fl, "неизвестный модуль XX"), "неизвестный модуль");
-  CHECK(has(board_fl, "# FL: w: угол вне ±32°"), "предел угла у сервера");
+  CHECK(has(board_fl, "# FL: w: угол вне ±90°"), "предел угла у сервера");
+  // 90° доходят до слейва по I2C: боковой ход доступен не только локальному модулю.
+  board_fl.serial.send("w FR 90");
+  CHECK(wait_until([] { return !node_fr::motorBusy() && node_fr::stepNow() == 12000; }, 5000),
+        "w FR 90 → слейв на 12000 шагов, сейчас %ld", (long)node_fr::stepNow());
+  CHECK(board_fr.phys == 12000, "колесо FR на 90°: phys=%ld", board_fr.phys);
 }
 
 static void send_drive_heartbeat(int percent, int times) {

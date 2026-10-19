@@ -72,7 +72,12 @@ const uint8_t BLDC_DIR_FORWARD_LEVEL = LOW;
 const float STEPS_PER_DEGREE = 133.333333f;    // шагов_на_оборот × микрошаг × редуктор / 360
 const uint16_t STEP_PERIOD_US = 100;           // рабочий ход: 10 кГц ≈ 75°/с
 const uint16_t CALIB_STEP_PERIOD_US = 2000;    // точный подход к датчику: 500 Гц ≈ 3,75°/с
-const float STEER_LIMIT_DEG = 32.0f;           // предел абсолютной команды w (как у сервера)
+// Предел абсолютной команды «w <угол>». ОДНО число на весь стек: столько же
+// в slam_gui/backend.py (STEER_LIMIT_DEG / MasterSource.MAX_STEER_DEG),
+// в robot_control/slam.py и в экранах (slam_gui/steer_presets.js). 90° дают
+// чистый боковой ход; запас до упора потенциометра (±130°) и до программного
+// предела хода STEER_TRAVEL_LIMIT_DEG (±125°) остаётся.
+const float STEER_LIMIT_DEG = 90.0f;
 const float MANUAL_MOVE_LIMIT_DEG = 360.0f;    // предел одной ручной команды d / c
 const float STEER_TRAVEL_LIMIT_DEG = 125.0f;   // предел хода от нуля: упор потенциометра ±130°
 
@@ -1177,7 +1182,7 @@ void printModuleStatus() {
 //   g              продолжить поворот, прерванный s
 //   d <°> f|b      повернуть на угол: f — вправо (+), b — влево (−)
 //   c <°> | c c    качание на угол / выключить качание
-//   w <°>          абсолютный угол (нужен ноль, предел ±32°) — команда сервера
+//   w <°>          абсолютный угол (нужен ноль, предел ±90°) — команда сервера
 //   t <%> | b      тяга BLDC −20…20 % / тормоз
 //   p              состояние
 void stopEverything() {
@@ -1312,7 +1317,7 @@ void handleModuleCommand(char* line) {
       return;
     }
     if (!parseFloatToken(arg1, &degrees) || fabsf(degrees) > STEER_LIMIT_DEG) {
-      note(PSTR("w: угол вне ±32°"));
+      note(PSTR("w: угол вне ±%d°"), (int)STEER_LIMIT_DEG);
       return;
     }
     if (!zero_set) {

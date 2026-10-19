@@ -85,6 +85,15 @@ WHEEL_R_M = 0.127            # радиус колеса Xiaomi M365 Pro, м
 MAX_DRIVE_PERCENT = 20       # ограничение открытого низкоскоростного прототипа
 DRIVE_ANGLE_ALIGNMENT_DEG = 2.5
 
+# Предел абсолютной команды поворота «w <модуль> <угол>». Одно число на весь
+# стек: столько же в прошивке (STEER_LIMIT_DEG в motor_master/motor_node),
+# в robot_control/slam.py (STEERING_ANGLE_LIMIT_DEG) и в экранах
+# (slam_gui/steer_presets.js → LIMIT_DEG). Механика позволяет больше — упор
+# потенциометра ±130°, программный предел хода STEER_TRAVEL_LIMIT_DEG = 125°,
+# поэтому 90° (чистый боковой ход) безопасно. Рассинхрон этих чисел и давал
+# «кривое» руление: экран отправлял угол, который сервер или плата резали.
+STEER_LIMIT_DEG = 90.0
+
 # --- АКБ 12S3P LiFePO4 (совпадает с gui/console-core.js) --------------------
 PACK = {
     "series": 12, "parallel": 3, "cellAh": 6.2,
@@ -337,7 +346,7 @@ class MasterSource:
     supports_calibration = True
     STALE_S = 1.0
     DRIVE_STALE_S = 0.75
-    MAX_STEER_DEG = 32.0
+    MAX_STEER_DEG = STEER_LIMIT_DEG
     MAX_DRIVE_PERCENT = 20
     MESSAGE_LIMIT = 40
     #: Сколько ждать первую строку @TLM после открытия незнакомого порта.
@@ -506,7 +515,9 @@ class MasterSource:
         if module not in MODULE_TITLES:
             return {"ok": False, "reason": "invalid_module"}
         if not math.isfinite(angle) or abs(angle) > self.MAX_STEER_DEG:
-            return {"ok": False, "reason": "angle_limit"}
+            # Предел возвращается в ответе: экран показывает настоящее число,
+            # а не зашитое в подписи кнопки.
+            return {"ok": False, "reason": "angle_limit", "limit": self.MAX_STEER_DEG}
         if not self.serial_ready.is_set():
             return {"ok": False, "reason": "serial_unavailable"}
 
