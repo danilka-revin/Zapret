@@ -30,8 +30,14 @@
 //
 // Телеметрия каждые 250 мс, по строке на модуль:
 //   @TLM mod=FL deg=0.00 tgt=0.00 moving=0 cal=1 cycle=0 calib=0 opto=1
-//        home=opto err=0 rpm=0.0 drive=0 fw=2 pot=1 t=12345
+//        home=opto err=0 rpm=0.0 drive=0 fw=3 pot=1 pm=1 t=12345
 // Строки «# FL: …» — сообщения для человека (сервер пишет их в журнал экрана).
+//
+// Шина I²C: 400 кГц, но если какая-то плата на них не отвечает (длинный
+// шлейф, только внутренние подтяжки), мастер сам переходит на 100 кГц и
+// остаётся на них — см. i2cDiagnose() и pollSlaves(). Плату со старой
+// прошивкой (кадр v2) мастер понимает, но её pm= не показывает: в старом
+// кадре биты режима занимал счётчик кадров.
 
 #define MODULE_ID "FL"
 #define TX_BUFFER_SIZE 768
@@ -119,7 +125,7 @@ const uint16_t RPM_SAMPLE_PERIOD_MS = 500;
 const int8_t DRIVE_MAX_PERCENT = 20;           // программный предел PWM
 const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → PWM 0 и тормоз
 
-const uint8_t FIRMWARE_PROTOCOL = 2;           // поле fw= в телеметрии @TLM
+const uint8_t FIRMWARE_PROTOCOL = 3;           // поле fw= в телеметрии @TLM (кадр I2C v3)
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -173,7 +179,8 @@ const uint16_t STATUS_V2 = 0x40;       // признак кадра этой в�
 const uint16_t STATUS_POT_MODE = 0x1000;  // режим с потенциометром
 const uint16_t STATUS_POT_MODE_SUPPORTED = 0x2000;
 const uint16_t STATUS_POT = 0x80;      // потенциометр откалиброван, доводка включена
-// биты 8–11: код ошибки калибровки, биты 12–15: счётчик кадров слейва
+// биты 8–11: код ошибки калибровки; биты 12–15 — режим потенциометра.
+// Счётчик кадров в состояние НЕ входит: в v3 это отдельное поле кадра.
 
 bool zero_set = false;
 uint8_t home_source = HOME_NONE;
@@ -1394,9 +1401,24 @@ const uint32_t I2C_CLOCK_HZ = 400000UL;       // как в проверенно�
 const uint32_t I2C_SAFE_CLOCK_HZ = 100000UL;
 const uint8_t I2C_SDA_PIN = 20;               // Mega: D20 = SDA
 const uint8_t I2C_SCL_PIN = 21;               // Mega: D21 = SCL
+// Таймаут одной операции Wire. Важно: на AVR twi_readFrom() считает это время
+// на ВСЮ передачу, а не на байт. 32 байта кадра на 100 кГц — это ~3,2 мс, то
+// есть прежние 3 мс обрывали нормальный ответ дальнего модуля (и «переход на
+// 100 кГц» на деле не работал). 10 мс — с запасом; зависшую шину всё равно
+// видно за один опрос, а расклинка идёт после восьми.
+const uint16_t I2C_TIMEOUT_US = 10000;
 // 8 опросов подряд (2 с) без единого ACK — шину пора расклинивать.
 const uint8_t I2C_SILENT_ROUNDS_BEFORE_RECOVERY = 8;
 const uint32_t I2C_RECOVERY_INTERVAL_MS = 5000;
+// Модуль не отдал кадр три опроса подряд (750 мс) — проверяем его на 100 кГц:
+// если там он отвечает, значит 400 кГц для его провода/подтяжек слишком много,
+// и мастер остаётся на 100 кГц. Иначе возвращаемся на 400 кГц и не дёргаем
+// шину чаще раза в 5 с.
+const uint8_t I2C_SLOW_RETRY_MISSES = 3;
+const uint32_t I2C_SLOW_RETRY_INTERVAL_MS = 5000;
+// Пока хотя бы один модуль не на связи — полный скан шины раз в минуту (и
+// сразу при потере связи): он печатает, кто отвечает, и пробует 100 кГц.
+const uint32_t I2C_HEALTH_PERIOD_MS = 60000;
 const uint16_t TELEMETRY_PERIOD_MS = 250;
 const uint16_t SLAVE_STALE_MS = 1000;
 const float DRIVE_ALIGNMENT_TOLERANCE_DEG = 2.5f;
@@ -1412,10 +1434,18 @@ bool slave_online[NUM_SLAVES] = {false, false, false};
 bool slave_fresh[NUM_SLAVES] = {false, false, false};
 uint32_t slave_last_frame_ms[NUM_SLAVES] = {0, 0, 0};   // когда кадр разобрался
 uint32_t slave_frame_hint_ms[NUM_SLAVES] = {0, 0, 0};   // когда об этом уже сказали
+// Версия кадра каждого слейва: 3 — новый (счётчик отдельным полем), 2 — старый.
+// В @TLM уходит своя у каждого модуля: по fw=2 видно плату, которую забыли
+// перепрошить.
+uint8_t slave_protocol[NUM_SLAVES] = {0, 0, 0};
+uint8_t slave_missed[NUM_SLAVES] = {0, 0, 0};           // опросов подряд без кадра
+uint32_t slave_slow_tried_ms[NUM_SLAVES] = {0, 0, 0};   // когда пробовали 100 кГц
 
 uint32_t i2c_clock_hz = I2C_CLOCK_HZ;          // может упасть до 100 кГц (см. i2cDiagnose)
+bool i2c_auto_slow = false;                    // уже перешли на безопасную скорость
 uint8_t bus_silent_rounds = 0;                 // опросов подряд без единого ACK
 uint32_t bus_recovered_at_ms = 0;
+uint32_t i2c_health_ms = 0;                    // последний полный скан «пока не все на связи»
 bool boot_scan_done = false;
 uint32_t boot_scan_at_ms = 0;
 
@@ -1454,7 +1484,7 @@ uint8_t i2cScanBus(uint8_t* found, uint8_t capacity) {
     if (count < capacity) found[count] = address;
     ++count;
   }
-  Wire.setWireTimeout(3000, true);
+  Wire.setWireTimeout(I2C_TIMEOUT_US, true);
   return count;
 }
 
@@ -1485,45 +1515,89 @@ void i2cRecoverBus() {
   pinMode(I2C_SCL_PIN, INPUT_PULLUP);
   Wire.begin();
   Wire.setClock(i2c_clock_hz);
-  Wire.setWireTimeout(3000, true);
+  Wire.setWireTimeout(I2C_TIMEOUT_US, true);
 }
 
-// Сколько модулей из 2/3/4 не ответили; печатает понятную причину.
-void i2cReportModules(uint8_t count, const uint8_t* found) {
+// Сколько модулей из 2/3/4 не ответили.
+uint8_t i2cMissingModules(uint8_t count, const uint8_t* found) {
   uint8_t missing = 0;
   for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
     bool answered = false;
     for (uint8_t k = 0; k < count; ++k) {
       if (found[k] == SLAVE_ADDRESSES[i]) answered = true;
     }
-    if (answered) continue;
-    ++missing;
+    if (!answered) ++missing;
   }
+  return missing;
+}
+
+// Индекс единственного молчащего модуля (0 — FR, 1 — RL, 2 — RR) или 0xFF,
+// если молчат несколько: по нему подсказываем точный адрес для команды «a».
+uint8_t i2cOnlyMissing(uint8_t count, const uint8_t* found) {
+  uint8_t index = 0xFF;
+  uint8_t total = 0;
+  for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
+    bool answered = false;
+    for (uint8_t k = 0; k < count; ++k) {
+      if (found[k] == SLAVE_ADDRESSES[i]) answered = true;
+    }
+    if (answered) continue;
+    ++total;
+    index = i;
+  }
+  return total == 1 ? index : 0xFF;
+}
+
+// Кто из 2/3/4 не ответил — с адресом каждой молчащей платы, а не только
+// «ответили не все». Так по журналу сразу видно, что пропал именно RR (4).
+void i2cReportModules(uint8_t count, const uint8_t* found) {
+  const uint8_t missing = i2cMissingModules(count, found);
   if (missing == 0) return;
   if (missing < NUM_SLAVES) {
     note(PSTR("I2C: ответили не все адреса 2/3/4 — проверьте плату, её питание и адрес"));
-    return;
+  } else {
+    note(PSTR("I2C: не ответил ни один слейв (2/3/4)"));
+    note(PSTR("I2C: проверьте SDA D20, SCL D21, общий GND и подтяжки 4,7 кОм"));
+    note(PSTR("I2C: три платы с одним адресом 2 тоже дают этот симптом — задайте a 3 и a 4"));
   }
-  note(PSTR("I2C: не ответил ни один слейв (2/3/4)"));
-  note(PSTR("I2C: проверьте SDA D20, SCL D21, общий GND и подтяжки 4,7 кОм"));
-  note(PSTR("I2C: три платы с одним адресом 2 тоже дают этот симптом — задайте a 3 и a 4"));
+  for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
+    bool answered = false;
+    for (uint8_t k = 0; k < count; ++k) {
+      if (found[k] == SLAVE_ADDRESSES[i]) answered = true;
+    }
+    if (answered) continue;
+    noteModule(SLAVE_MODULE_IDS[i],
+               PSTR("НЕТ СВЯЗИ: адрес %d не отвечает. Питание, SDA D20/SCL D21, общий GND; адрес — «a» на её USB"),
+               (int)SLAVE_ADDRESSES[i]);
+  }
 }
 
 void i2cDiagnose() {
   uint8_t found[12];
   uint8_t count = i2cScanBus(found, sizeof(found));
   if (count > sizeof(found)) count = sizeof(found);   // в списке — сколько влезло
-  if (count == 0 && i2c_clock_hz != I2C_SAFE_CLOCK_HZ) {
-    // 400 кГц не прошли — пробуем 100 кГц: с внутренними подтяжками это норма.
+  if (i2cMissingModules(count, found) > 0 && i2c_clock_hz > I2C_SAFE_CLOCK_HZ) {
+    // Отвечают не все. Частая причина — 400 кГц для этой шины слишком много:
+    // длинный шлейф и только внутренние подтяжки. Раньше мастер падал на
+    // 100 кГц, только если не ответил НИКТО; при «RR не видно, остальные
+    // иногда пропадают» он оставался на 400 кГц. Пробуем 100 кГц и остаёмся
+    // на них, если так отвечают больше модулей.
+    const uint8_t missing_fast = i2cMissingModules(count, found);
     Wire.setClock(I2C_SAFE_CLOCK_HZ);
-    uint8_t slower = i2cScanBus(found, sizeof(found));
-    if (slower > sizeof(found)) slower = sizeof(found);
-    if (slower > 0) {
+    uint8_t slower_found[12];
+    uint8_t slower = i2cScanBus(slower_found, sizeof(slower_found));
+    if (slower > sizeof(slower_found)) slower = sizeof(slower_found);
+    const uint8_t missing_slow = i2cMissingModules(slower, slower_found);
+    if (missing_slow < missing_fast) {
       i2c_clock_hz = I2C_SAFE_CLOCK_HZ;
+      i2c_auto_slow = true;
       count = slower;
-      note(PSTR("I2C: на 400 кГц никто не ответил, оставил 100 кГц — проверьте подтяжки"));
+      memcpy(found, slower_found, (size_t)slower);
+      note(PSTR("I2C: на 400 кГц отвечали %u из 3, на 100 кГц — %u из 3; работаю на 100 кГц"),
+           (unsigned)(NUM_SLAVES - missing_fast), (unsigned)(NUM_SLAVES - missing_slow));
     } else {
-      Wire.setClock(I2C_CLOCK_HZ);
+      Wire.setClock(i2c_clock_hz);
+      note(PSTR("I2C: на 100 кГц отвечают те же модули — дело не в скорости шины"));
     }
   }
   char list[48];
@@ -1538,32 +1612,77 @@ void i2cDiagnose() {
   } else {
     note(PSTR("I2C %lu кГц: отвечают %s"), (unsigned long)(i2c_clock_hz / 1000), list);
   }
+  // Адрес, которого нет в прошивке: чаще всего плату когда-то перевели
+  // командой «a», и адрес остался в EEPROM (он главнее NODE_ADDRESS, поэтому
+  // перепрошивка motor_node_RR.ino его не возвращает).
+  for (uint8_t k = 0; k < count; ++k) {
+    bool expected = false;
+    for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
+      if (found[k] == SLAVE_ADDRESSES[i]) expected = true;
+    }
+    if (expected) continue;
+    const uint8_t only = i2cOnlyMissing(count, found);
+    if (only != 0xFF) {
+      note(PSTR("I2C: лишний адрес %u — у платы адрес из EEPROM; на её USB: a %d"),
+           (unsigned)found[k], (int)SLAVE_ADDRESSES[only]);
+    } else {
+      note(PSTR("I2C: лишний адрес %u — у платы адрес из EEPROM; на её USB: a по месту колеса"),
+           (unsigned)found[k]);
+    }
+    break;
+  }
   i2cReportModules(count, found);
 }
 
-// Кадр слейва: "ток,цель,состояние,об/мин×10,тяга\n", не длиннее 32 байт.
+// Кадр слейва, не длиннее 32 байт:
+//   v3 (fw=3): "ток,цель,СОСТОЯНИЕ_hex,об/мин×10,тяга,счётчик\n"
+//   v2 (fw=2): "ток,цель,состояние,об/мин×10,тяга\n" — счётчик кадров лежал в
+//              битах 12–15 состояния вместе с режимом потенциометра.
+// Мастер понимает оба, чтобы плата со старой прошивкой была видна (и в @TLM
+// честно писалось fw=2), но у v2 режим потенциометра восстановить нельзя:
+// бит 0x1000 в том кадре — младший бит счётчика. Поэтому у v2 pm=-1.
 bool parseSlaveFrame(char* line, int32_t* current, int32_t* target, uint16_t* status,
-                     uint32_t* module_rpm_x10, int8_t* module_drive) {
-  long fields[5];
+                     uint32_t* module_rpm_x10, int8_t* module_drive,
+                     uint8_t* seq, uint8_t* protocol) {
+  uint8_t fields = 1;
+  for (const char* p = line; *p; ++p) {
+    if (*p == ',') ++fields;
+  }
+  if (fields != 5 && fields != 6) return false;
+  const bool v3 = fields == 6;
+  long values[6];
   char* p = line;
-  for (uint8_t i = 0; i < 5; ++i) {
+  for (uint8_t i = 0; i < fields; ++i) {
     char* end = nullptr;
-    fields[i] = strtol(p, &end, 10);
+    values[i] = strtol(p, &end, (v3 && i == 2) ? 16 : 10);
     if (end == p) return false;
     p = end;
-    if (i < 4) {
+    if (i + 1 < fields) {
       if (*p != ',') return false;
       ++p;
     }
   }
   if (*p != '\0') return false;
-  if (fields[2] < 0 || fields[2] > 0xFFFFL || !(fields[2] & STATUS_V2) || fields[3] < 0 ||
-      fields[4] < -DRIVE_MAX_PERCENT || fields[4] > DRIVE_MAX_PERCENT) return false;
-  *current = (int32_t)fields[0];
-  *target = (int32_t)fields[1];
-  *status = (uint16_t)fields[2];
-  *module_rpm_x10 = (uint32_t)fields[3];
-  *module_drive = (int8_t)fields[4];
+  if (values[2] < 0 || values[2] > 0xFFFFL || !(values[2] & STATUS_V2) ||
+      values[3] < 0 || values[4] < -DRIVE_MAX_PERCENT || values[4] > DRIVE_MAX_PERCENT) {
+    return false;
+  }
+  *current = (int32_t)values[0];
+  *target = (int32_t)values[1];
+  if (v3) {
+    if (values[5] < 0 || values[5] > 0x0F) return false;
+    *status = (uint16_t)values[2];
+    *seq = (uint8_t)values[5];
+    *protocol = 3;
+  } else {
+    // Биты 12–15 в старом кадре — счётчик, а не состояние: биты 0x1000/0x2000
+    // испорчены им, поэтому в status их не переносим вовсе.
+    *status = (uint16_t)(values[2] & 0x0FFF);
+    *seq = (uint8_t)((values[2] >> 12) & 0x0F);
+    *protocol = 2;
+  }
+  *module_rpm_x10 = (uint32_t)values[3];
+  *module_drive = (int8_t)values[4];
   return true;
 }
 
@@ -1603,15 +1722,19 @@ uint8_t requestSlaveFrame(uint8_t index) {
   return received;
 }
 
-void pollSlaves() {
-  const uint32_t now = millis();
-  uint8_t heard = 0;                   // сколько слейвов вообще ACK-нули адрес
-  bool answered[NUM_SLAVES] = {false, false, false};
-  for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
-    slave_fresh[i] = false;
-    const uint8_t received = requestSlaveFrame(i);
-    answered[i] = received > 0;
-    if (answered[i]) ++heard;
+// Прочитать и разобрать кадр одного слейва. answered — адрес вообще ACK-нул
+// (пусть даже кадр битый): это отличает «плата молчит» от коллизии адресов.
+bool readSlaveFrame(uint8_t index, int32_t* current, int32_t* target, uint16_t* status,
+                    uint32_t* module_rpm_x10, int8_t* module_drive,
+                    uint8_t* seq, uint8_t* protocol, bool* answered) {
+  *answered = false;
+  // Две попытки: requestSlaveFrame уже повторяет пустой ответ, а здесь
+  // повторяем ОБРЕЗАННЫЙ/битый кадр. Одиночная помеха не должна превращаться
+  // в «нет связи» на четверть секунды.
+  for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+    const uint8_t received = requestSlaveFrame(index);
+    if (received == 0) return false;
+    *answered = true;
     char buffer[40];
     uint8_t length = 0;
     bool complete = false;
@@ -1625,18 +1748,64 @@ void pollSlaves() {
       }
     }
     buffer[length] = '\0';
+    if (complete && parseSlaveFrame(buffer, current, target, status, module_rpm_x10,
+                                    module_drive, seq, protocol)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void pollSlaves() {
+  const uint32_t now = millis();
+  uint8_t heard = 0;                   // сколько слейвов вообще ACK-нули адрес
+  bool answered[NUM_SLAVES] = {false, false, false};
+  for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
+    slave_fresh[i] = false;
     int32_t current = 0;
     int32_t target = 0;
     uint16_t status = 0;
     uint32_t module_rpm_x10 = 0;
     int8_t module_drive = 0;
-    const bool parsed = received > 0 && complete &&
-        parseSlaveFrame(buffer, &current, &target, &status, &module_rpm_x10, &module_drive);
+    uint8_t seq = 0;
+    uint8_t protocol = 0;
+    bool ack = false;
+    bool parsed = readSlaveFrame(i, &current, &target, &status, &module_rpm_x10,
+                                 &module_drive, &seq, &protocol, &ack);
+    answered[i] = ack;
+    if (ack) ++heard;
+    // Три опроса подряд без кадра (750 мс) — возможно, 400 кГц для этой платы
+    // слишком быстрые: длинный шлейф и только внутренние подтяжки. Пробуем
+    // 100 кГц. Если кадр прочитался — остаёмся на 100 кГц: остальным платам
+    // это не мешает, а дальний модуль (обычно RR) возвращается на связь.
+    if (!parsed && !i2c_auto_slow && i2c_clock_hz > I2C_SAFE_CLOCK_HZ) {
+      if (slave_missed[i] < 255) ++slave_missed[i];
+      if (slave_missed[i] >= I2C_SLOW_RETRY_MISSES &&
+          (uint32_t)(now - slave_slow_tried_ms[i]) >= I2C_SLOW_RETRY_INTERVAL_MS) {
+        slave_slow_tried_ms[i] = now;
+        Wire.setClock(I2C_SAFE_CLOCK_HZ);
+        uint8_t slow_seq = 0;
+        uint8_t slow_protocol = 0;
+        bool slow_ack = false;
+        const bool slow_ok = readSlaveFrame(i, &current, &target, &status, &module_rpm_x10,
+                                            &module_drive, &slow_seq, &slow_protocol, &slow_ack);
+        if (slow_ok) {
+          parsed = true;
+          seq = slow_seq;
+          protocol = slow_protocol;
+          i2c_clock_hz = I2C_SAFE_CLOCK_HZ;
+          i2c_auto_slow = true;
+          note(PSTR("I2C: на 400 кГц кадры терялись, на 100 кГц модуль отвечает — остаюсь на 100 кГц"));
+        } else {
+          Wire.setClock(i2c_clock_hz);
+        }
+      }
+    }
     if (parsed) {
-      // Кадр с тем же номером — loop() слейва не обновляет его: связи нет.
-      const uint8_t seq = (uint8_t)(status >> 12);
+      // Кадр с тем же номером — loop() слейва его не обновляет: связи нет.
       if (seq != slave_seq[i]) {
         slave_seq[i] = seq;
+        slave_protocol[i] = protocol;
         reportSlaveChange(i, slave_status[i], status);
         slave_current[i] = current;
         slave_target[i] = target;
@@ -1648,10 +1817,14 @@ void pollSlaves() {
         slave_online[i] = true;
         slave_fresh[i] = true;
       }
+      slave_missed[i] = 0;
     }
     if (slave_online[i] && (uint32_t)(now - slave_last_seen_ms[i]) > SLAVE_STALE_MS) {
       slave_online[i] = false;
       noteModule(SLAVE_MODULE_IDS[i], PSTR("нет связи по I2C (адрес %d)"), (int)SLAVE_ADDRESSES[i]);
+      // Полный скан — сразу, не ожидая очередной минуты: в журнале окажется,
+      // кто отвечает, нет ли на шине лишнего адреса и помогает ли 100 кГц.
+      i2c_health_ms = now - I2C_HEALTH_PERIOD_MS;
     }
   }
   // Адрес отвечает, а кадр не разбирается: так выглядит коллизия адресов
@@ -1661,7 +1834,7 @@ void pollSlaves() {
     if ((uint32_t)(now - slave_last_frame_ms[i]) < 1500) continue;
     if ((uint32_t)(now - slave_frame_hint_ms[i]) < 10000) continue;
     slave_frame_hint_ms[i] = now;
-    noteModule(SLAVE_MODULE_IDS[i], PSTR("адрес %d отвечает, но кадр битый — старая прошивка или две платы тут"),
+    noteModule(SLAVE_MODULE_IDS[i], PSTR("адрес %d отвечает, но кадр битый — две платы на одном адресе или старая прошивка"),
                (int)SLAVE_ADDRESSES[i]);
   }
   // Никто не ответил ни разу за 2 с — почти наверняка шина удерживается
@@ -1679,10 +1852,23 @@ void pollSlaves() {
   } else {
     bus_silent_rounds = 0;
   }
+  // Пока кто-то не на связи — полный скан раз в минуту (и сразу при потере):
+  // он печатает, кто отвечает, сам пробует 100 кГц и подсказывает про лишний
+  // адрес в EEPROM. Так «RR не виден» не остаётся без объяснения в журнале.
+  if ((uint32_t)(now - i2c_health_ms) >= I2C_HEALTH_PERIOD_MS) {
+    bool missing = false;
+    for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
+      if (!slave_online[i]) missing = true;
+    }
+    if (missing) {
+      i2c_health_ms = now;
+      i2cDiagnose();
+    }
+  }
 }
 
 void appendTelemetry(const char* module, int32_t current, int32_t target, uint16_t status,
-                     uint32_t module_rpm_x10, int8_t module_drive) {
+                     uint32_t module_rpm_x10, int8_t module_drive, uint8_t firmware) {
   char deg[16];
   char tgt[16];
   char rpm[16];
@@ -1695,18 +1881,19 @@ void appendTelemetry(const char* module, int32_t current, int32_t target, uint16
       PSTR("@TLM mod=%s deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u rpm=%s drive=%d fw=%u pot=%d pm=%d t=%lu\r\n"),
       module, deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
       (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
-      home, (unsigned)((status >> 8) & 0x0F), rpm, (int)module_drive, (unsigned)FIRMWARE_PROTOCOL,
+      home, (unsigned)((status >> 8) & 0x0F), rpm, (int)module_drive, (unsigned)firmware,
       (status & STATUS_POT) ? 1 : 0, (status & STATUS_POT_MODE_SUPPORTED) ? ((status & STATUS_POT_MODE) ? 1 : 0) : -1, (unsigned long)millis());
   if (n <= 0 || n >= (int)sizeof(line)) return;
   txAppend(line, (uint16_t)n);
 }
 
 void buildTelemetry() {
-  appendTelemetry(MODULE_ID, stepNow(), targetNow(), moduleStatus(), rpm_x10, drive_percent);
+  appendTelemetry(MODULE_ID, stepNow(), targetNow(), moduleStatus(), rpm_x10, drive_percent,
+                  FIRMWARE_PROTOCOL);
   for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
     if (!slave_fresh[i]) continue;
     appendTelemetry(SLAVE_MODULE_IDS[i], slave_current[i], slave_target[i], slave_status[i],
-                    slave_rpm_x10[i], slave_drive[i]);
+                    slave_rpm_x10[i], slave_drive[i], slave_protocol[i]);
   }
 }
 
@@ -1765,6 +1952,12 @@ void broadcastCommand(const char* command) {
 void printReport() {
   printModuleStatus();
   const uint32_t now = millis();
+  uint8_t online = 0;
+  for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
+    if (slaveFresh(i, now)) ++online;
+  }
+  note(PSTR("I2C: %lu кГц%s, модулей на связи: %u из %u"), (unsigned long)(i2c_clock_hz / 1000),
+       i2c_auto_slow ? " (авто)" : "", (unsigned)online, (unsigned)NUM_SLAVES);
   for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
     const char* module = SLAVE_MODULE_IDS[i];
     if (!slaveFresh(i, now)) {
@@ -1932,7 +2125,7 @@ void setup() {
   // молча вырезался и таймаут TWI оставался выключен (twi_timeout_us = 0):
   // зависшая шина (слейв удержал SDA, помеха) вешала loop() в Wire навсегда.
   // Сам метод есть в ядре arduino:avr начиная с 1.8.3.
-  Wire.setWireTimeout(3000, true);  // зависшая шина I2C не останавливает loop()
+  Wire.setWireTimeout(I2C_TIMEOUT_US, true);  // 32 байта на 100 кГц — ~3,2 мс, нужен запас
   steeringSetup();
   last_telemetry_ms = millis();
   // Опрос шины — через секунду: слейвы, включённые вместе с мастером, успевают
@@ -1941,7 +2134,12 @@ void setup() {
   // Первую расклинку шины и первое предупреждение о битом кадре разрешаем
   // сразу: «в прошлый раз» этого не было.
   bus_recovered_at_ms = millis() - I2C_RECOVERY_INTERVAL_MS;
-  for (uint8_t i = 0; i < NUM_SLAVES; ++i) slave_frame_hint_ms[i] = millis() - 10000;
+  for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
+    slave_frame_hint_ms[i] = millis() - 10000;
+    // Первую пробу 100 кГц разрешаем сразу: иначе модуль, пропавший в первые
+    // 5 с после включения, ждал бы проверки скорости до пятой секунды.
+    slave_slow_tried_ms[i] = millis() - I2C_SLOW_RETRY_INTERVAL_MS;
+  }
   note(PSTR("--- MASTER: руль v%u, датчики: ноль D18, пот A0; ноль не задан — k или z ---"),
        (unsigned)FIRMWARE_PROTOCOL);
   potBootNote();

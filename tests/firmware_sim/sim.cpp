@@ -609,12 +609,16 @@ static void scenario_frame_limits() {
   FR::current_step = -123456;
   FR::target_step = 123456;
   FR::rpm_x10 = 4000000000UL;
+  FR::drive_percent = -20;
   FR::refreshFrame();
   const uint8_t index = FR::frame_front;
   const std::string frame(FR::frame[index], FR::frame_length[index]);
   CHECK(frame.size() <= 32, "кадр I2C не длиннее 32 байт: %zu «%s»", frame.size(), frame.c_str());
   CHECK(frame.rfind("-99999,99999,", 0) == 0, "шаги ограничены ±99999: %s", frame.c_str());
-  CHECK(frame.find(",99999,0\n") != std::string::npos, "об/мин ограничены: %s", frame.c_str());
+  CHECK(frame.find(",99999,-20,") != std::string::npos, "об/мин и тяга на месте: %s", frame.c_str());
+  int commas = 0;
+  for (char ch : frame) commas += ch == ',' ? 1 : 0;
+  CHECK(commas == 5, "кадр v3: шесть полей, счётчик отдельно: %s", frame.c_str());
 }
 
 // ---------------------------------------------------------------- вся система
@@ -664,7 +668,7 @@ static void scenario_system_calibrate_all() {
     const std::string tag = std::string("@TLM mod=") + module + " deg=0.00 tgt=0.00 moving=0 cal=1 cycle=0 calib=0";
     CHECK(out.find(tag) != std::string::npos, "телеметрия %s после калибровки", module);
   }
-  CHECK(has(board_fl, "home=opto err=0") && has(board_fl, "fw=2"), "поля home/err/fw в @TLM");
+  CHECK(has(board_fl, "home=opto err=0") && has(board_fl, "fw=3"), "поля home/err/fw в @TLM");
   CHECK(has(board_fl, "# FR: Калибровка ЗАВЕРШЕНА!") && has(board_fl, "# RR: Калибровка ЗАВЕРШЕНА!"),
         "мастер сообщает о калибровке слейвов");
   CHECK(has(board_fl, "# FL: Калибровка ЗАВЕРШЕНА!"), "и о своей");
@@ -872,6 +876,123 @@ static void scenario_bus_recovery() {
   CHECK(M::slave_online[0] && M::slave_online[1] && M::slave_online[2], "слейвы вернулись на шину");
 }
 
+// Счётчик кадров v3 — отдельное поле, а не биты 12–15 состояния. В v2 он
+// делил их с режимом потенциометра (0x1000/0x2000): pm= мигал 0/1, и
+// «Без потенциометра» в телеметрии выглядел то включённым, то выключенным.
+static void scenario_i2c_frame_v3_status() {
+  calibrate_all();
+  board_fl.serial.send("pm 0");
+  sim::run_for_ms(700);
+  CHECK(!M::pot_enabled && !node_fr::pot_enabled && !node_rl::pot_enabled && !node_rr::pot_enabled,
+        "pm 0 дошёл до всех четырёх плат");
+  const size_t mark = board_fl.serial.output.size();
+  sim::run_for_ms(2000);                 // восемь периодов телеметрии
+  const std::string tail = board_fl.serial.output.substr(mark);
+  CHECK(tail.find("pm=0") != std::string::npos, "pm=0 в телеметрии: %s", tail.c_str());
+  CHECK(tail.find("pm=1") == std::string::npos, "pm= не мигает: %s", tail.c_str());
+  CHECK(tail.find("pm=-1") == std::string::npos, "режим всех плат подтверждён");
+  CHECK(tail.find("fw=3") != std::string::npos, "fw=3 у новых кадров");
+}
+
+// Мастер понимает старый кадр v2 (5 полей), но не выдаёт его биты 0x1000/0x2000
+// за режим потенциометра: там лежал счётчик кадров, восстановить режим нельзя.
+static void scenario_i2c_frame_v2_compat() {
+  boot({&board_fl});
+  int32_t current = 0;
+  int32_t target = 0;
+  uint16_t status = 0;
+  uint32_t rpm = 0;
+  int8_t drive = 0;
+  uint8_t seq = 0;
+  uint8_t protocol = 0;
+  char v2[] = "-133,133,8256,0,0";       // 8256 = 0x2040: V2 | POT_MODE_SUPPORTED
+  CHECK(M::parseSlaveFrame(v2, &current, &target, &status, &rpm, &drive, &seq, &protocol),
+        "старый кадр разбирается");
+  CHECK(protocol == 2 && seq == 2, "fw=2: счётчик из битов 12–15, seq=%u", (unsigned)seq);
+  CHECK((status & (M::STATUS_POT_MODE | M::STATUS_POT_MODE_SUPPORTED)) == 0,
+        "биты режима из старого кадра не выдумываются");
+  char v3[] = "-133,133,2040,0,0,7";
+  CHECK(M::parseSlaveFrame(v3, &current, &target, &status, &rpm, &drive, &seq, &protocol),
+        "новый кадр разбирается");
+  CHECK(protocol == 3 && seq == 7 && (status & M::STATUS_POT_MODE_SUPPORTED),
+        "fw=3: режим и счётчик не пересекаются");
+  char bad[] = "-133,133,2040,0,0,16";
+  CHECK(!M::parseSlaveFrame(bad, &current, &target, &status, &rpm, &drive, &seq, &protocol),
+        "счётчик вне 0…15 отвергнут");
+}
+
+// Одиночная помеха на шине не должна выглядеть как потеря модуля: мастер
+// повторяет битый кадр, а не убирает колесо из телеметрии на четверть секунды.
+static void scenario_i2c_corrupt_frame_retry() {
+  calibrate_all();
+  board_rr.wire.corrupt_frames = 3;      // три битых кадра подряд
+  const size_t mark = board_fl.serial.output.size();
+  sim::run_for_ms(1500);
+  CHECK(M::slave_online[2], "битые кадры повторены, RR на связи");
+  CHECK(board_fl.serial.output.substr(mark).find("# RR: нет связи") == std::string::npos,
+        "ложной потери связи в журнале нет");
+}
+
+// RR на 400 кГц не отвечает (длинный шлейф, только внутренние подтяжки), на
+// 100 кГц работает. Раньше мастер уходил на 100 кГц, только если не ответил
+// НИКТО: при «RR не виден, остальные иногда пропадают» он оставался на 400.
+static void scenario_i2c_slow_bus_at_boot() {
+  board_fl.phys = -3000;
+  board_fr.phys = 2500;
+  board_rl.phys = 40;
+  board_rr.phys = -9000;
+  board_rr.flag_lo = 300;
+  board_rr.flag_hi = 700;
+  board_rr.wire.slow_bus_only = true;
+  boot(all_boards());
+  sim::run_for_ms(2500);                 // скан при старте (+1 с) уходит на 100 кГц
+  CHECK(M::i2c_clock_hz == 100000, "мастер сам перешёл на 100 кГц: %lu",
+        (unsigned long)M::i2c_clock_hz);
+  CHECK(has(board_fl, "работаю на 100 кГц") || has(board_fl, "остаюсь на 100 кГц"),
+        "в журнале объяснён переход");
+  board_fl.serial.send("k");
+  sim::run_for_ms(5);
+  CHECK(wait_until(all_idle, 30000), "калибровка всех колёс закончилась");
+  sim::run_for_ms(600);
+  CHECK(M::slave_online[2] && node_rr::zero_set, "RR на связи и откалиброван");
+  CHECK(has(board_fl, "# RR: на связи по I2C"), "журнал: RR вернулся на шину");
+}
+
+// То же на ходу: RR работал, потом провод/подтяжки «поплыли» и на 400 кГц он
+// пропал. Мастер обязан через три опроса попробовать 100 кГц и вернуть RR.
+static void scenario_i2c_slow_bus_runtime() {
+  calibrate_all();
+  CHECK(M::i2c_clock_hz == 400000 && M::slave_online[2], "до сбоя RR на 400 кГц");
+  board_rr.wire.slow_bus_only = true;
+  sim::run_for_ms(5000);
+  CHECK(M::i2c_clock_hz == 100000, "мастер перешёл на 100 кГц: %lu",
+        (unsigned long)M::i2c_clock_hz);
+  CHECK(has(board_fl, "остаюсь на 100 кГц"), "в журнале объяснён переход");
+  CHECK(M::slave_online[2], "RR снова на связи");
+  const size_t mark = board_fl.serial.output.size();
+  sim::run_for_ms(600);
+  CHECK(board_fl.serial.output.substr(mark).find("@TLM mod=RR") != std::string::npos,
+        "RR снова в телеметрии");
+}
+
+// Адрес платы мог остаться в EEPROM от прежней команды «a»: RR отвечает на 5,
+// и мастер обязан не просто сказать «ответили не все», а назвать лишний адрес.
+static void scenario_i2c_unexpected_address() {
+  boot(all_boards());
+  sim::run_for_ms(600);
+  board_rr.serial.send("a 5");
+  sim::run_for_ms(10);
+  CHECK(sim::bus[5] == &board_rr.wire && sim::bus[4] == nullptr, "RR переехал на адрес 5");
+  const size_t mark = board_fl.serial.output.size();
+  board_fl.serial.send("i2c");
+  sim::run_for_ms(50);
+  const std::string tail = board_fl.serial.output.substr(mark);
+  CHECK(tail.find("лишний адрес 5") != std::string::npos, "лишний адрес назван: %s", tail.c_str());
+  CHECK(tail.find("на её USB: a 4") != std::string::npos, "подсказан адрес RR: %s", tail.c_str());
+  CHECK(tail.find("RR: НЕТ СВЯЗИ: адрес 4") != std::string::npos,
+        "молчащий модуль назван по имени: %s", tail.c_str());
+}
+
 static void scenario_tlm_dump() {
   calibrate_all();
   board_fl.serial.send("q");
@@ -974,6 +1095,12 @@ static const Scenario SCENARIOS[] = {
     {"node_address", scenario_node_address},
     {"bus_recovery", scenario_bus_recovery},
     {"i2c_duplicate_address", scenario_i2c_duplicate_address},
+    {"i2c_frame_v3_status", scenario_i2c_frame_v3_status},
+    {"i2c_frame_v2_compat", scenario_i2c_frame_v2_compat},
+    {"i2c_corrupt_frame_retry", scenario_i2c_corrupt_frame_retry},
+    {"i2c_slow_bus_at_boot", scenario_i2c_slow_bus_at_boot},
+    {"i2c_slow_bus_runtime", scenario_i2c_slow_bus_runtime},
+    {"i2c_unexpected_address", scenario_i2c_unexpected_address},
 };
 
 static int run_one(const Scenario& scenario) {
