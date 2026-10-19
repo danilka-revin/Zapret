@@ -791,6 +791,87 @@ static void scenario_system_broadcast() {
   CHECK(has(board_fl, "pm=1"), "enabled mode is in telemetry");
 }
 
+// Шина I2C: скан адресов, адрес платы в EEPROM и расклинка зависшей шины.
+static void scenario_i2c_scan() {
+  calibrate_all();
+  const size_t mark = board_fl.serial.output.size();
+  board_fl.serial.send("i2c");
+  sim::run_for_ms(20);
+  const std::string tail = board_fl.serial.output.substr(mark);
+  CHECK(tail.find("I2C 400 кГц: отвечают 2,3,4") != std::string::npos,
+        "скан шины видит все три слейва: %s", tail.c_str());
+  CHECK(tail.find("не ответил ни один слейв") == std::string::npos, "ложной тревоги нет");
+}
+
+static void scenario_i2c_missing_address() {
+  // Плата RR не запущена: мастер обязан сказать, что ответили не все адреса,
+  // а не молча показывать три колеса.
+  boot({&board_fl, &board_fr, &board_rl});
+  sim::run_for_ms(1500);
+  CHECK(has(board_fl, "I2C: ответили не все адреса 2/3/4"),
+        "диагностика неполной шины: %s", board_fl.serial.output.c_str());
+}
+
+static void scenario_node_address() {
+  boot({&board_fr});
+  CHECK(has(board_fr, "I2C 2 (по умолчанию)"), "адрес по умолчанию в приветствии");
+  board_fr.serial.send("a");
+  sim::run_for_ms(5);
+  CHECK(has(board_fr, "I2C адрес 2 (по умолчанию)"), "a показывает адрес и источник");
+  board_fr.serial.send("a 7");
+  sim::run_for_ms(5);
+  CHECK(FR::node_address == 7 && FR::node_address_from_eeprom, "адрес сменён на 7");
+  CHECK(sim::bus[7] == &board_fr.wire && sim::bus[2] == nullptr, "на шине только новый адрес");
+  board_fr.serial.send("a 0");
+  sim::run_for_ms(5);
+  CHECK(FR::node_address == 7, "адрес 0 отвергнут");
+  board_fr.serial.send("a 200");
+  sim::run_for_ms(5);
+  CHECK(FR::node_address == 7, "адрес 200 отвергнут");
+  // Перезагрузка платы: адрес берётся из EEPROM, а не из NODE_ADDRESS.
+  board_fr.serial.output.clear();
+  FR::setup();
+  sim::run_for_ms(10);
+  CHECK(has(board_fr, "I2C 7 (EEPROM)"), "EEPROM пережил перезагрузку: %s",
+        board_fr.serial.output.c_str());
+  board_fr.serial.send("p");
+  sim::run_for_ms(5);
+  CHECK(has(board_fr, "I2C адрес 7 (из EEPROM)"), "p печатает адрес");
+}
+
+static void scenario_i2c_duplicate_address() {
+  // Две платы на одном адресе 2 — ровно то, что получается, если прошить все
+  // три ноды одним файлом. Адрес ACK-ает, но кадры битые: мастер обязан
+  // сказать об этом, а не просто «нет связи».
+  boot(all_boards());
+  sim::run_for_ms(600);
+  board_rl.serial.send("a 2");
+  sim::run_for_ms(5);
+  CHECK(node_rl::node_address == 2 && sim::bus_claims[2] == 2, "две платы на адресе 2");
+  const size_t mark = board_fl.serial.output.size();
+  sim::run_for_ms(3000);
+  const std::string tail = board_fl.serial.output.substr(mark);
+  CHECK(tail.find("адрес 2 отвечает, но кадр битый") != std::string::npos,
+        "мастер распознал коллизию адресов: %s", tail.c_str());
+  CHECK(tail.find("@TLM mod=RL") == std::string::npos, "RL на связи не числится");
+}
+
+static void scenario_bus_recovery() {
+  calibrate_all();
+  CHECK(M::slave_online[0] && M::slave_online[1] && M::slave_online[2], "слейвы на связи");
+  // Слейв удерживает SDA: все запросы мастера не проходят — ровно симптом
+  // «виден только мастер».
+  sim::i2c_bus_stuck = true;
+  sim::i2c_scl_edges = 0;
+  const size_t mark = board_fl.serial.output.size();
+  sim::run_for_ms(3000);
+  const std::string tail = board_fl.serial.output.substr(mark);
+  CHECK(tail.find("шина молчит") != std::string::npos, "мастер сообщил о расклинке: %s", tail.c_str());
+  CHECK(!sim::i2c_bus_stuck, "9 тактов SCL освободили SDA");
+  sim::run_for_ms(1500);
+  CHECK(M::slave_online[0] && M::slave_online[1] && M::slave_online[2], "слейвы вернулись на шину");
+}
+
 static void scenario_tlm_dump() {
   calibrate_all();
   board_fl.serial.send("q");
@@ -888,6 +969,11 @@ static const Scenario SCENARIOS[] = {
     {"system_drive", scenario_system_drive},
     {"system_slave_offline", scenario_system_slave_offline},
     {"system_broadcast", scenario_system_broadcast},
+    {"i2c_scan", scenario_i2c_scan},
+    {"i2c_missing_address", scenario_i2c_missing_address},
+    {"node_address", scenario_node_address},
+    {"bus_recovery", scenario_bus_recovery},
+    {"i2c_duplicate_address", scenario_i2c_duplicate_address},
 };
 
 static int run_one(const Scenario& scenario) {

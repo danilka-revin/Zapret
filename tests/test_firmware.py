@@ -106,6 +106,24 @@ def test_wire_timeout_is_actually_enabled_on_avr():
         assert "Wire.setWireTimeout(3000, true)" in text, path
 
 
+def test_i2c_bus_can_be_diagnosed_and_slaves_get_their_own_address():
+    """«Виден только мастер»: у трёх плат один адрес или шина удерживается.
+
+    Поэтому адрес слейва задаётся с его USB и живёт в EEPROM (одна прошивка на
+    все три платы), мастер умеет опросить шину и расклинить зависшую SDA.
+    """
+    node = _text(NODE)
+    master = _text(MASTER)
+    assert "#include <avr/eeprom.h>" in node
+    assert "eeprom_update_byte" in node
+    assert 'PSTR("a")' in node and 'PSTR("addr")' in node
+    # «a» не рассылается слейвам — иначе все три получат один адрес.
+    assert 'PSTR("a")) == 0 || strcasecmp_P(command, PSTR("addr")) == 0' in master
+    assert "i2cScanBus" in master and "i2cRecoverBus" in master
+    assert 'PSTR("i2c")' in master
+    assert "I2C_SAFE_CLOCK_HZ" in master
+
+
 def test_master_accepts_monitor_commands_of_the_tested_sketch():
     master = _text(MASTER)
     core = _core(MASTER)
@@ -165,7 +183,9 @@ def test_firmware_simulation_scenarios(simulator):
     result = subprocess.run([str(simulator)], capture_output=True, text=True, timeout=600)
     report = result.stdout + "\n" + result.stderr[-6000:]
     assert result.returncode == 0, report
-    assert "30/30 сценариев прошли" in result.stdout, report
+    # Число сценариев меняется вместе с прошивкой: важно, что все прошли.
+    summary = re.search(r"(\d+)/(\d+) сценариев прошли", result.stdout)
+    assert summary and summary.group(1) == summary.group(2), report
 
 
 def test_server_parses_simulated_master_telemetry(simulator):

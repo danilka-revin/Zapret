@@ -368,6 +368,26 @@ def test_sync_firmware_desktop_copies_master_and_node(fake_host):
     assert "мастер" in result.stdout and "нода" in result.stdout
 
 
+def test_sync_firmware_desktop_writes_node_per_wheel(fake_host):
+    """Три готовых ноды: адрес и имя вписаны, перепутать платы нельзя.
+
+    Один и тот же motor_node.ino на всех трёх платах — все отвечают на адресе 2,
+    и мастер видит только себя. Поэтому рядом кладутся motor_node_FR/RL/RR.ino.
+    """
+    result = run("sync_firmware_desktop.sh")
+    assert result.returncode == 0, result.stderr
+    desktop = fake_host.root / "Desktop"
+    source = (FIRMWARE / "motor_node" / "motor_node.ino").read_text(encoding="utf-8")
+    for module, address in (("FR", 2), ("RL", 3), ("RR", 4)):
+        text = (desktop / ("motor_node_%s.ino" % module)).read_text(encoding="utf-8")
+        assert '#define NODE_ADDRESS %d' % address in text
+        assert '#define MODULE_ID "%s"' % module in text
+        # Всё остальное — байт в байт исходник из firmware/.
+        assert text == source.replace("#define NODE_ADDRESS 2", "#define NODE_ADDRESS %d" % address) \
+                           .replace('#define MODULE_ID "FR"', '#define MODULE_ID "%s"' % module)
+    assert "нода FR" in result.stdout and "нода RR" in result.stdout
+
+
 def test_sync_firmware_desktop_refreshes_after_update_and_keeps_fresh(fake_host):
     """Новая версия прошивки заменяет копию; актуальная копия не переписывается."""
     assert run("sync_firmware_desktop.sh").returncode == 0
