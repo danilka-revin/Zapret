@@ -1423,7 +1423,16 @@ void onCommandReceived(int count) {
 void onFrameRequested() {
   const uint8_t index = frame_front;
   const uint8_t length = frame_length[index];
-  if (length > 0) Wire.write((const uint8_t*)frame[index], length);
+  if (length == 0) return;
+  // Ответ всегда ровно 32 байта: мастер читает 32, а библиотека Wire на AVR
+  // после исчерпания буфера продолжает отдавать старые байты из-под записанного
+  // (twi_txBufferIndex идёт дальше txBufferLength). Хвост добиваем нулями ПОСЛЕ
+  // «\n»: мастер обрывает разбор по переводу строки и хвоста не видит, но и
+  // мусор на шину не уходит.
+  uint8_t buffer[32];
+  memset(buffer, 0, sizeof(buffer));
+  memcpy(buffer, frame[index], length);
+  Wire.write(buffer, sizeof(buffer));
 }
 
 long clampSteps(int32_t value) {
