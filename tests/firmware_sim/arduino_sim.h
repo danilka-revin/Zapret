@@ -115,6 +115,21 @@ inline int i2c_scl_edges = 0;
 // как у трёх плат, прошитых одним motor_node.ino (данные на шине рвутся).
 inline int bus_claims[128] = {0};
 
+// Детерминированный ГПСЧ для помех на шине: сценарии гоняются в своих
+// процессах (fork), поэтому каждый стартует с одного и того же зерна.
+inline uint64_t rng_state = 0x243F6A8885A308D3ULL;
+inline uint32_t rng_next() {
+  rng_state ^= rng_state << 13;
+  rng_state ^= rng_state >> 7;
+  rng_state ^= rng_state << 17;
+  return (uint32_t)(rng_state >> 32);
+}
+inline bool roll(double probability) {
+  if (probability <= 0.0) return false;
+  if (probability >= 1.0) return true;
+  return (rng_next() >> 8) * (1.0 / 16777216.0) < probability;
+}
+
 class SimWire {
  public:
   Board* board = nullptr;
@@ -134,6 +149,18 @@ class SimWire {
   // Сколько ближайших кадров придёт битыми (помеха/обрыв): мастер должен
   // повторить запрос, а не объявлять модуль потерянным с первого сбоя.
   uint8_t corrupt_frames = 0;
+  // Плата отвечает на этой скорости и медленнее (slow_bus_only == max_ok_hz
+  // 100000). Выше — NACK/таймаут, как у дальнего модуля на длинном шлейфе.
+  uint32_t max_ok_hz = 400000;
+  // Потери от скорости: вероятность провала транзакции на 400 кГц, на
+  // медленной шине пропорционально меньше («фронты SDA не успевают»).
+  double loss_rate = 0.0;
+  // Пачки помех (моторы, ШИМ): транзакция с вероятностью burst_rate открывает
+  // окно на burst_ms, в котором все обращения к плате падают. Так на роботе
+  // выглядят наводки: связь пропадает пачками, а не по одному кадру.
+  double burst_rate = 0.0;
+  double burst_ms = 0.0;
+  int64_t burst_until_us = 0;
 
   void begin() { unregister(); }
   void begin(uint8_t addr) {
@@ -148,6 +175,19 @@ class SimWire {
   void setWireTimeout(uint32_t, bool) {}
   void onReceive(void (*fn)(int)) { on_receive = fn; }
   void onRequest(void (*fn)()) { on_request = fn; }
+  // Общая модель отказа транзакции к этой плате. hz — скорость шины МАСТЕРА:
+  // маргинальный шлейф глушит именно её, а не тактование самой платы.
+  bool bus_fail(uint32_t hz) {
+    if (!connected) return true;
+    if (slow_bus_only && hz > 100000) return true;
+    if (hz > max_ok_hz) return true;
+    if (sim::now_us < burst_until_us) return true;
+    if (roll(burst_rate)) {
+      burst_until_us = sim::now_us + (int64_t)(burst_ms * 1000.0);
+      return true;
+    }
+    return roll(loss_rate * (double)hz / 400000.0);
+  }
   void beginTransmission(uint8_t addr) {
     tx_address = addr;
     tx.clear();
@@ -164,10 +204,10 @@ class SimWire {
   }
   uint8_t endTransmission() {
     ++transmissions;
-    if (i2c_bus_stuck) return 4;         // шина удерживается: BUS ERROR
     SimWire* slave = tx_address >= 0 && tx_address < 128 ? bus[tx_address] : nullptr;
-    if (!slave || !slave->connected || !slave->on_receive) return 2;  // NACK адреса
-    if (slave->slow_bus_only && clock_hz > 100000) return 2;          // не тянет 400 кГц
+    if (i2c_bus_stuck) return 4;         // шина удерживается: BUS ERROR
+    if (!slave || !slave->on_receive) return 2;   // NACK адреса
+    if (slave->bus_fail(clock_hz)) return 2;      // помеха/скорость/обрыв
     slave->rx.clear();
     for (uint8_t value : tx) slave->rx.push_back(value);
     slave->on_receive((int)tx.size());
@@ -175,10 +215,10 @@ class SimWire {
   }
   uint8_t requestFrom(uint8_t addr, uint8_t quantity) {
     rx.clear();
-    if (i2c_bus_stuck) return 0;         // таймаут: шина не отпускает SDA
     SimWire* slave = addr < 128 ? bus[addr] : nullptr;
-    if (!slave || !slave->connected || !slave->on_request) return 0;
-    if (slave->slow_bus_only && clock_hz > 100000) return 0;          // не тянет 400 кГц
+    if (i2c_bus_stuck) return 0;         // таймаут: шина не отпускает SDA
+    if (!slave || !slave->on_request) return 0;
+    if (slave->bus_fail(clock_hz)) return 0;      // помеха/скорость/обрыв
     slave->tx.clear();
     slave->on_request();
     for (uint8_t i = 0; i < quantity; ++i) {

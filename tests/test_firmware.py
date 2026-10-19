@@ -105,10 +105,11 @@ def test_wire_timeout_is_actually_enabled_on_avr():
         assert "#if defined(WIRE_HAS_TIMEOUT)" not in text, path
         assert "Wire.setWireTimeout(" in text and ", true)" in text, path
     # На AVR twi_readFrom() отсчитывает таймаут на ВСЮ передачу, а не на байт:
-    # 32 байта кадра на 100 кГц — это ~3,2 мс. С прежними 3 мс мастер обрывал
-    # нормальный ответ слейва, и «переход на 100 кГц» не работал.
+    # 32 байта кадра на 100 кГц — это ~3,2 мс, на самой медленной ступени
+    # (31 кГц) — уже ~9,5 мс. Таймаут обязан покрывать всю передачу с запасом,
+    # иначе «переход на медленную скорость» обрывал бы нормальный ответ.
     master = _text(MASTER)
-    assert "I2C_TIMEOUT_US = 10000" in master
+    assert "I2C_TIMEOUT_US = 25000" in master
     assert "Wire.setWireTimeout(I2C_TIMEOUT_US, true)" in master
     assert "Wire.setWireTimeout(3000, true)" in _text(NODE)
 
@@ -128,7 +129,7 @@ def test_i2c_bus_can_be_diagnosed_and_slaves_get_their_own_address():
     assert 'PSTR("a")) == 0 || strcasecmp_P(command, PSTR("addr")) == 0' in master
     assert "i2cScanBus" in master and "i2cRecoverBus" in master
     assert 'PSTR("i2c")' in master
-    assert "I2C_SAFE_CLOCK_HZ" in master
+    assert "I2C_SPEED_TIERS" in master
 
 
 def test_i2c_frame_counter_is_not_packed_into_status_bits():
@@ -153,18 +154,42 @@ def test_i2c_frame_counter_is_not_packed_into_status_bits():
 def test_master_adapts_the_i2c_speed_when_not_every_module_answers():
     """400 кГц — не догма: дальняя плата (RR) на них может не отвечать.
 
-    Раньше переход на 100 кГц был только при полном молчании шины. Теперь
-    мастер пробует 100 кГц при старте, после трёх опросов без кадра и в
-    ежеминутном скане, и остаётся на них, если так отвечают больше модулей.
+    Переход на медленную ступень теперь по лестнице 400 → 100 → 50 → 31 кГц
+    (медленнее TWBR не помещается) и срабатывает не только при полном молчании
+    шины, но и при «плавающих» потерях: три пропуска в окне последних восьми
+    опросов. Счётчик пропусков «подряд» сбрасывается каждым удачным кадром, и
+    при кадрах через раз модули мигали «то 4, то 2, то 1» вечно.
     """
     master = _text(MASTER)
     assert "i2cMissingModules" in master
     assert "i2c_auto_slow" in master
     assert "slave_missed" in master
     assert "I2C_SLOW_RETRY_MISSES" in master
+    assert "I2C_SPEED_TIERS" in master and "31250UL" in master
+    assert "slave_loss8" in master and "I2C_LOSS_LIMIT" in master
+    assert "speedDemotionDue" in master and "trySlowerSpeed" in master
     # Диагностика называет молчащий модуль, а не только «ответили не все».
     assert "НЕТ СВЯЗИ: адрес %d не отвечает" in master
     assert "лишний адрес %u" in master
+
+
+def test_master_holds_module_telemetry_through_short_bus_outages():
+    """Одиночная помеха на шине не должна мигать «нет связи» на экране.
+
+    Пока кадр модуля не старше SLAVE_HOLD_MS, мастер шлёт его последние
+    значения в @TLM — сервер не объявляет модуль потерянным. Тяга от этого не
+    «залёживается»: driveReady смотрит на slaveFresh (настоящий кадр), а не на
+    удержание. Журнал при этом не мигает: одна и та же смена состояния
+    печатается не чаще I2C_NOTE_REPEAT_MS.
+    """
+    master = _text(MASTER)
+    assert "SLAVE_HOLD_MS" in master and "slaveHeld" in master
+    assert "driveReady" in master and "slaveFresh" in master
+    assert "I2C_NOTE_REPEAT_MS" in master
+    node = _text(NODE)
+    # Слейв всегда отдаёт кадр целиком (32 байта): хвост после «\\n» добит
+    # нулями, и мастер не читает мусор из старого буфера Wire.
+    assert "memset(buffer, 0, sizeof(buffer))" in node
 
 
 def test_master_accepts_monitor_commands_of_the_tested_sketch():

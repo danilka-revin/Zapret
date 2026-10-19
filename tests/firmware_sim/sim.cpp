@@ -744,6 +744,14 @@ static void scenario_system_slave_offline() {
   board_rr.wire.connected = false;
   sim::run_for_ms(1500);
   CHECK(has(board_fl, "# RR: нет связи по I2C (адрес 4)"), "мастер сообщает о потере RR");
+  // Пока RR не старше SLAVE_HOLD_MS, мастер держит его последние значения в
+  // телеметрии: экран не мигает «то 4, то 2, то 1» от одиночной помехи.
+  const size_t hold_mark = board_fl.serial.output.size();
+  sim::run_for_ms(600);
+  CHECK(board_fl.serial.output.substr(hold_mark).find("@TLM mod=RR") != std::string::npos,
+        "RR удержан в телеметрии последние значения");
+  // Старше SLAVE_HOLD_MS — строк быть не должно: сервер честно видит потерю.
+  sim::run_for_ms(1600);
   const size_t mark = board_fl.serial.output.size();
   sim::run_for_ms(600);
   const std::string tail = board_fl.serial.output.substr(mark);
@@ -857,7 +865,13 @@ static void scenario_i2c_duplicate_address() {
   const std::string tail = board_fl.serial.output.substr(mark);
   CHECK(tail.find("адрес 2 отвечает, но кадр битый") != std::string::npos,
         "мастер распознал коллизию адресов: %s", tail.c_str());
-  CHECK(tail.find("@TLM mod=RL") == std::string::npos, "RL на связи не числится");
+  // RL держится в телеметрии до SLAVE_HOLD_MS (его последние значения ещё
+  // свежие), а вот дальше — не числится: кадры-то битые.
+  sim::run_for_ms(1000);
+  const size_t after_hold = board_fl.serial.output.size();
+  sim::run_for_ms(600);
+  CHECK(board_fl.serial.output.substr(after_hold).find("@TLM mod=RL") == std::string::npos,
+        "RL на связи не числится");
 }
 
 static void scenario_bus_recovery() {
@@ -973,6 +987,89 @@ static void scenario_i2c_slow_bus_runtime() {
   sim::run_for_ms(600);
   CHECK(board_fl.serial.output.substr(mark).find("@TLM mod=RR") != std::string::npos,
         "RR снова в телеметрии");
+}
+
+// Телеметрия всех модулей без провалов: в каждом окне полсекунды должна быть
+// хотя бы одна строка @TLM каждого модуля. Ровно это видит сервер: если строка
+// пропала, через секунду модуль на экране «нет связи».
+static void check_tlm_no_gaps(double total_ms) {
+  const char* modules[4] = {"FL", "FR", "RL", "RR"};
+  const int slices = (int)(total_ms / 500.0);
+  for (int slice = 0; slice < slices; ++slice) {
+    const size_t mark = board_fl.serial.output.size();
+    sim::run_for_ms(500);
+    const std::string window = board_fl.serial.output.substr(mark);
+    for (const char* mod : modules) {
+      CHECK(window.find(std::string("@TLM mod=") + mod) != std::string::npos,
+            "без провалов @TLM: в окне %d нет %s", slice, mod);
+    }
+  }
+}
+
+// «То 4 модуля на связи, то 2, то 1, мастер всегда виден»: на 400 кГц кадры
+// теряются через раз (маргинальный шлейф, только внутренние подтяжки), а
+// счётчик пропусков «подряд» сбрасывается каждым удачным кадром — мастер так
+// и сидел бы на 400 кГц, и модули мигали «нет связи» вечно. Теперь потери
+// считаются окном последних опросов, мастер сам уходит с 400 кГц, а пока кадр
+// не прочитан — держит модуль в телеметрии (SLAVE_HOLD_MS): экран не мигает.
+static void scenario_i2c_flaky_bus() {
+  board_fr.wire.loss_rate = 0.70;
+  board_rl.wire.loss_rate = 0.72;
+  board_rr.wire.loss_rate = 0.78;
+  boot(all_boards());
+  sim::run_for_ms(2000);                 // старт, первые опросы, скан шины
+  const unsigned long started = millis();
+  for (int i = 0; i < 24 && M::i2c_clock_hz >= 400000; ++i) sim::run_for_ms(250);
+  CHECK(M::i2c_clock_hz < 400000,
+        "мастер сам ушёл с 400 кГц при «плавающих» потерях: %lu кГц",
+        (unsigned long)M::i2c_clock_hz);
+  CHECK(millis() - started <= 6000, "переход по окну потерь занял меньше 6 с: %lu мс",
+        (unsigned long)(millis() - started));
+  CHECK(M::slave_online[0] && M::slave_online[1] && M::slave_online[2],
+        "все три слейва на связи");
+  check_tlm_no_gaps(10000);
+}
+
+// Пачки помех от моторов: шина «пропадает» на 1,2 с. Кадры не читаются, но
+// мастер держит модуль в телеметрии (SLAVE_HOLD_MS) — экран не мигает «нет
+// связи» от одиночной помехи; тяга при этом честно запрещается: slaveFresh
+// смотрит на настоящий кадр, а не на удержание в телеметрии.
+static void scenario_i2c_noise_bursts() {
+  calibrate_all();
+  board_rr.wire.burst_until_us = sim::now_us + 1200 * 1000;   // 1,2 с помех на RR
+  const size_t mark = board_fl.serial.output.size();
+  sim::run_for_ms(1100);                 // RR без кадров дольше SLAVE_STALE_MS
+  board_fl.serial.send("t 8");
+  sim::run_for_ms(20);
+  CHECK(all_pwm(0), "тяга запрещена: RR не давал кадр дольше секунды");
+  sim::run_for_ms(600);                  // окно помех закончилось, RR вернулся
+  const std::string tail = board_fl.serial.output.substr(mark);
+  int rr_lines = 0;
+  for (size_t pos = tail.find("@TLM mod=RR"); pos != std::string::npos;
+       pos = tail.find("@TLM mod=RR", pos + 1)) {
+    ++rr_lines;
+  }
+  CHECK(rr_lines >= 4, "RR держится в телеметрии все 1,2 с помехи: %d строк", rr_lines);
+  CHECK(tail.find("# RR: нет связи по I2C") != std::string::npos, "журнал пишет о потере");
+  // Дальше — «моторные» помехи пачками на всех трёх модулях: телеметрия
+  // обязана идти без провалов (удержание + повторы чтения).
+  for (sim::Board* board : {&board_fr, &board_rl, &board_rr}) {
+    board->wire.burst_rate = 0.02;
+    board->wire.burst_ms = 1200;
+  }
+  check_tlm_no_gaps(10000);
+}
+
+// Дальний модуль не тянет даже 50 кГц — только самую медленную ступень.
+// Мастер обязан пройти лестницу скоростей до конца, а не застрять на 100 кГц.
+static void scenario_i2c_very_slow_bus() {
+  board_rr.wire.max_ok_hz = 40000;       // держит 31,25 кГц и медленнее
+  boot(all_boards());
+  sim::run_for_ms(2500);
+  CHECK(M::i2c_clock_hz == 31250, "мастер дошёл до 31,25 кГц: %lu",
+        (unsigned long)M::i2c_clock_hz);
+  CHECK(M::slave_online[0] && M::slave_online[1] && M::slave_online[2],
+        "все три слейва на связи на медленной шине");
 }
 
 // Адрес платы мог остаться в EEPROM от прежней команды «a»: RR отвечает на 5,
@@ -1100,6 +1197,9 @@ static const Scenario SCENARIOS[] = {
     {"i2c_corrupt_frame_retry", scenario_i2c_corrupt_frame_retry},
     {"i2c_slow_bus_at_boot", scenario_i2c_slow_bus_at_boot},
     {"i2c_slow_bus_runtime", scenario_i2c_slow_bus_runtime},
+    {"i2c_flaky_bus", scenario_i2c_flaky_bus},
+    {"i2c_noise_bursts", scenario_i2c_noise_bursts},
+    {"i2c_very_slow_bus", scenario_i2c_very_slow_bus},
     {"i2c_unexpected_address", scenario_i2c_unexpected_address},
 };
 
