@@ -97,13 +97,17 @@
       // Target is an unfilled, dashed outline; actual is a smaller solid wheel.
       // Distinct shapes remain readable when colors coincide or angles overlap.
       if (Number.isFinite(wheel.targetRadians)) {
-        ctx.save(); ctx.rotate(-wheel.targetRadians);
+        // Прошивка считает положительный угол поворотом вправо (по часовой
+        // стрелке сверху). У canvas положительный rotate тоже по часовой,
+        // поэтому знак не инвертируем — иначе колесо на карте уезжает в
+        // противоположную сторону от реального.
+        ctx.save(); ctx.rotate(wheel.targetRadians);
         ctx.strokeStyle = colors.target; ctx.lineWidth = 2; ctx.setLineDash([4, 2]);
         ctx.beginPath(); ctx.rect(-.115 * k, -.065 * k, .23 * k, .13 * k); ctx.stroke();
         ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(.15 * k, 0); ctx.stroke();
         ctx.restore();
       }
-      ctx.rotate(-(wheel.radians === null ? 0 : wheel.radians));
+      ctx.rotate(wheel.radians === null ? 0 : wheel.radians);
       ctx.fillStyle = wheel.angle === null ? pal.wheel : colors.actual;
       ctx.strokeStyle = wheel.angle === null ? '#82757c' : colors.actual;
       ctx.setLineDash(wheel.angle === null ? [3, 2] : []);

@@ -264,7 +264,11 @@
     if (window.RCRobotModel) {
       const options = { light: state.theme === 'light' };
       if (state.previewActive) {
-        options.state = { wheels: ['FL', 'FR', 'RL', 'RR'].map(id => ({ id, angle: null, radians: null, targetAngle: steerRad * 180 / Math.PI, targetRadians: steerRad, homed: true })), estop: false };
+        // steerRad — в системе ROS: плюс означает поворот влево. Модель шасси
+        // рисует углы в системе прошивки (плюс — вправо), поэтому знак
+        // разворачиваем, иначе колёса на предпросмотре маршрута смотрят не туда.
+        const hardwareSteerRad = -steerRad;
+        options.state = { wheels: ['FL', 'FR', 'RL', 'RR'].map(id => ({ id, angle: null, radians: null, targetAngle: hardwareSteerRad * 180 / Math.PI, targetRadians: hardwareSteerRad, homed: true })), estop: false };
       }
       window.RCRobotModel.draw(ctx, screenX, screenY, yaw, scale, options);
       return;

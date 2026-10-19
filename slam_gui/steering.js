@@ -12,6 +12,8 @@
   let driveQueued = null;
   let driveSending = false;
   let driveFlush = Promise.resolve();
+  let presetBusy = false;
+  let presetMessage = null;
   const pending = Object.create(null);
   const feedback = Object.create(null);
   const $ = (id) => document.getElementById(id);
@@ -43,6 +45,19 @@
           <button type="button" class="rc-steering-btn" id="rc-steering-lock" hidden>Заблокировать</button>
           <span id="rc-steering-source" role="status">Проверка связи…</span>
         </div>
+        <section class="rc-presets" aria-label="Пресеты руления">
+          <div class="rc-presets-head">
+            <div><b>Быстрые режимы</b><small>Пресет выставляет углы всех четырёх колёс; тяга остаётся на кнопках ниже.</small></div>
+            <span id="rc-preset-status" role="status">Проверка связи…</span>
+          </div>
+          <div id="rc-preset-grid" class="rc-preset-grid"></div>
+          <div class="rc-preset-all">
+            <label for="rc-preset-angle">Угол всех колёс <b><span id="rc-preset-angle-value">0</span>°</b>
+              <input id="rc-preset-angle" type="range" min="-32" max="32" step="1" value="0" disabled /></label>
+            <button type="button" class="rc-steering-btn" id="rc-preset-apply" disabled>Задать всем</button>
+            <span class="rc-preset-scale"><span>← влево</span><span>прямо</span><span>вправо →</span></span>
+          </div>
+        </section>
         <section class="rc-drive-panel" aria-label="Тяговые моторы">
           <div class="rc-drive-top"><div><b>Тяга BLDC</b><small>Зажмите направление; отпустите для торможения</small></div>
             <span id="rc-drive-status" role="status">Нужен ноль всех колёс (калибровка)</span></div>
@@ -89,6 +104,14 @@
     overlay.querySelector('#rc-steering-lock').addEventListener('click', lock);
     IDS.forEach((id) => bindCard(id));
     bindDriveControls();
+    buildPresetButtons();
+    const presetAngle = $('rc-preset-angle');
+    if (presetAngle) presetAngle.addEventListener('input', () => {
+      const label = $('rc-preset-angle-value');
+      if (label) label.textContent = String(presetAngle.value);
+    });
+    const presetApply = $('rc-preset-apply');
+    if (presetApply) presetApply.addEventListener('click', () => { void applyPresetAngle(); });
     window.addEventListener('pointerup', releaseDrive);
     window.addEventListener('pointercancel', releaseDrive);
     window.addEventListener('blur', releaseDrive);
@@ -100,6 +123,7 @@
     if (overlay) overlay.hidden = true;
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
+    presetBusy = false;
     releaseDrive();
     void lock();
   }
@@ -135,11 +159,226 @@
       if (window.RCPotMode) window.RCPotMode.render(document.querySelector('.rc-steering-toolbar'), snapshot, authorized);
       IDS.forEach((id) => renderCard(id));
       renderDrive();
+      renderPresets();
     } catch (error) {
       $('rc-steering-source').textContent = error && error.message ? error.message : 'Нет связи с сервером.';
       IDS.forEach((id) => renderCard(id));
       renderDrive();
     }
+  }
+
+  function presetList() {
+    return window.RCSteerPresets && Array.isArray(window.RCSteerPresets.PRESETS)
+      ? window.RCSteerPresets.PRESETS : [];
+  }
+
+  function presetById(id) {
+    return presetList().find((preset) => preset.id === id) || null;
+  }
+
+  function setPresetMessage(text, error) {
+    presetMessage = { text: String(text || ''), error: !!error, until: Date.now() + 10000 };
+    renderPresets();
+  }
+
+  function presetUniformAngle() {
+    const motors = snapshot && Array.isArray(snapshot.motors) ? snapshot.motors : [];
+    let common = null;
+    for (const id of IDS) {
+      const motor = motors.find((item) => item && item.id === id);
+      const raw = motor && motor.targetAngle != null && Number.isFinite(+motor.targetAngle)
+        ? +motor.targetAngle
+        : (motor && motor.angle != null && Number.isFinite(+motor.angle) ? +motor.angle : null);
+      if (raw === null) return null;
+      const value = Math.max(-32, Math.min(32, Math.round(raw)));
+      if (common === null) common = value;
+      else if (Math.abs(value - common) > 1) return null;
+    }
+    return common;
+  }
+
+  function presetBlockedReason() {
+    const control = (snapshot && snapshot.steeringControl) || {};
+    if (!control.available) return 'Управление доступно только в режиме master.';
+    if (!authorized) return 'Сначала разблокируйте PIN.';
+    const drive = (snapshot && snapshot.drive) || {};
+    if (drive.active || Number(drive.commandedPercent || 0) !== 0) {
+      return 'Сначала остановите тягу кнопкой СТОП.';
+    }
+    const motors = snapshot && Array.isArray(snapshot.motors) ? snapshot.motors : [];
+    const find = (id) => motors.find((item) => item && item.id === id) || null;
+    const offline = IDS.filter((id) => !(find(id) && find(id).online === true));
+    if (offline.length) return 'Нет связи: ' + offline.join(', ') + '.';
+    const unhomed = IDS.filter((id) => !(find(id) && find(id).homed === true));
+    if (unhomed.length) return 'Не откалиброваны: ' + unhomed.join(', ') + '.';
+    const moving = IDS.filter((id) => {
+      const motor = find(id);
+      return !!(motor && (motor.moving || motor.calibrating));
+    });
+    if (moving.length) return 'Дождитесь остановки: ' + moving.join(', ') + '.';
+    if (presetBusy) return 'Применяю пресет…';
+    if (Object.keys(pending).length) return 'Предыдущая команда ещё выполняется.';
+    return '';
+  }
+
+  function buildPresetButtons() {
+    const grid = $('rc-preset-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    const list = presetList();
+    if (!list.length) {
+      const note = document.createElement('p');
+      note.className = 'rc-preset-note';
+      note.textContent = 'Пресеты не загрузились — перезагрузите страницу.';
+      grid.appendChild(note);
+      return;
+    }
+    list.forEach((preset) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'rc-preset';
+      button.dataset.rcPreset = preset.id;
+      button.setAttribute('aria-pressed', 'false');
+      if (!preset.available) {
+        button.classList.add('is-unavailable');
+        button.title = preset.reason || 'Недоступно';
+      }
+      const icon = document.createElement('span');
+      icon.className = 'rc-preset-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      const iconAngles = preset.available
+        ? [preset.angle, preset.angle, preset.angle, preset.angle]
+        : [32, -32, 32, -32];
+      iconAngles.forEach((angle) => {
+        const wheel = document.createElement('i');
+        wheel.style.setProperty('--wheel-angle', angle + 'deg');
+        icon.appendChild(wheel);
+      });
+      const title = document.createElement('b');
+      title.textContent = preset.title;
+      const hint = document.createElement('small');
+      hint.textContent = preset.hint;
+      button.appendChild(icon);
+      button.appendChild(title);
+      button.appendChild(hint);
+      button.addEventListener('click', () => { void applyPreset(preset); });
+      grid.appendChild(button);
+    });
+  }
+
+  function renderPresets() {
+    const slider = $('rc-preset-angle');
+    const apply = $('rc-preset-apply');
+    const uniform = presetUniformAngle();
+    if (slider) {
+      if (!presetBusy && uniform !== null && document.activeElement !== slider) slider.value = String(uniform);
+      slider.disabled = presetBusy || !authorized || !(snapshot && snapshot.steeringControl && snapshot.steeringControl.available);
+      const label = $('rc-preset-angle-value');
+      if (label) label.textContent = String(slider.value);
+    }
+    const reason = presetBlockedReason();
+    if (apply) apply.disabled = presetBusy || !!reason;
+    document.querySelectorAll('[data-rc-preset]').forEach((button) => {
+      const preset = presetById(button.dataset.rcPreset);
+      if (!preset) return;
+      const active = preset.available && uniform !== null && Math.abs(uniform - preset.angle) <= 1;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+      button.disabled = presetBusy;
+    });
+    const status = $('rc-preset-status');
+    if (!status) return;
+    if (presetMessage && presetMessage.until <= Date.now()) presetMessage = null;
+    if (presetMessage) {
+      status.textContent = presetMessage.text;
+      status.dataset.error = String(!!presetMessage.error);
+    } else if (!window.RCSteerPresets) {
+      status.textContent = 'Пресеты не загрузились — перезагрузите страницу.';
+      status.dataset.error = 'true';
+    } else {
+      status.textContent = reason || 'Колёса готовы. Выберите режим.';
+      status.dataset.error = String(!!reason);
+    }
+  }
+
+  async function applyAngles(angles, label) {
+    if (presetBusy) return false;
+    const reason = presetBlockedReason();
+    if (reason) {
+      setPresetMessage(reason, true);
+      return false;
+    }
+    const targets = {};
+    for (const id of IDS) {
+      const angle = Math.max(-32, Math.min(32, Math.round(Number(angles[id]))));
+      if (!Number.isFinite(angle)) {
+        setPresetMessage('Не задан угол для ' + id + '.', true);
+        return false;
+      }
+      targets[id] = angle;
+    }
+    presetBusy = true;
+    presetMessage = { text: 'Применяю «' + label + '»…', error: false, until: Date.now() + 20000 };
+    renderPresets();
+    for (const id of IDS) {
+      try {
+        const { response, body } = await json('api/kiosk_steer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
+          body: JSON.stringify({ module: id, angle: targets[id] })
+        });
+        if (!response.ok || !body.ok) {
+          if (response.status === 401 || body.reason === 'pin_required') authorized = false;
+          const message = reasonText(body.reason);
+          feedback[id] = { text: 'пресет: ' + message, error: true, until: Date.now() + 8000 };
+          presetBusy = false;
+          setPresetMessage('Остановлено на ' + id + ': ' + message + '. Остальные колёса не трогаем.', true);
+          await refresh();
+          return false;
+        }
+        pending[id] = { at: Date.now(), angle: body.angle };
+        feedback[id] = { text: 'пресет · ' + targets[id] + '°', error: false, until: Date.now() + 6000 };
+      } catch (error) {
+        presetBusy = false;
+        setPresetMessage('Нет связи с сервером на ' + id + '. Проверьте сеть.', true);
+        await refresh();
+        return false;
+      }
+    }
+    presetBusy = false;
+    presetMessage = {
+      text: '«' + label + '»: угол ' + targets.FL + '° на всех колёсах. Тяга — кнопками ниже, удерживайте.',
+      error: false, until: Date.now() + 10000
+    };
+    await refresh();
+    return true;
+  }
+
+  async function applyPreset(preset) {
+    if (!preset || presetBusy) return;
+    if (!preset.available) {
+      setPresetMessage(preset.reason || 'Этот режим недоступен.', true);
+      return;
+    }
+    const angles = {};
+    IDS.forEach((id) => { angles[id] = preset.angle; });
+    if (!authorized) {
+      await unlock();
+      if (!authorized) {
+        setPresetMessage('Без PIN пресет не применить: нажмите «Разблокировать» и введите PIN.', true);
+        return;
+      }
+    }
+    await applyAngles(angles, preset.title);
+  }
+
+  async function applyPresetAngle() {
+    const slider = $('rc-preset-angle');
+    if (!slider) return;
+    const angle = Math.max(-32, Math.min(32, Math.round(Number(slider.value) || 0)));
+    const angles = {};
+    IDS.forEach((id) => { angles[id] = angle; });
+    await applyAngles(angles, 'Угол всех колёс ' + angle + '°');
   }
 
   function renderCard(id) {
@@ -462,7 +701,9 @@
       pin_required: 'PIN истёк · разблокируйте', module_offline: 'модуль не отвечает',
       serial_unavailable: 'USB-порт мастера недоступен', not_homed: 'сначала калибровка или 0° вручную',
       module_busy: 'дождитесь остановки модуля', angle_limit: 'предел ±32°',
-      command_queue_full: 'очередь команд занята', control_not_supported: 'источник не поддерживает поворот'
+      command_queue_full: 'очередь команд занята', control_not_supported: 'источник не поддерживает поворот',
+      estop: 'E-STOP взведён · снимите защёлку', payload: 'неверный формат команды',
+      command_failed: 'команда не выполнена'
     })[reason] || 'команда не принята';
   }
 

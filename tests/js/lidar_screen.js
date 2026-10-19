@@ -238,6 +238,9 @@ const modelFile = path.join(ROOT, 'slam_gui', 'robot_model.js');
 vm.runInThisContext(fs.readFileSync(modelFile, 'utf8'), { filename: modelFile });
 const viewFile = path.join(ROOT, 'slam_gui', 'lidar_view.js');
 vm.runInThisContext(fs.readFileSync(viewFile, 'utf8'), { filename: viewFile });
+// Как в robot.html: общие пресеты руления загружаются до экрана.
+const presetsFile = path.join(ROOT, 'slam_gui', 'steer_presets.js');
+vm.runInThisContext(fs.readFileSync(presetsFile, 'utf8'), { filename: presetsFile });
 let mapShows = 0;
 if (payload.mapOpening) {
   global.RCMapView = {
