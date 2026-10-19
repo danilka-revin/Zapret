@@ -310,6 +310,7 @@ def parse_master_line(line):
             # pot=1 — потенциометр A0 откалиброван (q), доводка положения включена.
             # Поле появилось в прошивке v2 после руля; старые кадры его не содержат.
             "pot": fields.get("pot") == "1",
+            "potMode": fields.get("pm") == "1" if fields.get("pm") in {"0", "1"} else None,
         }
     except (KeyError, ValueError):
         return None
@@ -384,6 +385,29 @@ class MasterSource:
         with self.lock:
             items = list(getattr(self, "messages", None) or [])[-limit:]
         return [{"ts": round(ts, 3), "text": text} for ts, text in items]
+
+    def set_pot_mode(self, action, now=None):
+        if not self.serial_ready.is_set():
+            return {"ok": False, "reason": "serial_unavailable"}
+        now = time.time() if now is None else now
+        with self.lock:
+            frames = dict(self.frames)
+            drive_active = self.drive_percent != 0
+        if any(mid not in frames or now - frames[mid][1] >= self.STALE_S for mid in MODULE_TITLES):
+            return {"ok": False, "reason": "module_offline"}
+        values = [frames[mid][0] for mid in MODULE_TITLES]
+        if any(f.get("potMode") is None for f in values):
+            return {"ok": False, "reason": "firmware_update_required"}
+        if drive_active or any(f.get("moving") or f.get("calib") or f.get("cycle") or f.get("drivePercent") for f in values):
+            return {"ok": False, "reason": "module_busy"}
+        if action == "calibrate" and any(not f.get("potMode") or not f.get("cal") for f in values):
+            return {"ok": False, "reason": "zero_required"}
+        command = {"on": b"pm 1\n", "off": b"pm 0\n", "calibrate": b"q\n"}[action]
+        try:
+            self.commands.put_nowait(command)
+        except queue.Full:
+            return {"ok": False, "reason": "command_queue_full"}
+        return {"ok": True, "queued": True}
 
     def calibrate_module(self, module, now=None):
         """Калибровка по оптодатчику одного модуля (FL/FR/RL/RR) или всех (ALL).
@@ -649,6 +673,7 @@ class MasterSource:
                                "calibErrorText": CALIB_ERRORS.get(error) if error else None,
                                "firmware": frame.get("firmware"),
                                "pot": frame.get("pot", False),
+                               "potMode": frame.get("potMode"),
                                "online": True, "fault": None,
                                "moving": frame["moving"], "calibrating": frame["calib"],
                                "cycling": frame.get("cycle", False)})

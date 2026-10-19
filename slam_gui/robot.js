@@ -2118,6 +2118,7 @@
       if (stateEl) stateEl.textContent = label;
     });
 
+    if (window.RCPotMode) window.RCPotMode.render(document.querySelector('.steer-calib-bar'), d, steeringAuthorized);
     const calibAll = $('steer-calib-all');
     if (calibAll) {
       const online = motors.filter((m) => m && m.online === true);

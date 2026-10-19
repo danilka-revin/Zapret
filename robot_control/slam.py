@@ -389,6 +389,18 @@ def _steering_zero(source, body):
     return {"ok": False, "reason": reason}, status
 
 
+def dispatch_pot_mode(source, body):
+    if estop_latch.latched() is not None:
+        return {"ok": False, "reason": "estop"}, 409
+    if not isinstance(body, dict) or set(body) != {"action"} or not isinstance(body["action"], str) or body["action"] not in {"on", "off", "calibrate"}:
+        return {"ok": False, "reason": "payload"}, 400
+    command = getattr(source, "set_pot_mode", None)
+    if not callable(command):
+        return {"ok": False, "reason": "control_not_supported"}, 409
+    result = command(body["action"])
+    return result, 200 if result.get("ok") else 409
+
+
 def dispatch_steering_calibration(source, body):
     """Проверить payload и запустить калибровку по оптодатчику (модуль или ALL)."""
     result, status = _steering_calibration(source, body)
@@ -527,6 +539,7 @@ ASSETS = {
     "battery.js": "battery_js",
     "steering.css": "steering_css",
     "steering.js": "steering_js",
+    "pot_mode.js": "pot_mode_js",
     "update.css": "update_css",
     "update.js": "update_js",
     # кнопка «Остановить всё»: пульт, бортовой экран, лидар и окно киоска
@@ -1031,6 +1044,15 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
             note_pin_required("программный ноль")
             return jsonify({"ok": False, "reason": "pin_required"}), 401
         result, status = dispatch_steering_zero(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
+    @bp.post("/api/kiosk_pot_mode")
+    def api_kiosk_pot_mode():
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        if not steering_access_valid():
+            return jsonify({"ok": False, "reason": "pin_required"}), 401
+        result, status = dispatch_pot_mode(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
     @bp.post("/api/kiosk_calibrate")

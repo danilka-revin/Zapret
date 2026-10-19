@@ -445,6 +445,36 @@ static void scenario_pot_feedback() {
   CHECK(std::labs(FR::stepNow()) <= 10, "счётчик снова в нуле: %ld", (long)FR::stepNow());
 }
 
+static void scenario_pot_mode() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  board_fr.serial.send("pm 0");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_enabled && !FR::potFeedbackAllowed(), "pm 0 disables feedback");
+  CHECK((FR::moduleStatus() & 0x3000) == 0x2000, "mode off reported");
+  board_fr.pot_bias_steps = 6000;
+  const int16_t raw = FR::pot_raw;
+  board_fr.serial.send("w 10");
+  sim::run_for_ms(5);
+  board_fr.serial.send("pm 1");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_enabled, "cannot switch during motion");
+  CHECK(wait_until(fr_settled, 3000), "open loop move completes");
+  CHECK(FR::stepNow() == FR::degreesToSteps(10), "open loop target reached");
+  CHECK(FR::pot_raw == raw, "disabled ADC ignored");
+  board_fr.serial.send("q");
+  sim::run_for_ms(5);
+  CHECK(FR::pot_cal_state == FR::POT_CAL_IDLE, "q rejected when disabled");
+  board_fr.serial.send("pm 2");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_enabled, "invalid mode rejected");
+  board_fr.serial.send("pm 1");
+  sim::run_for_ms(5);
+  CHECK(FR::pot_enabled && !FR::pot_calibrated, "enable requires fresh calibration");
+  CHECK((FR::moduleStatus() & 0x3000) == 0x3000, "mode on reported");
+}
+
 static void scenario_pot_unplugged() {
   board_fr.pot_present = false;
   boot({&board_fr});
@@ -749,6 +779,16 @@ static void scenario_system_broadcast() {
   board_fl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_fl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает слейвов");
+  board_fl.serial.send("pm 0");
+  sim::run_for_ms(600);
+  CHECK(!M::pot_enabled && !node_fr::pot_enabled && !node_rl::pot_enabled && !node_rr::pot_enabled,
+        "pm 0 reaches all four boards");
+  CHECK(has(board_fl, "pm=0"), "disabled mode is in telemetry");
+  board_fl.serial.send("pm 1");
+  sim::run_for_ms(600);
+  CHECK(M::pot_enabled && node_fr::pot_enabled && node_rl::pot_enabled && node_rr::pot_enabled,
+        "pm 1 reaches all four boards");
+  CHECK(has(board_fl, "pm=1"), "enabled mode is in telemetry");
 }
 
 static void scenario_tlm_dump() {
@@ -836,6 +876,7 @@ static const Scenario SCENARIOS[] = {
     {"pot_calibration", scenario_pot_calibration},
     {"pot_feedback", scenario_pot_feedback},
     {"pot_unplugged", scenario_pot_unplugged},
+    {"pot_mode", scenario_pot_mode},
     {"swing", scenario_swing},
     {"pause_resume", scenario_pause_resume},
     {"zero_manual", scenario_zero_manual},

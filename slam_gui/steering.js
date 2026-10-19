@@ -132,6 +132,7 @@
           : control.calibration
             ? 'Мастер на связи · откалибруйте колёса по датчику перед рулением и тягой.'
             : 'Мастер на связи · задайте ручной ноль перед рулением и тягой.';
+      if (window.RCPotMode) window.RCPotMode.render(document.querySelector('.rc-steering-toolbar'), snapshot, authorized);
       IDS.forEach((id) => renderCard(id));
       renderDrive();
     } catch (error) {
