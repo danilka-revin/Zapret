@@ -22,7 +22,9 @@
 // колёсам, как проверенный скетч) и с собственного USB 115200 — так модуль
 // можно проверить на столе отдельно: k, q, c, d, h, s, g, z, p, w, t, b, a.
 // Мастер раз в 250 мс забирает кадр состояния (до 32 байт):
-//   "ток_шаг,цель_шаг,состояние,об/мин×10,тяга%\n"
+//   "ток_шаг,цель_шаг,СОСТОЯНИЕ_hex,об/мин×10,тяга%,счётчик\n"
+// Счётчик кадров (0…15) — отдельное поле: раньше он занимал биты 12–15
+// состояния вместе с режимом потенциометра, и живой модуль выглядел потерянным.
 #ifndef NODE_ADDRESS
 #define NODE_ADDRESS 2
 #endif
@@ -114,7 +116,7 @@ const uint16_t RPM_SAMPLE_PERIOD_MS = 500;
 const int8_t DRIVE_MAX_PERCENT = 20;           // программный предел PWM
 const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → PWM 0 и тормоз
 
-const uint8_t FIRMWARE_PROTOCOL = 2;           // поле fw= в телеметрии @TLM
+const uint8_t FIRMWARE_PROTOCOL = 3;           // поле fw= в телеметрии @TLM (кадр I2C v3)
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -168,7 +170,8 @@ const uint16_t STATUS_V2 = 0x40;       // признак кадра этой в�
 const uint16_t STATUS_POT_MODE = 0x1000;  // режим с потенциометром
 const uint16_t STATUS_POT_MODE_SUPPORTED = 0x2000;
 const uint16_t STATUS_POT = 0x80;      // потенциометр откалиброван, доводка включена
-// биты 8–11: код ошибки калибровки, биты 12–15: счётчик кадров слейва
+// биты 8–11: код ошибки калибровки; биты 12–15 — режим потенциометра.
+// Счётчик кадров в состояние НЕ входит: в v3 это отдельное поле кадра.
 
 bool zero_set = false;
 uint8_t home_source = HOME_NONE;
@@ -1430,12 +1433,22 @@ long clampSteps(int32_t value) {
 }
 
 void refreshFrame() {
-  const uint16_t status = moduleStatus() | (uint16_t)((uint16_t)(frame_seq & 0x0F) << 12);
+  // Счётчик кадров — отдельное поле, а НЕ биты 12–15 состояния. В v2 он
+  // складывался по ИЛИ с битами режима потенциометра (0x1000/0x2000), из-за
+  // чего мастер:
+  //   * видел «тот же» счётчик, когда между опросами проходило кратное число
+  //     кадров, и объявлял живой модуль потерянным («связь обрывистая»);
+  //   * читал бит 0x1000 как режим потенциометра, а там был младший бит
+  //     счётчика — pm= мигал 0/1 и переключение режима не подтверждалось.
+  // Состояние печатаем в hex: 4 символа вместо 5 — кадр с любыми значениями
+  // (включая −99999 и FFFF) гарантированно укладывается в 32 байта Wire.
+  const uint16_t status = moduleStatus();
   frame_seq = (uint8_t)((frame_seq + 1) & 0x0F);
   char line[40];
-  const int n = snprintf_P(line, sizeof(line), PSTR("%ld,%ld,%u,%lu,%d\n"),
+  const int n = snprintf_P(line, sizeof(line), PSTR("%ld,%ld,%04X,%lu,%d,%u\n"),
       clampSteps(stepNow()), clampSteps(targetNow()), (unsigned)status,
-      (unsigned long)(rpm_x10 > 99999UL ? 99999UL : rpm_x10), (int)drive_percent);
+      (unsigned long)(rpm_x10 > 99999UL ? 99999UL : rpm_x10), (int)drive_percent,
+      (unsigned)frame_seq);
   if (n <= 0 || n > 32) return;
   const uint8_t back = frame_back;
   memcpy(frame[back], line, (size_t)n);

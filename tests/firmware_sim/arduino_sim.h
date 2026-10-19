@@ -126,6 +126,14 @@ class SimWire {
   std::deque<uint8_t> rx;                // принятые байты
   int tx_address = -1;
   long transmissions = 0;
+  uint32_t clock_hz = 400000;            // скорость шины у МАСТЕРА (setClock)
+  // Маргинальный шлейф: плата отвечает только на 100 кГц. Так выглядит дальний
+  // модуль (обычно RR) с длинным проводом и внутренними подтяжками: на 400 кГц
+  // он NACK-ает, на 100 кГц — работает. Мастер обязан сам это заметить.
+  bool slow_bus_only = false;
+  // Сколько ближайших кадров придёт битыми (помеха/обрыв): мастер должен
+  // повторить запрос, а не объявлять модуль потерянным с первого сбоя.
+  uint8_t corrupt_frames = 0;
 
   void begin() { unregister(); }
   void begin(uint8_t addr) {
@@ -136,7 +144,7 @@ class SimWire {
   }
   // Wire.end(): плата снимает свой адрес с шины (как twi_disable на AVR).
   void end() { unregister(); }
-  void setClock(uint32_t) {}
+  void setClock(uint32_t hz) { clock_hz = hz; }
   void setWireTimeout(uint32_t, bool) {}
   void onReceive(void (*fn)(int)) { on_receive = fn; }
   void onRequest(void (*fn)()) { on_request = fn; }
@@ -159,6 +167,7 @@ class SimWire {
     if (i2c_bus_stuck) return 4;         // шина удерживается: BUS ERROR
     SimWire* slave = tx_address >= 0 && tx_address < 128 ? bus[tx_address] : nullptr;
     if (!slave || !slave->connected || !slave->on_receive) return 2;  // NACK адреса
+    if (slave->slow_bus_only && clock_hz > 100000) return 2;          // не тянет 400 кГц
     slave->rx.clear();
     for (uint8_t value : tx) slave->rx.push_back(value);
     slave->on_receive((int)tx.size());
@@ -169,10 +178,16 @@ class SimWire {
     if (i2c_bus_stuck) return 0;         // таймаут: шина не отпускает SDA
     SimWire* slave = addr < 128 ? bus[addr] : nullptr;
     if (!slave || !slave->connected || !slave->on_request) return 0;
+    if (slave->slow_bus_only && clock_hz > 100000) return 0;          // не тянет 400 кГц
     slave->tx.clear();
     slave->on_request();
     for (uint8_t i = 0; i < quantity; ++i) {
       rx.push_back(i < slave->tx.size() ? slave->tx[i] : 0xFF);  // дальше — линия в 1
+    }
+    // Помеха: кадр пришёл битым один раз.
+    if (slave->corrupt_frames > 0 && !rx.empty()) {
+      rx[0] = '#';
+      --slave->corrupt_frames;
     }
     // На адресе несколько плат — SDA тянут все сразу, кадр приходит битым.
     if (bus_claims[addr] > 1 && !rx.empty()) rx[0] = '#';

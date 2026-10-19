@@ -103,7 +103,14 @@ def test_wire_timeout_is_actually_enabled_on_avr():
     for path in (MASTER, NODE):
         text = _text(path)
         assert "#if defined(WIRE_HAS_TIMEOUT)" not in text, path
-        assert "Wire.setWireTimeout(3000, true)" in text, path
+        assert "Wire.setWireTimeout(" in text and ", true)" in text, path
+    # На AVR twi_readFrom() отсчитывает таймаут на ВСЮ передачу, а не на байт:
+    # 32 байта кадра на 100 кГц — это ~3,2 мс. С прежними 3 мс мастер обрывал
+    # нормальный ответ слейва, и «переход на 100 кГц» не работал.
+    master = _text(MASTER)
+    assert "I2C_TIMEOUT_US = 10000" in master
+    assert "Wire.setWireTimeout(I2C_TIMEOUT_US, true)" in master
+    assert "Wire.setWireTimeout(3000, true)" in _text(NODE)
 
 
 def test_i2c_bus_can_be_diagnosed_and_slaves_get_their_own_address():
@@ -122,6 +129,42 @@ def test_i2c_bus_can_be_diagnosed_and_slaves_get_their_own_address():
     assert "i2cScanBus" in master and "i2cRecoverBus" in master
     assert 'PSTR("i2c")' in master
     assert "I2C_SAFE_CLOCK_HZ" in master
+
+
+def test_i2c_frame_counter_is_not_packed_into_status_bits():
+    """Счётчик кадров — отдельное поле, а не биты 12–15 состояния.
+
+    В v2 он складывался по ИЛИ с битами режима потенциометра (0x1000/0x2000).
+    Тогда pm= мигал 0/1 (переключение режима не подтверждалось), а мастер,
+    прочитав «тот же» счётчик после паузы, объявлял живой модуль потерянным.
+    Тест держит обе стороны: слейв не пакует счётчик в состояние, мастер
+    понимает старый кадр (5 полей) и новый (6) и не выдумывает режим из
+    испорченных старых битов.
+    """
+    node = _text(NODE)
+    master = _text(MASTER)
+    assert "(frame_seq & 0x0F) << 12" not in node
+    assert 'PSTR("%ld,%ld,%04X,%lu,%d,%u\\n")' in node
+    assert "values[2] & 0x0FFF" in master    # v2: биты 12–15 — счётчик, не режим
+    assert "fields != 5 && fields != 6" in master
+    assert "slave_protocol" in master
+
+
+def test_master_adapts_the_i2c_speed_when_not_every_module_answers():
+    """400 кГц — не догма: дальняя плата (RR) на них может не отвечать.
+
+    Раньше переход на 100 кГц был только при полном молчании шины. Теперь
+    мастер пробует 100 кГц при старте, после трёх опросов без кадра и в
+    ежеминутном скане, и остаётся на них, если так отвечают больше модулей.
+    """
+    master = _text(MASTER)
+    assert "i2cMissingModules" in master
+    assert "i2c_auto_slow" in master
+    assert "slave_missed" in master
+    assert "I2C_SLOW_RETRY_MISSES" in master
+    # Диагностика называет молчащий модуль, а не только «ответили не все».
+    assert "НЕТ СВЯЗИ: адрес %d не отвечает" in master
+    assert "лишний адрес %u" in master
 
 
 def test_master_accepts_monitor_commands_of_the_tested_sketch():
@@ -146,9 +189,11 @@ def test_calibration_messages_fit_the_line_buffers_in_utf8():
     считаем в байтах, с учётом подстановок и префикса строки.
     """
     note_re = re.compile(r'note\(PSTR\("((?:[^"\\]|\\.)*)"')
+    # noteModule(...) добавляет префикс «# RR: » — те же 6 байт, что и «# FL: ».
+    module_re = re.compile(r'noteModule\(\s*[^,]+,\s*PSTR\("((?:[^"\\]|\\.)*)"')
     for path in (MASTER, NODE):
         text = _text(path)
-        for fmt in note_re.findall(text):
+        for fmt in note_re.findall(text) + module_re.findall(text):
             fmt = fmt.replace('\\"', '"')
             # Подстановка %s занимает ~8 байт (например «-135.00»), префикс «# FL: » — 6,
             # перевод строки — 2; буфер строки — 176.
@@ -209,7 +254,7 @@ def test_server_parses_simulated_master_telemetry(simulator):
     assert set(frames) == {"FL", "FR", "RL", "RR"}
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 2 and frame["calibError"] == 0
+        assert frame["firmware"] == 3 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] == 0.0
         assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False
