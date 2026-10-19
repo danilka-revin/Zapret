@@ -129,6 +129,17 @@ static long count(const sim::Board& board, const char* text) {
   return n;
 }
 
+// То же, но только в хвосте вывода (после отметки) — «сколько раз с момента…».
+static long count_since(const sim::Board& board, const char* text, size_t from) {
+  long n = 0;
+  size_t pos = from;
+  while ((pos = board.serial.output.find(text, pos)) != std::string::npos) {
+    ++n;
+    pos += std::strlen(text);
+  }
+  return n;
+}
+
 static void check_signals(const sim::Board& board) {
   CHECK(board.dir_setup_violations == 0, "%s: DIR сменился позже чем за 5 мкс до PUL (%ld)",
         board.name, board.dir_setup_violations);
@@ -1112,6 +1123,103 @@ static void scenario_i2c_unexpected_address() {
         "молчащий модуль назван по имени: %s", tail.c_str());
 }
 
+// Авария шины во время работы. Каждый запрос к Wire на удерживаемой SDA стоит
+// полного таймаута (25 мс), а опрос трёх слейвов с повторами, пробы медленных
+// ступеней и скан 1…119 адресов шли одним куском внутри loop(). На роботе это
+// выглядело как «шина отвалилась»: @TLM замолкал на секунды, сервер гасил все
+// колёса (STALE_S = 1 с), команды оператора висели в очереди, а watchdog тяги
+// срабатывал не по отсутствию heartbeat, а потому что loop() не доходил до него.
+static void scenario_bus_stall_keeps_the_loop_alive() {
+  calibrate_all();
+  send_drive_heartbeat(8, 2);
+  CHECK(all_pwm(20), "тяга шла до аварии шины");
+  board_fl.reset_stats();                  // самый долгий loop() меряем с аварии
+  sim::i2c_bus_stuck = true;
+  sim::i2c_scl_edges = 0;
+  const size_t mark = board_fl.serial.output.size();
+  sim::run_for_ms(3000);
+  const std::string tail = board_fl.serial.output.substr(mark);
+  CHECK(board_fl.max_loop_us < 400000, "loop() не вставал дольше 400 мс: %lld мкс",
+        (long long)board_fl.max_loop_us);
+  // За 3 с при периоде 250 мс блоков @TLM должно быть около 12; сервер считает
+  // модуль живым 1 с, поэтому меньше 6 — это уже «пропала связь» на экране.
+  CHECK(count_since(board_fl, "@TLM mod=FL", mark) >= 6,
+        "телеметрия во время аварии не замолкала: %ld блоков",
+        count_since(board_fl, "@TLM mod=FL", mark));
+  CHECK(!sim::i2c_bus_stuck, "шина расклинена");
+  sim::run_for_ms(1500);
+  CHECK(M::slave_online[0] && M::slave_online[1] && M::slave_online[2],
+        "слейвы вернулись на шину после расклинки");
+  send_drive_heartbeat(8, 2);
+  CHECK(all_pwm(20), "после аварии тяга снова разрешена");
+}
+
+// «Крутится только одно колесо». ACK на шине означает лишь «байты до платы
+// дошли»: слейв отказывается молча (ноль не задан, включена тяга, старая
+// прошивка режет угол), а экран рапортовал «команда принята». Мастер обязан
+// проверить выполнение по кадру и назвать причину.
+static void scenario_slave_rejects_command() {
+  calibrate_all();
+  // RR потерял ноль (так выглядит и плата со старой прошивкой: угол не принят).
+  node_rr::zero_set = false;
+  node_rr::haltMotor();
+  const size_t mark = board_fl.serial.output.size();
+  board_fl.serial.send("w RR 90");
+  board_fl.serial.send("w FR 90");
+  sim::run_for_ms(2500);
+  const std::string tail = board_fl.serial.output.substr(mark);
+  CHECK(node_fr::stepNow() == 12000, "FR принял 90°: %ld шагов", (long)node_fr::stepNow());
+  CHECK(node_rr::stepNow() == 0, "RR не поехал: %ld шагов", (long)node_rr::stepNow());
+  CHECK(tail.find("# RR: команда «w 90.0» не выполнена: ноль не задан") != std::string::npos,
+        "мастер назвал причину отказа RR: %s", tail.c_str());
+  CHECK(tail.find("# FR: команда «w 90.0» не выполнена") == std::string::npos,
+        "про выполненную команду ложной тревоги нет: %s", tail.c_str());
+  // Отказ по тяге: слейв отвечает «руль заблокирован», мастер это видит.
+  board_fl.serial.send("w FR 0");
+  sim::run_for_ms(1500);
+  node_rr::zero_set = true;
+  node_rr::drive_active = true;
+  node_rr::drive_percent = 8;          // в кадре видна тяга — по ней и причина
+  node_rr::last_drive_command_ms = millis();   // watchdog слейва её пока не снял
+  const size_t busy_mark = board_fl.serial.output.size();
+  board_fl.serial.send("w RR 45");
+  sim::run_for_ms(2000);
+  CHECK(board_fl.serial.output.substr(busy_mark).find("не выполнена: включена тяга") !=
+            std::string::npos,
+        "отказ из-за тяги объяснён: %s", board_fl.serial.output.c_str());
+  node_rr::drive_active = false;
+  // Команда принята — тишина в журнале: предупреждение не должно быть шумным.
+  const size_t ok_mark = board_fl.serial.output.size();
+  board_fl.serial.send("w RR 45");
+  sim::run_for_ms(2000);
+  CHECK(node_rr::stepNow() == 6000, "после устранения причины RR поехал: %ld", (long)node_rr::stepNow());
+  CHECK(board_fl.serial.output.substr(ok_mark).find("не выполнена") == std::string::npos,
+        "выполненная команда не сопровождается предупреждением");
+}
+
+// Счётчик кадров 4-битный, а кадр слейв обновляет каждые 50 мс: опрос,
+// пришедшийся ровно на 16 кадров позже (800 мс — так бывает вокруг диагностики
+// шины), видит тот же номер. По одному номеру полностью живой модуль
+// объявлялся потерянным — ещё один источник «то 4 колеса, то 1».
+static void scenario_i2c_frame_freshness() {
+  calibrate_all();
+  CHECK(M::slave_online[0] && M::slave_online[2], "слейвы на связи");
+  CHECK(M::slaveFrameChanged(0, M::slave_current[0], M::slave_target[0] + 133,
+                             M::slave_status[0], M::slave_rpm_x10[0], M::slave_drive[0],
+                             M::slave_seq[0]),
+        "сменилась цель при том же счётчике — кадр живой");
+  CHECK(M::slaveFrameChanged(2, M::slave_current[2], M::slave_target[2],
+                             (uint16_t)(M::slave_status[2] ^ M::STATUS_MOVING),
+                             M::slave_rpm_x10[2], M::slave_drive[2], M::slave_seq[2]),
+        "сменилось состояние при том же счётчике — кадр живой");
+  // Ничего не изменилось: так отвечает застывший слейв (loop() встал, а TWI
+  // отдаёт старый буфер) — его по-прежнему не считаем живым.
+  CHECK(!M::slaveFrameChanged(0, M::slave_current[0], M::slave_target[0],
+                              M::slave_status[0], M::slave_rpm_x10[0], M::slave_drive[0],
+                              M::slave_seq[0]),
+        "застывший кадр живым не считается");
+}
+
 static void scenario_tlm_dump() {
   calibrate_all();
   board_fl.serial.send("q");
@@ -1223,6 +1331,9 @@ static const Scenario SCENARIOS[] = {
     {"i2c_noise_bursts", scenario_i2c_noise_bursts},
     {"i2c_very_slow_bus", scenario_i2c_very_slow_bus},
     {"i2c_unexpected_address", scenario_i2c_unexpected_address},
+    {"bus_stall_loop_alive", scenario_bus_stall_keeps_the_loop_alive},
+    {"slave_rejects_command", scenario_slave_rejects_command},
+    {"i2c_frame_freshness", scenario_i2c_frame_freshness},
 };
 
 static int run_one(const Scenario& scenario) {
