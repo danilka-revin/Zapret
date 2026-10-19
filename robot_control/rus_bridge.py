@@ -8,7 +8,9 @@
   на месте и поворот с разными углами колёс на этом железе не выполняются;
 * руль в движении не переводится (``module_busy``): перед поворотом колёс
   тяга снимается тормозом, колёса доходят до цели, и только потом снова тяга;
-* угол модуля ограничен ±32° (``MAX_STEER_DEG``): крабовый ход на 45° отказ;
+* угол модуля ограничен ±90° (``STEER_LIMIT_DEG`` — та же константа, что в
+  прошивке и в ``MasterSource.MAX_STEER_DEG``): крабовый ход на 45° и чистый
+  боковой ход на 90° доступны, больше — отказ ``steer_limit``;
 * heartbeat тяги не реже 650 мс: пока едем, команду ``t N`` надо повторять;
 * скорость в м/с переводится в проценты по калибровке ``mps_per_percent``.
   Без калибровки мост тягу не даёт — честнее стоять, чем ехать с выдуманной скоростью.
@@ -32,6 +34,11 @@ from robot_control.rus_core.kinematics import SwerveKinematics
 #: Имена модулей, как в прошивке мастера (``MODULE_TITLES`` в backend.py).
 MODULE_NAMES = {1: "FL", 2: "FR", 3: "RL", 4: "RR"}
 
+#: Предел абсолютного угла руля. Ровно столько же в прошивке
+#: (``STEER_LIMIT_DEG``) и в ``slam_gui/backend.py``: мост не должен обещать
+#: угол, который плата отрежет.
+STEER_LIMIT_DEG = 90.0
+
 #: Допуск, при котором углы модулей считаются одинаковыми (одна тяга на все колёса).
 SAME_ANGLE_DEG = 0.5
 #: Порог, с которого новый угол руля отправляется мастеру.
@@ -49,7 +56,7 @@ class Plan:
 
 def plan_motion(kin: SwerveKinematics, vx: float, vy: float, wz: float, *,
                 mps_per_percent: Optional[float],
-                max_steer_deg: float = 32.0,
+                max_steer_deg: float = STEER_LIMIT_DEG,
                 max_drive_percent: int = 20) -> Plan:
     """Перевести скорость корпуса в углы руля и тягу, которые умеет прошивка.
 
@@ -99,7 +106,7 @@ class MasterBridge:
 
     def __init__(self, source: Any, kin: Optional[SwerveKinematics] = None, *,
                  mps_per_percent: Optional[float] = None,
-                 max_steer_deg: float = 32.0,
+                 max_steer_deg: float = STEER_LIMIT_DEG,
                  align_deg: float = 2.5,
                  align_timeout_s: float = 3.0,
                  max_drive_percent: int = 20,

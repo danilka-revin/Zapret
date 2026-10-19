@@ -59,7 +59,11 @@ KIOSK_URL_PATH = "/kiosk"
 #: Ввод PIN открывает короткую сессию для руления и удерживаемой тяги.
 STEERING_SESSION_KEY = "kiosk_steering_expires"
 STEERING_SESSION_TTL_S = 5 * 60
-STEERING_ANGLE_LIMIT_DEG = 32.0
+#: Предел абсолютного угла руля. Совпадает с ``STEER_LIMIT_DEG`` в
+#: ``slam_gui/backend.py`` и в прошивке; если источник задаёт свой предел
+#: (``MAX_STEER_DEG``), проверка и ответ берут его — иначе API обещает одно,
+#: а плата режет другое, и руление выглядит «кривым».
+STEERING_ANGLE_LIMIT_DEG = 90.0
 STEERING_COMMAND_HEADER = "X-Robot-Control"
 STEERING_COMMAND_HEADER_VALUE = "steering"
 DRIVE_COMMAND_HEADER_VALUE = "drive"
@@ -156,7 +160,7 @@ COMMAND_REASON_TEXT = {
     "payload": "неверный состав полей",
     "invalid_module": "неизвестный модуль",
     "invalid_angle": "неверный угол",
-    "angle_limit": "угол вне допуска ±%.0f°" % STEERING_ANGLE_LIMIT_DEG,
+    "angle_limit": "угол вне допуска руля",
     "invalid_drive": "неверная величина тяги",
     "drive_limit": "тяга вне допуска ±%d%%" % MAX_DRIVE_PERCENT,
     "estop": "E-STOP: движение заблокировано, снимите защёлку с PIN",
@@ -284,6 +288,23 @@ def note_lidar_status(status) -> None:
                         source="лидар")
 
 
+def steering_angle_limit_deg(source=None):
+    """Действующий предел угла руля в градусах.
+
+    Источник (``MasterSource``) знает свой предел — берём его, иначе экран
+    получил бы одно число в ``limitDeg``, а команда была бы отклонена по
+    другому. Так предел один: прошивка → источник → API → ползунки экрана.
+    """
+    limit = getattr(source, "MAX_STEER_DEG", None)
+    try:
+        limit = float(limit)
+    except (TypeError, ValueError):
+        return STEERING_ANGLE_LIMIT_DEG
+    if not math.isfinite(limit) or limit <= 0:
+        return STEERING_ANGLE_LIMIT_DEG
+    return limit
+
+
 def steering_control_info(source):
     """Публичная возможность управления: мастер, адресные команды, ноль руля.
 
@@ -298,7 +319,7 @@ def steering_control_info(source):
         "optoUsed": calibration,
         "calibration": calibration,
         "manualZero": True,
-        "limitDeg": STEERING_ANGLE_LIMIT_DEG,
+        "limitDeg": steering_angle_limit_deg(source),
     }
 
 
@@ -334,8 +355,9 @@ def _steering_command(source, body):
     import math
     if not math.isfinite(angle):
         return {"ok": False, "reason": "invalid_angle"}, 400
-    if abs(angle) > STEERING_ANGLE_LIMIT_DEG:
-        return {"ok": False, "reason": "angle_limit", "limit": STEERING_ANGLE_LIMIT_DEG}, 400
+    limit_deg = steering_angle_limit_deg(source)
+    if abs(angle) > limit_deg:
+        return {"ok": False, "reason": "angle_limit", "limit": limit_deg}, 400
 
     if not getattr(source, "supports_individual_steer", False):
         return {"ok": False, "reason": "control_not_supported",
@@ -357,7 +379,11 @@ def _steering_command(source, body):
         status = 429
     elif reason in {"invalid_module", "invalid_angle", "angle_limit"}:
         status = 400
-    return {"ok": False, "reason": reason}, status
+    failure = {"ok": False, "reason": reason}
+    if reason == "angle_limit":
+        # Предел — из ответа источника: экран покажет настоящее число.
+        failure["limit"] = result.get("limit", limit_deg)
+    return failure, status
 
 
 def dispatch_steering_zero(source, body):

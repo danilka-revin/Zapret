@@ -4,6 +4,9 @@
 
   if (window.RCSteeringPanel) return;
   const IDS = ['FL', 'FR', 'RL', 'RR'];
+  /** Запасной предел угла, пока сервер не ответил; совпадает с прошивкой. */
+  const FALLBACK_LIMIT_DEG = 90;
+  let limitDeg = FALLBACK_LIMIT_DEG;
   let authorized = false;
   let snapshot = null;
   let pollTimer = null;
@@ -16,7 +19,44 @@
   let presetMessage = null;
   const pending = Object.create(null);
   const feedback = Object.create(null);
+  const sending = Object.create(null);
   const $ = (id) => document.getElementById(id);
+
+  function clampAngle(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    if (window.RCSteerPresets && typeof window.RCSteerPresets.clampAngle === 'function') {
+      return window.RCSteerPresets.clampAngle(n);
+    }
+    return Math.max(-limitDeg, Math.min(limitDeg, Math.round(n)));
+  }
+
+  /**
+   * Предел хода руля приходит с сервера (steeringControl.limitDeg) и
+   * расставляется по ползункам, подписям и пресетам. Зашитое в шаблон число
+   * расходилось с прошивкой — экран разрешал угол, который плата отклоняла.
+   */
+  function syncLimit(control) {
+    const presets = window.RCSteerPresets;
+    const reported = Number(control && control.limitDeg);
+    const next = Number.isFinite(reported) && reported > 0 ? Math.round(reported) : FALLBACK_LIMIT_DEG;
+    if (presets && typeof presets.setLimit === 'function') presets.setLimit(next);
+    const changed = next !== limitDeg;
+    limitDeg = next;
+    const text = presets && typeof presets.limitText === 'function' ? presets.limitText() : ('±' + next + '°');
+    document.querySelectorAll('[data-rc-steer-limit]').forEach((element) => { element.textContent = text; });
+    const ranges = [$('rc-preset-angle')].concat(
+      IDS.map((id) => document.querySelector('[data-rc-steering="' + id + '"] [data-range]')));
+    ranges.forEach((range) => {
+      if (!range) return;
+      range.min = String(-next);
+      range.max = String(next);
+      const value = clampAngle(range.value);
+      if (value !== null && Number(range.value) !== value) range.value = String(value);
+    });
+    if (changed) buildPresetButtons();
+    return changed;
+  }
 
   function addUi() {
     if ($('rc-steering-launch')) return;
@@ -35,7 +75,7 @@
       <section class="rc-steering-dialog" role="dialog" aria-modal="true" aria-labelledby="rc-steering-title">
         <header class="rc-steering-head">
           <div><h2 id="rc-steering-title">Управление приводами</h2>
-            <p>Рулевые шаговые моторы + удерживаемое низкоскоростное движение BLDC</p></div>
+            <p>Рулевые шаговые моторы; кнопки движения — в самом низу окна</p></div>
           <button type="button" class="rc-steering-close" aria-label="Закрыть">×</button>
         </header>
         <div class="rc-steering-safety" role="note"><b>Ноль руля — по оптодатчику D18:</b> «Калибровка» ищет оптодатчик в пределах ±135° (ход руля 270°) и ставит ноль в середину флажка по среднему трёх подходов к каждой кромке. После включения Arduino выставьте колёса прямо руками (±30°). «Задать 0°» — запасной ручной вариант без датчика. Ноль теряется после перезапуска Arduino.</div>
@@ -47,34 +87,22 @@
         </div>
         <section class="rc-presets" aria-label="Пресеты руления">
           <div class="rc-presets-head">
-            <div><b>Быстрые режимы</b><small>Пресет выставляет углы всех четырёх колёс; тяга остаётся на кнопках ниже.</small></div>
+            <div><b>Быстрые режимы</b><small>Пресет выставляет углы всех четырёх колёс в пределах <span data-rc-steer-limit>±90°</span>; тяга — кнопками «Движение» в самом низу окна.</small></div>
             <span id="rc-preset-status" role="status">Проверка связи…</span>
           </div>
           <div id="rc-preset-grid" class="rc-preset-grid"></div>
           <div class="rc-preset-all">
             <label for="rc-preset-angle">Угол всех колёс <b><span id="rc-preset-angle-value">0</span>°</b>
-              <input id="rc-preset-angle" type="range" min="-32" max="32" step="1" value="0" disabled /></label>
+              <input id="rc-preset-angle" type="range" min="-90" max="90" step="1" value="0" disabled /></label>
             <button type="button" class="rc-steering-btn" id="rc-preset-apply" disabled>Задать всем</button>
             <span class="rc-preset-scale"><span>← влево</span><span>прямо</span><span>вправо →</span></span>
           </div>
-        </section>
-        <section class="rc-drive-panel" aria-label="Тяговые моторы">
-          <div class="rc-drive-top"><div><b>Тяга BLDC</b><small>Зажмите направление; отпустите для торможения</small></div>
-            <span id="rc-drive-status" role="status">Нужен ноль всех колёс (калибровка)</span></div>
-          <label class="rc-drive-speed">Ограничение скорости <b><span id="rc-drive-speed-value">8</span>%</b>
-            <input id="rc-drive-speed" type="range" min="1" max="20" value="8" disabled></label>
-          <div class="rc-drive-actions">
-            <button type="button" data-drive-direction="-1" disabled>Зажать: назад</button>
-            <button type="button" data-drive-direction="1" disabled>Зажать: вперёд</button>
-            <button type="button" id="rc-drive-stop" class="stop" disabled>СТОП</button>
-          </div>
-          <small class="rc-drive-warning">Программный стоп и watchdog (650 мс), не аварийный выключатель. Перед запуском вывесьте колёса и установите аппаратную аварийную кнопку в силовую цепь.</small>
         </section>
         <div class="rc-steering-grid">${IDS.map((id) => `
           <article class="rc-steering-card" data-rc-steering="${id}">
             <header><b>${id}</b><span data-status>нет связи</span></header>
             <div class="rc-steering-values"><span>Сейчас <b data-current>—</b></span><span>Цель <b data-target>0°</b></span></div>
-            <input data-range type="range" min="-32" max="32" step="1" value="0" aria-label="${id}, целевой угол" disabled>
+            <input data-range type="range" min="-90" max="90" step="1" value="0" aria-label="${id}, целевой угол" disabled>
             <div class="rc-steering-actions">
               <button type="button" data-calib disabled>Калибровка</button>
               <button type="button" data-origin disabled>Задать 0°</button>
@@ -86,6 +114,18 @@
             <small data-message aria-live="polite"></small>
           </article>`).join('')}
         </div>
+        <section class="rc-drive-panel" aria-label="Тяговые моторы">
+          <div class="rc-drive-top"><div><b>Движение</b><small>Зажмите направление; отпустите для торможения</small></div>
+            <span id="rc-drive-status" role="status">Нужен ноль всех колёс (калибровка)</span></div>
+          <label class="rc-drive-speed">Ограничение скорости <b><span id="rc-drive-speed-value">8</span>%</b>
+            <input id="rc-drive-speed" type="range" min="1" max="20" value="8" disabled></label>
+          <div class="rc-drive-actions">
+            <button type="button" data-drive-direction="-1" disabled>Зажать: назад</button>
+            <button type="button" data-drive-direction="1" disabled>Зажать: вперёд</button>
+            <button type="button" id="rc-drive-stop" class="stop" disabled>СТОП</button>
+          </div>
+          <small class="rc-drive-warning">Программный стоп и watchdog (650 мс), не аварийный выключатель. Перед запуском вывесьте колёса и установите аппаратную аварийную кнопку в силовую цепь.</small>
+        </section>
       </section>`;
     const header = document.querySelector('.top-status, .head-actions');
     if (header) header.append(launch);
@@ -148,6 +188,7 @@
       $('rc-steering-unlock').hidden = authorized;
       $('rc-steering-lock').hidden = !authorized;
       const control = snapshot.steeringControl || {};
+      syncLimit(control);
       const source = $('rc-steering-source');
       source.textContent = !control.available
         ? 'Управление доступно при RC_SLAM_SOURCE=master и подключённом USB мастера.'
@@ -168,11 +209,15 @@
   }
 
   function presetList() {
-    return window.RCSteerPresets && Array.isArray(window.RCSteerPresets.PRESETS)
-      ? window.RCSteerPresets.PRESETS : [];
+    if (!window.RCSteerPresets) return [];
+    if (typeof window.RCSteerPresets.list === 'function') return window.RCSteerPresets.list();
+    return Array.isArray(window.RCSteerPresets.PRESETS) ? window.RCSteerPresets.PRESETS : [];
   }
 
   function presetById(id) {
+    if (window.RCSteerPresets && typeof window.RCSteerPresets.get === 'function') {
+      return window.RCSteerPresets.get(id);
+    }
     return presetList().find((preset) => preset.id === id) || null;
   }
 
@@ -190,7 +235,8 @@
         ? +motor.targetAngle
         : (motor && motor.angle != null && Number.isFinite(+motor.angle) ? +motor.angle : null);
       if (raw === null) return null;
-      const value = Math.max(-32, Math.min(32, Math.round(raw)));
+      const value = clampAngle(raw);
+      if (value === null) return null;
       if (common === null) common = value;
       else if (Math.abs(value - common) > 1) return null;
     }
@@ -248,7 +294,7 @@
       icon.setAttribute('aria-hidden', 'true');
       const iconAngles = preset.available
         ? [preset.angle, preset.angle, preset.angle, preset.angle]
-        : [32, -32, 32, -32];
+        : [limitDeg, -limitDeg, limitDeg, -limitDeg];
       iconAngles.forEach((angle) => {
         const wheel = document.createElement('i');
         wheel.style.setProperty('--wheel-angle', angle + 'deg');
@@ -261,7 +307,7 @@
       button.appendChild(icon);
       button.appendChild(title);
       button.appendChild(hint);
-      button.addEventListener('click', () => { void applyPreset(preset); });
+      button.addEventListener('click', () => { void applyPreset(presetById(preset.id) || preset); });
       grid.appendChild(button);
     });
   }
@@ -284,7 +330,9 @@
       const active = preset.available && uniform !== null && Math.abs(uniform - preset.angle) <= 1;
       button.classList.toggle('is-active', active);
       button.setAttribute('aria-pressed', String(active));
-      button.disabled = presetBusy;
+      // Недоступный пресет остаётся нажимаемым — по нажатию показываем причину.
+      button.disabled = presetBusy || (preset.available && !!reason);
+      if (preset.reason) button.title = preset.reason;
     });
     const status = $('rc-preset-status');
     if (!status) return;
@@ -310,8 +358,8 @@
     }
     const targets = {};
     for (const id of IDS) {
-      const angle = Math.max(-32, Math.min(32, Math.round(Number(angles[id]))));
-      if (!Number.isFinite(angle)) {
+      const angle = clampAngle(angles[id]);
+      if (angle === null) {
         setPresetMessage('Не задан угол для ' + id + '.', true);
         return false;
       }
@@ -329,7 +377,7 @@
         });
         if (!response.ok || !body.ok) {
           if (response.status === 401 || body.reason === 'pin_required') authorized = false;
-          const message = reasonText(body.reason);
+          const message = reasonText(body.reason, body);
           feedback[id] = { text: 'пресет: ' + message, error: true, until: Date.now() + 8000 };
           presetBusy = false;
           setPresetMessage('Остановлено на ' + id + ': ' + message + '. Остальные колёса не трогаем.', true);
@@ -347,7 +395,7 @@
     }
     presetBusy = false;
     presetMessage = {
-      text: '«' + label + '»: угол ' + targets.FL + '° на всех колёсах. Тяга — кнопками ниже, удерживайте.',
+      text: '«' + label + '»: угол ' + targets.FL + '° на всех колёсах. Тяга — кнопками «Движение» в самом низу окна.',
       error: false, until: Date.now() + 10000
     };
     await refresh();
@@ -375,7 +423,8 @@
   async function applyPresetAngle() {
     const slider = $('rc-preset-angle');
     if (!slider) return;
-    const angle = Math.max(-32, Math.min(32, Math.round(Number(slider.value) || 0)));
+    const angle = clampAngle(slider.value);
+    if (angle === null) return;
     const angles = {};
     IDS.forEach((id) => { angles[id] = angle; });
     await applyAngles(angles, 'Угол всех колёс ' + angle + '°');
@@ -403,7 +452,10 @@
         Math.abs(current - Number(entry.angle)) <= 1 && !moving))) delete pending[id];
     const activePending = pending[id] && Date.now() - pending[id].at < 15000;
     if (pending[id] && !activePending) delete pending[id];
-    const ready = !!control.available && authorized && online && zeroed && !moving && !activePending && !tractionActive;
+    // Пока команда в полёте, карточка «занята»: второй запрос по тому же колесу
+    // плата отклонила бы как module_busy.
+    const ready = !!control.available && authorized && online && zeroed && !moving && !activePending &&
+      !tractionActive && !sending[id];
     const canZero = !!control.available && authorized && online && !moving && !activePending && !tractionActive;
     const range = card.querySelector('[data-range]');
     if (!card.dataset.dirty && current != null) range.value = String(Math.round(target));
@@ -419,7 +471,8 @@
     const status = card.querySelector('[data-status]');
     status.textContent = !control.available ? 'нет master' : !authorized ? 'нужен PIN'
       : !online ? 'нет связи' : calibrating ? 'калибровка по датчику…' : moving ? 'движется'
-        : tractionActive ? 'тяга включена · стоп' : activePending ? 'команда в очереди'
+        : tractionActive ? 'тяга включена · стоп' : sending[id] ? 'отправляю команду…'
+          : activePending ? 'команда в очереди'
           : !zeroed ? (motor && motor.calibErrorText ? 'ошибка калибровки: ' + motor.calibErrorText
             : control.calibration ? 'нужна калибровка' : 'нужен ручной ноль')
             : homeSource === 'opto' ? 'готов · ноль по датчику' : 'готов · ноль вручную';
@@ -575,23 +628,33 @@
     return driveFlush;
   }
 
+  /** Передвинуть цель колеса на экране; вернуть угол или null, если он не задан. */
+  function markCardDirty(id, value) {
+    const card = document.querySelector('[data-rc-steering="' + id + '"]');
+    if (!card) return null;
+    const range = card.querySelector('[data-range]');
+    const angle = clampAngle(value);
+    if (!range || angle === null) return null;
+    range.value = String(angle);
+    card.dataset.dirty = 'true';
+    card.querySelector('[data-target]').textContent = angle + '°';
+    renderCard(id);
+    return angle;
+  }
+
   function bindCard(id) {
     const card = document.querySelector('[data-rc-steering="' + id + '"]');
     const range = card.querySelector('[data-range]');
-    range.addEventListener('input', () => {
-      card.dataset.dirty = 'true';
-      card.querySelector('[data-target]').textContent = Math.round(+range.value) + '°';
-      renderCard(id);
-    });
+    range.addEventListener('input', () => { markCardDirty(id, range.value); });
+    // Как на бортовом экране: отпустил ползунок — команда ушла. Раньше здесь
+    // требовалось ещё нажать «Повернуть», а на экране робота — нет: одно и то
+    // же действие на двух пультах вело себя по-разному.
+    range.addEventListener('change', () => { void sendAngle(id); });
     card.querySelectorAll('[data-step]').forEach((button) => button.addEventListener('click', () => {
-      range.value = String(Math.max(-32, Math.min(32, Number(range.value) + Number(button.dataset.step))));
-      card.dataset.dirty = 'true';
-      card.querySelector('[data-target]').textContent = Math.round(+range.value) + '°';
-      renderCard(id);
+      if (markCardDirty(id, Number(range.value) + Number(button.dataset.step)) !== null) void sendAngle(id);
     }));
     card.querySelector('[data-center]').addEventListener('click', () => {
-      range.value = '0'; card.dataset.dirty = 'true';
-      card.querySelector('[data-target]').textContent = '0°'; renderCard(id);
+      if (markCardDirty(id, 0) !== null) void sendAngle(id);
     });
     card.querySelector('[data-send]').addEventListener('click', () => void sendAngle(id));
     card.querySelector('[data-origin]').addEventListener('click', () => void setZero(id));
@@ -633,8 +696,27 @@
 
   async function sendAngle(id) {
     if (!authorized) return unlock();
+    // Двойное нажатие отправляло две команды: вторая возвращала «модуль занят»
+    // и пугала оператора, хотя колесо уже ехало куда надо.
+    if (sending[id]) return;
     const card = document.querySelector('[data-rc-steering="' + id + '"]');
-    const angle = Math.max(-32, Math.min(32, Number(card.querySelector('[data-range]').value)));
+    if (!card) return;
+    const angle = clampAngle(card.querySelector('[data-range]').value);
+    if (angle === null) return;
+    const motor = snapshot && Array.isArray(snapshot.motors)
+      ? snapshot.motors.find((item) => item && item.id === id) : null;
+    const current = motor && Number.isFinite(+motor.angle) ? +motor.angle : null;
+    if (motor && current !== null && !motor.moving && Math.abs(current - angle) <= 1) {
+      // Колесо уже стоит там: команда не нужна. Если угол не совпал (не доехало)
+      // — отправляем, это рабочий способ докрутить.
+      card.dataset.dirty = '';
+      feedback[id] = { text: 'колесо уже на ' + angle + '°', error: false, until: Date.now() + 4000 };
+      await refresh();
+      return;
+    }
+    const sendButton = card.querySelector('[data-send]');
+    sending[id] = true;
+    if (sendButton) sendButton.disabled = true;
     try {
       const { response, body } = await json('api/kiosk_steer', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
@@ -642,14 +724,16 @@
       });
       if (!response.ok || !body.ok) {
         if (response.status === 401) authorized = false;
-        feedback[id] = { text: reasonText(body.reason), error: true, until: Date.now() + 6000 };
+        feedback[id] = { text: reasonText(body.reason, body), error: true, until: Date.now() + 6000 };
       } else {
         pending[id] = { at: Date.now(), angle: body.angle };
         card.dataset.dirty = '';
-        feedback[id] = { text: 'команда отправлена', error: false, until: Date.now() + 6000 };
+        feedback[id] = { text: 'команда отправлена · ' + angle + '°', error: false, until: Date.now() + 6000 };
       }
     } catch (error) {
       feedback[id] = { text: 'сервер не отвечает', error: true, until: Date.now() + 6000 };
+    } finally {
+      sending[id] = false;
     }
     await refresh();
   }
@@ -696,11 +780,16 @@
     await refresh();
   }
 
-  function reasonText(reason) {
+  function reasonText(reason, detail) {
+    const reported = Number(detail && detail.limit);
+    const limit = Number.isFinite(reported) && reported > 0
+      ? '±' + Math.round(reported) + '°'
+      : (window.RCSteerPresets && typeof window.RCSteerPresets.limitText === 'function'
+        ? window.RCSteerPresets.limitText() : '±' + limitDeg + '°');
     return ({
       pin_required: 'PIN истёк · разблокируйте', module_offline: 'модуль не отвечает',
       serial_unavailable: 'USB-порт мастера недоступен', not_homed: 'сначала калибровка или 0° вручную',
-      module_busy: 'дождитесь остановки модуля', angle_limit: 'предел ±32°',
+      module_busy: 'дождитесь остановки модуля', angle_limit: 'предел ' + limit,
       command_queue_full: 'очередь команд занята', control_not_supported: 'источник не поддерживает поворот',
       estop: 'E-STOP взведён · снимите защёлку', payload: 'неверный формат команды',
       command_failed: 'команда не выполнена'

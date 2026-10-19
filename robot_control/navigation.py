@@ -4,8 +4,8 @@
 неизученные клетки свободными. Исполнитель намеренно ограничен возможностями
 прошивки Zapret: общая тяга всех колёс, одинаковый угол, без разворота на месте.
 Поэтому путь состоит только из прямых/крабовых отрезков в секторе ±28° от
-текущего курса (запас до аппаратного предела ±32°), с остановкой перед сменой
-угла. Автоматическая тяга выключена по умолчанию и требует явного включения и
+текущего курса (запас до аппаратного предела ``STEER_LIMIT_DEG``, сейчас ±90°),
+с остановкой перед сменой угла. Автоматическая тяга выключена по умолчанию и требует явного включения и
 измеренной калибровки скорости.
 
 Это не Nav2 и не замена сертифицированному защитному контуру. Перед запуском
@@ -24,15 +24,18 @@ from math import gcd
 from typing import Any, Optional
 
 from robot_control import estop as estop_latch
-from robot_control.rus_bridge import MasterBridge
+from robot_control.rus_bridge import STEER_LIMIT_DEG, MasterBridge
 from robot_control.rus_core.kinematics import SwerveKinematics
 
 log = logging.getLogger("robot_control.navigation")
 
 FREE_MAX = 19
 OCCUPIED_MIN = 65
+#: Сектор планирования: намеренно у́же аппаратного предела, чтобы A* строил
+#: короткие прямые/крабовые отрезки, а не «боком» через всю карту.
 PLAN_STEER_DEG = 28.0
-HARDWARE_STEER_DEG = 32.0
+#: Аппаратный предел руля — одна константа на прошивку, сервер и мост.
+HARDWARE_STEER_DEG = STEER_LIMIT_DEG
 DEFAULT_FOOTPRINT_M = 0.42
 DEFAULT_ROBOT_LENGTH_M = 0.75
 DEFAULT_ROBOT_WIDTH_M = 0.60
@@ -1087,7 +1090,11 @@ class NavigationService:
                     body_y = -math.sin(yaw) * ux + math.cos(yaw) * uy
                     body_angle = math.atan2(body_y, body_x)
                     if abs(body_angle) > math.radians(HARDWARE_STEER_DEG + 0.5) and abs(abs(body_angle) - math.pi) > math.radians(HARDWARE_STEER_DEG + 0.5):
-                        raise NavigationError("steer_limit", "Курс изменился: новый участок вне допуска руля ±32°", 409)
+                        raise NavigationError(
+                            "steer_limit",
+                            "Курс изменился: новый участок вне допуска руля ±%.0f°" % HARDWARE_STEER_DEG,
+                            409,
+                        )
 
                     scan = self._scan()
                     if not scan:

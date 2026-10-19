@@ -47,6 +47,10 @@ from robot_control.kiosk_app import (
 )
 
 
+#: Ход руля, общий для прошивки, сервера и экранов (STEER_LIMIT_DEG).
+STEER_LIMIT_DEG = 90
+
+
 @pytest.fixture
 def kiosk_app(config: Config):
     application = create_kiosk_app(config)
@@ -176,7 +180,7 @@ def test_steering_endpoint_dispatches_exactly_one_module_and_angle(kiosk_app, ki
     for bad_body in (
         {"module": "FR", "angle": 12, "pwm": 100},
         {"module": "drive", "angle": 12},
-        {"module": "FL", "angle": 33},
+        {"module": "FL", "angle": 91},   # за пределом ±90° (STEER_LIMIT_DEG)
     ):
         response = kiosk_client.post("/api/kiosk_steer", json=bad_body, headers=headers)
         assert response.status_code == 400
@@ -184,6 +188,65 @@ def test_steering_endpoint_dispatches_exactly_one_module_and_angle(kiosk_app, ki
 
     # Следующая команда тоже доступна без PIN-сессии.
     assert kiosk_client.post("/api/kiosk_steer", json={"module": "FR", "angle": 10}, headers=headers).status_code == 200
+
+
+def test_steering_api_reports_the_limit_it_enforces(kiosk_app, kiosk_client):
+    """limitDeg в телеметрии и отказ по пределу говорят одно и то же число."""
+    from robot_control import slam as slam_module
+
+    class LimitedSource:
+        name = "master"
+        supports_individual_steer = True
+        supports_calibration = True
+        MAX_STEER_DEG = STEER_LIMIT_DEG
+
+        def __init__(self):
+            self.commands = []
+
+        def steer_module(self, module, angle):
+            self.commands.append((module, angle))
+            return {"ok": True, "queued": True, "module": module, "angle": angle}
+
+    source = LimitedSource()
+    kiosk_app.extensions["rc_slam"].source = source
+    assert slam_module.steering_control_info(source)["limitDeg"] == STEER_LIMIT_DEG
+
+    headers = {"X-Robot-Control": "steering"}
+    ok = kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 90}, headers=headers)
+    assert ok.status_code == 200, ok.get_json()
+
+    over = kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 91}, headers=headers)
+    assert over.status_code == 400
+    body = over.get_json()
+    assert body["reason"] == "angle_limit"
+    assert body["limit"] == STEER_LIMIT_DEG
+
+
+def test_steering_api_adopts_the_source_limit(kiosk_app, kiosk_client):
+    """Старая прошивка режет ход до ±32° — API не обещает больше, чем примет плата."""
+    class OldSource:
+        name = "master"
+        supports_individual_steer = True
+        MAX_STEER_DEG = 32.0
+
+        def __init__(self):
+            self.commands = []
+
+        def steer_module(self, module, angle):
+            self.commands.append((module, angle))
+            return {"ok": True, "queued": True, "module": module, "angle": angle}
+
+    source = OldSource()
+    kiosk_app.extensions["rc_slam"].source = source
+
+    from robot_control import slam as slam_module
+    assert slam_module.steering_control_info(source)["limitDeg"] == 32.0
+
+    headers = {"X-Robot-Control": "steering"}
+    assert kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 45},
+                             headers=headers).status_code == 400
+    assert kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 32},
+                             headers=headers).status_code == 200
 
 
 def test_manual_software_zero_is_available_without_pin_and_targets_one_module(kiosk_app, kiosk_client):

@@ -1464,7 +1464,9 @@ body.swipe-open .kiosk {
 .steer-preset:hover { border-color: var(--accent); }
 .steer-preset.is-active { border-color: var(--accent); background: rgba(192, 80, 90, .16); }
 .steer-preset.is-unavailable { opacity: .55; cursor: help; }
-.steer-preset:disabled { opacity: .4; cursor: wait; }
+/* Пресет гаснет, когда команда всё равно была бы отклонена (модуль не готов,
+   тяга включена, предел прошивки ниже) — причина видна в статусе и в подсказке. */
+.steer-preset:disabled { opacity: .4; cursor: not-allowed; }
 .steer-preset b { font-size: 13px; font-weight: 900; }
 .steer-preset small { color: var(--muted); font-size: 10px; line-height: 1.3; }
 .steer-preset-icon {

@@ -85,10 +85,31 @@ def test_plan_crab_within_steer_limit_is_feasible():
     assert plan.percent == 10
 
 
-def test_plan_crab_45_exceeds_steer_limit():
+def test_plan_crab_45_is_within_steer_limit():
+    # Ход руля ±90°: диагональ 45° больше не упирается в предел.
     v = 0.1
     plan = plan_motion(SwerveKinematics(), v * math.cos(math.radians(45)),
                        v * math.sin(math.radians(45)), 0.0, mps_per_percent=CAL)
+    assert plan.ok
+    assert all(abs(d - 45.0) < 0.1 for d in plan.steer_deg.values())
+
+
+def test_plan_pure_side_step_at_90_degrees_is_feasible():
+    # 90° — чистый боковой ход: все колёса перпендикулярно корпусу, тяга одна.
+    v = 0.1
+    plan = plan_motion(SwerveKinematics(), v * math.cos(math.radians(90)),
+                       v * math.sin(math.radians(90)), 0.0, mps_per_percent=CAL)
+    assert plan.ok
+    assert all(abs(abs(d) - 90.0) < 0.1 for d in plan.steer_deg.values())
+
+
+def test_plan_still_refuses_angle_beyond_an_explicit_limit():
+    # Предел — параметр моста: на старом железе (±32°) диагональ 45° по-прежнему отказ,
+    # то есть защита не исчезла вместе с расширением хода.
+    v = 0.1
+    plan = plan_motion(SwerveKinematics(), v * math.cos(math.radians(45)),
+                       v * math.sin(math.radians(45)), 0.0, mps_per_percent=CAL,
+                       max_steer_deg=32.0)
     assert not plan.ok and plan.reason == "steer_limit"
 
 
