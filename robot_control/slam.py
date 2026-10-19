@@ -548,6 +548,8 @@ ASSETS = {
     "battery.js": "battery_js",
     "steering.css": "steering_css",
     "steering.js": "steering_js",
+    # общие пресеты руления: одни и те же углы на киоске и веб-пульте
+    "steer_presets.js": "steer_presets_js",
     "pot_mode.js": "pot_mode_js",
     "update.css": "update_css",
     "update.js": "update_js",

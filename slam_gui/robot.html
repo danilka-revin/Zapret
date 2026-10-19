@@ -534,71 +534,115 @@
         </div>
       </section>
 
-      <!-- Руление и удерживаемое низкоскоростное движение на киоске без PIN. -->
-      <section id="swipe-motors-view" class="swipe-view steer-panel" hidden aria-label="Руление и тяга">
+      <!-- Тяга и руление: пресеты углов, схема колёс и удерживаемое движение. -->
+      <section id="swipe-motors-view" class="swipe-view steer-panel" hidden aria-label="Тяга и руление">
         <header class="steer-panel-head">
           <div>
-            <h3>Руление и движение</h3>
-            <p>Шаговые модули задаются отдельно; BLDC едет только пока удерживается направление.</p>
+            <h3>Тяга и руление</h3>
+            <p>1) выберите режим · 2) колёса встанут на угол · 3) удерживайте «Вперёд» или «Назад»</p>
           </div>
           <div class="steer-access">
             <span id="steer-auth-status" class="steer-auth-status">доступ без PIN</span>
           </div>
         </header>
+
+        <section class="steer-modes" aria-labelledby="steer-modes-title">
+          <div class="steer-modes-head">
+            <div><b id="steer-modes-title">Режим движения</b><small>Пресет выставляет все четыре колеса. Движение — кнопками ниже, пока держите.</small></div>
+            <span id="steer-preset-status" class="steer-preset-status" role="status">Проверка связи…</span>
+          </div>
+          <div id="steer-preset-grid" class="steer-preset-grid" role="group" aria-label="Пресеты углов колёс"></div>
+          <div class="steer-master">
+            <div class="steer-master-head"><label for="steer-master-slider">Угол всех колёс</label><b><output id="steer-master-value">0°</output></b></div>
+            <input id="steer-master-slider" type="range" min="-32" max="32" step="1" value="0" aria-describedby="steer-master-hint" />
+            <div class="steer-master-scale"><span>← влево</span><span>прямо</span><span>вправо →</span></div>
+            <div class="steer-master-actions">
+              <button id="steer-apply-all" class="btn-steer" type="button" disabled>Применить ко всем колёсам</button>
+              <span id="steer-master-hint">Плюс — вправо, минус — влево, как в телеметрии. Пресет не включает тягу.</span>
+            </div>
+          </div>
+        </section>
+
+        <div class="steer-hero">
+          <div class="steer-diagram" role="img" aria-label="Схема колёс, вид сверху, перед сверху">
+            <span class="steer-diagram-front">ПЕРЕД</span>
+            <span class="steer-diagram-body" aria-hidden="true"></span>
+            <span class="steer-diagram-wheel" data-preview-wheel="FL" aria-hidden="true"></span>
+            <span class="steer-diagram-wheel" data-preview-wheel="FR" aria-hidden="true"></span>
+            <span class="steer-diagram-wheel" data-preview-wheel="RL" aria-hidden="true"></span>
+            <span class="steer-diagram-wheel" data-preview-wheel="RR" aria-hidden="true"></span>
+            <span class="steer-diagram-caption">вид сверху · цель</span>
+          </div>
+          <div class="steer-hero-copy">
+            <b id="steer-hero-angle">0°</b>
+            <span id="steer-hero-mode">Прямо · движение вперёд/назад</span>
+            <small>Схема показывает целевой угол. Фактический угол каждого колеса — в точной настройке ниже.</small>
+          </div>
+        </div>
+
         <section class="traction-controls" aria-label="Тяговые BLDC-моторы">
-          <div class="traction-head"><div><b>Тяга BLDC</b><span>Удерживай направление · отпусти для торможения</span></div>
-            <span id="drive-status" role="status">Нужен ноль всех колёс (калибровка)</span></div>
-          <label class="traction-speed">Предел PWM <b><output id="drive-speed-value">8</output>%</b>
-            <input id="drive-speed" type="range" min="1" max="20" value="8" disabled></label>
+          <div class="traction-head">
+            <div><b>Движение</b><span>Удерживайте кнопку · отпустили — тормоз</span></div>
+            <span id="drive-status" role="status">Нужен ноль всех колёс (калибровка)</span>
+          </div>
           <div class="traction-actions">
-            <button id="drive-back" type="button" disabled>Зажать: назад</button>
-            <button id="drive-forward" type="button" disabled>Зажать: вперёд</button>
+            <button id="drive-back" type="button" disabled>◀ Зажать: назад</button>
+            <button id="drive-forward" type="button" disabled>Зажать: вперёд ▶</button>
             <button id="drive-stop" class="traction-stop" type="button" disabled>СТОП</button>
           </div>
+          <label class="traction-speed">Предел PWM <b><output id="drive-speed-value">8</output>%</b>
+            <input id="drive-speed" type="range" min="1" max="20" value="8" disabled></label>
           <small class="traction-warning">Лимит 20%. Программный стоп и watchdog (650 мс) не заменяют физическую аварийную кнопку. Первые испытания — с вывешенными колёсами.</small>
         </section>
+
         <p id="steer-source-status" class="steer-source-status" role="status">Проверка связи с модулями…</p>
+
         <section class="steer-calib-bar" aria-label="Калибровка руля по оптодатчику">
           <div><b>Ноль руля — по оптодатчику D18</b>
             <span>Колесо ищет флажок в пределах ±135° (ход руля 270°): сначала вправо, затем влево. Подходит к каждой кромке по три раза и встаёт в середину флажка по среднему. После включения Arduino выставьте колёса прямо руками (±30°). Колёса не должны упираться, рядом — никого.</span></div>
           <button id="steer-calib-all" class="btn-steer btn-steer--calib" type="button" disabled>Калибровать все колёса</button>
         </section>
-        <div class="steer-grid">
-          <article class="steer-card" data-steer-card="FL">
-            <header><b>FL</b><span id="steer-state-FL" class="steer-state">—</span></header>
-            <div class="steer-readout"><span>Сейчас <b id="steer-current-FL">—</b></span><span>Цель <output id="steer-target-FL">0°</output></span></div>
-            <div class="steer-meta"><span id="steer-home-FL" data-home="none">ноль: —</span><span id="steer-opto-FL" data-opto="unknown">датчик: —</span></div>
-            <input id="steer-slider-FL" data-steer-slider="FL" type="range" min="-32" max="32" step="1" value="0" aria-label="Целевой угол переднего левого рулевого модуля" disabled />
-            <div class="steer-range-labels"><span>−32°</span><span>+32°</span></div>
-            <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="FL" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="FL" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="FL" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="FL" disabled>0°</button><button type="button" data-steer-adjust="FL" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="FL" disabled>Повернуть FL</button></div>
-          </article>
-          <article class="steer-card" data-steer-card="FR">
-            <header><b>FR</b><span id="steer-state-FR" class="steer-state">—</span></header>
-            <div class="steer-readout"><span>Сейчас <b id="steer-current-FR">—</b></span><span>Цель <output id="steer-target-FR">0°</output></span></div>
-            <div class="steer-meta"><span id="steer-home-FR" data-home="none">ноль: —</span><span id="steer-opto-FR" data-opto="unknown">датчик: —</span></div>
-            <input id="steer-slider-FR" data-steer-slider="FR" type="range" min="-32" max="32" step="1" value="0" aria-label="Целевой угол переднего правого рулевого модуля" disabled />
-            <div class="steer-range-labels"><span>−32°</span><span>+32°</span></div>
-            <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="FR" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="FR" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="FR" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="FR" disabled>0°</button><button type="button" data-steer-adjust="FR" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="FR" disabled>Повернуть FR</button></div>
-          </article>
-          <article class="steer-card" data-steer-card="RL">
-            <header><b>RL</b><span id="steer-state-RL" class="steer-state">—</span></header>
-            <div class="steer-readout"><span>Сейчас <b id="steer-current-RL">—</b></span><span>Цель <output id="steer-target-RL">0°</output></span></div>
-            <div class="steer-meta"><span id="steer-home-RL" data-home="none">ноль: —</span><span id="steer-opto-RL" data-opto="unknown">датчик: —</span></div>
-            <input id="steer-slider-RL" data-steer-slider="RL" type="range" min="-32" max="32" step="1" value="0" aria-label="Целевой угол заднего левого рулевого модуля" disabled />
-            <div class="steer-range-labels"><span>−32°</span><span>+32°</span></div>
-            <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="RL" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="RL" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="RL" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="RL" disabled>0°</button><button type="button" data-steer-adjust="RL" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="RL" disabled>Повернуть RL</button></div>
-          </article>
-          <article class="steer-card" data-steer-card="RR">
-            <header><b>RR</b><span id="steer-state-RR" class="steer-state">—</span></header>
-            <div class="steer-readout"><span>Сейчас <b id="steer-current-RR">—</b></span><span>Цель <output id="steer-target-RR">0°</output></span></div>
-            <div class="steer-meta"><span id="steer-home-RR" data-home="none">ноль: —</span><span id="steer-opto-RR" data-opto="unknown">датчик: —</span></div>
-            <input id="steer-slider-RR" data-steer-slider="RR" type="range" min="-32" max="32" step="1" value="0" aria-label="Целевой угол заднего правого рулевого модуля" disabled />
-            <div class="steer-range-labels"><span>−32°</span><span>+32°</span></div>
-            <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="RR" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="RR" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="RR" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="RR" disabled>0°</button><button type="button" data-steer-adjust="RR" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="RR" disabled>Повернуть RR</button></div>
-          </article>
-        </div>
-        <ul id="steer-messages" class="steer-messages" aria-label="Сообщения прошивки руля" hidden></ul>
-        <p class="steer-footnote">Нужны источник master и свежая связь. Ноль задаёт «Калибровка» по оптодатчику D18 (прошивка v2); «0° вручную» — запасной вариант, если датчик снят: сначала выставьте колесо прямо руками. Ноль сбрасывается при перезапуске Arduino; поворот с экрана — в пределах ±32°.</p>
+
+        <details class="steer-fine" id="steer-fine">
+          <summary>Точная настройка каждого колеса · калибровка</summary>
+          <div class="steer-grid">
+            <article class="steer-card" data-steer-card="FL">
+              <header><b>FL</b><span id="steer-state-FL" class="steer-state">—</span></header>
+              <div class="steer-readout"><span>Сейчас <b id="steer-current-FL">—</b></span><span>Цель <output id="steer-target-FL">0°</output></span></div>
+              <div class="steer-meta"><span id="steer-home-FL" data-home="none">ноль: —</span><span id="steer-opto-FL" data-opto="unknown">датчик: —</span></div>
+              <input id="steer-slider-FL" data-steer-slider="FL" type="range" min="-32" max="32" step="1" value="0" aria-label="Целевой угол переднего левого рулевого модуля" disabled />
+              <div class="steer-range-labels"><span>−32° ← влево</span><span>прямо</span><span>вправо → +32°</span></div>
+              <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="FL" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="FL" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="FL" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="FL" disabled>0°</button><button type="button" data-steer-adjust="FL" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="FL" disabled>Повернуть FL</button></div>
+            </article>
+            <article class="steer-card" data-steer-card="FR">
+              <header><b>FR</b><span id="steer-state-FR" class="steer-state">—</span></header>
+              <div class="steer-readout"><span>Сейчас <b id="steer-current-FR">—</b></span><span>Цель <output id="steer-target-FR">0°</output></span></div>
+              <div class="steer-meta"><span id="steer-home-FR" data-home="none">ноль: —</span><span id="steer-opto-FR" data-opto="unknown">датчик: —</span></div>
+              <input id="steer-slider-FR" data-steer-slider="FR" type="range" min="-32" max="32" step="1" value="0" aria-label="Целевой угол переднего правого рулевого модуля" disabled />
+              <div class="steer-range-labels"><span>−32° ← влево</span><span>прямо</span><span>вправо → +32°</span></div>
+              <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="FR" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="FR" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="FR" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="FR" disabled>0°</button><button type="button" data-steer-adjust="FR" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="FR" disabled>Повернуть FR</button></div>
+            </article>
+            <article class="steer-card" data-steer-card="RL">
+              <header><b>RL</b><span id="steer-state-RL" class="steer-state">—</span></header>
+              <div class="steer-readout"><span>Сейчас <b id="steer-current-RL">—</b></span><span>Цель <output id="steer-target-RL">0°</output></span></div>
+              <div class="steer-meta"><span id="steer-home-RL" data-home="none">ноль: —</span><span id="steer-opto-RL" data-opto="unknown">датчик: —</span></div>
+              <input id="steer-slider-RL" data-steer-slider="RL" type="range" min="-32" max="32" step="1" value="0" aria-label="Целевой угол заднего левого рулевого модуля" disabled />
+              <div class="steer-range-labels"><span>−32° ← влево</span><span>прямо</span><span>вправо → +32°</span></div>
+              <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="RL" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="RL" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="RL" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="RL" disabled>0°</button><button type="button" data-steer-adjust="RL" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="RL" disabled>Повернуть RL</button></div>
+            </article>
+            <article class="steer-card" data-steer-card="RR">
+              <header><b>RR</b><span id="steer-state-RR" class="steer-state">—</span></header>
+              <div class="steer-readout"><span>Сейчас <b id="steer-current-RR">—</b></span><span>Цель <output id="steer-target-RR">0°</output></span></div>
+              <div class="steer-meta"><span id="steer-home-RR" data-home="none">ноль: —</span><span id="steer-opto-RR" data-opto="unknown">датчик: —</span></div>
+              <input id="steer-slider-RR" data-steer-slider="RR" type="range" min="-32" max="32" step="1" value="0" aria-label="Целевой угол заднего правого рулевого модуля" disabled />
+              <div class="steer-range-labels"><span>−32° ← влево</span><span>прямо</span><span>вправо → +32°</span></div>
+              <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="RR" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="RR" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="RR" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="RR" disabled>0°</button><button type="button" data-steer-adjust="RR" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="RR" disabled>Повернуть RR</button></div>
+            </article>
+          </div>
+          <ul id="steer-messages" class="steer-messages" aria-label="Сообщения прошивки руля" hidden></ul>
+        </details>
+
+        <p class="steer-footnote">Ноль задаёт «Калибровка» по оптодатчику D18; «0° вручную» — запасной вариант, если датчик снят. Ноль сбрасывается при перезапуске Arduino. Пресеты и общий ползунок выставляют цель всем четырём колёсам в пределах ±32°; тяга включается только удержанием и лишь при совпадении углов в пределах 2,5°. Разворот на месте эта прошивка не выполняет: у неё одна тяга на все колёса.</p>
       </section>
     </div>
     </div>
@@ -793,6 +837,7 @@
   </div>
 
   <script src="/robot_model.js"></script><script src="lidar_view.js"></script>
+  <script src="steer_presets.js"></script>
   <script src="viewport.js"></script>
   <script src="camera_view.js"></script>
   <script src="map_view.js"></script>

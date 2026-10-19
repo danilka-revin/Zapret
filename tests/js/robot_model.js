@@ -33,9 +33,11 @@ model.draw(ctx, 100, 200, Math.PI / 3, 100, { state: live });
 const rotations = operations.filter(op => op[0] === 'rotate').map(op => op[1]);
 assert.equal(rotations[0], -Math.PI / 3);
 assert.equal(rotations.length, 9);
+// Прошивка: +deg — вправо (по часовой стрелке сверху), canvas rotate(+a)
+// тоже по часовой. Фактические и целевые углы рисуются с тем же знаком.
 angles.forEach((angle, i) => {
-  assert.ok(Math.abs(rotations[2 + i * 2] + angle * Math.PI / 180) < 1e-10);
-  assert.ok(Math.abs(rotations[1 + i * 2] + 80 * Math.PI / 180) < 1e-10);
+  assert.ok(Math.abs(rotations[2 + i * 2] - angle * Math.PI / 180) < 1e-10);
+  assert.ok(Math.abs(rotations[1 + i * 2] - 80 * Math.PI / 180) < 1e-10);
 });
 assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'strokeStyle' && op[2] === '#36c275'));
 assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'fillStyle' && op[2] === '#e35d6a'));

@@ -1984,6 +1984,377 @@
       ' Проверьте USB-кабель, RC_SLAM_PORT и scripts/master_check.py.';
   }
 
+  const STEER_IDS = ['FL', 'FR', 'RL', 'RR'];
+  let steerPresetBusy = false;
+  let steerPresetMessage = null;
+  let steerPreviewMode = 'live';
+  let steerPreviewTimer = null;
+  const steerPreviewAngles = { FL: 0, FR: 0, RL: 0, RR: 0 };
+
+  function steerClamp(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return Math.max(-32, Math.min(32, Math.round(n)));
+  }
+
+  function steerPresetList() {
+    return window.RCSteerPresets && Array.isArray(window.RCSteerPresets.PRESETS)
+      ? window.RCSteerPresets.PRESETS : [];
+  }
+
+  function steerPresetById(id) {
+    return steerPresetList().find((preset) => preset.id === id) || null;
+  }
+
+  function steerModeText(angle) {
+    if (window.RCSteerPresets && typeof window.RCSteerPresets.modeFor === 'function') {
+      return window.RCSteerPresets.modeFor(angle);
+    }
+    const n = steerClamp(angle);
+    if (n === null) return 'Угол не задан';
+    if (n === 0) return 'Прямо · движение вперёд/назад';
+    return (n < 0 ? 'Краб влево' : 'Краб вправо') + ' · диагональ';
+  }
+
+  function updateSteerDiagram() {
+    const panel = $('swipe-motors-view');
+    if (!panel) return;
+    STEER_IDS.forEach((id) => {
+      const wheel = panel.querySelector('[data-preview-wheel="' + id + '"]');
+      if (wheel) wheel.style.transform = 'rotate(' + steerPreviewAngles[id] + 'deg)';
+    });
+    const values = STEER_IDS.map((id) => steerPreviewAngles[id]);
+    const uniform = values.every((value) => Math.abs(value - values[0]) <= 1);
+    setText($('steer-master-value'), uniform ? Math.round(values[0]) + '°' : 'разные');
+    setText($('steer-hero-angle'), uniform ? Math.round(values[0]) + '°' : '—');
+    setText($('steer-hero-mode'), uniform ? steerModeText(values[0]) : 'Колёса под разными углами');
+  }
+
+  function setSteerPreviewAngles(angles, mode) {
+    if (angles) {
+      STEER_IDS.forEach((id) => {
+        const value = steerClamp(angles[id]);
+        if (value !== null) steerPreviewAngles[id] = value;
+      });
+    }
+    if (mode) steerPreviewMode = mode;
+    updateSteerDiagram();
+  }
+
+  function steerLiveAngles(data, key) {
+    const motors = Array.isArray(data && data.motors) ? data.motors : [];
+    const out = {};
+    STEER_IDS.forEach((id) => {
+      const motor = motors.find((item) => item && item.id === id);
+      const value = motor && motor.online === true && motor[key] !== null &&
+        motor[key] !== undefined && Number.isFinite(+motor[key]) ? +motor[key] : null;
+      out[id] = value;
+    });
+    return out;
+  }
+
+  function steerPreviewUniform() {
+    const values = STEER_IDS.map((id) => steerPreviewAngles[id]);
+    return values.every((value) => Math.abs(value - values[0]) <= 1) ? values[0] : null;
+  }
+
+  function steerPresetBlockedReason() {
+    const d = lastData || {};
+    const control = d.steeringControl || {};
+    if (!control.available) {
+      return String(control.source || '') === 'master-peer'
+        ? 'Руление и пресеты доступны на бортовом экране (порт 8090).'
+        : 'Источник master не подключён: пресеты недоступны.';
+    }
+    if (!steeringAuthorized) return 'Управление недоступно: разблокируйте PIN.';
+    const drive = d.drive || {};
+    if (drive.active || Number(drive.commandedPercent || 0) !== 0) {
+      return 'Сначала остановите тягу кнопкой СТОП.';
+    }
+    const motors = Array.isArray(d.motors) ? d.motors : [];
+    const find = (id) => motors.find((item) => item && item.id === id) || null;
+    const offline = STEER_IDS.filter((id) => {
+      const motor = find(id);
+      return !(motor && motor.online === true);
+    });
+    if (offline.length) return 'Нет связи: ' + offline.join(', ') + '.';
+    const unhomed = STEER_IDS.filter((id) => {
+      const motor = find(id);
+      return !(motor && motor.homed === true);
+    });
+    if (unhomed.length) return 'Не откалиброваны: ' + unhomed.join(', ') + '. Сначала калибровка.';
+    const moving = STEER_IDS.filter((id) => {
+      const motor = find(id);
+      return !!(motor && (motor.moving || motor.calibrating || motor.cycling));
+    });
+    if (moving.length) return 'Дождитесь остановки: ' + moving.join(', ') + '.';
+    if (Object.keys(pendingSteer).length || Object.keys(pendingZero).length || Object.keys(pendingCalib).length) {
+      return 'Предыдущая команда ещё выполняется — дождитесь её.';
+    }
+    return '';
+  }
+
+  function previewAllCards(angles) {
+    const panel = $('swipe-motors-view');
+    if (!panel) return;
+    STEER_IDS.forEach((id) => {
+      const angle = steerClamp(angles[id]);
+      if (angle === null) return;
+      const card = panel.querySelector('[data-steer-card="' + id + '"]');
+      const slider = $('steer-slider-' + id);
+      const target = $('steer-target-' + id);
+      if (slider) slider.value = String(angle);
+      if (target) target.textContent = angle + '°';
+      if (card) card.dataset.steerDirty = 'true';
+    });
+    setSteerPreviewAngles(angles, 'manual');
+  }
+
+  function renderSteerPresetBar(data, motors, available, tractionActive) {
+    const panel = $('swipe-motors-view');
+    if (!panel || !$('steer-preset-grid')) return;
+    const slider = $('steer-master-slider');
+    const apply = $('steer-apply-all');
+    const status = $('steer-preset-status');
+    let uniform = null;
+
+    if (steerPreviewMode === 'live') {
+      const targets = steerLiveAngles(data, 'targetAngle');
+      const currents = steerLiveAngles(data, 'angle');
+      const use = STEER_IDS.map((id) => (targets[id] === null ? currents[id] : targets[id]));
+      const complete = use.every((value) => value !== null);
+      if (complete) {
+        const angles = {};
+        STEER_IDS.forEach((id, index) => {
+          const value = steerClamp(use[index]);
+          angles[id] = value === null ? 0 : value;
+        });
+        setSteerPreviewAngles(angles, 'live');
+        uniform = steerPreviewUniform();
+        if (slider && uniform !== null && !steerPresetBusy) slider.value = String(Math.round(uniform));
+      }
+      updateSteerDiagram();
+      if (!complete) {
+        setText($('steer-master-value'), '—');
+        setText($('steer-hero-angle'), '—');
+        setText($('steer-hero-mode'), 'Нет свежих данных от всех колёс');
+      }
+    } else {
+      uniform = steerPreviewUniform();
+    }
+
+    const reason = steerPresetBlockedReason();
+    if (apply) {
+      apply.disabled = steerPresetBusy || !!reason;
+      apply.textContent = steerPresetBusy ? 'Применяю…' : 'Применить ко всем колёсам';
+    }
+    if (slider) slider.disabled = steerPresetBusy || !available || !steeringAuthorized;
+    panel.querySelectorAll('[data-steer-preset]').forEach((button) => {
+      const preset = steerPresetById(button.dataset.steerPreset);
+      if (!preset) return;
+      const active = preset.available && uniform !== null && Math.abs(uniform - preset.angle) <= 1;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+      button.disabled = steerPresetBusy;
+    });
+
+    const now = Date.now();
+    if (steerPresetMessage && steerPresetMessage.until <= now) steerPresetMessage = null;
+    if (!status) return;
+    if (steerPresetMessage) {
+      status.textContent = steerPresetMessage.text;
+      status.dataset.error = String(!!steerPresetMessage.error);
+    } else if (!window.RCSteerPresets) {
+      status.textContent = 'Пресеты не загрузились — перезагрузите экран.';
+      status.dataset.error = 'true';
+    } else if (reason) {
+      status.textContent = reason;
+      status.dataset.error = 'true';
+    } else if (tractionActive) {
+      status.textContent = 'Тяга включена — сначала СТОП.';
+      status.dataset.error = 'true';
+    } else {
+      status.textContent = 'Колёса готовы. Выберите режим.';
+      status.dataset.error = 'false';
+    }
+  }
+
+  function errorText(reason) {
+    const messages = {
+      pin_required: 'PIN истёк · разблокируйте',
+      control_not_supported: 'управление только на бортовом экране',
+      module_offline: 'нет свежей связи',
+      serial_unavailable: 'порт мастера недоступен',
+      not_homed: 'сначала калибровка или 0° вручную',
+      module_busy: 'дождитесь остановки модуля / выключите тягу',
+      angle_limit: 'угол за пределами ±32°',
+      command_queue_full: 'очередь команд занята',
+      invalid_module: 'неизвестный модуль',
+      invalid_angle: 'неверный угол',
+      estop: 'E-STOP взведён — снимите защёлку',
+      payload: 'неверный формат команды',
+      command_failed: 'команда не выполнена'
+    };
+    return messages[reason] || 'команда не принята';
+  }
+
+  async function applySteerAngles(angles, label) {
+    if (steerPresetBusy) return false;
+    const reason = steerPresetBlockedReason();
+    if (reason) {
+      steerPresetMessage = { text: reason, error: true, until: Date.now() + 9000 };
+      renderSteeringControls(lastData || {});
+      return false;
+    }
+    const targets = {};
+    for (const id of STEER_IDS) {
+      const angle = steerClamp(angles[id]);
+      if (angle === null) {
+        steerPresetMessage = { text: 'Не задан угол для ' + id + '.', error: true, until: Date.now() + 9000 };
+        renderSteeringControls(lastData || {});
+        return false;
+      }
+      targets[id] = angle;
+    }
+    steerPresetBusy = true;
+    steerPresetMessage = { text: 'Применяю «' + label + '»…', error: false, until: Date.now() + 20000 };
+    renderSteeringControls(lastData || {});
+    for (const id of STEER_IDS) {
+      const angle = targets[id];
+      try {
+        const response = await fetch('api/kiosk_steer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
+          body: JSON.stringify({ module: id, angle })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result || !result.ok) {
+          if (response.status === 401 || (result && result.reason === 'pin_required')) {
+            setSteeringAuthorized(false);
+          }
+          const message = errorText(result && result.reason);
+          steerResult[id] = { text: 'пресет: ' + message, error: true, until: Date.now() + 10000 };
+          steerPresetMessage = {
+            text: 'Остановлено на ' + id + ': ' + message + '. Остальные колёса не трогаем.',
+            error: true, until: Date.now() + 12000
+          };
+          steerPresetBusy = false;
+          scheduleSteerPreviewLive();
+          renderSteeringControls(lastData || {});
+          return false;
+        }
+        const sent = steerClamp(result.angle);
+        pendingSteer[id] = { angle: sent === null ? angle : sent, sentAt: Date.now() };
+        const card = panelCard(id);
+        if (card) card.dataset.steerDirty = 'false';
+        steerResult[id] = { text: 'пресет · ' + angle + '°', error: false, until: Date.now() + 8000 };
+      } catch (error) {
+        steerPresetMessage = {
+          text: 'Нет связи с сервером на ' + id + '. Проверьте сеть.',
+          error: true, until: Date.now() + 12000
+        };
+        steerPresetBusy = false;
+        scheduleSteerPreviewLive();
+        renderSteeringControls(lastData || {});
+        return false;
+      }
+    }
+    steerPresetBusy = false;
+    scheduleSteerPreviewLive();
+    steerPresetMessage = {
+      text: '«' + label + '»: ' + steerModeText(targets.FL) + '. Движение — кнопками ниже, удерживайте.',
+      error: false, until: Date.now() + 10000
+    };
+    renderSteeringControls(lastData || {});
+    return true;
+  }
+
+  function scheduleSteerPreviewLive() {
+    if (steerPreviewTimer) clearTimeout(steerPreviewTimer);
+    steerPreviewTimer = setTimeout(() => {
+      steerPreviewTimer = null;
+      steerPreviewMode = 'live';
+      renderSteeringControls(lastData || {});
+    }, 5000);
+  }
+
+  function panelCard(id) {
+    const panel = $('swipe-motors-view');
+    return panel ? panel.querySelector('[data-steer-card="' + id + '"]') : null;
+  }
+
+  async function chooseSteerPreset(preset) {
+    if (!preset || steerPresetBusy) return;
+    if (!preset.available) {
+      steerPresetMessage = { text: preset.reason || 'Пресет недоступен.', error: true, until: Date.now() + 12000 };
+      renderSteeringControls(lastData || {});
+      return;
+    }
+    const angles = {};
+    STEER_IDS.forEach((id) => { angles[id] = preset.angle; });
+    previewAllCards(angles);
+    const slider = $('steer-master-slider');
+    if (slider) slider.value = String(preset.angle);
+    updateSteerDiagram();
+    await applySteerAngles(angles, preset.title);
+  }
+
+  async function applyMasterAngles() {
+    const slider = $('steer-master-slider');
+    if (!slider) return;
+    const angle = steerClamp(slider.value);
+    if (angle === null) return;
+    const angles = {};
+    STEER_IDS.forEach((id) => { angles[id] = angle; });
+    previewAllCards(angles);
+    await applySteerAngles(angles, 'Угол всех колёс ' + angle + '°');
+  }
+
+  function buildSteerPresetButtons() {
+    const grid = $('steer-preset-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    const presets = steerPresetList();
+    if (!presets.length) {
+      const note = document.createElement('p');
+      note.className = 'steer-preset-status';
+      note.textContent = 'Пресеты не загрузились — перезагрузите экран.';
+      grid.appendChild(note);
+      return;
+    }
+    presets.forEach((preset) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'steer-preset';
+      button.dataset.steerPreset = preset.id;
+      button.setAttribute('aria-pressed', 'false');
+      if (!preset.available) {
+        button.classList.add('is-unavailable');
+        button.title = preset.reason || 'Недоступно';
+      }
+      const icon = document.createElement('span');
+      icon.className = 'steer-preset-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      const iconAngles = preset.available
+        ? [preset.angle, preset.angle, preset.angle, preset.angle]
+        : [32, -32, 32, -32];
+      iconAngles.forEach((angle) => {
+        const wheel = document.createElement('i');
+        wheel.style.setProperty('--wheel-angle', angle + 'deg');
+        icon.appendChild(wheel);
+      });
+      const title = document.createElement('b');
+      title.textContent = preset.title;
+      const hint = document.createElement('small');
+      hint.textContent = preset.hint;
+      button.appendChild(icon);
+      button.appendChild(title);
+      button.appendChild(hint);
+      button.addEventListener('click', () => { void chooseSteerPreset(preset); });
+      grid.appendChild(button);
+    });
+  }
+
   function renderSteeringControls(data) {
     const panel = $('swipe-motors-view');
     if (!panel) return;
@@ -1996,6 +2367,7 @@
     const tractionActive = !!drive.active || Number(drive.commandedPercent || 0) !== 0;
     const sourceStatus = $('steer-source-status');
     const authStatus = $('steer-auth-status');
+    renderSteerPresetBar(d, motors, available, tractionActive);
 
     if (sourceStatus) {
       if (!available && String(control.source || '') === 'master-peer') {
@@ -2076,8 +2448,10 @@
       // Ползунок ограничен ±32°, а при калибровке цель — до ±135°: показываем настоящую.
       if (targetEl) targetEl.textContent = (!dirty && busy && target != null ? Math.round(target) : Math.round(+slider.value || 0)) + '°';
 
-      const ready = available && steeringAuthorized && online && homed && !busy && !pending && !zeroPending && !calibPending && !tractionActive;
-      const canSetZero = available && steeringAuthorized && online && !busy && !pending && !zeroPending && !calibPending && !tractionActive;
+      const ready = available && steeringAuthorized && online && homed && !busy && !pending && !zeroPending &&
+        !calibPending && !tractionActive && !steerPresetBusy;
+      const canSetZero = available && steeringAuthorized && online && !busy && !pending && !zeroPending &&
+        !calibPending && !tractionActive && !steerPresetBusy;
       const canCalibrate = canSetZero && !!control.calibration;
       slider.disabled = !ready;
       card.querySelectorAll('[data-steer-adjust="' + id + '"], [data-steer-zero="' + id + '"]').forEach((button) => {
@@ -2139,7 +2513,7 @@
       const anyBusy = online.some((m) => m.moving || m.calibrating || m.cycling);
       const anyPending = Object.keys(pendingCalib).length > 0;
       calibAll.disabled = !(available && control.calibration && steeringAuthorized && online.length > 0 &&
-        !anyBusy && !anyPending && !tractionActive);
+        !anyBusy && !anyPending && !tractionActive && !steerPresetBusy);
       calibAll.textContent = online.some((m) => m.calibrating) ? 'Калибровка идёт…' : 'Калибровать все колёса';
     }
     renderMasterMessages(d.masterMessages);
@@ -2347,23 +2721,10 @@
       card.dataset.steerDirty = 'true';
       delete steerResult[id];
       if (output) output.textContent = Math.round(+slider.value) + '°';
+      steerPreviewAngles[id] = Math.max(-32, Math.min(32, Math.round(value)));
+      steerPreviewMode = 'manual';
+      updateSteerDiagram();
       renderSteeringControls(lastData || {});
-    }
-
-    function errorText(reason) {
-      const messages = {
-        pin_required: 'PIN истёк · разблокируйте',
-        control_not_supported: 'управление только на бортовом экране',
-        module_offline: 'нет свежей связи',
-        serial_unavailable: 'порт мастера недоступен',
-        not_homed: 'сначала калибровка или 0° вручную',
-        module_busy: 'дождитесь остановки модуля / выключите тягу',
-        angle_limit: 'угол за пределами ±32°',
-        command_queue_full: 'очередь команд занята',
-        invalid_module: 'неизвестный модуль',
-        invalid_angle: 'неверный угол',
-      };
-      return messages[reason] || 'команда не принята';
     }
 
     async function sendSteer(id) {
@@ -2484,6 +2845,20 @@
         renderSteeringControls(lastData || {});
       }
     }
+
+    const masterSlider = $('steer-master-slider');
+    if (masterSlider) {
+      masterSlider.addEventListener('input', () => {
+        const angle = steerClamp(masterSlider.value);
+        if (angle === null) return;
+        const angles = {};
+        STEER_IDS.forEach((id) => { angles[id] = angle; });
+        previewAllCards(angles);
+      });
+    }
+    const applyAllButton = $('steer-apply-all');
+    if (applyAllButton) applyAllButton.addEventListener('click', () => { void applyMasterAngles(); });
+    buildSteerPresetButtons();
 
     const calibAllButton = $('steer-calib-all');
     if (calibAllButton) calibAllButton.addEventListener('click', () => { void startCalibration('ALL'); });

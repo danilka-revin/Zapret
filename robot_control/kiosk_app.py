@@ -1084,7 +1084,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     for filename in ("pot_mode.js", "robot.css", "robot.js", "battery.js", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "map_view.js",
                      "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
-                     "power.css", "power.js"):
+                     "steer_presets.js", "power.css", "power.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
         def _view(name=filename):
             return _send(name)
