@@ -12,3 +12,15 @@ inline uint8_t digitalPinToInterrupt(uint8_t pin) { return pin == 2 ? 4 : 0xFF; 
 inline void attachInterrupt(uint8_t, void (*fn)(), int) { sim_board.tach_fn = fn; }
 static sim::SimSerial& Serial = sim_board.serial;
 static sim::SimWire& Wire = sim_board.wire;
+
+// EEPROM платы (avr/eeprom.h): адрес — просто номер ячейки, как на AVR.
+inline uint8_t eeprom_read_byte(const uint8_t* address) {
+  return sim_board.eeprom_read((uint16_t)(uintptr_t)address);
+}
+inline void eeprom_write_byte(uint8_t* address, uint8_t value) {
+  sim_board.eeprom_write((uint16_t)(uintptr_t)address, value);
+}
+inline void eeprom_update_byte(uint8_t* address, uint8_t value) {
+  const uint16_t slot = (uint16_t)(uintptr_t)address;
+  if (sim_board.eeprom_read(slot) != value) sim_board.eeprom_write(slot, value);
+}

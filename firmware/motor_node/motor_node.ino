@@ -1,4 +1,5 @@
 #include <Wire.h>
+#include <avr/eeprom.h>
 #include <avr/interrupt.h>
 #include <avr/pgmspace.h>
 #include <ctype.h>
@@ -11,11 +12,15 @@
 
 // motor_node — одна прошивка для трёх слейвов FR/RL/RR (Arduino Mega 2560 /
 // Mega Mini). Мастер — отдельная прошивка motor_master (модуль FL).
-// Перед загрузкой поменяйте NODE_ADDRESS и MODULE_ID: FR = 2, RL = 3, RR = 4.
+// Адрес на шине и имя модуля — в начале файла: FR = 2, RL = 3, RR = 4. Если
+// прошить все три платы одним и тем же файлом, все ответят на адресе 2 и
+// мастер не увидит ни одного колеса (SDA тянут три платы сразу). Поэтому адрес
+// можно задать с USB командой «a 3» — он сохранится в EEPROM и переживёт
+// перепрошивку; на рабочем столе скрипт кладёт готовые motor_node_FR/RL/RR.ino.
 //
 // Команды приходят от мастера по I2C (он пересылает строки монитора всем
 // колёсам, как проверенный скетч) и с собственного USB 115200 — так модуль
-// можно проверить на столе отдельно: k, q, c, d, h, s, g, z, p, w, t, b.
+// можно проверить на столе отдельно: k, q, c, d, h, s, g, z, p, w, t, b, a.
 // Мастер раз в 250 мс забирает кадр состояния (до 32 байт):
 //   "ток_шаг,цель_шаг,состояние,об/мин×10,тяга%\n"
 #ifndef NODE_ADDRESS
@@ -24,7 +29,7 @@
 #ifndef MODULE_ID
 #define MODULE_ID "FR"
 #endif
-#define TX_BUFFER_SIZE 320
+#define TX_BUFFER_SIZE 512
 
 // =========================== STEERING CORE BEGIN ===========================
 // Этот блок одинаков в motor_master.ino и motor_node.ino (тест
@@ -1398,14 +1403,17 @@ const uint16_t SERIAL_LINE_TIMEOUT_MS = 1000;
 // Обработчики Wire вызываются из прерывания TWI: только копирование.
 void onCommandReceived(int count) {
   (void)count;
-  uint8_t next = (uint8_t)((rx_head + 1) % RX_SLOTS);
-  if (next == rx_tail) rx_tail = (uint8_t)((rx_tail + 1) % RX_SLOTS);  // переполнение: старейшую долой
   uint8_t n = 0;
   while (Wire.available()) {
     const char ch = (char)Wire.read();
     if (n < RX_LENGTH - 1) rx_commands[rx_head][n++] = ch;
   }
   rx_commands[rx_head][n] = '\0';
+  // Пустая посылка — это опрос шины (i2cScanBus у мастера), а не команда:
+  // иначе сканирование забивает очередь и вытесняет настоящую команду.
+  if (n == 0) return;
+  const uint8_t next = (uint8_t)((rx_head + 1) % RX_SLOTS);
+  if (next == rx_tail) rx_tail = (uint8_t)((rx_tail + 1) % RX_SLOTS);  // переполнение: старейшую долой
   rx_head = next;
 }
 
@@ -1438,6 +1446,94 @@ void refreshFrame() {
   frame_back = (uint8_t)(back ^ 1);
 }
 
+// ---- адрес на шине: по умолчанию из NODE_ADDRESS, меняется командой a ----
+// Почему это важно: у трёх плат, прошитых одним файлом, адрес по умолчанию
+// один и тот же (2). Тогда на запрос мастера отвечают сразу три слейва, SDA
+// тянут все вместе — кадры рвутся, и в телеметрии остаётся только FL. Адрес,
+// сохранённый здесь, главнее NODE_ADDRESS и не теряется при перепрошивке,
+// поэтому одну и ту же motor_node.ino можно заливать на все три платы.
+const uint16_t EEPROM_ADDRESS_MAGIC_SLOT = 0;   // 0x5A — адрес задавали командой a
+const uint16_t EEPROM_ADDRESS_VALUE_SLOT = 1;
+const uint8_t EEPROM_ADDRESS_MAGIC = 0x5A;
+const uint8_t NODE_ADDRESS_MIN = 1;
+const uint8_t NODE_ADDRESS_MAX = 119;          // 120…127 — служебные адреса I2C
+uint8_t node_address = NODE_ADDRESS;
+bool node_address_from_eeprom = false;
+
+uint8_t storedNodeAddress() {
+  if (eeprom_read_byte((const uint8_t*)(uint16_t)EEPROM_ADDRESS_MAGIC_SLOT) != EEPROM_ADDRESS_MAGIC) {
+    return NODE_ADDRESS;
+  }
+  const uint8_t value = eeprom_read_byte((const uint8_t*)(uint16_t)EEPROM_ADDRESS_VALUE_SLOT);
+  if (value < NODE_ADDRESS_MIN || value > NODE_ADDRESS_MAX) return NODE_ADDRESS;
+  node_address_from_eeprom = true;
+  return value;
+}
+
+void printAddressStatus() {
+  note(PSTR("I2C адрес %u (%s); сменить: a 3"), (unsigned)node_address,
+       node_address_from_eeprom ? "из EEPROM" : "по умолчанию");
+}
+
+void setNodeAddress(uint8_t address) {
+  if (address == node_address) {
+    note(PSTR("I2C адрес %u — уже такой"), (unsigned)node_address);
+    return;
+  }
+  eeprom_update_byte((uint8_t*)(uint16_t)EEPROM_ADDRESS_MAGIC_SLOT, EEPROM_ADDRESS_MAGIC);
+  eeprom_update_byte((uint8_t*)(uint16_t)EEPROM_ADDRESS_VALUE_SLOT, address);
+  // Перезапуск TWI на новом адресе: без перезагрузки платы.
+  Wire.end();
+  node_address = address;
+  node_address_from_eeprom = true;
+  Wire.begin(node_address);
+  Wire.setWireTimeout(3000, true);
+  Wire.onReceive(onCommandReceived);
+  Wire.onRequest(onFrameRequested);
+  refreshFrame();
+  note(PSTR("I2C адрес %u сохранён в EEPROM, шина перезапущена"), (unsigned)node_address);
+}
+
+// «a» и «addr» — команды только самой платы (мастер их не рассылает: иначе все
+// три слейва получили бы один адрес). Аргумент не обязателен: «a» показывает.
+bool handleAddressCommand(char* line) {
+  char work[32];
+  strncpy(work, line, sizeof(work) - 1);
+  work[sizeof(work) - 1] = '\0';
+  char* save = nullptr;
+  char* command = strtok_r(work, " \t", &save);
+  if (!command) return false;
+  if (strcasecmp_P(command, PSTR("a")) != 0 && strcasecmp_P(command, PSTR("addr")) != 0) return false;
+  char* arg = strtok_r(nullptr, " \t", &save);
+  char* extra = strtok_r(nullptr, " \t", &save);
+  if (!arg) {
+    printAddressStatus();
+    return true;
+  }
+  long value = 0;
+  if (extra || !parseLongToken(arg, &value) ||
+      value < NODE_ADDRESS_MIN || value > NODE_ADDRESS_MAX) {
+    note(PSTR("Шаблон: a [адрес 1…119]"));
+    return true;
+  }
+  setNodeAddress((uint8_t)value);
+  return true;
+}
+
+// Общая точка входа для USB и I2C: адрес — свои команды, «p» дополняем
+// строкой адреса (сам printModuleStatus лежит в общем блоке).
+void handleNodeCommand(char* line) {
+  if (handleAddressCommand(line)) return;
+  char work[32];
+  strncpy(work, line, sizeof(work) - 1);
+  work[sizeof(work) - 1] = '\0';
+  char* save = nullptr;
+  char* first = strtok_r(work, " \t", &save);
+  const bool status = first && strcasecmp_P(first, PSTR("p")) == 0;
+  handleModuleCommand(line);
+  if (status) printAddressStatus();
+}
+
 void readSerialLines() {
   if ((serial_length > 0 || serial_overflow) &&
       (uint32_t)(millis() - serial_last_char_ms) > SERIAL_LINE_TIMEOUT_MS) {
@@ -1452,7 +1548,7 @@ void readSerialLines() {
         note(PSTR("слишком длинная строка — пропущена"));
       } else if (serial_length > 0 && serial_line[0] != '@' && serial_line[0] != '#') {
         serial_line[serial_length] = '\0';
-        handleModuleCommand(serial_line);
+        handleNodeCommand(serial_line);
       }
       serial_length = 0;
       serial_overflow = false;
@@ -1466,7 +1562,8 @@ void readSerialLines() {
 
 void setup() {
   Serial.begin(115200);
-  Wire.begin(NODE_ADDRESS);
+  node_address = storedNodeAddress();
+  Wire.begin(node_address);
   // Как и у мастера: макрос WIRE_HAS_TIMEOUT ядро arduino:avr не определяет,
   // поэтому вызов — безусловный (метод есть с ядра 1.8.3). Сброс TWI по
   // таймауту не даёт слейву навсегда остаться с подвешенной шиной.
@@ -1476,8 +1573,9 @@ void setup() {
   steeringSetup();
   refreshFrame();
   last_frame_ms = millis();
-  note(PSTR("--- SLAVE %s, I2C %d: руль v%u, датчики: ноль D18, пот A0; ноль не задан — k или z ---"),
-       MODULE_ID, (int)NODE_ADDRESS, (unsigned)FIRMWARE_PROTOCOL);
+  const char* address_source = node_address_from_eeprom ? "EEPROM" : "по умолчанию";
+  note(PSTR("--- SLAVE %s, I2C %d (%s): руль v%u, датчики: ноль D18, пот A0; ноль не задан — k или z ---"),
+       MODULE_ID, (int)node_address, address_source, (unsigned)FIRMWARE_PROTOCOL);
   potBootNote();
 }
 
@@ -1493,7 +1591,7 @@ void loop() {
     rx_tail = (uint8_t)((rx_tail + 1) % RX_SLOTS);
     interrupts();
     command[RX_LENGTH - 1] = '\0';
-    handleModuleCommand(command);
+    handleNodeCommand(command);
   }
   readSerialLines();
   steeringLoop();

@@ -106,6 +106,15 @@ class SimSerial {
 class SimWire;
 inline SimWire* bus[128] = {nullptr};
 
+// Авария шины: слейв (или помеха) удерживает SDA низким. Пока флаг поднят,
+// передачи не проходят (как NACK/таймаут на железе), а восстановление
+// (9 тактов SCL) снимает его — см. Board::digital_write и i2cRecoverBus().
+inline bool i2c_bus_stuck = false;
+inline int i2c_scl_edges = 0;
+// Сколько плат зарегистрировано на каждом адресе: >1 — коллизия адресов,
+// как у трёх плат, прошитых одним motor_node.ino (данные на шине рвутся).
+inline int bus_claims[128] = {0};
+
 class SimWire {
  public:
   Board* board = nullptr;
@@ -118,11 +127,15 @@ class SimWire {
   int tx_address = -1;
   long transmissions = 0;
 
-  void begin() { address = -1; }
+  void begin() { unregister(); }
   void begin(uint8_t addr) {
+    unregister();
     address = addr;
     bus[addr] = this;
+    ++bus_claims[addr];
   }
+  // Wire.end(): плата снимает свой адрес с шины (как twi_disable на AVR).
+  void end() { unregister(); }
   void setClock(uint32_t) {}
   void setWireTimeout(uint32_t, bool) {}
   void onReceive(void (*fn)(int)) { on_receive = fn; }
@@ -143,6 +156,7 @@ class SimWire {
   }
   uint8_t endTransmission() {
     ++transmissions;
+    if (i2c_bus_stuck) return 4;         // шина удерживается: BUS ERROR
     SimWire* slave = tx_address >= 0 && tx_address < 128 ? bus[tx_address] : nullptr;
     if (!slave || !slave->connected || !slave->on_receive) return 2;  // NACK адреса
     slave->rx.clear();
@@ -152,6 +166,7 @@ class SimWire {
   }
   uint8_t requestFrom(uint8_t addr, uint8_t quantity) {
     rx.clear();
+    if (i2c_bus_stuck) return 0;         // таймаут: шина не отпускает SDA
     SimWire* slave = addr < 128 ? bus[addr] : nullptr;
     if (!slave || !slave->connected || !slave->on_request) return 0;
     slave->tx.clear();
@@ -159,6 +174,8 @@ class SimWire {
     for (uint8_t i = 0; i < quantity; ++i) {
       rx.push_back(i < slave->tx.size() ? slave->tx[i] : 0xFF);  // дальше — линия в 1
     }
+    // На адресе несколько плат — SDA тянут все сразу, кадр приходит битым.
+    if (bus_claims[addr] > 1 && !rx.empty()) rx[0] = '#';
     return quantity;
   }
   int available() { return (int)rx.size(); }
@@ -167,6 +184,15 @@ class SimWire {
     const int value = rx.front();
     rx.pop_front();
     return value;
+  }
+
+ private:
+  void unregister() {
+    if (address >= 0 && address < 128) {
+      if (bus[address] == this) bus[address] = nullptr;
+      if (bus_claims[address] > 0) --bus_claims[address];
+    }
+    address = -1;
   }
 };
 
@@ -177,6 +203,10 @@ struct Board {
   int analog[80] = {0};
   SimSerial serial;
   SimWire wire;
+  // EEPROM платы (ATmega2560 — 4 КиБ, здесь хватает 1 КиБ): адрес узла и т.п.
+  uint8_t eeprom[1024] = {0};
+  uint8_t eeprom_read(uint16_t address) { return eeprom[address & 1023]; }
+  void eeprom_write(uint16_t address, uint8_t value) { eeprom[address & 1023] = value; }
   void (*setup_fn)() = nullptr;
   void (*loop_fn)() = nullptr;
   void (*isr_fn)() = nullptr;
@@ -258,6 +288,14 @@ struct Board {
     value = value ? HIGH : LOW;
     const uint8_t before = level[pin];
     level[pin] = value;
+    // Восстановление зависшей шины: 9 тактов SCL освобождают SDA.
+    if (pin == 21 && mode[21] == OUTPUT && before == LOW && value == HIGH && i2c_bus_stuck) {
+      if (++i2c_scl_edges >= 9) {
+        i2c_bus_stuck = false;
+        i2c_scl_edges = 0;
+        level[20] = HIGH;
+      }
+    }
     if (pin == 7 && before != value) last_dir_change_us = now_us;
     if (pin != 6 || before == value) return;
     if (value == HIGH) {
@@ -281,6 +319,7 @@ struct Board {
 
   int digital_read(uint8_t pin) {
     if (pin == 18) return opto_active() ? LOW : HIGH;
+    if (pin == 20) return i2c_bus_stuck ? LOW : level[pin];  // SDA удерживается
     return level[pin];
   }
 

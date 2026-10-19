@@ -50,7 +50,45 @@ sync_one() {
   fi
 }
 
+# Нода для конкретного колеса: адрес и имя уже вписаны, править файл не нужно.
+# Три платы, прошитые одним и тем же motor_node.ino, отвечают на одном адресе 2
+# — мастер не видит ни одного колеса; готовые файлы исключают эту ошибку.
+make_node() {
+  local module="$1" address="$2" src dst tmp
+  src="$ROOT/firmware/motor_node/motor_node.ino"
+  dst="$DESK/motor_node_${module}.ino"
+  if [[ ! -f "$src" ]]; then
+    echo "[firmware] нет исходника прошивки ноды: $src" >&2
+    FAILED=1
+    return
+  fi
+  tmp="$dst.tmp.$$"
+  if ! sed -e "s/^#define NODE_ADDRESS .*/#define NODE_ADDRESS ${address}/" \
+           -e "s/^#define MODULE_ID .*/#define MODULE_ID \"${module}\"/" \
+           -- "$src" >"$tmp"; then
+    rm -f "$tmp"
+    echo "[firmware] не удалось собрать motor_node_${module}.ino" >&2
+    FAILED=1
+    return
+  fi
+  if [[ -f "$dst" ]] && cmp -s "$tmp" "$dst"; then
+    rm -f "$tmp"
+    echo "[firmware] нода ${module} (адрес ${address}): на рабочем столе уже актуальная версия"
+    return
+  fi
+  if mv -f -- "$tmp" "$dst"; then
+    echo "[firmware] нода ${module} (адрес ${address}): прошивка обновлена на рабочем столе: $dst"
+  else
+    rm -f "$tmp"
+    echo "[firmware] не удалось скопировать прошивку ноды ${module} в $dst" >&2
+    FAILED=1
+  fi
+}
+
 sync_one "$ROOT/firmware/motor_master/motor_master.ino" "мастер (FL)"
-sync_one "$ROOT/firmware/motor_node/motor_node.ino" "нода (FR/RL/RR — адрес и имя в начале файла)"
+sync_one "$ROOT/firmware/motor_node/motor_node.ino" "нода (шаблон: адрес и имя в начале файла)"
+make_node FR 2
+make_node RL 3
+make_node RR 4
 
 exit "$FAILED"
