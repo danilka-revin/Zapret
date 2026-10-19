@@ -727,6 +727,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "source": snap.get("source"),
             "steeringControl": steering_control_info(state.source),
             "drive": snap.get("drive"),
+            # Какой порт мастера настроен/открыт: экран объясняет «нет связи».
+            "masterPort": snap.get("masterPort"),
             # Последние сообщения прошивки мастера («# FR: Калибровка ЗАВЕРШЕНА!»).
             "masterMessages": snap.get("masterMessages") or [],
         }})

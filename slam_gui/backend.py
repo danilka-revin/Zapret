@@ -317,13 +317,18 @@ def parse_master_line(line):
 
 
 class MasterSource:
-    """Мастер-Arduino по одному UART: руление и низкоскоростная тяга.
+    """Мастер-Arduino по UART: руление и низкоскоростная тяга.
 
     Ноль руля — калибровка по оптодатчику D18 (``w FL calib`` / ``k`` для всех)
     или ручной ``w FL zero``. Тяга — только удерживаемая команда ±20% (``t N``),
     разрешённая при свежей телеметрии, заданном нуле всех четырёх модулей и
     одинаковом направлении колёс. Плата сама отключает PWM и включает тормоз
     через 650 мс без heartbeat.
+
+    Порт может быть один (``"/dev/ttyACM0"``) или несколько кандидатов
+    (``["/dev/ttyACM0", "/dev/ttyUSB0"]``). Кандидаты перебираются по очереди;
+    незнакомый порт считается мастером только после строки ``@TLM``, поэтому
+    открытие лидара или чужой Arduino не выдаётся за связь с бортом.
     """
 
     name = "master"
@@ -335,9 +340,20 @@ class MasterSource:
     MAX_STEER_DEG = 32.0
     MAX_DRIVE_PERCENT = 20
     MESSAGE_LIMIT = 40
+    #: Сколько ждать первую строку @TLM после открытия незнакомого порта.
+    PROBE_S = 5.0
+    #: Пауза перед повторным перебором портов.
+    RETRY_S = 2.0
 
-    def __init__(self, port, baud=115200, on_message=None):
-        self.port = port
+    def __init__(self, port, baud=115200, on_message=None, on_status=None,
+                 port_provider=None, probe=None):
+        ports = [port] if isinstance(port, str) else [p for p in (port or []) if p]
+        if not ports:
+            ports = ["/dev/ttyACM0"]
+        self.configured_port = ports[0]
+        self.port = ports[0]
+        self.ports = ports
+        self.candidates = [p for p in ports if os.path.exists(p)]
         self.baud = baud
         self.lock = threading.Lock()
         self.frames = {}                 # модуль → (последний кадр, время)
@@ -347,8 +363,42 @@ class MasterSource:
         self.serial_ready = threading.Event()
         self.messages = []               # строки «# FL: …» прошивки: (время, текст)
         self.on_message = on_message     # их же — в журнал экрана
+        self.on_status = on_status       # «порт не найден / мастер на связи»
+        self.port_provider = port_provider   # пересканировать порты при обрыве
+        # Явно заданный существующий порт — воля оператора: открываем и работаем
+        # как раньше. Если его нет, открытие ещё ничего не доказывает — ждём @TLM.
+        self.probe = (not os.path.exists(self.port)) if probe is None else bool(probe)
+        self.last_error = ""
+        self._last_status = None
         self._stop = False
         threading.Thread(target=self._reader, daemon=True).start()
+
+    @staticmethod
+    def _port_error_hint(exc):
+        """Понятная причина ошибки pyserial — прямо в журнал экрана."""
+        low = str(exc or "").lower()
+        if "permission" in low or "access is denied" in low:
+            return " — нет прав: sudo usermod -aG dialout $USER, затем войдите заново"
+        if ("exclusively lock" in low or "resource temporarily unavailable" in low
+                or "busy" in low):
+            return " — порт занят другой программой (монитор порта или второй процесс)"
+        return ""
+
+    def _note_status(self, level, text):
+        """Сообщить о поиске порта один раз, а не каждые две секунды."""
+        text = str(text or "").strip()
+        if not text:
+            return
+        with self.lock:
+            if text == self._last_status:
+                return
+            self._last_status = text
+        callback = getattr(self, "on_status", None)
+        if callback is not None:
+            try:
+                callback(level, text)
+            except Exception:                 # noqa: BLE001 — журнал не ломает чтение
+                pass
 
     def feed(self, line, now=None):
         """Принимает строку монитора; True, если это телеметрия.
@@ -617,36 +667,107 @@ class MasterSource:
             finally:
                 self.commands.task_done()
 
+    def _candidate_ports(self):
+        """Существующие порты: настроенный, остальные из настроек и свежий скан."""
+        provider = getattr(self, "port_provider", None)
+        if callable(provider):
+            try:
+                # Свежий скан важнее старого списка: порт мог перейти лидару.
+                ports = list(provider() or [])
+            except Exception:             # noqa: BLE001 — скан не критичен
+                ports = list(self.ports)
+        else:
+            ports = list(self.ports)
+        out, seen = [], set()
+        for path in ports:
+            path = str(path or "").strip()
+            if not path or not os.path.exists(path):
+                continue
+            try:
+                real = os.path.realpath(path)
+            except OSError:
+                real = path
+            if real in seen:
+                continue
+            seen.add(real)
+            out.append(path)
+        with self.lock:
+            self.candidates = list(out)
+        return out
+
+    def _await_telemetry(self, dev, seconds):
+        """Ждать строку @TLM: только она доказывает, что это мастер."""
+        deadline = time.monotonic() + max(0.1, float(seconds))
+        while not self._stop and time.monotonic() < deadline:
+            raw = dev.readline()
+            if not raw:
+                continue
+            if self.feed(raw.decode("utf-8", "replace")):
+                return True
+        return False
+
     def _reader(self):
         try:
             import serial                    # pyserial, только для реального железа
         except ImportError:
             print("! master: pyserial не установлен (pip install pyserial) — порт %s выключен" % self.port)
+            self._note_status("error", "мастер: pyserial не установлен — порт %s выключен"
+                              % self.configured_port)
             return
         while not self._stop:
-            try:
-                # exclusive: второй процесс не может открыть тот же UART и читать
-                # его вперемешку (строки телеметрии рвутся, команды теряются).
-                with serial.Serial(self.port, self.baud, timeout=0.2, exclusive=True) as dev:
-                    self.serial_ready.set()
-                    print("· master: %s открыт" % self.port)
-                    while not self._stop:
-                        raw = dev.readline()
-                        if raw:
-                            self.feed(raw.decode("utf-8", "replace"))
-                        self._write_pending_commands(dev)
-            except Exception as exc:          # noqa: BLE001 — порт может пропасть
+            candidates = self._candidate_ports()
+            if not candidates:
                 self.serial_ready.clear()
-                self._discard_pending_commands()
-                if not self._stop:
-                    print("! master %s: %s — повтор через 2 с" % (self.port, exc))
-                    time.sleep(2.0)
-            finally:
-                self.serial_ready.clear()
-                self._discard_pending_commands()
-                with self.lock:
-                    self.drive_percent = 0
-                    self.drive_last_command = 0.0
+                self._note_status(
+                    "warn",
+                    "мастер: USB-порт не найден (RC_SLAM_PORT=%s) — ждём подключения"
+                    % self.configured_port,
+                )
+                time.sleep(self.RETRY_S)
+                continue
+            for candidate in candidates:
+                if self._stop:
+                    break
+                # Явно заданный существующий порт не проверяем: оператор сказал,
+                # где мастер. Остальные — только по телеметрии @TLM.
+                trusted = candidate == self.configured_port and not self.probe
+                try:
+                    # exclusive: второй процесс не может открыть тот же UART и читать
+                    # его вперемешку (строки телеметрии рвутся, команды теряются).
+                    with serial.Serial(candidate, self.baud, timeout=0.2, exclusive=True) as dev:
+                        if not trusted and not self._await_telemetry(dev, self.PROBE_S):
+                            self._note_status(
+                                "warn",
+                                "мастер: на %s нет строк @TLM — это не мастер, пробую другой порт"
+                                % candidate,
+                            )
+                            continue
+                        self.port = candidate
+                        self.last_error = ""
+                        self.serial_ready.set()
+                        self._note_status("ok", "мастер на связи: %s" % candidate)
+                        while not self._stop:
+                            raw = dev.readline()
+                            if raw:
+                                self.feed(raw.decode("utf-8", "replace"))
+                            self._write_pending_commands(dev)
+                except Exception as exc:      # noqa: BLE001 — порт может пропасть
+                    self.last_error = str(exc)
+                    if not self._stop:
+                        self._note_status(
+                            "warn",
+                            "мастер %s: %s%s — проверяю другие порты"
+                            % (candidate, exc, self._port_error_hint(exc)),
+                        )
+                        time.sleep(self.RETRY_S)
+                finally:
+                    self.serial_ready.clear()
+                    self._discard_pending_commands()
+                    with self.lock:
+                        self.drive_percent = 0
+                        self.drive_last_command = 0.0
+            if not self._stop:
+                time.sleep(self.RETRY_S)
 
     def read(self, now=None):
         now = time.time() if now is None else now
@@ -688,6 +809,20 @@ class MasterSource:
         out["mode"] = "МАСТЕР НА СВЯЗИ" if link else None
         out["linkOk"] = link
         out["masterMessages"] = self.recent_messages(8) if hasattr(self, "messages") else []
+        # Какой порт настроен, какой открыт и какие ещё есть: экран объясняет
+        # «нет связи» не советом «проверьте кабель», а конкретным портом.
+        with self.lock:
+            port = getattr(self, "port", None)
+            ready = getattr(self, "serial_ready", None)
+            active = port if ready is not None and ready.is_set() else None
+            candidates = list(getattr(self, "candidates", None) or
+                              getattr(self, "ports", None) or ([port] if port else []))
+            out["masterPort"] = {
+                "configured": getattr(self, "configured_port", port),
+                "active": active,
+                "candidates": candidates,
+                "error": getattr(self, "last_error", "") or None,
+            }
         return out
 
 
@@ -753,6 +888,7 @@ class MasterPeerSource:
         out["motors"] = data.get("motors") or out["motors"]
         out["drive"] = data.get("drive") or out["drive"]
         out["masterMessages"] = data.get("masterMessages") or []
+        out["masterPort"] = data.get("masterPort")
         out["linkOk"] = bool(data.get("linkOk"))
         out["mode"] = data.get("mode")
         out["estop"] = data.get("estop")

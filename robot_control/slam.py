@@ -218,6 +218,15 @@ def note_master_message(text: str) -> None:
     eventlog.record(level, "прошивка " + text, source="мастер")
 
 
+def note_master_status(level: str, text: str) -> None:
+    """Поиск порта мастера и его обрыв — в журнал экрана, а не только в stdout."""
+    text = str(text or "").strip()
+    if not text:
+        return
+    eventlog.record(level if level in {"ok", "warn", "err"} else "info", text,
+                    source="мастер")
+
+
 def reset_journal_notes() -> None:
     """Забыть, о чём журнал уже писал: повторная инициализация и тесты.
 
@@ -710,14 +719,44 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
     if mode == "master" and master_role == "peer":
         return mod.MasterPeerSource(peer_kiosk_url())
     if mode == "master":
-        # мастер-Arduino на одном UART (RC_SLAM_PORT, по умолчанию /dev/ttyACM0)
+        # мастер-Arduino на UART: настроенный порт первым, затем остальные USB.
+        # Один /dev/ttyACM0 — не догма: Mega на CH340/FT232 появляется как
+        # /dev/ttyUSB0, а номер ttyUSBx меняется после переподключения.
         from .battery import reserved_ports
-        port = os.environ.get("RC_SLAM_PORT", "/dev/ttyACM0").strip()
+        from .master_port import configured_port, diagnostics, master_ports
+
+        port = configured_port()
         if port in reserved_ports() or os.path.realpath(port) in reserved_ports():
             log.error("Шасси: RC_SLAM_PORT совпадает с RC_BMS_PORT — мастер отключён")
             return mod.NoSource()
-        # Сообщения прошивки («# FR: Калибровка ЗАВЕРШЕНА!») — в журнал экрана.
-        return mod.MasterSource(port, on_message=note_master_message)
+
+        info = diagnostics(port)
+        if info["configuredExists"]:
+            log.info("мастер: порт %s · кандидаты: %s", port,
+                     ", ".join(info["candidates"]) or "нет")
+        else:
+            log.warning("мастер: %s не найден — ищу на других USB-портах (%s)",
+                        port, ", ".join(info["ports"]) or "портов нет")
+        if info["conflict"]:
+            log.warning("мастер: %s", info["conflict"])
+        elif info["hint"]:
+            log.info("мастер: %s", info["hint"])
+
+        # Явно заданный и существующий порт — воля оператора; всё остальное
+        # проверяем по строке @TLM, чтобы не принять лидар за мастер.
+        explicit = (os.environ.get("RC_SLAM_PORT") or
+                    os.environ.get("RC_SLAM_MASTER_PORT") or "").strip()
+        probe = (not explicit) or (not os.path.exists(port))
+        candidates = info["candidates"] or [port]
+        # Сообщения прошивки («# FR: Калибровка ЗАВЕРШЕНА!») — в журнал экрана;
+        # поиск/обрыв порта — тоже.
+        return mod.MasterSource(
+            candidates,
+            on_message=note_master_message,
+            on_status=note_master_status,
+            port_provider=lambda: master_ports(port),
+            probe=probe,
+        )
 
     if mode != "auto":
         log.warning("неизвестный RC_SLAM_SOURCE=%r — использую auto", mode)
@@ -964,6 +1003,7 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
             "source": snap.get("source"),
             "steeringControl": steering_control_info(state.source),
             "drive": snap.get("drive"),
+            "masterPort": snap.get("masterPort"),
             "masterMessages": snap.get("masterMessages") or [],
             "estop": (snap.get("estop") if getattr(state.source, "name", "") == "master-peer"
                       else estop_latch.latched()),

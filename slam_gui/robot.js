@@ -1970,6 +1970,20 @@
   }
 
   /* ============ Руление и безопасная тяга BLDC ============ */
+  function masterPortHint(d) {
+    const info = d && d.masterPort;
+    if (!info) return '';
+    const configured = String(info.configured || '');
+    const active = String(info.active || '');
+    if (active) return ' Порт: ' + active + '.';
+    const list = Array.isArray(info.candidates) ? info.candidates.filter(Boolean) : [];
+    const tried = list.length ? list.join(', ') : (configured || '—');
+    const error = info.error ? ' Ошибка: ' + String(info.error) + '.' : '';
+    return ' Порт ' + (configured || '—') + ' не ответил' +
+      (tried && tried !== configured ? ' (проверены: ' + tried + ')' : '') + '.' + error +
+      ' Проверьте USB-кабель, RC_SLAM_PORT и scripts/master_check.py.';
+  }
+
   function renderSteeringControls(data) {
     const panel = $('swipe-motors-view');
     if (!panel) return;
@@ -1989,7 +2003,7 @@
       } else if (!available) {
         sourceStatus.textContent = 'Ручной поворот доступен только при RC_SLAM_SOURCE=master и подключённом UART мастера.';
       } else if (d.linkOk === false) {
-        sourceStatus.textContent = 'Мастер выбран, но свежей связи с рулевыми модулями пока нет.';
+        sourceStatus.textContent = 'Мастер выбран, но свежей связи с рулевыми модулями пока нет.' + masterPortHint(d);
       } else if (control.calibration) {
         sourceStatus.textContent = 'Мастер подключён · ноль руля — «Калибровка» по оптодатчику D18; «0° вручную» — если датчика нет.';
       } else {

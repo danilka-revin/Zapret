@@ -116,6 +116,8 @@ def test_telemetry_api_returns_only_public_values(kiosk_client):
             "source", "steeringControl", "drive", "lidarStatus", "lidarDemo", "masterMessages",
             # состояние E-STOP публично: экран обязан показывать защёлку
             "estop",
+            # какой порт мастера настроен/открыт: экран объясняет «нет связи»
+            "masterPort",
         }
         # причина «нет скана» видна на экране, а не только в журнале
         status = body["data"]["lidarStatus"]
