@@ -75,6 +75,7 @@ from robot_control.slam import (
     build_state,
     dispatch_drive_command,
     dispatch_steering_calibration,
+    dispatch_pot_mode,
     engage_estop,
     release_estop,
     note_pin_result,
@@ -863,6 +864,16 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         result, status = dispatch_steering_zero(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
+    @app.post("/api/kiosk_pot_mode")
+    def api_kiosk_pot_mode():
+        if state is None:
+            return jsonify({"ok": False, "reason": "serial_unavailable"}), 503
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        navigation.cancel("Смена режима потенциометра — маршрут остановлен.")
+        result, status = dispatch_pot_mode(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
     @app.post("/api/kiosk_calibrate")
     def api_kiosk_calibrate():
         """Калибровка руля по оптодатчику D18: один модуль или ``ALL``."""
@@ -1068,7 +1079,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         })
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
-    for filename in ("robot.css", "robot.js", "battery.js", "lidar_settings.css",
+    for filename in ("pot_mode.js", "robot.css", "robot.js", "battery.js", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "map_view.js",
                      "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
                      "power.css", "power.js"):

@@ -599,3 +599,28 @@ def test_master_source_reports_each_module_and_empty_for_silent_ones():
     stale = src.read(now=102.0)                             # старше STALE_S — связи нет
     assert stale["linkOk"] is False
     assert all(m["online"] is False for m in stale["motors"])
+
+
+def test_pot_mode_requires_all_boards_and_idle_telemetry():
+    backend = _load_backend()
+    src = _bare_master_source(backend)
+    line = '@TLM mod=%s deg=0 tgt=0 moving=0 cal=1 cycle=0 calib=0 drive=0 fw=2 pm=1'
+    for mid in ('FL', 'FR', 'RL'):
+        src.feed(line % mid, now=100)
+    assert src.set_pot_mode('off', now=100.2)['reason'] == 'module_offline'
+    src.feed((line % 'RR').replace(' pm=1', ''), now=100)
+    assert src.set_pot_mode('off', now=100.2)['reason'] == 'firmware_update_required'
+    src.feed(line % 'RR', now=100)
+    assert src.set_pot_mode('off', now=100.2)['ok']
+    assert src.commands.get_nowait() == b'pm 0\n'
+    assert src.set_pot_mode('on', now=100.2)['ok']
+    assert src.commands.get_nowait() == b'pm 1\n'
+    assert src.set_pot_mode('calibrate', now=100.2)['ok']
+    assert src.commands.get_nowait() == b'q\n'
+    src.feed((line % 'FR').replace('pm=1', 'pm=0'), now=100)
+    assert src.set_pot_mode('calibrate', now=100.2)['reason'] == 'zero_required'
+    src.feed((line % 'FR').replace('moving=0', 'moving=1'), now=100)
+    assert src.set_pot_mode('off', now=100.2)['reason'] == 'module_busy'
+    assert src.set_pot_mode('off', now=102)['reason'] == 'module_offline'
+    src.serial_ready.clear()
+    assert src.set_pot_mode('off', now=100.2)['reason'] == 'serial_unavailable'

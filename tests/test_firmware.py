@@ -165,7 +165,7 @@ def test_firmware_simulation_scenarios(simulator):
     result = subprocess.run([str(simulator)], capture_output=True, text=True, timeout=600)
     report = result.stdout + "\n" + result.stderr[-6000:]
     assert result.returncode == 0, report
-    assert "29/29 сценариев прошли" in result.stdout, report
+    assert "30/30 сценариев прошли" in result.stdout, report
 
 
 def test_server_parses_simulated_master_telemetry(simulator):

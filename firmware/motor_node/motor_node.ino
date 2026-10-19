@@ -160,6 +160,8 @@ const uint16_t STATUS_OPTO = 0x08;
 const uint16_t STATUS_CYCLE = 0x10;
 const uint16_t STATUS_HOME_OPTO = 0x20;
 const uint16_t STATUS_V2 = 0x40;       // признак кадра этой версии
+const uint16_t STATUS_POT_MODE = 0x1000;  // режим с потенциометром
+const uint16_t STATUS_POT_MODE_SUPPORTED = 0x2000;
 const uint16_t STATUS_POT = 0x80;      // потенциометр откалиброван, доводка включена
 // биты 8–11: код ошибки калибровки, биты 12–15: счётчик кадров слейва
 
@@ -418,6 +420,7 @@ const uint8_t POT_CAL_TO_PLUS = 3;        // в +60°
 const uint8_t POT_CAL_BACK = 4;           // обратно в 0°
 
 int16_t pot_raw = 0;                      // фильтрованное значение АЦП 0…1023
+bool pot_enabled = true;                 // pm 0: управление только по шагам
 bool pot_sampled = false;
 bool pot_railed = false;                  // 0/1023 — обрыв, КЗ или упор
 bool pot_zero_valid = false;              // есть привязка к нулю руля
@@ -461,6 +464,7 @@ int16_t potMeasureRaw() {
 // Один отсчёт раз в POT_SAMPLE_PERIOD_MS + экспоненциальный фильтр 1/4.
 // 10 мс при 75°/с — это 0,75° запаздывания, а шум АЦП падает вчетверо.
 void updatePot() {
+  if (!pot_enabled) return;
   const uint32_t now = millis();
   if ((uint32_t)(now - last_pot_sample_ms) < POT_SAMPLE_PERIOD_MS) return;
   last_pot_sample_ms = now;
@@ -481,12 +485,13 @@ float potAngleDeg() {
 }
 
 bool potFeedbackAllowed() {
-  return pot_calibrated && pot_zero_valid && !pot_railed && zero_set;
+  return pot_enabled && pot_calibrated && pot_zero_valid && !pot_railed && zero_set;
 }
 
 // Ноль руля задан (k или z) — запомнить, где стоит движок потенциометра.
 // Наклон (отсчёты/градус), измеренный q, при повторном нуле сохраняется.
 void potCaptureZero() {
+  if (!pot_enabled) return;
   const int16_t raw = potReadAverage(POT_CAL_SAMPLES);
   pot_raw = raw;
   pot_sampled = true;
@@ -518,6 +523,7 @@ void potBootNote() {
 }
 
 void potPrintStatus() {
+  if (!pot_enabled) { note(PSTR("Без потенциометра: угол по шагам")); return; }
   potMeasureRaw();                     // p — свежий замер, а не фильтр с задержкой
   if (pot_zero_valid && !pot_railed) {
     char angle[16];
@@ -538,6 +544,7 @@ void startPotCalMove(uint8_t state, float degrees) {
 }
 
 bool startPotCalibration() {
+  if (!pot_enabled) { note(PSTR("Сначала pm 1 — включить потенциометр")); return false; }
   if (drive_active) {
     note(PSTR("потенциометр: включена тяга — сначала b или s"));
     return false;
@@ -1129,11 +1136,13 @@ uint16_t moduleStatus() {
   uint16_t status = STATUS_V2;
   if (motorBusy()) status |= STATUS_MOVING;
   if (zero_set) status |= STATUS_ZERO;
-  if (calib_state != CAL_IDLE) status |= STATUS_CALIB;
+  if (calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE) status |= STATUS_CALIB;
   if (optoActive()) status |= STATUS_OPTO;
   if (cycle_active) status |= STATUS_CYCLE;
   if (zero_set && home_source == HOME_OPTO) status |= STATUS_HOME_OPTO;
   if (potFeedbackAllowed()) status |= STATUS_POT;
+  status |= STATUS_POT_MODE_SUPPORTED;  // поддержка переключения режима
+  if (pot_enabled) status |= STATUS_POT_MODE;
   status |= (uint16_t)(calib_error & 0x0F) << 8;
   return status;
 }
@@ -1192,6 +1201,25 @@ void handleModuleCommand(char* line) {
 
   if (strcasecmp_P(command, PSTR("k")) == 0 || strcasecmp_P(command, PSTR("calib")) == 0) {
     startCalibration();
+  } else if (strcasecmp_P(command, PSTR("pm")) == 0) {
+    if (!arg1 || arg2 || (strcmp(arg1, "0") && strcmp(arg1, "1"))) {
+      note(PSTR("Шаблон: pm 0|1")); return;
+    }
+    if (motorBusy() || drive_percent != 0 || calib_state != CAL_IDLE ||
+        pot_cal_state != POT_CAL_IDLE || cycle_active) {
+      note(PSTR("Смена режима: сначала s")); return;
+    }
+    const bool enabled = arg1[0] == '1';
+    if (enabled != pot_enabled) {
+      pot_enabled = enabled;
+      pot_calibrated = false;
+      pot_zero_valid = false;
+      pot_sampled = false;
+      feedback_pending = false;
+      resume_allowed = false;
+      if (enabled) potMeasureRaw();  // ноль АЦП измерит q в положении 0°
+    }
+    note(pot_enabled ? PSTR("С потенциометром: q для доводки") : PSTR("Без потенциометра: угол по шагам"));
   } else if (strcasecmp_P(command, PSTR("q")) == 0) {
     startPotCalibration();
   } else if (strcasecmp_P(command, PSTR("s")) == 0) {

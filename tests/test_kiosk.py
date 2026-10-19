@@ -1084,3 +1084,16 @@ def test_kiosk_launch_files_are_in_place(name):
 def test_kiosk_script_is_executable():
     path = Path(__file__).resolve().parent.parent / "scripts" / "kiosk.sh"
     assert os.access(path, os.X_OK), "scripts/kiosk.sh должен быть исполняемым"
+
+
+def test_pot_mode_api(kiosk_app, kiosk_client):
+    class Source:
+        def set_pot_mode(self, action):
+            return {"ok": True, "queued": True}
+    kiosk_app.extensions['rc_slam'].source = Source()
+    headers = {'X-Robot-Control': 'steering'}
+    assert kiosk_client.post('/api/kiosk_pot_mode', json={'action': 'off'}).status_code == 400
+    for body in ({}, {'action': []}, {'action': 'invalid'}, {'action': 'off', 'extra': 1}):
+        assert kiosk_client.post('/api/kiosk_pot_mode', json=body, headers=headers).status_code == 400
+    for action in ('off', 'on', 'calibrate'):
+        assert kiosk_client.post('/api/kiosk_pot_mode', json={'action': action}, headers=headers).status_code == 200
