@@ -1,4 +1,23 @@
-#include <Wire.h>
+// motor_wheel — прошивка ОДНОГО колеса руля (Arduino Mega 2560 / Mega Mini).
+// I2C больше нет: каждая из четырёх плат подключена к серверу собственным
+// USB-кабелем (115200 бод), и на каждой плате прошивка СВОЕГО колеса —
+// FL, FR, RL или RR. Имя колеса зашито в MODULE_ID (в начале файла); рабочий
+// стол получает готовые motor_wheel_FL/FR/RL/RR.ino (scripts/sync_firmware_desktop.sh),
+// прошивать одинаковым файлом все четыре платы не нужно.
+//
+// Сервер сам понимает, куда что подключено: плата называет себя в каждой
+// строке телеметрии «@TLM mod=FL …» (раз в 250 мс) и на запрос «@ID» —
+// какая прошивка на каком порту, определяется без настроек и переключателей,
+// в любом порядке кабелей. Команда с именем чужого колеса («w FR 12.5»,
+// пришедшая на FL) молча игнорируется — перепутанные порты не крутят не то.
+//
+// Команды с USB (как в проверенном скетче): k, q, c, d, h, s, g, z, p, w, t, b.
+//   w 12.5 | w FL 12.5 — поворот колеса; w zero / w calib — ноль и калибровка;
+//   t N — тяга BLDC ±20% (heartbeat раз в <650 мс, иначе плата сама тормозит);
+//   b — тормоз; @ID — имя колеса; ? — справка.
+//
+// На каждой плате: свой TB6600 (шаговый руль), оптодатчик нуля на D18,
+// потенциометр положения колеса на A0 и интерфейс BLDC-тяги.
 #include <avr/eeprom.h>
 #include <avr/interrupt.h>
 #include <avr/pgmspace.h>
@@ -10,38 +29,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-// motor_node — одна прошивка для трёх слейвов FR/RL/RR (Arduino Mega 2560 /
-// Mega Mini). Мастер — отдельная прошивка motor_master (модуль FL).
-// Адрес на шине и имя модуля — в начале файла: FR = 2, RL = 3, RR = 4. Если
-// прошить все три платы одним и тем же файлом, все ответят на адресе 2 и
-// мастер не увидит ни одного колеса (SDA тянут три платы сразу). Поэтому адрес
-// можно задать с USB командой «a 3» — он сохранится в EEPROM и переживёт
-// перепрошивку; на рабочем столе скрипт кладёт готовые motor_node_FR/RL/RR.ino.
-//
-// Команды приходят от мастера по I2C (он пересылает строки монитора всем
-// колёсам, как проверенный скетч) и с собственного USB 115200 — так модуль
-// можно проверить на столе отдельно: k, q, c, d, h, s, g, z, p, w, t, b, a.
-// Мастер раз в 250 мс забирает кадр состояния (до 32 байт):
-//   "ток_шаг,цель_шаг,СОСТОЯНИЕ_hex,об/мин×10,тяга%,счётчик\n"
-// Счётчик кадров (0…15) — отдельное поле: раньше он занимал биты 12–15
-// состояния вместе с режимом потенциометра, и живой модуль выглядел потерянным.
-#ifndef NODE_ADDRESS
-#define NODE_ADDRESS 2
-#endif
+// Имя колеса — главный признак прошивки: сервер по нему привязывает порт к
+// модулю. Скрипт sync_firmware_desktop.sh подставляет сюда FL/FR/RL/RR.
 #ifndef MODULE_ID
-#define MODULE_ID "FR"
+#define MODULE_ID "FL"
 #endif
 #define TX_BUFFER_SIZE 512
 
 // =========================== STEERING CORE BEGIN ===========================
-// Этот блок одинаков в motor_master.ino и motor_node.ino (тест
-// tests/test_firmware.py сверяет его побайтно): меняете — меняйте в обоих.
+// Этот блок — руль и датчики, он не зависит от способа связи с сервером.
 //
 // Руль повторяет скетч, проверенный на железе (firmware/reference/steering_tested):
 // те же пины и уровни, 133.33 шага/°, 100 мкс на шаг в работе и 2000 мкс при
 // точном подходе к оптодатчику D18, те же команды монитора (k c d h s g p z).
 // Отличия от него:
-//   * шаги выдаёт Timer1 (тик 50 мкс), а не loop(): опрос I2C и печать в порт
+//   * шаги выдаёт Timer1 (тик 50 мкс), а не loop(): чтение USB и печать
 //     не сбивают ход мотора;
 //   * датчик проверяется в том же прерывании — кромка ловится с точностью до
 //     шага, без запаздывания loop();
@@ -101,7 +103,7 @@ const uint8_t OPTO_DEBOUNCE_TICKS = 3;         // 3 тика по 50 мкс по
 // ---- потенциометр положения колеса (команда q) ----
 // Линейный 10 кОм, 270°: крайние выводы — 5 В и GND платы, движок — A0.
 // Питание от 5 В той же платы: измерение ратиометрическое, просадка 5 В не
-// меняет угол. A0 свободен на всех четырёх платах (D2–D8, D18, I2C D20/D21 заняты).
+// меняет угол. A0 свободен на всех четырёх платах (заняты только D2–D8 и D18).
 const int16_t POT_ADC_MAX = 1023;
 const int16_t POT_RAIL_MARGIN = 4;               // 0…4 и 1019…1023 — обрыв, КЗ или упор
 const float POT_NOMINAL_COUNTS_PER_DEG = 1023.0f / 270.0f;  // 270° на весь ход
@@ -123,7 +125,7 @@ const uint32_t POT_CAL_TIMEOUT_MS = 30000UL;
 // Наклон потенциометра — свойство железа, а не сессии: между включениями он не
 // меняется. Без сохранения доводка после каждой перезагрузки молча выключалась
 // (pot_calibrated = false), колесо снова ехало вслепую, и пропущенные шаги
-// никто не замечал. Слоты 0…1 заняты I2C-адресом.
+// никто не замечал. Слоты 0…1 свободны (раньше там жил I2C-адрес).
 const uint16_t EEPROM_POT_MAGIC_SLOT = 2;
 const uint16_t EEPROM_POT_SLOPE_SLOT = 3;   // 4 байта, float, little-endian
 const uint8_t EEPROM_POT_MAGIC = 0x51;      // «q» — наклон измерен
@@ -134,7 +136,7 @@ const uint16_t RPM_SAMPLE_PERIOD_MS = 500;
 const int8_t DRIVE_MAX_PERCENT = 20;           // программный предел PWM
 const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → PWM 0 и тормоз
 
-const uint8_t FIRMWARE_PROTOCOL = 3;           // поле fw= в телеметрии @TLM (кадр I2C v3)
+const uint8_t FIRMWARE_PROTOCOL = 4;           // поле fw= в телеметрии @TLM (v4: своё колесо на своём USB)
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -177,7 +179,7 @@ const uint8_t CAL_ERR_ABORTED = 4;     // прервано командой s
 const uint8_t CAL_ERR_TIMEOUT = 5;     // дольше CALIB_TIMEOUT_MS
 const uint8_t CAL_ERR_SPREAD = 6;      // кромки между подходами расходятся больше CALIB_MAX_EDGE_SPREAD_DEG
 
-// Биты состояния модуля: кадр слейва по I2C и поля телеметрии @TLM.
+// Биты состояния модуля: поля телеметрии @TLM.
 const uint16_t STATUS_MOVING = 0x01;
 const uint16_t STATUS_ZERO = 0x02;
 const uint16_t STATUS_CALIB = 0x04;
@@ -1241,9 +1243,9 @@ void printModuleStatus() {
   potPrintStatus();
 }
 
-// Команды одного рулевого модуля. Мастер выполняет их для FL и пересылает те
-// же строки слейвам (как проверенный скетч), слейв принимает их по I2C и со
-// своего USB — так любой модуль можно проверить на столе по одному.
+// Команды одного рулевого модуля (проверенный скетч). Плата принимает их со
+// своего USB — сервер шлёт адресную команду на порт нужного колеса, а любую
+// плату можно проверить на столе отдельно от остальных.
 //   k | calib      калибровка по оптодатчику
 //   q              калибровка потенциометра A0: 0°, −60°, +60° (доводка по датчику)
 //   z | zero       ноль в текущем положении (вручную)
@@ -1455,20 +1457,10 @@ void steeringLoop() {
 }
 // ============================ STEERING CORE END ============================
 
-// ============================== слейв I2C ===================================
-const uint16_t FRAME_PERIOD_MS = 50;
-const uint8_t RX_SLOTS = 4;                    // «b» сразу после «t» не потеряется
-const uint8_t RX_LENGTH = 32;                  // буфер Wire на AVR — 32 байта
-
-volatile char rx_commands[RX_SLOTS][RX_LENGTH];
-volatile uint8_t rx_head = 0;
-volatile uint8_t rx_tail = 0;
-char frame[2][36];
-volatile uint8_t frame_length[2] = {0, 0};
-volatile uint8_t frame_front = 0;
-uint8_t frame_back = 1;
-uint8_t frame_seq = 0;
-uint32_t last_frame_ms = 0;
+// ==================== USB: команды и телеметрия колеса =====================
+// Каждое колесо — своя плата со своим USB: сервер открывает все четыре порта,
+// опознаёт колесо по строке @TLM/@ID и шлёт команды на нужный порт. Здесь же
+// страховка прошивки: команда с именем чужого колеса не выполняется.
 char serial_line[48];
 uint8_t serial_length = 0;
 bool serial_overflow = false;
@@ -1476,158 +1468,113 @@ uint32_t serial_last_char_ms = 0;
 // Обрывок строки без \n дольше секунды — мусор (наводка, сброс порта, эхо):
 // выбрасываем, иначе он склеится со следующей командой и «съест» её.
 const uint16_t SERIAL_LINE_TIMEOUT_MS = 1000;
+const uint16_t TELEMETRY_PERIOD_MS = 250;   // как часто печатаем @TLM
+uint32_t last_telemetry_ms = 0;
 
-// Обработчики Wire вызываются из прерывания TWI: только копирование.
-void onCommandReceived(int count) {
-  (void)count;
-  uint8_t n = 0;
-  while (Wire.available()) {
-    const char ch = (char)Wire.read();
-    if (n < RX_LENGTH - 1) rx_commands[rx_head][n++] = ch;
+// Имя модуля в команде «w <имя> …»: своё колесо, ALL, чужое колесо или не имя.
+const uint8_t MOD_UNKNOWN = 0;
+const uint8_t MOD_MINE = 1;
+const uint8_t MOD_OTHER = 2;
+const uint8_t MOD_ALL = 3;
+
+uint8_t classifyModuleToken(const char* token) {
+  if (!token) return MOD_UNKNOWN;
+  if (strcasecmp_P(token, PSTR(MODULE_ID)) == 0) return MOD_MINE;
+  if (strcasecmp_P(token, PSTR("ALL")) == 0) return MOD_ALL;
+  if (strcasecmp_P(token, PSTR("FL")) == 0 || strcasecmp_P(token, PSTR("FR")) == 0 ||
+      strcasecmp_P(token, PSTR("RL")) == 0 || strcasecmp_P(token, PSTR("RR")) == 0) {
+    return MOD_OTHER;
   }
-  rx_commands[rx_head][n] = '\0';
-  // Пустая посылка — это опрос шины (i2cScanBus у мастера), а не команда:
-  // иначе сканирование забивает очередь и вытесняет настоящую команду.
-  if (n == 0) return;
-  const uint8_t next = (uint8_t)((rx_head + 1) % RX_SLOTS);
-  if (next == rx_tail) rx_tail = (uint8_t)((rx_tail + 1) % RX_SLOTS);  // переполнение: старейшую долой
-  rx_head = next;
+  return MOD_UNKNOWN;
 }
 
-void onFrameRequested() {
-  const uint8_t index = frame_front;
-  const uint8_t length = frame_length[index];
-  if (length == 0) return;
-  // Ответ всегда ровно 32 байта: мастер читает 32, а библиотека Wire на AVR
-  // после исчерпания буфера продолжает отдавать старые байты из-под записанного
-  // (twi_txBufferIndex идёт дальше txBufferLength). Хвост добиваем нулями ПОСЛЕ
-  // «\n»: мастер обрывает разбор по переводу строки и хвоста не видит, но и
-  // мусор на шину не уходит.
-  uint8_t buffer[32];
-  memset(buffer, 0, sizeof(buffer));
-  memcpy(buffer, frame[index], length);
-  Wire.write(buffer, sizeof(buffer));
+void printHelp() {
+  note(PSTR("команды: k, q, c [°], c c, d [°] [f/b], h, s, g, z, p, ?"));
+  note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: t [%%], b · @ID — имя колеса"));
 }
 
-long clampSteps(int32_t value) {
-  if (value > 99999L) return 99999L;
-  if (value < -99999L) return -99999L;
-  return (long)value;
+// «@ID mod=FL fw=4» — ответ на запрос сервера: какое колесо на этом порту.
+// Строка начинается с @, поэтому её не спутать с сообщением «# …» для журнала.
+void printIdentity() {
+  char line[64];
+  const int n = snprintf_P(line, sizeof(line), PSTR("@ID mod=%s fw=%u\r\n"),
+                           MODULE_ID, (unsigned)FIRMWARE_PROTOCOL);
+  if (n > 0) txAppend(line, (uint16_t)n);
 }
 
-void refreshFrame() {
-  // Счётчик кадров — отдельное поле, а НЕ биты 12–15 состояния. В v2 он
-  // складывался по ИЛИ с битами режима потенциометра (0x1000/0x2000), из-за
-  // чего мастер:
-  //   * видел «тот же» счётчик, когда между опросами проходило кратное число
-  //     кадров, и объявлял живой модуль потерянным («связь обрывистая»);
-  //   * читал бит 0x1000 как режим потенциометра, а там был младший бит
-  //     счётчика — pm= мигал 0/1 и переключение режима не подтверждалось.
-  // Состояние печатаем в hex: 4 символа вместо 5 — кадр с любыми значениями
-  // (включая −99999 и FFFF) гарантированно укладывается в 32 байта Wire.
+// Строка телеметрии одного колеса — тот же формат, что у мастера прежней
+// схемы: сервер (slam_gui/backend.py) разбирает его без изменений.
+void appendTelemetry() {
   const uint16_t status = moduleStatus();
-  frame_seq = (uint8_t)((frame_seq + 1) & 0x0F);
-  char line[40];
-  const int n = snprintf_P(line, sizeof(line), PSTR("%ld,%ld,%04X,%lu,%d,%u\n"),
-      clampSteps(stepNow()), clampSteps(targetNow()), (unsigned)status,
-      (unsigned long)(rpm_x10 > 99999UL ? 99999UL : rpm_x10), (int)drive_percent,
-      (unsigned)frame_seq);
-  if (n <= 0 || n > 32) return;
-  const uint8_t back = frame_back;
-  memcpy(frame[back], line, (size_t)n);
-  frame_length[back] = (uint8_t)n;
-  noInterrupts();
-  frame_front = back;
-  interrupts();
-  frame_back = (uint8_t)(back ^ 1);
+  char deg[16];
+  char tgt[16];
+  char rpm[16];
+  char line[192];
+  formatDegrees(stepNow(), deg, sizeof(deg));
+  formatDegrees(targetNow(), tgt, sizeof(tgt));
+  formatFixed((long)rpm_x10, 1, rpm, sizeof(rpm));
+  const char* home = !(status & STATUS_ZERO) ? "none"
+      : ((status & STATUS_HOME_OPTO) ? "opto" : "manual");
+  const int n = snprintf_P(line, sizeof(line),
+      PSTR("@TLM mod=%s deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u rpm=%s drive=%d fw=%u pot=%d pm=%d t=%lu\r\n"),
+      MODULE_ID, deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
+      (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
+      home, (unsigned)((status >> 8) & 0x0F), rpm, (int)drive_percent, (unsigned)FIRMWARE_PROTOCOL,
+      (status & STATUS_POT) ? 1 : 0,
+      (status & STATUS_POT_MODE_SUPPORTED) ? ((status & STATUS_POT_MODE) ? 1 : 0) : -1,
+      (unsigned long)millis());
+  if (n <= 0 || n >= (int)sizeof(line)) return;
+  txAppend(line, (uint16_t)n);
 }
 
-// ---- адрес на шине: по умолчанию из NODE_ADDRESS, меняется командой a ----
-// Почему это важно: у трёх плат, прошитых одним файлом, адрес по умолчанию
-// один и тот же (2). Тогда на запрос мастера отвечают сразу три слейва, SDA
-// тянут все вместе — кадры рвутся, и в телеметрии остаётся только FL. Адрес,
-// сохранённый здесь, главнее NODE_ADDRESS и не теряется при перепрошивке,
-// поэтому одну и ту же motor_node.ino можно заливать на все три платы.
-const uint16_t EEPROM_ADDRESS_MAGIC_SLOT = 0;   // 0x5A — адрес задавали командой a
-const uint16_t EEPROM_ADDRESS_VALUE_SLOT = 1;
-const uint8_t EEPROM_ADDRESS_MAGIC = 0x5A;
-const uint8_t NODE_ADDRESS_MIN = 1;
-const uint8_t NODE_ADDRESS_MAX = 119;          // 120…127 — служебные адреса I2C
-uint8_t node_address = NODE_ADDRESS;
-bool node_address_from_eeprom = false;
-
-uint8_t storedNodeAddress() {
-  if (eeprom_read_byte((const uint8_t*)(uint16_t)EEPROM_ADDRESS_MAGIC_SLOT) != EEPROM_ADDRESS_MAGIC) {
-    return NODE_ADDRESS;
-  }
-  const uint8_t value = eeprom_read_byte((const uint8_t*)(uint16_t)EEPROM_ADDRESS_VALUE_SLOT);
-  if (value < NODE_ADDRESS_MIN || value > NODE_ADDRESS_MAX) return NODE_ADDRESS;
-  node_address_from_eeprom = true;
-  return value;
-}
-
-void printAddressStatus() {
-  note(PSTR("I2C адрес %u (%s); сменить: a 3"), (unsigned)node_address,
-       node_address_from_eeprom ? "из EEPROM" : "по умолчанию");
-}
-
-void setNodeAddress(uint8_t address) {
-  if (address == node_address) {
-    note(PSTR("I2C адрес %u — уже такой"), (unsigned)node_address);
-    return;
-  }
-  eeprom_update_byte((uint8_t*)(uint16_t)EEPROM_ADDRESS_MAGIC_SLOT, EEPROM_ADDRESS_MAGIC);
-  eeprom_update_byte((uint8_t*)(uint16_t)EEPROM_ADDRESS_VALUE_SLOT, address);
-  // Перезапуск TWI на новом адресе: без перезагрузки платы.
-  Wire.end();
-  node_address = address;
-  node_address_from_eeprom = true;
-  Wire.begin(node_address);
-  Wire.setWireTimeout(3000, true);
-  Wire.onReceive(onCommandReceived);
-  Wire.onRequest(onFrameRequested);
-  refreshFrame();
-  note(PSTR("I2C адрес %u сохранён в EEPROM, шина перезапущена"), (unsigned)node_address);
-}
-
-// «a» и «addr» — команды только самой платы (мастер их не рассылает: иначе все
-// три слейва получили бы один адрес). Аргумент не обязателен: «a» показывает.
-bool handleAddressCommand(char* line) {
-  char work[32];
+// Общая точка входа USB: «w [FL] …» разбирается на имя колеса и команду ядра,
+// остальное уходит в handleModuleCommand как есть.
+void handleWheelCommand(char* line) {
+  char work[48];
   strncpy(work, line, sizeof(work) - 1);
   work[sizeof(work) - 1] = '\0';
   char* save = nullptr;
   char* command = strtok_r(work, " \t", &save);
-  if (!command) return false;
-  if (strcasecmp_P(command, PSTR("a")) != 0 && strcasecmp_P(command, PSTR("addr")) != 0) return false;
-  char* arg = strtok_r(nullptr, " \t", &save);
-  char* extra = strtok_r(nullptr, " \t", &save);
-  if (!arg) {
-    printAddressStatus();
-    return true;
+  if (!command) return;
+  if (strcasecmp_P(command, PSTR("?")) == 0 || strcasecmp_P(command, PSTR("help")) == 0) {
+    printHelp();
+    return;
   }
-  long value = 0;
-  if (extra || !parseLongToken(arg, &value) ||
-      value < NODE_ADDRESS_MIN || value > NODE_ADDRESS_MAX) {
-    note(PSTR("Шаблон: a [адрес 1…119]"));
-    return true;
+  if (strcasecmp_P(command, PSTR("w")) == 0) {
+    char* arg1 = strtok_r(nullptr, " \t", &save);
+    char* arg2 = strtok_r(nullptr, " \t", &save);
+    char* extra = strtok_r(nullptr, " \t", &save);
+    const uint8_t kind = classifyModuleToken(arg1);
+    if (kind == MOD_OTHER) return;   // команда чужого колеса — молча пропускаем
+    if (kind == MOD_MINE || kind == MOD_ALL) {
+      if (!arg2 || extra) {
+        note(PSTR("Шаблон: w [FL] 12.5 | w zero | w calib"));
+        return;
+      }
+      // «w FL z» и «w FL k» — короткие имена, как в прежнем мастере.
+      char local[32];
+      if (strcasecmp_P(arg2, PSTR("z")) == 0) {
+        strcpy_P(local, PSTR("w zero"));
+      } else if (strcasecmp_P(arg2, PSTR("k")) == 0) {
+        strcpy_P(local, PSTR("w calib"));
+      } else {
+        snprintf_P(local, sizeof(local), PSTR("w %s"), arg2);
+      }
+      handleModuleCommand(local);
+      return;
+    }
+    if (kind == MOD_UNKNOWN && arg2) {
+      note(PSTR("неизвестный модуль %s (есть FL, FR, RL, RR, ALL)"), arg1);
+      return;
+    }
+    // «w 12.5», «w zero», «w calib» — своя команда без имени колеса.
+    handleModuleCommand(line);
+    return;
   }
-  setNodeAddress((uint8_t)value);
-  return true;
-}
-
-// Общая точка входа для USB и I2C: адрес — свои команды, «p» дополняем
-// строкой адреса (сам printModuleStatus лежит в общем блоке).
-void handleNodeCommand(char* line) {
-  if (handleAddressCommand(line)) return;
-  char work[32];
-  strncpy(work, line, sizeof(work) - 1);
-  work[sizeof(work) - 1] = '\0';
-  char* save = nullptr;
-  char* first = strtok_r(work, " \t", &save);
-  const bool status = first && strcasecmp_P(first, PSTR("p")) == 0;
   handleModuleCommand(line);
-  if (status) printAddressStatus();
+  if (strcasecmp_P(command, PSTR("p")) == 0) {
+    note(PSTR("колесо %s, прошивка v%u (USB, без I2C)"), MODULE_ID, (unsigned)FIRMWARE_PROTOCOL);
+  }
 }
 
 void readSerialLines() {
@@ -1642,9 +1589,16 @@ void readSerialLines() {
     if (ch == '\n' || ch == '\r') {
       if (serial_overflow) {
         note(PSTR("слишком длинная строка — пропущена"));
-      } else if (serial_length > 0 && serial_line[0] != '@' && serial_line[0] != '#') {
+      } else if (serial_length > 0) {
         serial_line[serial_length] = '\0';
-        handleNodeCommand(serial_line);
+        if (serial_line[0] == '@') {
+          // «@ID» — запрос имени колеса; «@TLM …» и прочий @ — наше же эхо.
+          const char c1 = (char)tolower((unsigned char)serial_line[1]);
+          const char c2 = (char)tolower((unsigned char)serial_line[2]);
+          if (c1 == 'i' && c2 == 'd') printIdentity();
+        } else if (serial_line[0] != '#') {
+          handleWheelCommand(serial_line);
+        }
       }
       serial_length = 0;
       serial_overflow = false;
@@ -1658,42 +1612,22 @@ void readSerialLines() {
 
 void setup() {
   Serial.begin(115200);
-  node_address = storedNodeAddress();
-  Wire.begin(node_address);
-  // Как и у мастера: макрос WIRE_HAS_TIMEOUT ядро arduino:avr не определяет,
-  // поэтому вызов — безусловный (метод есть с ядра 1.8.3). Сброс TWI по
-  // таймауту не даёт слейву навсегда остаться с подвешенной шиной.
-  Wire.setWireTimeout(3000, true);
-  Wire.onReceive(onCommandReceived);
-  Wire.onRequest(onFrameRequested);
   steeringSetup();
-  refreshFrame();
-  last_frame_ms = millis();
-  const char* address_source = node_address_from_eeprom ? "EEPROM" : "по умолчанию";
-  note(PSTR("--- SLAVE %s, I2C %d (%s): руль v%u, датчики: ноль D18, пот A0; ноль не задан — k или z ---"),
-       MODULE_ID, (int)node_address, address_source, (unsigned)FIRMWARE_PROTOCOL);
+  last_telemetry_ms = millis();
+  note(PSTR("--- КОЛЕСО %s: руль v%u, USB 115200, без I2C; ноль не задан — k или z ---"),
+       MODULE_ID, (unsigned)FIRMWARE_PROTOCOL);
   potBootNote();
+  printHelp();
 }
 
 void loop() {
-  for (uint8_t guard = 0; guard < RX_SLOTS; ++guard) {
-    char command[RX_LENGTH];
-    noInterrupts();
-    if (rx_tail == rx_head) {
-      interrupts();
-      break;
-    }
-    for (uint8_t i = 0; i < RX_LENGTH; ++i) command[i] = rx_commands[rx_tail][i];
-    rx_tail = (uint8_t)((rx_tail + 1) % RX_SLOTS);
-    interrupts();
-    command[RX_LENGTH - 1] = '\0';
-    handleNodeCommand(command);
-  }
   readSerialLines();
   steeringLoop();
   const uint32_t now = millis();
-  if ((uint32_t)(now - last_frame_ms) >= FRAME_PERIOD_MS) {
-    last_frame_ms = now;
-    refreshFrame();
+  if ((uint32_t)(now - last_telemetry_ms) >= TELEMETRY_PERIOD_MS) {
+    last_telemetry_ms = now;
+    // Блок @TLM должен уйти целиком: обрезанный — сервер не разберёт.
+    if (txFree() >= 160) appendTelemetry();
   }
+  txPump();
 }

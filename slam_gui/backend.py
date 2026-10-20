@@ -20,7 +20,8 @@ backend.py — сервер борта RUS SLAM: отдаёт экраны и д
     --source none     робот не подключён: все значения пустые (null), без демо;
     --source serial   реальные модули: кадры телеметрии 16 Б по /dev/ttyUSB*
                       (протокол: docs/SERIAL_PROTOCOL.md, CRC16/Modbus);
-    --source master   мастер по одному UART: @TLM и адресный поворот модулей;
+    --source master   четыре колеса по одному USB каждое: @TLM/@ID опознают
+                      какое колесо на каком порту, поворот адресный (w FL 12.5);
     --source ros      ROS 2 (rclpy): /modules/state, /battery, /cargo/lock.
 
 Замок: PIN-код хранится как SHA-256(salt + pin) в gui/state/lock.json,
@@ -86,7 +87,7 @@ MAX_DRIVE_PERCENT = 20       # ограничение открытого низ�
 DRIVE_ANGLE_ALIGNMENT_DEG = 2.5
 
 # Предел абсолютной команды поворота «w <модуль> <угол>». Одно число на весь
-# стек: столько же в прошивке (STEER_LIMIT_DEG в motor_master/motor_node),
+# стек: столько же в прошивке (STEER_LIMIT_DEG в firmware/motor_wheel),
 # в robot_control/slam.py (STEERING_ANGLE_LIMIT_DEG) и в экранах
 # (slam_gui/steer_presets.js → LIMIT_DEG). Механика позволяет больше — упор
 # потенциометра ±130°, программный предел хода STEER_TRAVEL_LIMIT_DEG = 125°,
@@ -326,19 +327,37 @@ def parse_master_line(line):
         return None
 
 
+class _WheelLink:
+    """Открытый USB-порт колеса: очередь команд и привязанное имя модуля."""
+
+    def __init__(self, path):
+        self.path = path
+        self.module = None               # опознанное колесо (FL/FR/RL/RR)
+        self.commands = queue.Queue(maxsize=16)
+
+
 class MasterSource:
-    """Мастер-Arduino по UART: руление и низкоскоростная тяга.
+    """Четыре колеса — четыре USB-порта: руление и низкоскоростная тяга.
+
+    I²C больше нет: каждая плата со своей прошивкой (``firmware/motor_wheel``,
+    имя колеса зашито в ``MODULE_ID``) подключена собственным USB-кабелем.
+    Сервер сам понимает, куда что подключено: плата называет себя в каждой
+    строке «@TLM mod=FL …» (раз в 250 мс) и на запрос «@ID» — порядок кабелей
+    и номера ``ttyUSBx`` не важны. Порт, приславший имя колеса, которое уже
+    опознано за другим портом, в кадры не идёт: две одинаковые прошивки видно
+    сразу («перепрошите одну плату»), а не как мигающая связь.
 
     Ноль руля — калибровка по оптодатчику D18 (``w FL calib`` / ``k`` для всех)
-    или ручной ``w FL zero``. Тяга — только удерживаемая команда ±20% (``t N``),
-    разрешённая при свежей телеметрии, заданном нуле всех четырёх модулей и
-    одинаковом направлении колёс. Плата сама отключает PWM и включает тормоз
-    через 650 мс без heartbeat.
+    или ручной ``w FL zero``. Тяга — только удерживаемая команда ±20% (``t N``)
+    на все порты, разрешённая при свежей телеметрии, заданном нуле всех четырёх
+    модулей и одинаковом направлении колёс. Плата сама отключает PWM и
+    включает тормоз через 650 мс без heartbeat; если порт колеса пропал прямо
+    в движении — тормоз уходит на остальные порты (fail closed).
 
-    Порт может быть один (``"/dev/ttyACM0"``) или несколько кандидатов
-    (``["/dev/ttyACM0", "/dev/ttyUSB0"]``). Кандидаты перебираются по очереди;
-    незнакомый порт считается мастером только после строки ``@TLM``, поэтому
-    открытие лидара или чужой Arduino не выдаётся за связь с бортом.
+    Адресная команда «w FL 12.5» уходит только на порт колеса FL; рассылаемые
+    (``k, q, t, b, pm, s, …``) — на все открытые порты. Прошивка дополнительно
+    игнорирует команды с чужим именем, поэтому перепутанный кабель не крутит
+    не то колесо.
     """
 
     name = "master"
@@ -350,10 +369,14 @@ class MasterSource:
     MAX_STEER_DEG = STEER_LIMIT_DEG
     MAX_DRIVE_PERCENT = 20
     MESSAGE_LIMIT = 40
-    #: Сколько ждать первую строку @TLM после открытия незнакомого порта.
+    #: Сколько ждать строку @TLM/@ID после открытия порта (плата перезагружается).
     PROBE_S = 5.0
-    #: Пауза перед повторным перебором портов.
+    #: Пауза перед повторным открытием порта, с которого ничего не пришло.
     RETRY_S = 2.0
+    #: Как часто менеджер пересматривает список портов-кандидатов.
+    RESCAN_S = 2.0
+    #: Как часто предупреждать о двух платах с одной прошивкой колеса.
+    CONFLICT_NOTE_S = 10.0
 
     def __init__(self, port, baud=115200, on_message=None, on_status=None,
                  port_provider=None, probe=None):
@@ -361,26 +384,32 @@ class MasterSource:
         if not ports:
             ports = ["/dev/ttyACM0"]
         self.configured_port = ports[0]
-        self.port = ports[0]
+        self.port = None                 # первый опознанный порт (для экрана)
         self.ports = ports
         self.candidates = [p for p in ports if os.path.exists(p)]
         self.baud = baud
         self.lock = threading.Lock()
         self.frames = {}                 # модуль → (последний кадр, время)
+        self.modules = {}                # модуль → порт (кто где опознан)
+        self.links = {}                  # порт → _WheelLink открытого порта
         self.drive_percent = 0
         self.drive_last_command = 0.0
         self.commands = queue.Queue(maxsize=16)
         self.serial_ready = threading.Event()
         self.messages = []               # строки «# FL: …» прошивки: (время, текст)
         self.on_message = on_message     # их же — в журнал экрана
-        self.on_status = on_status       # «порт не найден / мастер на связи»
+        self.on_status = on_status       # «порт не найден / колёса на связи»
         self.port_provider = port_provider   # пересканировать порты при обрыве
-        # Явно заданный существующий порт — воля оператора: открываем и работаем
-        # как раньше. Если его нет, открытие ещё ничего не доказывает — ждём @TLM.
-        self.probe = (not os.path.exists(self.port)) if probe is None else bool(probe)
+        # Идентификация по @TLM/@ID обязательна: какое колесо на каком порту,
+        # решает прошивка платы, а не настройки. probe оставлен для совместимости.
+        self.probe = True if probe is None else bool(probe)
         self.last_error = ""
         self._last_status = None
         self._stop = False
+        self._serial = None
+        self._spawning = set()
+        self._cooldown = {}              # порт → время следующей попытки открыть
+        self._conflict_noted = {}        # модуль → момент предупреждения о дубле
         threading.Thread(target=self._reader, daemon=True).start()
 
     @staticmethod
@@ -395,7 +424,7 @@ class MasterSource:
         return ""
 
     def _note_status(self, level, text):
-        """Сообщить о поиске порта один раз, а не каждые две секунды."""
+        """Сообщить о порте один раз, а не каждые две секунды."""
         text = str(text or "").strip()
         if not text:
             return
@@ -414,7 +443,7 @@ class MasterSource:
         """Принимает строку монитора; True, если это телеметрия.
 
         Строки «# FL: …» — сообщения прошивки для человека (калибровка, ошибки
-        датчика, потеря связи по I2C): они сохраняются и уходят в журнал.
+        датчика): они сохраняются и уходят в журнал.
         """
         now = time.time() if now is None else now
         frame = parse_master_line(line)
@@ -446,7 +475,27 @@ class MasterSource:
             items = list(getattr(self, "messages", None) or [])[-limit:]
         return [{"ts": round(ts, 3), "text": text} for ts, text in items]
 
+    # --------------------------------------------------------------- команды #
+    @staticmethod
+    def _command_module(command):
+        """Какому колесу адресована команда: «w FL 12.5» → ``FL``, иначе всем.
+
+        Прошивка колеса и так игнорирует чужое имя, но сервер предпочитает
+        не слать лишние байты: адресная команда уходит на свой порт.
+        """
+        try:
+            text = bytes(command).decode("ascii", "ignore").strip()
+        except Exception:                     # noqa: BLE001 — битые байты не команда
+            return None
+        parts = text.split()
+        if len(parts) >= 2 and parts[0].lower() == "w":
+            token = parts[1].upper()
+            if token in MODULE_TITLES:
+                return token
+        return None
+
     def set_pot_mode(self, action, now=None):
+        """Режим потенциометра всех четырёх плат: pm 0/1 или калибровка q."""
         if not self.serial_ready.is_set():
             return {"ok": False, "reason": "serial_unavailable"}
         now = time.time() if now is None else now
@@ -462,7 +511,9 @@ class MasterSource:
             return {"ok": False, "reason": "module_busy"}
         if action == "calibrate" and any(not f.get("potMode") or not f.get("cal") for f in values):
             return {"ok": False, "reason": "zero_required"}
-        command = {"on": b"pm 1\n", "off": b"pm 0\n", "calibrate": b"q\n"}[action]
+        command = {"on": b"pm 1\n", "off": b"pm 0\n", "calibrate": b"q\n"}.get(action)
+        if command is None:
+            return {"ok": False, "reason": "invalid_action"}
         try:
             self.commands.put_nowait(command)
         except queue.Full:
@@ -472,10 +523,10 @@ class MasterSource:
     def calibrate_module(self, module, now=None):
         """Калибровка по оптодатчику одного модуля (FL/FR/RL/RR) или всех (ALL).
 
-        Колесо ищет флажок в пределах ±135° от текущего положения (ход руля 270°):
-        сначала вправо, затем влево. Команда принимается только при выключенной тяге
-        и стоящем модуле. После включения Arduino колёса выставляют прямо руками:
-        прошивка не знает, где колесо стоит.
+        Колесо ищет флажок в пределах ±125° от текущего положения (ход руля
+        270°): сначала вправо, затем влево. Команда принимается только при
+        выключенной тяге и стоящем модуле. После включения Arduino колёса
+        выставляют прямо руками: прошивка не знает, где колесо стоит.
         """
         module = str(module or "").upper()
         if module not in MODULE_TITLES and module != "ALL":
@@ -663,22 +714,122 @@ class MasterSource:
             try:
                 self.commands.get_nowait()
             except queue.Empty:
-                return
+                break
             else:
                 self.commands.task_done()
+        with self.lock:
+            links = list((getattr(self, "links", None) or {}).values())
+        for link in links:
+            while True:
+                try:
+                    link.commands.get_nowait()
+                except queue.Empty:
+                    break
 
-    def _write_pending_commands(self, dev):
+    def _brake_all(self):
+        """Тормоз на все открытые порты: один пропавший порт гасит всю тягу."""
+        with self.lock:
+            links = list((getattr(self, "links", None) or {}).values())
+            self.drive_percent = 0
+            self.drive_last_command = 0.0
+        for link in links:
+            try:
+                link.commands.put_nowait(b"b\n")
+            except queue.Full:
+                pass
+
+    def _fanout_commands(self):
+        """Раздать команды из общей очереди по открытым портам."""
         while True:
             try:
                 command = self.commands.get_nowait()
+            except queue.Empty:
+                return
+            else:
+                self.commands.task_done()
+            target = self._command_module(command)
+            with self.lock:
+                links = list((getattr(self, "links", None) or {}).values())
+            if target and not any(link.module == target for link in links):
+                self._note_message(
+                    "%s: команда «%s» не доставлена — порт колеса не на связи"
+                    % (target, bytes(command).decode("ascii", "ignore").strip()),
+                    time.time())
+                continue
+            for link in links:
+                if target and link.module and link.module != target:
+                    continue
+                try:
+                    link.commands.put_nowait(command)
+                except queue.Full:
+                    pass
+
+    def _link_write(self, link, dev):
+        while True:
+            try:
+                command = link.commands.get_nowait()
             except queue.Empty:
                 return
             try:
                 dev.write(command)
                 dev.flush()
             finally:
-                self.commands.task_done()
+                link.commands.task_done()
 
+    # ------------------------------------------------------------- идентификация #
+    @staticmethod
+    def _line_module(line):
+        """Имя колеса из строки @TLM/@ID, иначе None (не идентификация)."""
+        text = (line or "").strip()
+        if text.startswith(TLM_PREFIX):
+            frame = parse_master_line(text)
+            return frame["mod"] if frame else None
+        if text[:3].upper() == "@ID":
+            for token in text[3:].split():
+                key, sep, value = token.partition("=")
+                if sep and key.lower() == "mod":
+                    name = value.strip().upper()
+                    return name if name in MODULE_TITLES else None
+        return None
+
+    def _bind_module(self, link, module):
+        """Привязать колесо к порту. False — это дубль уже занятого имени."""
+        now = time.time()
+        with self.lock:
+            owner = self.modules.get(module)
+            if owner is None:
+                self.modules[module] = link.path
+                link.module = module
+                fresh = True
+            elif owner == link.path:
+                if link.module != module:
+                    link.module = module
+                return True
+            else:
+                fresh = False
+            if self.port is None:
+                self.port = link.path
+        if fresh:
+            self.serial_ready.set()
+            self._note_status("ok", "мастер на связи: %s · колесо %s" % (link.path, module))
+            return True
+        with self.lock:
+            last = self._conflict_noted.get(module, 0.0)
+            self._conflict_noted[module] = now
+        if now - last > self.CONFLICT_NOTE_S:
+            self._note_status(
+                "warn",
+                "прошивка %s и на %s, и на %s — перепрошите одну плату"
+                % (module, owner, link.path))
+        return False
+
+    def _link_line(self, link, line):
+        module = self._line_module(line)
+        if module is not None and not self._bind_module(link, module):
+            return
+        self.feed(line)
+
+    # ------------------------------------------------------------ потоки портов #
     def _candidate_ports(self):
         """Существующие порты: настроенный, остальные из настроек и свежий скан."""
         provider = getattr(self, "port_provider", None)
@@ -707,80 +858,89 @@ class MasterSource:
             self.candidates = list(out)
         return out
 
-    def _await_telemetry(self, dev, seconds):
-        """Ждать строку @TLM: только она доказывает, что это мастер."""
-        deadline = time.monotonic() + max(0.1, float(seconds))
-        while not self._stop and time.monotonic() < deadline:
-            raw = dev.readline()
-            if not raw:
-                continue
-            if self.feed(raw.decode("utf-8", "replace")):
-                return True
-        return False
+    def _open_new_links(self):
+        """Открыть порты, которых ещё нет в работе: каждый — своё колесо."""
+        candidates = self._candidate_ports()
+        now = time.monotonic()
+        if not candidates and not self.links:
+            self.serial_ready.clear()
+            self._note_status(
+                "warn",
+                "мастер: USB-порт не найден (RC_SLAM_PORT=%s) — ждём подключения"
+                % self.configured_port)
+            return
+        for candidate in candidates:
+            with self.lock:
+                if candidate in self.links or candidate in self._spawning:
+                    continue
+                if self._cooldown.get(candidate, 0.0) > now:
+                    continue
+                self._spawning.add(candidate)
+            link = _WheelLink(candidate)
+            threading.Thread(target=self._link_worker, args=(link,), daemon=True).start()
+
+    def _link_worker(self, link):
+        """Порт одного колеса: чтение @TLM, запись адресованных ему команд."""
+        serial = self._serial
+        dev = None
+        try:
+            # exclusive: второй процесс не может открыть тот же UART и читать
+            # его вперемешку (строки телеметрии рвутся, команды теряются).
+            dev = serial.Serial(link.path, self.baud, timeout=0.2, exclusive=True)
+            with self.lock:
+                self.links[link.path] = link
+            while not self._stop:
+                raw = dev.readline()
+                if raw:
+                    self._link_line(link, raw.decode("utf-8", "replace"))
+                self._link_write(link, dev)
+        except Exception as exc:          # noqa: BLE001 — порт может пропасть
+            self.last_error = str(exc)
+            if not self._stop:
+                self._note_status(
+                    "warn",
+                    "колесо %s (%s): %s%s — жду переподключения"
+                    % (link.module or "не опознано", link.path, exc, self._port_error_hint(exc)))
+        finally:
+            if dev is not None:
+                try:
+                    dev.close()
+                except Exception:         # noqa: BLE001 — порт уже мёртв
+                    pass
+            lost_module = None
+            with self.lock:
+                self.links.pop(link.path, None)
+                self._spawning.discard(link.path)
+                self._cooldown[link.path] = time.monotonic() + self.RETRY_S
+                if link.module and self.modules.get(link.module) == link.path:
+                    self.modules.pop(link.module, None)
+                    lost_module = link.module
+                if not self.modules:
+                    self.serial_ready.clear()
+                    self.port = None
+            if lost_module and not self._stop:
+                self._note_status("warn", "колесо %s: порт %s пропал" % (lost_module, link.path))
+                # Fail closed: потеря колеса в движении гасит тягу везде.
+                if self.drive_percent != 0:
+                    self._brake_all()
 
     def _reader(self):
         try:
-            import serial                    # pyserial, только для реального железа
+            import serial                # pyserial, только для реального железа
         except ImportError:
-            print("! master: pyserial не установлен (pip install pyserial) — порт %s выключен" % self.port)
-            self._note_status("error", "мастер: pyserial не установлен — порт %s выключен"
-                              % self.configured_port)
+            print("! master: pyserial не установлен (pip install pyserial) — порты колёс выключены")
+            self._note_status("error", "мастер: pyserial не установлен — порты колёс выключены")
             return
+        self._serial = serial
+        next_scan = 0.0
         while not self._stop:
-            candidates = self._candidate_ports()
-            if not candidates:
-                self.serial_ready.clear()
-                self._note_status(
-                    "warn",
-                    "мастер: USB-порт не найден (RC_SLAM_PORT=%s) — ждём подключения"
-                    % self.configured_port,
-                )
-                time.sleep(self.RETRY_S)
-                continue
-            for candidate in candidates:
-                if self._stop:
-                    break
-                # Явно заданный существующий порт не проверяем: оператор сказал,
-                # где мастер. Остальные — только по телеметрии @TLM.
-                trusted = candidate == self.configured_port and not self.probe
-                try:
-                    # exclusive: второй процесс не может открыть тот же UART и читать
-                    # его вперемешку (строки телеметрии рвутся, команды теряются).
-                    with serial.Serial(candidate, self.baud, timeout=0.2, exclusive=True) as dev:
-                        if not trusted and not self._await_telemetry(dev, self.PROBE_S):
-                            self._note_status(
-                                "warn",
-                                "мастер: на %s нет строк @TLM — это не мастер, пробую другой порт"
-                                % candidate,
-                            )
-                            continue
-                        self.port = candidate
-                        self.last_error = ""
-                        self.serial_ready.set()
-                        self._note_status("ok", "мастер на связи: %s" % candidate)
-                        while not self._stop:
-                            raw = dev.readline()
-                            if raw:
-                                self.feed(raw.decode("utf-8", "replace"))
-                            self._write_pending_commands(dev)
-                except Exception as exc:      # noqa: BLE001 — порт может пропасть
-                    self.last_error = str(exc)
-                    if not self._stop:
-                        self._note_status(
-                            "warn",
-                            "мастер %s: %s%s — проверяю другие порты"
-                            % (candidate, exc, self._port_error_hint(exc)),
-                        )
-                        time.sleep(self.RETRY_S)
-                finally:
-                    self.serial_ready.clear()
-                    self._discard_pending_commands()
-                    with self.lock:
-                        self.drive_percent = 0
-                        self.drive_last_command = 0.0
-            if not self._stop:
-                time.sleep(self.RETRY_S)
+            if time.monotonic() >= next_scan:
+                next_scan = time.monotonic() + self.RESCAN_S
+                self._open_new_links()
+            self._fanout_commands()
+            time.sleep(0.05 if (self.links or self._spawning) else self.RETRY_S)
 
+    # -------------------------------------------------------------- телеметрия #
     def read(self, now=None):
         now = time.time() if now is None else now
         with self.lock:
@@ -801,8 +961,7 @@ class MasterSource:
                                "drivePercent": frame.get("drivePercent"),
                                "homed": frame["cal"], "manualZero": frame.get("manualZero", frame["cal"]),
                                "homeSource": frame.get("home") or ("manual" if frame["cal"] else "none"),
-                               "opto": frame.get("opto"),
-                               "calibError": error or 0,
+                               "opto": frame.get("opto"), "calibError": error or 0,
                                "calibErrorText": CALIB_ERRORS.get(error) if error else None,
                                "firmware": frame.get("firmware"),
                                "pot": frame.get("pot", False),
@@ -821,9 +980,11 @@ class MasterSource:
         out["mode"] = "МАСТЕР НА СВЯЗИ" if link else None
         out["linkOk"] = link
         out["masterMessages"] = self.recent_messages(8) if hasattr(self, "messages") else []
-        # Какой порт настроен, какой открыт и какие ещё есть: экран объясняет
-        # «нет связи» не советом «проверьте кабель», а конкретным портом.
+        # Какие порты открыты и за каким колесом какой закреплён: экран
+        # объясняет «нет связи» конкретным портом, а не советом «проверьте кабель».
         with self.lock:
+            modules = dict(getattr(self, "modules", None) or {})
+            open_ports = list(getattr(self, "links", None) or {})
             port = getattr(self, "port", None)
             ready = getattr(self, "serial_ready", None)
             active = port if ready is not None and ready.is_set() else None
@@ -834,9 +995,10 @@ class MasterSource:
                 "active": active,
                 "candidates": candidates,
                 "error": getattr(self, "last_error", "") or None,
+                "modules": modules,
+                "open": open_ports,
             }
         return out
-
 
 class MasterPeerSource:
     """Пульт (8080) без собственного UART: телеметрия берётся с бортового экрана.

@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Кладёт на рабочий стол актуальные прошивки Arduino: мастер и ноду.
+# Кладёт на рабочий стол актуальные прошивки Arduino: по одной на каждое колесо.
 #
 # Запускается сам при каждом старте через ярлык «Запустить робот»
 # (scripts/start_desktop.sh) и при создании ярлыка (scripts/make_shortcut.sh),
 # поэтому после обновления версии («Обновить с GitHub») на рабочем столе при
 # следующем запуске лежат те же файлы, что и в firmware/ репозитория.
 # Копии зеркальные: правки на рабочем столе при следующем запуске заменятся
-# версией из репозитория — исходники правятся в firmware/motor_master и
-# firmware/motor_node.
+# версией из репозитория — исходник правится в firmware/motor_wheel.
+#
+# I²C больше нет: каждое колесо — своя плата со своим USB-кабелем и своей
+# прошивкой. Готовые motor_wheel_FL/FR/RL/RR.ino отличаются одной строкой
+# (MODULE_ID) — их нельзя перепутать, и сервер сам поймёт, какое колесо на
+# каком порту (см. slam_gui/backend.py MasterSource).
 #
 # Файл переписывается только если содержимое изменилось: актуальная копия
 # не трогается (даже время изменения сохраняется). Ошибка копирования не
@@ -50,45 +54,45 @@ sync_one() {
   fi
 }
 
-# Нода для конкретного колеса: адрес и имя уже вписаны, править файл не нужно.
-# Три платы, прошитые одним и тем же motor_node.ino, отвечают на одном адресе 2
-# — мастер не видит ни одного колеса; готовые файлы исключают эту ошибку.
-make_node() {
-  local module="$1" address="$2" src dst tmp
-  src="$ROOT/firmware/motor_node/motor_node.ino"
-  dst="$DESK/motor_node_${module}.ino"
+# Прошивка конкретного колеса: имя (MODULE_ID) уже вписано, править файл не
+# нужно. Четыре платы, прошитые одним и тем же motor_wheel.ino, все называют
+# себя FL — сервер видит четыре одинаковые прошивки и честно просит
+# перепрошить. Готовые файлы исключают эту ошибку.
+make_wheel() {
+  local module="$1" src dst tmp
+  src="$ROOT/firmware/motor_wheel/motor_wheel.ino"
+  dst="$DESK/motor_wheel_${module}.ino"
   if [[ ! -f "$src" ]]; then
-    echo "[firmware] нет исходника прошивки ноды: $src" >&2
+    echo "[firmware] нет исходника прошивки колеса: $src" >&2
     FAILED=1
     return
   fi
   tmp="$dst.tmp.$$"
-  if ! sed -e "s/^#define NODE_ADDRESS .*/#define NODE_ADDRESS ${address}/" \
-           -e "s/^#define MODULE_ID .*/#define MODULE_ID \"${module}\"/" \
+  if ! sed -e "s/^#define MODULE_ID .*/#define MODULE_ID \"${module}\"/" \
            -- "$src" >"$tmp"; then
     rm -f "$tmp"
-    echo "[firmware] не удалось собрать motor_node_${module}.ino" >&2
+    echo "[firmware] не удалось собрать motor_wheel_${module}.ino" >&2
     FAILED=1
     return
   fi
   if [[ -f "$dst" ]] && cmp -s "$tmp" "$dst"; then
     rm -f "$tmp"
-    echo "[firmware] нода ${module} (адрес ${address}): на рабочем столе уже актуальная версия"
+    echo "[firmware] колесо ${module}: на рабочем столе уже актуальная версия"
     return
   fi
   if mv -f -- "$tmp" "$dst"; then
-    echo "[firmware] нода ${module} (адрес ${address}): прошивка обновлена на рабочем столе: $dst"
+    echo "[firmware] колесо ${module}: прошивка обновлена на рабочем столе: $dst"
   else
     rm -f "$tmp"
-    echo "[firmware] не удалось скопировать прошивку ноды ${module} в $dst" >&2
+    echo "[firmware] не удалось скопировать прошивку колеса ${module} в $dst" >&2
     FAILED=1
   fi
 }
 
-sync_one "$ROOT/firmware/motor_master/motor_master.ino" "мастер (FL)"
-sync_one "$ROOT/firmware/motor_node/motor_node.ino" "нода (шаблон: адрес и имя в начале файла)"
-make_node FR 2
-make_node RL 3
-make_node RR 4
+sync_one "$ROOT/firmware/motor_wheel/motor_wheel.ino" "колесо (шаблон: имя в начале файла)"
+make_wheel FL
+make_wheel FR
+make_wheel RL
+make_wheel RR
 
 exit "$FAILED"

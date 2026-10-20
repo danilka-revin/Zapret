@@ -722,9 +722,10 @@ def peer_kiosk_url() -> str:
 def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
     """Источник данных робота.
 
-    ``master``: один UART мастер-Arduino (строки "@TLM", см. firmware/motor_master).
-    Порт открывает только владелец (``master_role="owner"`` — бортовой экран);
-    пульт (``"peer"``) читает телеметрию с экрана и порт не трогает.
+    ``master``: четыре колеса по одному USB каждое (см. firmware/motor_wheel).
+    Сервер сам опознаёт, какое колесо на каком порту (строки "@TLM"/"@ID").
+    Порты открывает только владелец (``master_role="owner"`` — бортовой экран);
+    пульт (``"peer"``) читает телеметрию с экрана и порты не трогает.
     ``auto``: ROS 2, если есть rclpy; иначе UART-модули, если есть pyserial и
     живой порт; иначе пустой источник (без выдуманных данных).
     """
@@ -747,43 +748,40 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
     if mode == "master" and master_role == "peer":
         return mod.MasterPeerSource(peer_kiosk_url())
     if mode == "master":
-        # мастер-Arduino на UART: настроенный порт первым, затем остальные USB.
-        # Один /dev/ttyACM0 — не догма: Mega на CH340/FT232 появляется как
-        # /dev/ttyUSB0, а номер ttyUSBx меняется после переподключения.
+        # Колёса на своих USB: настроенный порт — первый кандидат, затем все
+        # остальные USB. Порядок кабелей и номера ttyUSBx не важны: каждое
+        # колесо называет себя в @TLM/@ID, и сервер сам ведёт карту
+        # «колесо → порт» (см. slam_gui/backend.py MasterSource).
         from .battery import reserved_ports
         from .master_port import configured_port, diagnostics, master_ports
 
         port = configured_port()
         if port in reserved_ports() or os.path.realpath(port) in reserved_ports():
-            log.error("Шасси: RC_SLAM_PORT совпадает с RC_BMS_PORT — мастер отключён")
+            log.error("Шасси: RC_SLAM_PORT совпадает с RC_BMS_PORT — колёса отключены")
             return mod.NoSource()
 
         info = diagnostics(port)
         if info["configuredExists"]:
-            log.info("мастер: порт %s · кандидаты: %s", port,
+            log.info("колёса: %s первым · кандидаты: %s", port,
                      ", ".join(info["candidates"]) or "нет")
         else:
-            log.warning("мастер: %s не найден — ищу на других USB-портах (%s)",
+            log.warning("колёса: %s не найден — ищу на всех USB-портах (%s)",
                         port, ", ".join(info["ports"]) or "портов нет")
         if info["conflict"]:
-            log.warning("мастер: %s", info["conflict"])
+            log.warning("колёса: %s", info["conflict"])
         elif info["hint"]:
-            log.info("мастер: %s", info["hint"])
+            log.info("колёса: %s", info["hint"])
 
-        # Явно заданный и существующий порт — воля оператора; всё остальное
-        # проверяем по строке @TLM, чтобы не принять лидар за мастер.
-        explicit = (os.environ.get("RC_SLAM_PORT") or
-                    os.environ.get("RC_SLAM_MASTER_PORT") or "").strip()
-        probe = (not explicit) or (not os.path.exists(port))
         candidates = info["candidates"] or [port]
-        # Сообщения прошивки («# FR: Калибровка ЗАВЕРШЕНА!») — в журнал экрана;
-        # поиск/обрыв порта — тоже.
+        # Каждый порт проверяется по строке @TLM/@ID: какое колесо на каком
+        # порту, решает прошивка платы. Сообщения прошивки («# FR: Калибровка
+        # ЗАВЕРШЕНА!») — в журнал экрана; поиск/обрыв порта — тоже.
         return mod.MasterSource(
             candidates,
             on_message=note_master_message,
             on_status=note_master_status,
             port_provider=lambda: master_ports(port),
-            probe=probe,
+            probe=True,
         )
 
     if mode != "auto":
