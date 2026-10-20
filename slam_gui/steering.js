@@ -92,13 +92,13 @@
         </div>
         <section class="rc-presets" aria-label="Пресеты руления">
           <div class="rc-presets-head">
-            <div><b>Быстрые режимы</b><small>Пресет выставляет углы всех четырёх колёс в пределах <span data-rc-steer-limit>±90°</span>; тяга — кнопками «Движение» в самом низу окна.</small></div>
+            <div><b>Быстрые режимы</b><small>Пресет выставляет углы всех четырёх колёс в пределах <span data-rc-steer-limit>±100°</span>; тяга — кнопками «Движение» в самом низу окна.</small></div>
             <span id="rc-preset-status" role="status">Проверка связи…</span>
           </div>
           <div id="rc-preset-grid" class="rc-preset-grid"></div>
           <div class="rc-preset-all">
             <label for="rc-preset-angle">Угол всех колёс <b><span id="rc-preset-angle-value">0</span>°</b>
-              <input id="rc-preset-angle" type="range" min="-90" max="90" step="1" value="0" disabled /></label>
+              <input id="rc-preset-angle" type="range" min="-100" max="100" step="1" value="0" disabled /></label>
             <button type="button" class="rc-steering-btn" id="rc-preset-apply" disabled>Задать всем</button>
             <span class="rc-preset-scale"><span>← влево</span><span>прямо</span><span>вправо →</span></span>
           </div>
@@ -107,7 +107,7 @@
           <article class="rc-steering-card" data-rc-steering="${id}">
             <header><b>${id}</b><span data-status>нет связи</span></header>
             <div class="rc-steering-values"><span>Сейчас <b data-current>—</b></span><span>Цель <b data-target>0°</b></span></div>
-            <input data-range type="range" min="-90" max="90" step="1" value="0" aria-label="${id}, целевой угол" disabled>
+            <input data-range type="range" min="-100" max="100" step="1" value="0" aria-label="${id}, целевой угол" disabled>
             <div class="rc-steering-actions">
               <button type="button" data-calib disabled>Калибровка</button>
               <button type="button" data-origin disabled>Задать 0°</button>

@@ -48,7 +48,7 @@ from robot_control.kiosk_app import (
 
 
 #: Ход руля, общий для прошивки, сервера и экранов (STEER_LIMIT_DEG).
-STEER_LIMIT_DEG = 90
+STEER_LIMIT_DEG = 100
 
 
 @pytest.fixture
@@ -180,7 +180,7 @@ def test_steering_endpoint_dispatches_exactly_one_module_and_angle(kiosk_app, ki
     for bad_body in (
         {"module": "FR", "angle": 12, "pwm": 100},
         {"module": "drive", "angle": 12},
-        {"module": "FL", "angle": 91},   # за пределом ±90° (STEER_LIMIT_DEG)
+        {"module": "FL", "angle": 101},  # за пределом ±100° (STEER_LIMIT_DEG)
     ):
         response = kiosk_client.post("/api/kiosk_steer", json=bad_body, headers=headers)
         assert response.status_code == 400
@@ -215,7 +215,7 @@ def test_steering_api_reports_the_limit_it_enforces(kiosk_app, kiosk_client):
     ok = kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 90}, headers=headers)
     assert ok.status_code == 200, ok.get_json()
 
-    over = kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 91}, headers=headers)
+    over = kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 101}, headers=headers)
     assert over.status_code == 400
     body = over.get_json()
     assert body["reason"] == "angle_limit"
@@ -397,7 +397,9 @@ def test_journal_records_real_pin_and_command_events(kiosk_app, kiosk_client):
     kiosk_client.post("/api/kiosk_lock/open", json={"pin": "7232"})
     kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 12.5},
                       headers={"X-Robot-Control": "steering"})
-    kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 99},
+    # Угол за пределом хода (±100°): команда обязана быть отклонена и попасть
+    # в журнал — иначе оператор не поймёт, почему колесо не поехало.
+    kiosk_client.post("/api/kiosk_steer", json={"module": "FL", "angle": 101},
                       headers={"X-Robot-Control": "steering"})
 
     entries = kiosk_client.get("/api/kiosk_logs?limit=50").get_json()["data"]["entries"]

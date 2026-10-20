@@ -63,7 +63,7 @@ STEERING_SESSION_TTL_S = 5 * 60
 #: ``slam_gui/backend.py`` и в прошивке; если источник задаёт свой предел
 #: (``MAX_STEER_DEG``), проверка и ответ берут его — иначе API обещает одно,
 #: а плата режет другое, и руление выглядит «кривым».
-STEERING_ANGLE_LIMIT_DEG = 90.0
+STEERING_ANGLE_LIMIT_DEG = 100.0
 STEERING_COMMAND_HEADER = "X-Robot-Control"
 STEERING_COMMAND_HEADER_VALUE = "steering"
 DRIVE_COMMAND_HEADER_VALUE = "drive"
