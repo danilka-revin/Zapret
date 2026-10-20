@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Проверка USB-мастера Zapret: на каком порту Arduino и почему «нет связи».
+"""Проверка USB-колёс Zapret: на каком порту Arduino и почему «нет связи».
 
-Мастер — плата с прошивкой ``firmware/motor_master`` (Arduino Mega / Mega Mini,
-USB 115200 бод). Каждые 250 мс она печатает ``@TLM mod=FL …``; по этой строке
-скрипт и узнаёт мастер, а не просто «порт открылся».
+Колесо — плата с прошивкой ``firmware/motor_wheel`` (Arduino Mega / Mega Mini,
+USB 115200 бод, имя колеса в ``MODULE_ID``). Каждые 250 мс она печатает
+``@TLM mod=FL …``; по этой строке скрипт узнаёт колесо, а не просто «порт
+открылся». Порт из ``RC_SLAM_PORT`` — первый кандидат; сервер ведёт карту
+«колесо → порт» сам, скрипт помогает найти и закрепить кандидатов.
 
     .venv/bin/python scripts/master_check.py              # найти мастер сам
     .venv/bin/python scripts/master_check.py --list       # только список портов
@@ -22,7 +24,7 @@ CH340/FT232/CP2102 — как ``ttyUSB0``. Номер после перепод�
 колёса»: ноль руля после перезапуска платы не сохраняется. Если пульт/экран уже
 занимает порт, скрипт честно скажет «занят» — это не поломка.
 
-Коды возврата: 0 — мастер найден, 1 — не найден (причина в выводе).
+Коды возврата: 0 — колесо найдено, 1 — не найдено (причина в выводе).
 """
 
 from __future__ import annotations
@@ -141,11 +143,11 @@ def probe_port(port: str, *, seconds: float = 5.0, baud: int = BAUD) -> dict:
             except ValueError:
                 pass
             result.update(ok=True, modules=modules, firmware=firmware, lines=lines)
-            # FL приходит и без слейвов: мастер подтверждён, дальше ждать нечего.
+            # Каждая плата печатает своё колесо: первого ответа достаточно.
             break
         if not result["ok"]:
-            result["detail"] = ("порт открылся, но строк @TLM нет: это не мастер "
-                                "или прошита не motor_master")
+            result["detail"] = ("порт открылся, но строк @TLM нет: это не колесо "
+                                "Zapret или прошита не motor_wheel")
     except Exception as exc:                  # noqa: BLE001 — pyserial SerialException
         code, detail = classify_error(exc)
         result.update(error=code, detail=detail)
@@ -223,7 +225,7 @@ def save_env(port: str, path: Path = ENV_FILE) -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Найти USB-мастер Zapret (@TLM), проверить порт и записать его в .env",
+        description="Найти USB-колесо Zapret (@TLM), проверить порт и записать его в .env",
     )
     parser.add_argument("--port", default="", help="порт или glob (по умолчанию — из RC_SLAM_PORT и автопоиск)")
     parser.add_argument("--seconds", type=float, default=5.0,
@@ -246,7 +248,7 @@ def main(argv=None) -> int:
         return 0 if (os.path.exists(configured) or serial_ports()) else 1
 
     if not args.json:
-        log("Проверка USB-мастера Zapret (Arduino, 115200 бод)")
+        log("Проверка USB-колёс Zapret (Arduino, 115200 бод)")
         for line in describe(args.port):
             log(line)
         log()
@@ -261,13 +263,14 @@ def main(argv=None) -> int:
             continue
         if report["ok"]:
             modules = ", ".join(report["modules"]) or "—"
-            log("  мастер ответил: @TLM, модулей: %d (%s), fw=%s"
+            log("  колесо ответило: @TLM, модулей: %d (%s), fw=%s"
                 % (len(report["modules"]), modules, report["firmware"] or "?"))
-            if len(report["modules"]) < 4:
-                log("  внимание: ответили не все четыре платы — слейвы FR/RL/RR "
-                    "не на связи по I²C, экран покажет их как «нет связи».")
+            if (report["firmware"] or 0) < 4:
+                log("  внимание: прошивка до v4 (fw=%s) — перепрошите плату файлом "
+                    "motor_wheel_%s.ino с рабочего стола." % (report["firmware"] or "?",
+                                                              report["modules"][0] if report["modules"] else "XX"))
         else:
-            log("  не мастер: %s" % (report["detail"] or report["error"] or "нет ответа"))
+            log("  не колесо: %s" % (report["detail"] or report["error"] or "нет ответа"))
     found = next((report for report in reports if report["ok"]), None)
 
     if args.json:
@@ -284,8 +287,9 @@ def main(argv=None) -> int:
 
     log()
     if not found:
-        log("Мастер не ответил ни на одном порту.")
-        log("• проверьте, что прошит именно firmware/motor_master (не motor_node), 115200 бод;")
+        log("Колесо не ответило ни на одном порту.")
+        log("• проверьте, что прошит именно firmware/motor_wheel "
+            "(motor_wheel_FL/FR/RL/RR.ino — каждая плата своим файлом), 115200 бод;")
         log("• закройте монитор порта Arduino IDE; если порт «занят» — остановите "
             "робота (./scripts/stop.sh): один UART нельзя открыть двум программам;")
         log("• проверьте кабель (с данными), питание платы и `dmesg | tail` после подключения;")
@@ -293,7 +297,7 @@ def main(argv=None) -> int:
         return 1
 
     stable = stable_port_path(found["port"])
-    log("Мастер найден: %s" % found["port"])
+    log("Колесо найдено: %s (%s)" % (found["port"], ", ".join(found["modules"]) or "?"))
     if stable != found["port"]:
         log("Постоянное имя (не меняется после переподключения): %s" % stable)
     if args.save_env:

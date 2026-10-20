@@ -6,7 +6,7 @@
 
     AVR_ROOT=/путь/к/avr     # каталог, где лежит bin/avr-gcc (у IDE: .../tools/avr-gcc/7.3.0-…)
     CORE_ROOT=/путь/к/ArduinoCore-avr
-    python3 firmware/tools/avr_build.py firmware/motor_master/motor_master.ino
+    python3 firmware/tools/avr_build.py firmware/motor_wheel/motor_wheel.ino
 
 Делает то же, что arduino-cli: дописывает #include <Arduino.h> и прототипы
 функций, собирает ядро и Wire, компонует и печатает avr-size. Предупреждения

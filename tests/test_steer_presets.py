@@ -60,8 +60,7 @@ def test_steer_limit_is_one_number_across_the_stack():
     Раньше число было записано в семи местах независимо: расхождение выглядело
     как «кривое руление» — ползунок шёл дальше, чем принимала плата.
     """
-    firmware = [ROOT / "firmware" / "motor_master" / "motor_master.ino",
-                ROOT / "firmware" / "motor_node" / "motor_node.ino"]
+    firmware = [ROOT / "firmware" / "motor_wheel" / "motor_wheel.ino"]
     for path in firmware:
         text = _text(path)
         assert _ino_const(text, "STEER_LIMIT_DEG") == STEER_LIMIT_DEG, path.name

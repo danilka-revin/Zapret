@@ -1562,7 +1562,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     # Настройки (заодно подхватываем .env — например RC_KIOSK_OPEN).
-    # По умолчанию используется USB-мастер четырёх I2C-плат; стенд включается
+    # По умолчанию используются четыре колеса по своему USB; стенд включается
     # явно: RC_SLAM_SOURCE=none ./run_kiosk.py
     cfg = Config.from_env()
     if args.source:

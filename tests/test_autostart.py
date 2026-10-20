@@ -355,52 +355,54 @@ FIRMWARE = Path(__file__).resolve().parent.parent / "firmware"
 
 def desktop_firmware(home: Path) -> tuple[Path, Path]:
     desktop = home / "Desktop"
-    return desktop / "motor_master.ino", desktop / "motor_node.ino"
+    return desktop / "motor_wheel.ino", desktop / "motor_wheel_FL.ino"
 
 
-def test_sync_firmware_desktop_copies_master_and_node(fake_host):
-    """На рабочем столе появляются обе прошивки — байт в байт как в репозитории."""
+def test_sync_firmware_desktop_copies_wheel_template(fake_host):
+    """На рабочем столе шаблон прошивки — байт в байт как в репозитории."""
     result = run("sync_firmware_desktop.sh")
     assert result.returncode == 0, result.stderr
-    master, node = desktop_firmware(fake_host.root)
-    assert master.read_bytes() == (FIRMWARE / "motor_master" / "motor_master.ino").read_bytes()
-    assert node.read_bytes() == (FIRMWARE / "motor_node" / "motor_node.ino").read_bytes()
-    assert "мастер" in result.stdout and "нода" in result.stdout
+    template, fl = desktop_firmware(fake_host.root)
+    assert template.read_bytes() == (FIRMWARE / "motor_wheel" / "motor_wheel.ino").read_bytes()
+    assert "колесо" in result.stdout
 
 
-def test_sync_firmware_desktop_writes_node_per_wheel(fake_host):
-    """Три готовых ноды: адрес и имя вписаны, перепутать платы нельзя.
+def test_sync_firmware_desktop_writes_firmware_per_wheel(fake_host):
+    """Четыре готовых прошивки: имя колеса вписано, перепутать платы нельзя.
 
-    Один и тот же motor_node.ino на всех трёх платах — все отвечают на адресе 2,
-    и мастер видит только себя. Поэтому рядом кладутся motor_node_FR/RL/RR.ino.
+    Один и тот же motor_wheel.ino на всех четырёх платах — все называют себя
+    FL, и сервер честно видит четыре одинаковые прошивки. Поэтому рядом
+    кладутся motor_wheel_FL/FR/RL/RR.ino с вписанным MODULE_ID: каждая плата
+    получает прошивку СВОЕГО колеса.
     """
     result = run("sync_firmware_desktop.sh")
     assert result.returncode == 0, result.stderr
     desktop = fake_host.root / "Desktop"
-    source = (FIRMWARE / "motor_node" / "motor_node.ino").read_text(encoding="utf-8")
-    for module, address in (("FR", 2), ("RL", 3), ("RR", 4)):
-        text = (desktop / ("motor_node_%s.ino" % module)).read_text(encoding="utf-8")
-        assert '#define NODE_ADDRESS %d' % address in text
+    source = (FIRMWARE / "motor_wheel" / "motor_wheel.ino").read_text(encoding="utf-8")
+    for module in ("FL", "FR", "RL", "RR"):
+        text = (desktop / ("motor_wheel_%s.ino" % module)).read_text(encoding="utf-8")
         assert '#define MODULE_ID "%s"' % module in text
         # Всё остальное — байт в байт исходник из firmware/.
-        assert text == source.replace("#define NODE_ADDRESS 2", "#define NODE_ADDRESS %d" % address) \
-                           .replace('#define MODULE_ID "FR"', '#define MODULE_ID "%s"' % module)
-    assert "нода FR" in result.stdout and "нода RR" in result.stdout
+        assert text == source.replace('#define MODULE_ID "FL"',
+                                      '#define MODULE_ID "%s"' % module)
+    assert "колесо FR" in result.stdout and "колесо RR" in result.stdout
 
 
 def test_sync_firmware_desktop_refreshes_after_update_and_keeps_fresh(fake_host):
     """Новая версия прошивки заменяет копию; актуальная копия не переписывается."""
     assert run("sync_firmware_desktop.sh").returncode == 0
-    master, node = desktop_firmware(fake_host.root)
-    master_mtime = master.stat().st_mtime_ns
+    template, fl = desktop_firmware(fake_host.root)
+    template_mtime = template.stat().st_mtime_ns
 
-    # «Обновилась версия»: копия ноды на рабочем столе теперь старая.
-    node.write_text("// старая версия прошивки\n", encoding="utf-8")
+    # «Обновилась версия»: копия колеса на рабочем столе теперь старая.
+    fl.write_text("// старая версия прошивки\n", encoding="utf-8")
     result = run("sync_firmware_desktop.sh")
     assert result.returncode == 0, result.stderr
-    assert node.read_bytes() == (FIRMWARE / "motor_node" / "motor_node.ino").read_bytes()
-    # Мастер не менялся — его файл не трогаем (даже время изменения то же).
-    assert master.stat().st_mtime_ns == master_mtime
+    source = (FIRMWARE / "motor_wheel" / "motor_wheel.ino").read_text(encoding="utf-8")
+    # FL — имя по умолчанию: копия колеса байт в байт совпадает с шаблоном.
+    assert fl.read_bytes() == source.encode("utf-8")
+    # Шаблон не менялся — его файл не трогаем (даже время изменения то же).
+    assert template.stat().st_mtime_ns == template_mtime
 
 
 def test_desktop_launch_syncs_firmware(fake_host):

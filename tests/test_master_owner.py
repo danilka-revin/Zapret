@@ -41,7 +41,11 @@ def _snapshot(angle_fr=12.5, linked=True, estop=None):
 
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="нужен POSIX pty")
 def test_master_port_is_opened_exclusively_by_one_process():
-    """Второй процесс не может открыть порт мастера, пока его держит владелец."""
+    """Второй процесс не может открыть порт колеса, пока его держит владелец.
+
+    Порт считается своим после @TLM: плата называет колесо, и сервер сам
+    привязывает его к порту (I²C больше нет, все четыре колеса на своих USB).
+    """
     serial = pytest.importorskip("serial")
     backend = _backend()
     master_fd, slave_fd = os.openpty()
@@ -50,8 +54,15 @@ def test_master_port_is_opened_exclusively_by_one_process():
         owner = backend.MasterSource(name)
         deadline = time.time() + 3.0
         while not owner.serial_ready.is_set() and time.time() < deadline:
+            # плата «перезагрузилась» при открытии и вскоре печатает @TLM
+            try:
+                os.write(master_fd, b"@TLM mod=FL deg=0.00 tgt=0.00 moving=0 cal=1 "
+                                    b"cycle=0 calib=0 opto=1 rpm=0.0 drive=0 fw=4 t=1\r\n")
+            except OSError:
+                pass
             time.sleep(0.05)
-        assert owner.serial_ready.is_set(), "владелец должен открыть порт"
+        assert owner.serial_ready.is_set(), "владелец должен опознать колесо"
+        assert owner.modules.get("FL") == name, "FL привязан к порту автоматически"
 
         with pytest.raises(serial.SerialException):
             serial.Serial(name, 115200, timeout=0.1, exclusive=True)
