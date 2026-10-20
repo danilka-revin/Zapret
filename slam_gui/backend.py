@@ -332,6 +332,9 @@ class _WheelLink:
 
     def __init__(self, path):
         self.path = path
+        self.device = os.path.realpath(path)
+        self.rx = bytearray()
+        self.rx_discard = False
         self.module = None               # опознанное колесо (FL/FR/RL/RR)
         self.commands = queue.Queue(maxsize=16)
 
@@ -376,8 +379,10 @@ class MasterSource:
         «здесь колесо»: лидар такой порт не перебирает (его открытие
         сбрасывает плату и рвёт телеметрию).
 
-    И главное: порт, который за ``PROBE_S`` не назвал себя колесом, немедленно
-    отпускается и больше не трогается. Раньше источник колёс держал открытыми
+    Неопознанные порты автопоиска отпускаются и временно исключаются.
+    Явно назначенные оператором порты повторно проверяются после паузы:
+    USB-разветвитель мог перезапустить плату, которая ещё загружается.
+    Раньше источник колёс держал открытыми
     ВСЕ найденные USB-порты — включая лидар, — и писал в них команды: лидар
     глох, счётчик на экране мигал «200 → 15 → 50».
     """
@@ -395,6 +400,9 @@ class MasterSource:
     PROBE_S = 5.0
     #: Пауза перед повторным открытием порта, с которого ничего не пришло.
     RETRY_S = 2.0
+    # Recover a wedged USB stream, not an ordinary missed 250 ms frame.
+    TELEMETRY_TIMEOUT_S = 10.0
+    MAX_LINE_BYTES = 1024
     #: Как часто менеджер пересматривает список портов-кандидатов.
     RESCAN_S = 2.0
     #: Как часто предупреждать о двух платах с одной прошивкой колеса.
@@ -893,12 +901,33 @@ class MasterSource:
         if reported is not None:
             # An automatically discovered board cannot take a manually reserved role.
             if not assigned and reported in getattr(self, "module_ports", {}):
-                return
+                return False
             if not self._bind_module(link, module):
-                return
+                return False
             if assigned and line.strip().startswith(TLM_PREFIX):
                 line = re.sub(r"(?i)(\bmod=)[^\s]+", lambda m: m[1] + assigned, line)
-        self.feed(line)
+        return self.feed(line)
+
+    def _link_bytes(self, link, raw):
+        """UART timeouts may split a line; only a newline completes a frame.
+
+        Bound memory on binary/noisy ports and discard the *whole* oversized
+        line, rather than interpreting a valid-looking suffix as telemetry.
+        """
+        telemetry = False
+        for byte in raw:
+            if byte == 10:
+                if not link.rx_discard and link.rx:
+                    telemetry = self._link_line(
+                        link, link.rx.decode("utf-8", "replace")) or telemetry
+                link.rx.clear()
+                link.rx_discard = False
+            elif not link.rx_discard:
+                link.rx.append(byte)
+                if len(link.rx) > self.MAX_LINE_BYTES:
+                    link.rx.clear()
+                    link.rx_discard = True
+        return telemetry
 
     # ------------------------------------------------------------ потоки портов #
     def _candidate_ports(self):
@@ -990,6 +1019,12 @@ class MasterSource:
         отказ сразу. Порт, который просто молчит, получает несколько попыток:
         плата могла ещё не загрузиться после сброса при открытии.
         """
+        if self._assigned_module(path):
+            # An explicitly selected wheel may still be booting after a hub
+            # power dip. Never quarantine it for ten minutes for boot chatter.
+            self._note_status(
+                "warn", "порт %s: нет @TLM/@ID — проверю снова; проверьте питание USB-разветвителя и прошивку" % path)
+            return
         if streamed >= self.PROBE_GARBAGE_BYTES:
             self._misses.pop(path, None)
             self._reject_port(path, "поток без @TLM (похоже, это не колесо)")
@@ -1023,7 +1058,13 @@ class MasterSource:
         waiting_for_lidar = False
         for candidate in candidates:
             with self.lock:
-                if candidate in self.links or candidate in self._spawning:
+                # Candidate aliases can change between rescans. Opening the
+                # same tty again can toggle DTR and reset an Arduino even when
+                # the subsequent pyserial exclusive lock fails.
+                device = os.path.realpath(candidate)
+                busy = {link.device for link in self.links.values()}
+                busy.update(os.path.realpath(p) for p in self._spawning)
+                if device in busy:
                     continue
                 if self._cooldown.get(candidate, 0.0) > now:
                     continue
@@ -1074,7 +1115,7 @@ class MasterSource:
                 raw = dev.readline()
                 if raw:
                     streamed += len(raw)
-                    self._link_line(link, raw.decode("utf-8", "replace"))
+                    self._link_bytes(link, raw)
             if link.module is None:
                 self._reject_silent(link.path, streamed)
                 return
@@ -1082,15 +1123,19 @@ class MasterSource:
             # Отметка «здесь колесо»: лидар такой порт не перебирает — его
             # открытие сбрасывает плату и рвёт телеметрию.
             self._tag(link.path)
-            # Замок снимаем: порт уже наш (открыт монопольно), а второй процесс
-            # робота должен видеть «занят» и не ждать освобождения вечно.
-            self._unclaim(token)
-            token = _UNCLAIMED
-            next_tag = time.monotonic() + self.TAG_REFRESH_S
+            # Keep the shared real-device lock until close. pyserial's tty
+            # lock alone cannot prevent another subsystem opening/resetting
+            # the board before it attempts its own exclusive lock.
+            last_telemetry = time.monotonic()
+            next_tag = last_telemetry + self.TAG_REFRESH_S
             while not self._stop:
                 raw = dev.readline()
-                if raw:
-                    self._link_line(link, raw.decode("utf-8", "replace"))
+                if raw and self._link_bytes(link, raw):
+                    last_telemetry = time.monotonic()
+                if time.monotonic() - last_telemetry >= self.TELEMETRY_TIMEOUT_S:
+                    raise TimeoutError(
+                        "нет телеметрии @TLM %.0f с; переподключаю USB — проверьте питание разветвителя, кабель и прошивку"
+                        % self.TELEMETRY_TIMEOUT_S)
                 self._link_write(link, dev)
                 if time.monotonic() >= next_tag:
                     self._tag(link.path)
@@ -1115,6 +1160,7 @@ class MasterSource:
                 self._cooldown[link.path] = time.monotonic() + self.RETRY_S
                 if link.module and self.modules.get(link.module) == link.path:
                     self.modules.pop(link.module, None)
+                    self.frames.pop(link.module, None)
                     lost_module = link.module
                 if not self.modules:
                     self.serial_ready.clear()
