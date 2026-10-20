@@ -548,17 +548,17 @@
 
         <section class="steer-modes" aria-labelledby="steer-modes-title">
           <div class="steer-modes-head">
-            <div><b id="steer-modes-title">Режим движения</b><small>Пресет выставляет все четыре колеса в пределах <span data-steer-limit>±90°</span>. Кнопки движения — в самом низу экрана: удерживайте их.</small></div>
+            <div><b id="steer-modes-title">Режим движения</b><small>Пресет выставляет все четыре колеса в пределах <span data-steer-limit>±100°</span>. Кнопки движения — в самом низу экрана: удерживайте их.</small></div>
             <span id="steer-preset-status" class="steer-preset-status" role="status">Проверка связи…</span>
           </div>
           <div id="steer-preset-grid" class="steer-preset-grid" role="group" aria-label="Пресеты углов колёс"></div>
           <div class="steer-master">
             <div class="steer-master-head"><label for="steer-master-slider">Угол всех колёс</label><b><output id="steer-master-value">0°</output></b></div>
-            <input id="steer-master-slider" type="range" min="-90" max="90" step="1" value="0" aria-describedby="steer-master-hint" />
+            <input id="steer-master-slider" type="range" min="-100" max="100" step="1" value="0" aria-describedby="steer-master-hint" />
             <div class="steer-master-scale"><span>← влево</span><span>прямо</span><span>вправо →</span></div>
             <div class="steer-master-actions">
               <button id="steer-apply-all" class="btn-steer" type="button" disabled>Применить ко всем колёсам</button>
-              <span id="steer-master-hint">Плюс — вправо, минус — влево, как в телеметрии; ход <span data-steer-limit>±90°</span>. Пресет не включает тягу.</span>
+              <span id="steer-master-hint">Плюс — вправо, минус — влево, как в телеметрии; ход <span data-steer-limit>±100°</span>. Пресет не включает тягу.</span>
             </div>
           </div>
         </section>
@@ -595,39 +595,39 @@
               <header><b>FL</b><span id="steer-state-FL" class="steer-state">—</span></header>
               <div class="steer-readout"><span>Сейчас <b id="steer-current-FL">—</b></span><span>Цель <output id="steer-target-FL">0°</output></span></div>
               <div class="steer-meta"><span id="steer-home-FL" data-home="none">ноль: —</span><span id="steer-opto-FL" data-opto="unknown">датчик: —</span></div>
-              <input id="steer-slider-FL" data-steer-slider="FL" type="range" min="-90" max="90" step="1" value="0" aria-label="Целевой угол переднего левого рулевого модуля" disabled />
-              <div class="steer-range-labels" data-steer-range-labels><span>−90° ← влево</span><span>прямо</span><span>вправо → +90°</span></div>
+              <input id="steer-slider-FL" data-steer-slider="FL" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол переднего левого рулевого модуля" disabled />
+              <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
               <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="FL" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="FL" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="FL" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="FL" disabled>0°</button><button type="button" data-steer-adjust="FL" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="FL" disabled>Повернуть FL</button></div>
             </article>
             <article class="steer-card" data-steer-card="FR">
               <header><b>FR</b><span id="steer-state-FR" class="steer-state">—</span></header>
               <div class="steer-readout"><span>Сейчас <b id="steer-current-FR">—</b></span><span>Цель <output id="steer-target-FR">0°</output></span></div>
               <div class="steer-meta"><span id="steer-home-FR" data-home="none">ноль: —</span><span id="steer-opto-FR" data-opto="unknown">датчик: —</span></div>
-              <input id="steer-slider-FR" data-steer-slider="FR" type="range" min="-90" max="90" step="1" value="0" aria-label="Целевой угол переднего правого рулевого модуля" disabled />
-              <div class="steer-range-labels" data-steer-range-labels><span>−90° ← влево</span><span>прямо</span><span>вправо → +90°</span></div>
+              <input id="steer-slider-FR" data-steer-slider="FR" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол переднего правого рулевого модуля" disabled />
+              <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
               <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="FR" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="FR" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="FR" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="FR" disabled>0°</button><button type="button" data-steer-adjust="FR" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="FR" disabled>Повернуть FR</button></div>
             </article>
             <article class="steer-card" data-steer-card="RL">
               <header><b>RL</b><span id="steer-state-RL" class="steer-state">—</span></header>
               <div class="steer-readout"><span>Сейчас <b id="steer-current-RL">—</b></span><span>Цель <output id="steer-target-RL">0°</output></span></div>
               <div class="steer-meta"><span id="steer-home-RL" data-home="none">ноль: —</span><span id="steer-opto-RL" data-opto="unknown">датчик: —</span></div>
-              <input id="steer-slider-RL" data-steer-slider="RL" type="range" min="-90" max="90" step="1" value="0" aria-label="Целевой угол заднего левого рулевого модуля" disabled />
-              <div class="steer-range-labels" data-steer-range-labels><span>−90° ← влево</span><span>прямо</span><span>вправо → +90°</span></div>
+              <input id="steer-slider-RL" data-steer-slider="RL" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол заднего левого рулевого модуля" disabled />
+              <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
               <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="RL" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="RL" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="RL" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="RL" disabled>0°</button><button type="button" data-steer-adjust="RL" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="RL" disabled>Повернуть RL</button></div>
             </article>
             <article class="steer-card" data-steer-card="RR">
               <header><b>RR</b><span id="steer-state-RR" class="steer-state">—</span></header>
               <div class="steer-readout"><span>Сейчас <b id="steer-current-RR">—</b></span><span>Цель <output id="steer-target-RR">0°</output></span></div>
               <div class="steer-meta"><span id="steer-home-RR" data-home="none">ноль: —</span><span id="steer-opto-RR" data-opto="unknown">датчик: —</span></div>
-              <input id="steer-slider-RR" data-steer-slider="RR" type="range" min="-90" max="90" step="1" value="0" aria-label="Целевой угол заднего правого рулевого модуля" disabled />
-              <div class="steer-range-labels" data-steer-range-labels><span>−90° ← влево</span><span>прямо</span><span>вправо → +90°</span></div>
+              <input id="steer-slider-RR" data-steer-slider="RR" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол заднего правого рулевого модуля" disabled />
+              <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
               <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="RR" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="RR" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="RR" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="RR" disabled>0°</button><button type="button" data-steer-adjust="RR" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="RR" disabled>Повернуть RR</button></div>
             </article>
           </div>
           <ul id="steer-messages" class="steer-messages" aria-label="Сообщения прошивки руля" hidden></ul>
         </details>
 
-        <p class="steer-footnote">Ноль задаёт «Калибровка» по оптодатчику D18; «0° вручную» — запасной вариант, если датчик снят. Ноль сбрасывается при перезапуске Arduino. Пресеты и общий ползунок выставляют цель всем четырём колёсам в пределах <span data-steer-limit>±90°</span>: 0° — прямо, 45° — диагональ (краб), 90° — чистый боковой ход. Тяга включается только удержанием кнопок «Движение» в самом низу экрана и лишь при совпадении углов в пределах 2,5°. Разворот на месте эта прошивка не выполняет: у неё одна тяга на все колёса.</p>
+        <p class="steer-footnote">Ноль задаёт «Калибровка» по оптодатчику D18; «0° вручную» — запасной вариант, если датчик снят. Ноль сбрасывается при перезапуске Arduino. Пресеты и общий ползунок выставляют цель всем четырём колёсам в пределах <span data-steer-limit>±100°</span>: 0° — прямо, 45° — диагональ (краб), 90° — чистый боковой ход. Тяга включается только удержанием кнопок «Движение» в самом низу экрана и лишь при совпадении углов в пределах 2,5°. Разворот на месте эта прошивка не выполняет: у неё одна тяга на все колёса.</p>
 
         <section class="traction-controls" aria-label="Тяговые BLDC-моторы">
           <div class="traction-head">

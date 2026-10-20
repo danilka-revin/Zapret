@@ -401,7 +401,7 @@
       if (card && card.dataset.tone !== s.sev) card.dataset.tone = s.sev;
 
       const hasAngle = typeof m.angle === 'number' && isFinite(m.angle);
-      const angle = hasAngle ? clamp(m.angle, -90, 90) : 0;
+      const angle = hasAngle ? clamp(m.angle, -100, 100) : 0;
       if (wheel) {
         if (wheel.dataset.tone !== s.sev) wheel.dataset.tone = s.sev;
         wheel.style.transform = 'rotate(' + angle.toFixed(1) + 'deg)';

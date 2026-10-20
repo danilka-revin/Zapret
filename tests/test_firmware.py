@@ -366,6 +366,34 @@ def test_server_parses_simulated_master_telemetry(simulator):
     assert motors["FR"]["pot"] is True
 
 
+def test_pot_correction_cannot_drag_the_wheel_after_a_lying_sensor():
+    """Доводка доворачивает колесо, а не возит его за врущим датчиком.
+
+    Расхождение с целью больше ``POT_TRUST_DEG`` означает, что сбился ноль
+    датчика или не сделана ``q``. Раньше доводка догоняла именно датчик и
+    утаскивала колесо на десятки градусов от команды («повернулось на 4°
+    вместо 35°»), а привязка счётчика шагов к датчику заставляла телеметрию
+    отрапортовать успех при колесе совсем не там.
+    """
+    for path in (MASTER, NODE):
+        core = _core(path)
+        trust = float(_const(core, "POT_TRUST_DEG"))
+        deadband = float(_const(core, "POT_CORRECTION_DEADBAND_DEG"))
+        # Предел доверия обязан быть заметно больше мёртвой зоны, иначе доводка
+        # не успеет сделать ни одной полезной поправки.
+        assert trust > deadband * 4, path.name
+        # И заметно меньше хода руля: иначе датчик по-прежнему сможет увезти
+        # колесо через полшкалы.
+        assert trust < float(_const(core, "STEER_LIMIT_DEG")) / 10, path.name
+        assert "POT_TRUST_DEG" in core, path.name
+        # И доводка, и привязка счётчика шагов к датчику обязаны его соблюдать.
+        assert core.count("POT_TRUST_DEG") >= 3, path.name
+        assert "доводка отключена, нужна q" in core, path.name
+
+    # Логика одинакова в обеих прошивках: мастер и слейв крутят колёса одним кодом.
+    assert _core(MASTER).count("POT_TRUST_DEG") == _core(NODE).count("POT_TRUST_DEG")
+
+
 def _avr_toolchain_available() -> bool:
     if shutil.which("arduino-cli"):
         return True

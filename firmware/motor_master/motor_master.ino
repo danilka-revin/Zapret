@@ -84,9 +84,10 @@ const uint16_t CALIB_STEP_PERIOD_US = 2000;    // точный подход к �
 // Предел абсолютной команды «w <угол>». ОДНО число на весь стек: столько же
 // в slam_gui/backend.py (STEER_LIMIT_DEG / MasterSource.MAX_STEER_DEG),
 // в robot_control/slam.py и в экранах (slam_gui/steer_presets.js). 90° дают
-// чистый боковой ход; запас до упора потенциометра (±130°) и до программного
-// предела хода STEER_TRAVEL_LIMIT_DEG (±125°) остаётся.
-const float STEER_LIMIT_DEG = 90.0f;
+// чистый боковой ход, а 100° — запас для диагоналей на неровном полу; до упора
+// потенциометра (±130°) и до программного предела хода
+// STEER_TRAVEL_LIMIT_DEG (±125°) запас остаётся.
+const float STEER_LIMIT_DEG = 100.0f;
 const float MANUAL_MOVE_LIMIT_DEG = 360.0f;    // предел одной ручной команды d / c
 const float STEER_TRAVEL_LIMIT_DEG = 125.0f;   // предел хода от нуля: упор потенциометра ±130°
 
@@ -119,6 +120,10 @@ const float POT_CORRECTION_DEADBAND_DEG = 0.7f;  // меньше — мотор 
 const uint8_t POT_CORRECTION_MAX_PASSES = 3;     // поправок на один поворот
 const uint16_t POT_CORRECTION_SETTLE_MS = 60;    // механика успокаивается после стопа
 const float POT_RESYNC_DEG = 0.25f;              // счётчик шагов привязать к датчику
+// Насколько датчику вообще позволено спорить с целью. Доводка убирает
+// люфт и увод на единицы градусов; расхождение в десятки градусов означает,
+// что врёт датчик (сбился ноль, изношена дорожка, не сделана q), а не колесо.
+const float POT_TRUST_DEG = 5.0f;
 const float POT_CAL_POINT_DEG = 60.0f;           // автокалибровка наклона: −60° и +60°
 const float POT_CAL_MIN_COUNTS_PER_DEG = 1.5f;   // проверка правдоподобия наклона
 const float POT_CAL_MAX_COUNTS_PER_DEG = 8.0f;
@@ -698,6 +703,24 @@ void updateFeedback() {
   const float actual = potAngleDeg();
   const float wanted = (float)feedback_target_step / STEPS_PER_DEGREE;
   const float error = actual - wanted;
+  // Датчик доворачивает колесо на сантиметры, а не возит его по всей шкале.
+  // Если он расходится с целью сильнее POT_TRUST_DEG, верить ему нельзя:
+  // доводка догоняла бы именно датчик и утаскивала колесо на десятки градусов
+  // от команды (оператор видит «повернулось на 4° вместо 35°»), а последовавшая
+  // привязка счётчика шагов к датчику заставляла телеметрию отрапортовать
+  // успех при колесе совсем не там. Колесо остаётся там, куда его привели
+  // шаги, а расхождение честно печатается.
+  if (!pot_railed && fabsf(error) > POT_TRUST_DEG) {
+    char text[16];
+    formatFixed(lroundf(error * 100.0f), 2, text, sizeof(text));
+    note(PSTR("Потенциометр: расхождение %s° — доводка отключена, нужна q"), text);
+    noInterrupts();
+    target_step = feedback_target_step;
+    interrupts();
+    feedback_pending = false;
+    feedback_passes = 0;
+    return;
+  }
   if (!pot_railed && fabsf(error) > POT_CORRECTION_DEADBAND_DEG &&
       feedback_passes < POT_CORRECTION_MAX_PASSES) {
     ++feedback_passes;
@@ -715,8 +738,11 @@ void updateFeedback() {
   }
 
   const float step_angle = (float)stepNow() / STEPS_PER_DEGREE;
+  // Счётчик шагов привязываем к датчику только в пределах доверия: иначе одна
+  // врущая q молча перепишет положение колеса и телеметрия начнёт врать следом.
   if (pot_zero_valid && !pot_railed &&
-      fabsf(actual - step_angle) > POT_RESYNC_DEG) {
+      fabsf(actual - step_angle) > POT_RESYNC_DEG &&
+      fabsf(actual - step_angle) <= POT_TRUST_DEG) {
     noInterrupts();
     current_step = degreesToSteps(actual);
     interrupts();

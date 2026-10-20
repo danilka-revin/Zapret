@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 NODE = shutil.which("node")
 
 #: Ход руля, который должен быть одинаковым во всём стеке.
-STEER_LIMIT_DEG = 90
+STEER_LIMIT_DEG = 100
 
 
 def _text(path: Path) -> str:
@@ -83,10 +83,10 @@ def test_steer_limit_is_one_number_across_the_stack():
 
     # Ползунки в разметке сразу нарисованы с настоящим ходом, до ответа сервера.
     kiosk = _text(ROOT / "slam_gui" / "robot.html")
-    assert kiosk.count('min="-90" max="90"') == 5
+    assert kiosk.count('min="-100" max="100"') == 5
     assert 'min="-32"' not in kiosk
     console = _text(ROOT / "slam_gui" / "steering.js")
-    assert console.count('min="-90" max="90"') == 2
+    assert console.count('min="-100" max="100"') == 2
 
 
 def test_kiosk_movement_block_is_at_the_bottom_of_the_steering_panel():

@@ -370,25 +370,32 @@ static void scenario_moves() {
         "w 12.5 → 1667 шагов, сейчас %ld", (long)FR::stepNow());
   CHECK(board_fr.phys == 1667, "колесо на 12.5°: phys=%ld", board_fr.phys);
 
-  // Предел абсолютной команды — ±90° (STEER_LIMIT_DEG): боковой ход колесу
-  // доступен, угол вне предела его не двигает, возврат в рабочее положение — тоже.
+  // Предел абсолютной команды — ±100° (STEER_LIMIT_DEG): боковой ход (90°) и
+  // запас до 100° колесу доступны, угол вне предела его не двигает, возврат в
+  // рабочее положение — тоже.
   board_fr.serial.send("w 90");
   CHECK(wait_until([] { return !FR::motorBusy() && FR::stepNow() == 12000; }, 3000),
         "w 90 → 12000 шагов, сейчас %ld", (long)FR::stepNow());
   CHECK(board_fr.phys == 12000, "колесо на 90°: phys=%ld", board_fr.phys);
 
+  // 100° — новый потолок: колесо обязано доехать, а не быть отклонённым.
   board_fr.serial.send("w 100");
-  sim::run_for_ms(50);
-  CHECK(board_fr.phys == 12000 && has(board_fr, "угол вне ±90°"), "w 100 отклонена");
+  CHECK(wait_until([] { return !FR::motorBusy() && FR::stepNow() == 13333; }, 3000),
+        "w 100 → 13333 шага, сейчас %ld", (long)FR::stepNow());
+  CHECK(board_fr.phys == 13333, "колесо на 100°: phys=%ld", board_fr.phys);
 
-  board_fr.serial.send("w -90");
-  CHECK(wait_until([] { return !FR::motorBusy() && FR::stepNow() == -12000; }, 5000),
-        "w -90 → -12000 шагов, сейчас %ld", (long)FR::stepNow());
-  CHECK(board_fr.phys == -12000, "колесо на −90°: phys=%ld", board_fr.phys);
+  board_fr.serial.send("w 101");
+  sim::run_for_ms(50);
+  CHECK(board_fr.phys == 13333 && has(board_fr, "угол вне ±100°"), "w 101 отклонена");
+
+  board_fr.serial.send("w -100");
+  CHECK(wait_until([] { return !FR::motorBusy() && FR::stepNow() == -13333; }, 5000),
+        "w -100 → -13333 шага, сейчас %ld", (long)FR::stepNow());
+  CHECK(board_fr.phys == -13333, "колесо на −100°: phys=%ld", board_fr.phys);
 
   board_fr.serial.send("w 12.5");
   CHECK(wait_until([] { return !FR::motorBusy() && FR::stepNow() == 1667; }, 5000),
-        "возврат на 12.5° после ±90°, сейчас %ld", (long)FR::stepNow());
+        "возврат на 12.5° после ±100°, сейчас %ld", (long)FR::stepNow());
   CHECK(board_fr.phys == 1667, "колесо снова на 12.5°: phys=%ld", board_fr.phys);
 
   const int64_t started = sim::now_us;
@@ -723,15 +730,20 @@ static void scenario_system_server_commands() {
   CHECK(wait_until([] { return node_rr::calib_state == node_rr::CAL_IDLE; }, 30000) &&
         node_rr::home_source == node_rr::HOME_OPTO, "RR откалиброван заново");
   board_fl.serial.send("w XX 5");
-  board_fl.serial.send("w FL 100");
+  board_fl.serial.send("w FL 101");
   sim::run_for_ms(20);
   CHECK(has(board_fl, "неизвестный модуль XX"), "неизвестный модуль");
-  CHECK(has(board_fl, "# FL: w: угол вне ±90°"), "предел угла у сервера");
+  CHECK(has(board_fl, "# FL: w: угол вне ±100°"), "предел угла у сервера");
   // 90° доходят до слейва по I2C: боковой ход доступен не только локальному модулю.
   board_fl.serial.send("w FR 90");
   CHECK(wait_until([] { return !node_fr::motorBusy() && node_fr::stepNow() == 12000; }, 5000),
         "w FR 90 → слейв на 12000 шагов, сейчас %ld", (long)node_fr::stepNow());
   CHECK(board_fr.phys == 12000, "колесо FR на 90°: phys=%ld", board_fr.phys);
+  // Новый потолок 100° тоже доходит до слейва, а не режется по дороге.
+  board_fl.serial.send("w FR 100");
+  CHECK(wait_until([] { return !node_fr::motorBusy() && node_fr::stepNow() == 13333; }, 5000),
+        "w FR 100 → слейв на 13333 шага, сейчас %ld", (long)node_fr::stepNow());
+  CHECK(board_fr.phys == 13333, "колесо FR на 100°: phys=%ld", board_fr.phys);
 }
 
 static void send_drive_heartbeat(int percent, int times) {
@@ -1202,6 +1214,32 @@ static void scenario_slave_rejects_command() {
 // окончания поворота). Проверяем, что мастер раздаёт всю пачку и что последнее
 // в ней колесо не теряется: жалоба «RR всегда ничего не исполняет» означала бы,
 // что четвёртая команда до слейва не доходит.
+// Доводка по потенциометру доворачивает колесо на единицы градусов (люфт, увод),
+// а не возит его по всей шкале. Если датчик расходится с целью сильно — сбился
+// его ноль, изношена дорожка или не сделана q, — верить ему нельзя: раньше
+// доводка догоняла именно датчик и утаскивала колесо на десятки градусов от
+// команды («повернулось на 4° вместо 35°»), а привязка счётчика шагов к датчику
+// заставляла телеметрию отрапортовать успех при колесе совсем не там.
+static void scenario_pot_distrust() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  // Датчик «уехал» относительно колеса на 31°: так выглядит сбившийся ноль.
+  board_fr.pot_bias_steps = 4133;
+  board_fr.serial.send("w 35");
+  sim::run_for_ms(2);
+  CHECK(wait_until(fr_settled, 8000), "w 35 не закончилась");
+  // Колесо осталось там, куда его привели шаги, а не там, где видит датчик.
+  CHECK(board_fr.phys == 4667, "колесо на 35° (4667 шагов), а не %ld", board_fr.phys);
+  CHECK(FR::stepNow() == 4667, "счётчик шагов не переписан датчиком: %ld",
+        (long)FR::stepNow());
+  CHECK(has(board_fr, "расхождение 31.08"), "расхождение названо оператору: %s",
+        board_fr.serial.output.c_str());
+  CHECK(has(board_fr, "доводка отключена"), "доводка честно отключена: %s",
+        board_fr.serial.output.c_str());
+  // В пределах доверия датчик по-прежнему доворачивает колесо (см. pot_feedback).
+}
+
 static void scenario_preset_burst() {
   calibrate_all();
   const long rr_zero = (long)node_rr::stepNow();
@@ -1368,6 +1406,7 @@ static const Scenario SCENARIOS[] = {
     {"bus_stall_loop_alive", scenario_bus_stall_keeps_the_loop_alive},
     {"slave_rejects_command", scenario_slave_rejects_command},
     {"i2c_frame_freshness", scenario_i2c_frame_freshness},
+    {"pot_distrust", scenario_pot_distrust},
     {"preset_burst", scenario_preset_burst},
 };
 

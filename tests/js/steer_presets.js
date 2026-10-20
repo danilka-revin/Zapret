@@ -6,9 +6,9 @@ const presets = require('../../slam_gui/steer_presets.js');
 const ids = ['FL', 'FR', 'RL', 'RR'];
 
 assert.deepEqual(Array.from(presets.IDS), ids);
-assert.equal(presets.LIMIT_DEG, 90);
-assert.equal(presets.limit(), 90);
-assert.equal(presets.limitText(), '±90°');
+assert.equal(presets.LIMIT_DEG, 100);
+assert.equal(presets.limit(), 100);
+assert.equal(presets.limitText(), '±100°');
 // Пресетов больше, чем было: прямо, подруливание, краб и чистый боковой ход
 // в обе стороны + честно недоступный разворот.
 assert.equal(presets.PRESETS.length, 8);
@@ -45,8 +45,8 @@ assert.equal(presets.anglesFor('pivot'), null);
 assert.match(pivot.reason, /одна тяга/);
 assert.match(pivot.reason, /борт/);
 
-assert.equal(presets.clampAngle(150), 90);
-assert.equal(presets.clampAngle(-150), -90);
+assert.equal(presets.clampAngle(150), 100);
+assert.equal(presets.clampAngle(-150), -100);
 assert.equal(presets.clampAngle(45), 45);
 assert.equal(presets.clampAngle('12.6'), 13);
 assert.equal(presets.clampAngle('abc'), null);
