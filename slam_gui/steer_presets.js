@@ -5,7 +5,7 @@
  * Поэтому «краб влево» — это −45°, а не +45°.
  *
  * Предел угла — ОДНО число на весь стек (``LIMIT_DEG``): прошивка
- * (``STEER_LIMIT_DEG`` в motor_master/motor_node), сервер
+ * (``STEER_LIMIT_DEG`` в firmware/motor_wheel), сервер
  * (``MasterSource.MAX_STEER_DEG``) и экраны. Дополнительно экран подхватывает
  * фактический предел из телеметрии (``steeringControl.limitDeg``) через
  * ``setLimit()``: если плата прошита старым вариантом и режет ход до ±32°,

@@ -1,5 +1,5 @@
 // motor_wheel — прошивка ОДНОГО колеса руля (Arduino Mega 2560 / Mega Mini).
-// I2C больше нет: каждая из четырёх плат подключена к серверу собственным
+// Каждая из четырёх плат подключена к серверу собственным
 // USB-кабелем (115200 бод), и на каждой плате прошивка СВОЕГО колеса —
 // FL, FR, RL или RR. Имя колеса зашито в MODULE_ID (в начале файла); рабочий
 // стол получает готовые motor_wheel_FL/FR/RL/RR.ino (scripts/sync_firmware_desktop.sh),
@@ -125,7 +125,7 @@ const uint32_t POT_CAL_TIMEOUT_MS = 30000UL;
 // Наклон потенциометра — свойство железа, а не сессии: между включениями он не
 // меняется. Без сохранения доводка после каждой перезагрузки молча выключалась
 // (pot_calibrated = false), колесо снова ехало вслепую, и пропущенные шаги
-// никто не замечал. Слоты 0…1 свободны (раньше там жил I2C-адрес).
+// никто не замечал. Слоты 0…1 свободны.
 const uint16_t EEPROM_POT_MAGIC_SLOT = 2;
 const uint16_t EEPROM_POT_SLOPE_SLOT = 3;   // 4 байта, float, little-endian
 const uint8_t EEPROM_POT_MAGIC = 0x51;      // «q» — наклон измерен
@@ -1573,7 +1573,7 @@ void handleWheelCommand(char* line) {
   }
   handleModuleCommand(line);
   if (strcasecmp_P(command, PSTR("p")) == 0) {
-    note(PSTR("колесо %s, прошивка v%u (USB, без I2C)"), MODULE_ID, (unsigned)FIRMWARE_PROTOCOL);
+    note(PSTR("колесо %s, прошивка v%u (USB)"), MODULE_ID, (unsigned)FIRMWARE_PROTOCOL);
   }
 }
 
@@ -1614,7 +1614,7 @@ void setup() {
   Serial.begin(115200);
   steeringSetup();
   last_telemetry_ms = millis();
-  note(PSTR("--- КОЛЕСО %s: руль v%u, USB 115200, без I2C; ноль не задан — k или z ---"),
+  note(PSTR("--- КОЛЕСО %s: руль v%u, USB 115200; ноль не задан — k или z ---"),
        MODULE_ID, (unsigned)FIRMWARE_PROTOCOL);
   potBootNote();
   printHelp();

@@ -1,5 +1,5 @@
 // Хост-симуляция прошивки колеса motor_wheel: четыре независимые платы
-// (FL/FR/RL/RR), каждая со своим USB и прошивкой СВОЕГО колеса — без I2C.
+// (FL/FR/RL/RR), каждая со своим USB и прошивкой СВОЕГО колеса; связь — только UART.
 //
 // Сборка и запуск (это делает tests/test_firmware.py):
 //   g++ -std=c++17 -I tests/firmware_sim/stubs tests/firmware_sim/sim.cpp -o sim
@@ -71,7 +71,7 @@ static int failures = 0;
     }                                                                      \
   } while (0)
 
-static void wire_boards() {
+static void bind_boards() {
   board_fl.name = "FL";
   board_fl.setup_fn = wheel_fl::setup;
   board_fl.loop_fn = wheel_fl::loop;
@@ -88,7 +88,6 @@ static void wire_boards() {
   board_rr.setup_fn = wheel_rr::setup;
   board_rr.loop_fn = wheel_rr::loop;
   board_rr.isr_fn = wheel_rr::TIMER1_COMPA_vect_handler;
-  for (sim::Board* board : {&board_fl, &board_fr, &board_rl, &board_rr}) board->wire.board = board;
 }
 
 static void boot(std::vector<sim::Board*> list) {
@@ -1012,7 +1011,7 @@ static int run_pty(const char* link_base) {
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
     links.push_back(link);
   }
-  wire_boards();
+  bind_boards();
   board_fl.phys = -3000;
   board_fr.phys = 2500;
   board_rl.phys = 40;
@@ -1084,7 +1083,7 @@ static const Scenario SCENARIOS[] = {
 };
 
 static int run_one(const Scenario& scenario) {
-  wire_boards();
+  bind_boards();
   scenario.fn();
   if (failures) {
     std::fprintf(stderr, "%s: %d ошибок\n", scenario.name, failures);
@@ -1098,7 +1097,7 @@ static int run_one(const Scenario& scenario) {
 int main(int argc, char** argv) {
   if (argc > 2 && std::strcmp(argv[1], "pty") == 0) return run_pty(argv[2]);
   if (argc > 1 && std::strcmp(argv[1], "tlm_dump") == 0) {
-    wire_boards();
+    bind_boards();
     scenario_tlm_dump();
     return failures ? 1 : 0;
   }
