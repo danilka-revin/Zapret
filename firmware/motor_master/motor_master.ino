@@ -1,4 +1,5 @@
 #include <Wire.h>
+#include <avr/eeprom.h>
 #include <avr/interrupt.h>
 #include <avr/pgmspace.h>
 #include <ctype.h>
@@ -128,6 +129,14 @@ const float POT_CAL_POINT_DEG = 60.0f;           // автокалибровка
 const float POT_CAL_MIN_COUNTS_PER_DEG = 1.5f;   // проверка правдоподобия наклона
 const float POT_CAL_MAX_COUNTS_PER_DEG = 8.0f;
 const uint32_t POT_CAL_TIMEOUT_MS = 30000UL;
+
+// Наклон потенциометра — свойство железа, а не сессии: между включениями он не
+// меняется. Без сохранения доводка после каждой перезагрузки молча выключалась
+// (pot_calibrated = false), колесо снова ехало вслепую, и пропущенные шаги
+// никто не замечал. Слоты 0…1 заняты I2C-адресом.
+const uint16_t EEPROM_POT_MAGIC_SLOT = 2;
+const uint16_t EEPROM_POT_SLOPE_SLOT = 3;   // 4 байта, float, little-endian
+const uint8_t EEPROM_POT_MAGIC = 0x51;      // «q» — наклон измерен
 
 // ---- тяга BLDC ----
 const uint8_t TACH_PULSES_PER_REV = 1;         // импульсов SC на оборот колеса
@@ -537,7 +546,39 @@ void potCaptureZero() {
        pot_calibrated ? "наклон сохранён" : "q — точная калибровка");
 }
 
+float potSlopeFromEeprom() {
+  if (eeprom_read_byte((const uint8_t*)(uint16_t)EEPROM_POT_MAGIC_SLOT) != EEPROM_POT_MAGIC) return 0.0f;
+  uint8_t bytes[4];
+  for (uint8_t i = 0; i < sizeof(bytes); ++i) {
+    bytes[i] = eeprom_read_byte((const uint8_t*)(uintptr_t)(EEPROM_POT_SLOPE_SLOT + i));
+  }
+  float slope;
+  memcpy(&slope, bytes, sizeof(slope));
+  if (slope < POT_CAL_MIN_COUNTS_PER_DEG || slope > POT_CAL_MAX_COUNTS_PER_DEG) return 0.0f;
+  return slope;
+}
+
+void potSlopeToEeprom(float slope) {
+  uint8_t bytes[4];
+  memcpy(bytes, &slope, sizeof(slope));
+  for (uint8_t i = 0; i < sizeof(bytes); ++i) {
+    eeprom_update_byte((uint8_t*)(uintptr_t)(EEPROM_POT_SLOPE_SLOT + i), bytes[i]);
+  }
+  eeprom_update_byte((uint8_t*)(uint16_t)EEPROM_POT_MAGIC_SLOT, EEPROM_POT_MAGIC);
+}
+
+// Провал q значит, что датчик себя не подтвердил: прежний наклон доверия
+// больше не заслуживает, иначе следующая загрузка достанет его из памяти.
+void potSlopeForget() {
+  eeprom_update_byte((uint8_t*)(uint16_t)EEPROM_POT_MAGIC_SLOT, 0);
+}
+
 void potBootNote() {
+  const float saved_slope = potSlopeFromEeprom();
+  if (saved_slope > 0.0f) {
+    pot_counts_per_degree = saved_slope;
+    pot_calibrated = true;
+  }
   const int16_t raw = potReadAverage(POT_CAL_SAMPLES);
   pot_raw = raw;
   pot_sampled = true;
@@ -545,7 +586,8 @@ void potBootNote() {
   if (pot_railed) {
     note(PSTR("потенциометр A0: %d — на краю, проверьте провод"), (int)raw);
   } else {
-    note(PSTR("потенциометр A0: %d — ноль: k/z, калибровка: q"), (int)raw);
+    note(PSTR("потенциометр A0: %d — ноль: k/z%s"), (int)raw,
+         pot_calibrated ? ", наклон из EEPROM" : ", калибровка: q");
   }
 }
 
@@ -650,6 +692,7 @@ void updatePotCalibration() {
           magnitude > POT_CAL_MAX_COUNTS_PER_DEG) {
         pot_cal_ok = false;
         pot_calibrated = false;
+        potSlopeForget();
         pot_zero_valid = false;
         note(PSTR("ОШИБКА потенциометра: нет сигнала или неверный ход"));
       } else {
@@ -658,6 +701,7 @@ void updatePotCalibration() {
         pot_counts_per_degree = slope;
         pot_zero_valid = true;
         pot_calibrated = true;
+        potSlopeToEeprom(slope);
         char text[16];
         formatFixed(lroundf(slope * 100.0f), 2, text, sizeof(text));
         note(PSTR("Потенциометр: %s отсч/°, 0° = %d"), text, (int)pot_cal_zero_raw);
@@ -713,7 +757,7 @@ void updateFeedback() {
   if (!pot_railed && fabsf(error) > POT_TRUST_DEG) {
     char text[16];
     formatFixed(lroundf(error * 100.0f), 2, text, sizeof(text));
-    note(PSTR("Потенциометр: расхождение %s° — доводка отключена, нужна q"), text);
+    note(PSTR("Потенциометр: расхождение %s° — доводка отключена; проверьте колесо или q"), text);
     noInterrupts();
     target_step = feedback_target_step;
     interrupts();

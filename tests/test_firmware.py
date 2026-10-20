@@ -388,10 +388,52 @@ def test_pot_correction_cannot_drag_the_wheel_after_a_lying_sensor():
         assert "POT_TRUST_DEG" in core, path.name
         # И доводка, и привязка счётчика шагов к датчику обязаны его соблюдать.
         assert core.count("POT_TRUST_DEG") >= 3, path.name
-        assert "доводка отключена, нужна q" in core, path.name
+        # Большое расхождение — это либо сбившийся ноль датчика, либо
+        # заклинившее колесо (пропущенные шаги). Прошивка не может отличить
+        # одно от другого по одному замеру, поэтому сообщение обязано называть
+        # обе причины, а не отправлять оператора перекалибровывать исправный
+        # датчик. Раньше текст утверждал «нужна q» безальтернативно.
+        assert "доводка отключена; проверьте колесо или q" in core, path.name
+        assert "нужна q" not in core, path.name
 
     # Логика одинакова в обеих прошивках: мастер и слейв крутят колёса одним кодом.
     assert _core(MASTER).count("POT_TRUST_DEG") == _core(NODE).count("POT_TRUST_DEG")
+
+
+def test_pot_slope_survives_reboot_via_eeprom():
+    """Наклон потенциометра обязан переживать перезагрузку.
+
+    Пока ``pot_counts_per_degree`` жил только в RAM, ``pot_calibrated`` после
+    каждого включения снова был ``false``, ``potFeedbackAllowed()`` возвращал
+    ``false``, и вся доводка (включая защиту от врущего датчика) молча
+    выключалась. Колесо ездило вслепую, а пропущенные шаги никто не замечал —
+    ровно тот случай, когда «все тесты проходят без потенциометра».
+    """
+    for path in (MASTER, NODE):
+        text, core = _text(path), _core(path)
+        # У слейва слоты 0…1 заняты I2C-адресом (этот код живёт вне общей
+        # области прошивки); у мастера адреса в EEPROM нет вовсе — он и так
+        # мастер шины. В обоих случае наклон обязан начинаться дальше занятых
+        # ячеек, иначе успешная q затрёт адрес платы.
+        if "EEPROM_ADDRESS_VALUE_SLOT" in text:
+            assert int(_const(text, "EEPROM_ADDRESS_VALUE_SLOT")) < int(
+                _const(core, "EEPROM_POT_MAGIC_SLOT")
+            ), path.name
+        assert int(_const(core, "EEPROM_POT_MAGIC_SLOT")) + 1 == int(
+            _const(core, "EEPROM_POT_SLOPE_SLOT")
+        ), path.name
+        # Измеренный наклон сохраняется, провалившаяся q — стирается.
+        assert "potSlopeToEeprom(slope)" in core, path.name
+        assert "potSlopeForget()" in core, path.name
+        # Загрузка обязана проверять правдоподобие, иначе битая ячейка EEPROM
+        # включит доводку с мусорным наклоном.
+        load = core[core.index("float potSlopeFromEeprom()"):]
+        load = load[:load.index("\n}\n")]
+        assert "POT_CAL_MIN_COUNTS_PER_DEG" in load, path.name
+        assert "POT_CAL_MAX_COUNTS_PER_DEG" in load, path.name
+        assert "EEPROM_POT_MAGIC" in load, path.name
+        # Загрузка вызывается при старте, иначе персистентность бесполезна.
+        assert "potSlopeFromEeprom()" in core[core.index("void potBootNote()"):], path.name
 
 
 def _avr_toolchain_available() -> bool:
