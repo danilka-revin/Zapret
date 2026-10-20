@@ -782,6 +782,16 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
             on_status=note_master_status,
             port_provider=lambda: master_ports(port),
             probe=True,
+            # Порты — общий ресурс с лидаром (он тоже на USB): пока лидар ищет
+            # свой порт, колёса ждут; порт, не назвавшийся колесом, колёса
+            # отпускают; опознанный порт колеса помечается, чтобы лидар его не
+            # перебирал. Без этого источник колёс держал открытыми все
+            # USB-порты, включая лидар, — и лидар глох.
+            claim=try_lock_port,
+            release=unlock_port,
+            yield_to_lidar=lidar_holds_port,
+            tag_module=tag_module_port,
+            untag_module=untag_module_port,
         )
 
     if mode != "auto":
