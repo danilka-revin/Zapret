@@ -82,6 +82,11 @@ def kiosk_client(config):
 
 def test_lidar_manager_feed_and_expiration():
     mgr = LidarManager.get_instance()
+    # Одиночка: сбрасываем скан, оставшийся от прошлых тестов. Пока прежний
+    # скан свежий и большой (>= LIDAR_MIN_POINTS), он не даст затереть себя
+    # двухточечным обрывком — здесь же проверяется именно затирание.
+    mgr.scan = []
+    mgr.scan_at = 0.0
     # Загружаем точки
     test_points = [{"a": 0.0, "r": 1.5}, {"a": 1.57, "r": 2.5}]
     count = mgr.feed_points(test_points, source_label="unit_test")

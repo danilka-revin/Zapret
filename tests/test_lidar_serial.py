@@ -508,11 +508,50 @@ def test_ld06_crc_and_revolution_detection():
 
     stream = Ld06Stream()
     packets = []
-    for start_deg in (0.0, 30.0, 60.0, 0.0, 30.0):  # второй виток начинается с 0°
+    # виток заканчивается около 350° и продолжается с 10° — скачок через 0°
+    for start_deg in (300.0, 330.0, 350.0, 10.0, 40.0):
         packets.extend(stream.feed(encode_ld06_packet(start_deg)))
     assert len(packets) == 5
     assert [revolution for _, revolution in packets] == [False, False, False, True, False]
     assert all(len(pts) == 12 for pts, _ in packets)
+
+
+def test_ld06_stream_angle_jitter_is_not_a_revolution():
+    """Дрожь расчётного угла — не граница витка.
+
+    Раньше любое убывание угла считалось концом витка: виток резался на
+    куски, и экран мигал — «то 200 точек, то 50, то 15».
+    """
+    stream = Ld06Stream()
+    packets = []
+    for start_deg in (358.0, 359.0, 358.9, 359.9, 359.4):
+        packets.extend(stream.feed(encode_ld06_packet(start_deg)))
+    assert [revolution for _, revolution in packets] == [False] * 5
+
+
+def test_scan_accumulator_does_not_chop_slow_revolutions():
+    """Медленный виток не режется паузой — публикуется целиком.
+
+    У медленного витка (мотор сбросил обороты, тяжёлый участок) период
+    длиннее паузы ``LIDAR_PUBLISH_GAP_S``: раньше накопленное отдавалось по
+    паузе посреди витка, и экран видел «то 200 точек, то 50, то 15».
+    """
+    tick = [0.0]
+    published: list[list[dict[str, float]]] = []
+    acc = ScanAccumulator(published.append, min_points=1, gap_s=0.35, clock=lambda: tick[0])
+
+    def send_revolution(t0: float, n: int = 8, step: float = 0.1) -> None:
+        for i in range(n):
+            tick[0] = t0 + i * step
+            acc.add([{"a": float(i), "r": 1.0}], revolution_done=(i == 0))
+
+    send_revolution(0.0)   # виток 1: период ещё неизвестен
+    send_revolution(1.0)   # виток 2: 1.0 с/виток — длиннее паузы 0.35 с
+    send_revolution(2.0)   # виток 3
+    tick[0] = 3.0
+    acc.flush()
+    sizes = [len(scan) for scan in published]
+    assert sizes[2:] == [8, 8], "медленный виток режется паузой: %s" % sizes
 
 
 def test_ld06_stream_tolerates_broken_crc():

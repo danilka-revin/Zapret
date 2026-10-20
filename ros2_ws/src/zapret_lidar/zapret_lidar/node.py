@@ -34,6 +34,13 @@ RETRY_PAUSE_S = 5.0
 DEFAULT_PROBE_TIMEOUT_S = 8.0
 #: Через сколько секунд без точек считать драйвер вставшим (с).
 DEFAULT_SCAN_TIMEOUT_S = 3.0
+#: Сколько раз подряд перезапускать вставший рабочий драйвер ТЕМ ЖЕ пакетом и
+#: портом, прежде чем вернуться к полному перебору плана. Рабочий драйвер —
+#: лучший кандидат на своём порту; полный пересмотр плана (probe_ports +
+#: перебор всех драйверов) при каждом обрыве давал секунды тишины и чужие
+#: драйверы на своём же порту — на экране это выглядело как «с перерывами, то
+#: 200 точек, то 15».
+RESTART_SAME_LIMIT = 2
 #: Сколько секунд держать результат проверки портов. Раньше порты проверялись
 #: заново каждые 5 с (и на живом потоке это занимало десятки секунд): таймер
 #: ROS 2 стоял, /scan не обрабатывался, состояние не публиковалось.
@@ -181,6 +188,9 @@ class LidarSupervisor(Node):
         self.driver_baud = 0
         self.started_at = 0.0
         self.restarts = 0
+        self._current_item = None     # какой пункт плана запущен сейчас
+        self._working_item = None     # пункт плана, который уже давал /scan
+        self._same_restarts = 0       # подряд перезапусков одного и того же драйвера
         self._next_retry = 0.0
         self._lock = threading.Lock()
         self._stop = False
@@ -326,6 +336,26 @@ class LidarSupervisor(Node):
         # заново перебирал бы пустой план (нет портов/пакетов) и грузил CPU.
         self._next_retry = now() + RETRY_PAUSE_S
 
+    def _restart_same(self, note: str) -> bool:
+        """Перезапускает вставший рабочий драйвер тем же пакетом и портом.
+
+        Драйвер, который уже отдавал /scan, — лучший кандидат на этом порту.
+        Полный пересмотр плана при каждом обрыве превращал короткий сбой в
+        секунды тишины и попытки чужих драйверов на своём порту (на экране:
+        «с перерывами, то 200 точек, то 15»). После ``RESTART_SAME_LIMIT``
+        неудачных перезапусков подряд возвращаемся к полному перебору плана.
+        """
+        if self.state != "restarting" or self._working_item is None:
+            return False
+        if self._same_restarts >= RESTART_SAME_LIMIT:
+            return False
+        self._same_restarts += 1
+        if self.launch(self._working_item):
+            self.reason = "драйвер встал (%s) — перезапускаю тот же %s" % (
+                note, self._working_item.driver.title)
+            return True
+        return False
+
     def launch(self, item: drv.PlanItem) -> bool:
         """Запускает драйвер попытки. False — попытка не удалась, есть следующая."""
         prefix = self._ros_prefix()
@@ -360,6 +390,7 @@ class LidarSupervisor(Node):
         self.driver = item.driver
         self.driver_port = item.port
         self.driver_baud = item.baud
+        self._current_item = item
         self.started_at = now()
         self.state = "probing"
         self.reason = "запускаю %s" % item.driver.title
@@ -421,6 +452,9 @@ class LidarSupervisor(Node):
     def _on_scan(self, msg: LaserScan) -> None:
         points = sum(1 for value in msg.ranges if value and value == value and value < 1e30)
         self.watch.feed(points)
+        self._same_restarts = 0
+        if self.process is not None and self.process.poll() is None and self._current_item is not None:
+            self._working_item = self._current_item
         if self.state != "running":
             self.state = "running"
             self.driver_port = self.driver_port or ""
@@ -437,6 +471,8 @@ class LidarSupervisor(Node):
             self.watch = ScanWatch()
             self.tried = []
             self._probe_at = 0.0
+            self._working_item = None
+            self._same_restarts = 0
             self.refresh_plan(force_probe=True)
             self.start_next()
             response.success = True
@@ -517,6 +553,8 @@ class LidarSupervisor(Node):
                 # probe_ports не должен натыкаться на собственный драйвер.
                 self.stop_process()
                 self.watch = ScanWatch()
+                if self._restart_same(note):
+                    return
                 if self.plan_index >= len(self.plan) or self.state == "restarting":
                     self.refresh_plan()
                 self.start_next()
