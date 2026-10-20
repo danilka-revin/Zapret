@@ -2,10 +2,10 @@
 //
 // Каждая плата — свой экземпляр Board: выводы, USB Serial, модель шагового
 // привода (TB6600 шагает по фронту PUL, если ENA = HIGH, направление — по DIR)
-// и оптодатчика нуля на D18 (флажок с гистерезисом). Заглушки Wire/I2C ниже
-// оставлены для совместимости заголовков, сама прошивка I²C не использует.
+// и оптодатчика нуля на D18 (флажок с гистерезисом). Связь с сервером — только
+// USB Serial: I²C в прошивке вырезан, здесь его заглушек больше нет.
 // Скетч компилируется внутри своего namespace (см. sim.cpp), а функции
-// digitalWrite/Serial/Wire там подменяются привязанными к своей плате.
+// digitalWrite/Serial там подменяются привязанными к своей плате.
 // Время общее: тик Timer1 — 50 мкс, прерывания всех плат вызываются по тику,
 // loop() каждой платы — между тиками.
 #pragma once
@@ -104,195 +104,14 @@ class SimSerial {
   }
 };
 
-class SimWire;
-inline SimWire* bus[128] = {nullptr};
-
-// Авария шины: слейв (или помеха) удерживает SDA низким. Пока флаг поднят,
-// передачи не проходят (как NACK/таймаут на железе), а восстановление
-// (9 тактов SCL) снимает его — см. Board::digital_write и i2cRecoverBus().
-inline bool i2c_bus_stuck = false;
-inline int i2c_scl_edges = 0;
-// Сколько плат зарегистрировано на каждом адресе: >1 — коллизия адресов,
-// как у трёх плат, прошитых одним motor_node.ino (данные на шине рвутся).
-inline int bus_claims[128] = {0};
-
-// Детерминированный ГПСЧ для помех на шине: сценарии гоняются в своих
-// процессах (fork), поэтому каждый стартует с одного и того же зерна.
-inline uint64_t rng_state = 0x243F6A8885A308D3ULL;
-inline uint32_t rng_next() {
-  rng_state ^= rng_state << 13;
-  rng_state ^= rng_state >> 7;
-  rng_state ^= rng_state << 17;
-  return (uint32_t)(rng_state >> 32);
-}
-inline bool roll(double probability) {
-  if (probability <= 0.0) return false;
-  if (probability >= 1.0) return true;
-  return (rng_next() >> 8) * (1.0 / 16777216.0) < probability;
-}
-
-class SimWire {
- public:
-  Board* board = nullptr;
-  int address = -1;
-  bool connected = true;                 // false — плата «отключена» от шины
-  void (*on_receive)(int) = nullptr;
-  void (*on_request)() = nullptr;
-  std::vector<uint8_t> tx;               // мастер: передача; слейв: ответ на запрос
-  std::deque<uint8_t> rx;                // принятые байты
-  int tx_address = -1;
-  long transmissions = 0;
-  uint32_t clock_hz = 400000;            // скорость шины у МАСТЕРА (setClock)
-  uint32_t timeout_us = 1000000;         // Wire.setWireTimeout: сколько ждать ответ
-  // Маргинальный шлейф: плата отвечает только на 100 кГц. Так выглядит дальний
-  // модуль (обычно RR) с длинным проводом и внутренними подтяжками: на 400 кГц
-  // он NACK-ает, на 100 кГц — работает. Мастер обязан сам это заметить.
-  bool slow_bus_only = false;
-  // Сколько ближайших кадров придёт битыми (помеха/обрыв): мастер должен
-  // повторить запрос, а не объявлять модуль потерянным с первого сбоя.
-  uint8_t corrupt_frames = 0;
-  // Плата отвечает на этой скорости и медленнее (slow_bus_only == max_ok_hz
-  // 100000). Выше — NACK/таймаут, как у дальнего модуля на длинном шлейфе.
-  uint32_t max_ok_hz = 400000;
-  // Потери от скорости: вероятность провала транзакции на 400 кГц, на
-  // медленной шине пропорционально меньше («фронты SDA не успевают»).
-  double loss_rate = 0.0;
-  // Пачки помех (моторы, ШИМ): транзакция с вероятностью burst_rate открывает
-  // окно на burst_ms, в котором все обращения к плате падают. Так на роботе
-  // выглядят наводки: связь пропадает пачками, а не по одному кадру.
-  double burst_rate = 0.0;
-  double burst_ms = 0.0;
-  int64_t burst_until_us = 0;
-
-  void begin() { unregister(); }
-  void begin(uint8_t addr) {
-    unregister();
-    address = addr;
-    bus[addr] = this;
-    ++bus_claims[addr];
-  }
-  // Wire.end(): плата снимает свой адрес с шины (как twi_disable на AVR).
-  void end() { unregister(); }
-  void setClock(uint32_t hz) { clock_hz = hz; }
-  // Таймаут Wire на AVR отсчитывается на ВСЮ передачу: пока мастер ждёт ответ,
-  // loop() стоит. Симуляция обязана это время тратить, иначе блокировки шины в
-  // прошивке не видны (опрос «зависшей» шины выглядит бесплатным).
-  void setWireTimeout(uint32_t us, bool) { timeout_us = us ? us : 1000000; }
-  void onReceive(void (*fn)(int)) { on_receive = fn; }
-  void onRequest(void (*fn)()) { on_request = fn; }
-  // Время передачи: старт + по 9 бит на байт (данные + ACK) + стоп.
-  static int64_t wire_us(uint32_t hz, size_t bytes) {
-    if (hz == 0) hz = 100000;
-    return (int64_t)(((uint64_t)bytes + 2) * 9 * 1000000 / hz);
-  }
-  // Отказ адреса (NACK) на железе возвращается сразу — ждём только адресную фазу.
-  void spend_nack() { sim::advance(wire_us(clock_hz, 1)); }
-  // Зависшая шина: мастер крутится до таймаута (twi_timeout_us).
-  void spend_timeout() { sim::advance((int64_t)timeout_us); }
-  // Общая модель отказа транзакции к этой плате. hz — скорость шины МАСТЕРА:
-  // маргинальный шлейф глушит именно её, а не тактование самой платы.
-  bool bus_fail(uint32_t hz) {
-    if (!connected) return true;
-    if (slow_bus_only && hz > 100000) return true;
-    if (hz > max_ok_hz) return true;
-    if (sim::now_us < burst_until_us) return true;
-    if (roll(burst_rate)) {
-      burst_until_us = sim::now_us + (int64_t)(burst_ms * 1000.0);
-      return true;
-    }
-    return roll(loss_rate * (double)hz / 400000.0);
-  }
-  void beginTransmission(uint8_t addr) {
-    tx_address = addr;
-    tx.clear();
-  }
-  size_t write(uint8_t value) {
-    if (tx.size() >= 32) return 0;       // буфер Wire на AVR — 32 байта
-    tx.push_back(value);
-    return 1;
-  }
-  size_t write(const uint8_t* data, size_t length) {
-    size_t written = 0;
-    for (size_t i = 0; i < length; ++i) written += write(data[i]);
-    return written;
-  }
-  uint8_t endTransmission() {
-    ++transmissions;
-    SimWire* slave = tx_address >= 0 && tx_address < 128 ? bus[tx_address] : nullptr;
-    if (i2c_bus_stuck) {                 // шина удерживается: BUS ERROR после таймаута
-      spend_timeout();
-      return 4;
-    }
-    if (!slave || !slave->on_receive) {  // NACK адреса
-      spend_nack();
-      return 2;
-    }
-    if (slave->bus_fail(clock_hz)) {     // помеха/скорость/обрыв
-      spend_nack();
-      return 2;
-    }
-    slave->rx.clear();
-    for (uint8_t value : tx) slave->rx.push_back(value);
-    slave->on_receive((int)tx.size());
-    sim::advance(wire_us(clock_hz, tx.size() + 1));
-    return 0;
-  }
-  uint8_t requestFrom(uint8_t addr, uint8_t quantity) {
-    rx.clear();
-    SimWire* slave = addr < 128 ? bus[addr] : nullptr;
-    if (i2c_bus_stuck) {                 // таймаут: шина не отпускает SDA
-      spend_timeout();
-      return 0;
-    }
-    if (!slave || !slave->on_request) {
-      spend_nack();
-      return 0;
-    }
-    if (slave->bus_fail(clock_hz)) {     // помеха/скорость/обрыв
-      spend_nack();
-      return 0;
-    }
-    slave->tx.clear();
-    slave->on_request();
-    for (uint8_t i = 0; i < quantity; ++i) {
-      rx.push_back(i < slave->tx.size() ? slave->tx[i] : 0xFF);  // дальше — линия в 1
-    }
-    sim::advance(wire_us(clock_hz, (size_t)quantity + 1));
-    // Помеха: кадр пришёл битым один раз.
-    if (slave->corrupt_frames > 0 && !rx.empty()) {
-      rx[0] = '#';
-      --slave->corrupt_frames;
-    }
-    // На адресе несколько плат — SDA тянут все сразу, кадр приходит битым.
-    if (bus_claims[addr] > 1 && !rx.empty()) rx[0] = '#';
-    return quantity;
-  }
-  int available() { return (int)rx.size(); }
-  int read() {
-    if (rx.empty()) return -1;
-    const int value = rx.front();
-    rx.pop_front();
-    return value;
-  }
-
- private:
-  void unregister() {
-    if (address >= 0 && address < 128) {
-      if (bus[address] == this) bus[address] = nullptr;
-      if (bus_claims[address] > 0) --bus_claims[address];
-    }
-    address = -1;
-  }
-};
-
 struct Board {
   const char* name = "";
   uint8_t level[80] = {0};
   uint8_t mode[80] = {0};
   int analog[80] = {0};
   SimSerial serial;
-  SimWire wire;
-  // EEPROM платы (ATmega2560 — 4 КиБ, здесь хватает 1 КиБ): адрес узла и т.п.
+  // EEPROM платы (ATmega2560 — 4 КиБ, здесь хватает 1 КиБ): ноль, наклон
+  // потенциометра и т.п.
   uint8_t eeprom[1024] = {0};
   uint8_t eeprom_read(uint16_t address) { return eeprom[address & 1023]; }
   void eeprom_write(uint16_t address, uint8_t value) { eeprom[address & 1023] = value; }
@@ -348,8 +167,8 @@ struct Board {
     max_loop_us = 0;
   }
 
-  // Самый долгий проход loop(): пока мастер ждёт Wire, loop() стоит — не качает
-  // USB (телеметрия, heartbeat тяги) и не обновляет watchdog тяги (650 мс).
+  // Самый долгий проход loop(): если loop() стоит, плата не шлёт USB
+  // (телеметрия, heartbeat тяги) и не обновляет watchdog тяги (650 мс).
   int64_t max_loop_us = 0;
 
   bool opto_active() {
@@ -388,14 +207,6 @@ struct Board {
     value = value ? HIGH : LOW;
     const uint8_t before = level[pin];
     level[pin] = value;
-    // Восстановление зависшей шины: 9 тактов SCL освобождают SDA.
-    if (pin == 21 && mode[21] == OUTPUT && before == LOW && value == HIGH && i2c_bus_stuck) {
-      if (++i2c_scl_edges >= 9) {
-        i2c_bus_stuck = false;
-        i2c_scl_edges = 0;
-        level[20] = HIGH;
-      }
-    }
     if (pin == 7 && before != value) last_dir_change_us = now_us;
     if (pin != 6 || before == value) return;
     if (value == HIGH) {
@@ -425,7 +236,6 @@ struct Board {
 
   int digital_read(uint8_t pin) {
     if (pin == 18) return opto_active() ? LOW : HIGH;
-    if (pin == 20) return i2c_bus_stuck ? LOW : level[pin];  // SDA удерживается
     return level[pin];
   }
 

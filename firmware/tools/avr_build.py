@@ -9,7 +9,7 @@
     python3 firmware/tools/avr_build.py firmware/motor_wheel/motor_wheel.ino
 
 Делает то же, что arduino-cli: дописывает #include <Arduino.h> и прототипы
-функций, собирает ядро и Wire, компонует и печатает avr-size. Предупреждения
+функций, собирает ядро, компонует и печатает avr-size. Предупреждения
 компилятора (-Wall -Wextra) печатаются; код возврата ≠ 0 при ошибке сборки.
 Если есть arduino-cli, проще: arduino-cli compile --fqbn arduino:avr:mega <каталог>.
 """
@@ -76,8 +76,7 @@ def sketch_source(ino: Path) -> str:
 def build(ino: Path, out_dir: Path) -> str:
     avr, core = toolchain()
     gcc, gxx = str(avr / "bin" / "avr-gcc"), str(avr / "bin" / "avr-g++")
-    include = ["-I", str(core / "cores" / "arduino"), "-I", str(core / "variants" / "mega"),
-               "-I", str(core / "libraries" / "Wire" / "src")]
+    include = ["-I", str(core / "cores" / "arduino"), "-I", str(core / "variants" / "mega")]
     common = ["-c", "-g", "-Os", "-ffunction-sections", "-fdata-sections", "-flto",
               "-mmcu=" + MCU, *DEFINES, *include]
     cflags = [*common, "-std=gnu11", "-fno-fat-lto-objects"]
@@ -85,9 +84,7 @@ def build(ino: Path, out_dir: Path) -> str:
                 "-fno-threadsafe-statics", "-Wno-error=narrowing"]
     sources = sorted((core / "cores" / "arduino").glob("*.c")) \
         + sorted((core / "cores" / "arduino").glob("*.cpp")) \
-        + sorted((core / "cores" / "arduino").glob("*.S")) \
-        + [core / "libraries" / "Wire" / "src" / "Wire.cpp",
-           core / "libraries" / "Wire" / "src" / "utility" / "twi.c"]
+        + sorted((core / "cores" / "arduino").glob("*.S"))
     objects = []
     for source in sources:
         target = out_dir / (source.name + ".o")

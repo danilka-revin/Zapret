@@ -2,16 +2,18 @@
 # Кладёт на рабочий стол актуальные прошивки Arduino: по одной на каждое колесо.
 #
 # Запускается сам при каждом старте через ярлык «Запустить робот»
-# (scripts/start_desktop.sh) и при создании ярлыка (scripts/make_shortcut.sh),
-# поэтому после обновления версии («Обновить с GitHub») на рабочем столе при
-# следующем запуске лежат те же файлы, что и в firmware/ репозитория.
+# (scripts/start_desktop.sh), при создании ярлыка (scripts/make_shortcut.sh),
+# при общем запуске робота (scripts/start_robot.sh) и после кнопки «Обновить с
+# GitHub» (robot_control/updater.py), поэтому на рабочем столе всегда лежат
+# те же файлы, что и в firmware/ репозитория.
 # Копии зеркальные: правки на рабочем столе при следующем запуске заменятся
 # версией из репозитория — исходник правится в firmware/motor_wheel.
 #
-# I²C больше нет: каждое колесо — своя плата со своим USB-кабелем и своей
-# прошивкой. Готовые motor_wheel_FL/FR/RL/RR.ino отличаются одной строкой
-# (MODULE_ID) — их нельзя перепутать, и сервер сам поймёт, какое колесо на
-# каком порту (см. slam_gui/backend.py MasterSource).
+# Связь с колёсами — только USB-UART: каждое колесо — своя плата со своим
+# кабелем и своей прошивкой. Готовые motor_wheel_FL/FR/RL/RR.ino отличаются
+# одной строкой (MODULE_ID) — их нельзя перепутать, и сервер сам поймёт,
+# какое колесо на каком порту (см. slam_gui/backend.py MasterSource).
+# Старые файлы прошивок схемы «мастер + слейвы» с рабочего стола убираются.
 #
 # Файл переписывается только если содержимое изменилось: актуальная копия
 # не трогается (даже время изменения сохраняется). Ошибка копирования не
@@ -20,14 +22,51 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
-# Рабочий стол ищем так же, как make_shortcut.sh: иначе прошивки лягут не
-# рядом с ярлыком (на русской Ubuntu это может быть ~/Рабочий стол).
-DESK=""
-if command -v xdg-user-dir >/dev/null 2>&1; then
-  DESK="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
-fi
-[[ -z "$DESK" || ! -d "$DESK" ]] && DESK="$HOME/Desktop"
+# Где лежит рабочий стол. Порядок поиска:
+#   1) каталог, где уже стоит ярлык «Запустить робот» (robot-control.desktop) —
+#      файлы обязаны оказаться рядом с ярлыком, что бы ни думал xdg;
+#   2) xdg-user-dir DESKTOP — но НЕ само $HOME: при не настроенном каталоге
+#      xdg-user-dir отдаёт $HOME, и файлы «пропадали» бы в домашней папке;
+#   3) известные имена каталога в разных локалях (Desktop, «Рабочий стол»,
+#      Skrivebord, …) — какой существует;
+#   4) иначе создаём ~/Desktop.
+find_desktop() {
+  local candidate
+  for candidate in "$HOME"/*/; do
+    candidate="${candidate%/}"
+    if [[ -f "$candidate/robot-control.desktop" ]]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+  if command -v xdg-user-dir >/dev/null 2>&1; then
+    candidate="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+    if [[ -n "$candidate" && "$candidate" != "$HOME" && -d "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  fi
+  for candidate in "$HOME/Desktop" "$HOME/Рабочий стол" "$HOME/Рабочая область" \
+                   "$HOME/Робочий стіл" "$HOME/Skrivebord" "$HOME/Skrivbord" \
+                   "$HOME/Schreibtisch" "$HOME/Escritorio" "$HOME/Bureau" \
+                   "$HOME/Pulpit" "$HOME/Scrivania" "$HOME/Área de trabalho"; do
+    if [[ -d "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+  printf '%s' "$HOME/Desktop"
+}
+
+DESK="$(find_desktop)"
 mkdir -p "$DESK" || { echo "[firmware] не удалось создать папку рабочего стола: $DESK" >&2; exit 1; }
+
+# Старые файлы прошивок схемы «мастер + слейвы» (I²C): их больше нет в
+# репозитории, на рабочем столе они только путают — убираем.
+for stale in "$DESK"/motor_master*.ino "$DESK"/motor_node*.ino; do
+  [[ -f "$stale" ]] || continue
+  rm -f -- "$stale" && echo "[firmware] убрана устаревшая прошивка (мастер+слейвы): $(basename "$stale")"
+done
 
 FAILED=0
 sync_one() {

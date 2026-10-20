@@ -405,6 +405,64 @@ def test_sync_firmware_desktop_refreshes_after_update_and_keeps_fresh(fake_host)
     assert template.stat().st_mtime_ns == template_mtime
 
 
+def test_sync_firmware_removes_stale_i2c_firmware(fake_host):
+    """Старые прошивки «мастер + слейвы» с рабочего стола убираются, а не копятся.
+
+    После перехода на четыре USB-порта файлы motor_master/motor_node остались
+    бы на столе рядом с новыми и путали: их нельзя прошивать в колёса.
+    """
+    desktop = fake_host.root / "Desktop"
+    desktop.mkdir()
+    (desktop / "motor_master.ino").write_text("// I2C мастер\n", encoding="utf-8")
+    (desktop / "motor_node_RR.ino").write_text("// I2C слейв\n", encoding="utf-8")
+
+    result = run("sync_firmware_desktop.sh")
+    assert result.returncode == 0, result.stderr
+    assert not (desktop / "motor_master.ino").exists()
+    assert not (desktop / "motor_node_RR.ino").exists()
+    assert "убрана устаревшая прошивка" in result.stdout
+    # Новые прошивки на месте.
+    assert (desktop / "motor_wheel.ino").is_file()
+    assert (desktop / "motor_wheel_RR.ino").is_file()
+
+
+def test_sync_firmware_finds_desktop_next_to_launcher(fake_host):
+    """Стол ищется рядом с ярлыком: в других локалях это не ~/Desktop.
+
+    На русской/норвежской Ubuntu рабочий стол — «Рабочий стол» или
+    Skrivebord. Файлы обязаны лечь туда, где уже стоит ярлык «Запустить
+    робот», — иначе «прошивка не появляется на рабочем столе».
+    """
+    desktop = fake_host.root / "Рабочий стол"
+    desktop.mkdir()
+    (desktop / "robot-control.desktop").write_text("[Desktop Entry]\n", encoding="utf-8")
+
+    result = run("sync_firmware_desktop.sh")
+    assert result.returncode == 0, result.stderr
+    assert (desktop / "motor_wheel.ino").is_file(), "прошивки должны лежать рядом с ярлыком"
+    assert (desktop / "motor_wheel_FL.ino").is_file()
+    assert not (fake_host.root / "Desktop").exists(), "в ~/Desktop ничего класть не нужно"
+
+
+def test_sync_firmware_never_writes_into_home(fake_host):
+    """xdg-user-dir отдаёт $HOME при не настроенном каталоге — туда класть нельзя.
+
+    Именно так файлы «не появлялись на рабочем столе»: скрипт считал $HOME
+    рабочим столом. Результат должен попасть в настоящий каталог стола.
+    """
+    bin_dir = fake_host.root.parent / "bin"
+    shim = bin_dir / "xdg-user-dir"
+    shim.write_text("#!/usr/bin/env bash\necho \"$HOME\"\n", encoding="utf-8")
+    shim.chmod(0o755)
+    desktop = fake_host.root / "Desktop"
+    desktop.mkdir()
+
+    result = run("sync_firmware_desktop.sh")
+    assert result.returncode == 0, result.stderr
+    assert not (fake_host.root / "motor_wheel.ino").exists(), "$HOME — не рабочий стол"
+    assert (desktop / "motor_wheel.ino").is_file()
+
+
 def test_desktop_launch_syncs_firmware(fake_host):
     """Запуск через ярлык и создание ярлыка обновляют прошивки на рабочем столе."""
     launcher = (SCRIPTS / "start_desktop.sh").read_text(encoding="utf-8")

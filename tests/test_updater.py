@@ -204,3 +204,39 @@ def test_failed_build_rolls_back_to_previous_version(tmp_path):
     assert state["status"] == "error"
     assert "не собралась" in state["error"]
     assert git(clone, "rev-parse", "HEAD") == old_sha
+
+def test_update_syncs_wheel_firmware_to_desktop(tmp_path, monkeypatch):
+    """«Обновить с GitHub» сам кладёт новые прошивки на рабочий стол.
+
+    Без этого новая версия прошивки не появлялась на столе до следующего
+    запуска ярлыка: обновление перезапускает приложение напрямую.
+    """
+    _remote, seed, clone = make_remote(tmp_path)
+    home = tmp_path / "home"
+    (home / "Desktop").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    sync_src = Path(__file__).resolve().parent.parent / "scripts" / "sync_firmware_desktop.sh"
+    (seed / "scripts").mkdir()
+    (seed / "scripts" / "sync_firmware_desktop.sh").write_text(
+        sync_src.read_text(encoding="utf-8"), encoding="utf-8")
+    (seed / "firmware" / "motor_wheel").mkdir(parents=True)
+    (seed / "firmware" / "motor_wheel" / "motor_wheel.ino").write_text(
+        '#define MODULE_ID "FL"  // шаблон\n// тело прошивки\n', encoding="utf-8")
+    git(seed, "add", "scripts", "firmware")
+    git(seed, "commit", "-m", "firmware sync")
+    git(seed, "push", "origin", "main")
+
+    manager = UpdateManager(
+        clone, branch="main",
+        dependency_installer=lambda root: (0, "fake installer OK"))
+    assert manager.start() is True
+    state = wait_for_terminal(manager)
+    assert state["status"] == "done", state.get("error")
+
+    desktop = home / "Desktop"
+    assert (desktop / "motor_wheel.ino").read_text(encoding="utf-8").startswith("#define MODULE_ID")
+    fl = (desktop / "motor_wheel_FL.ino").read_text(encoding="utf-8")
+    assert '#define MODULE_ID "FL"' in fl
+    assert "motor_wheel_FR.ino" in [p.name for p in desktop.iterdir()]
+    assert any("[firmware]" in line for line in state.get("output", []))

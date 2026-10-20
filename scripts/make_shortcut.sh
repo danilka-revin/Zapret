@@ -60,7 +60,7 @@ if command -v gio >/dev/null 2>&1; then
   gio set "$DESK/$NAME.desktop" metadata::trusted true 2>/dev/null || true
 fi
 
-# Рядом с ярлыком — актуальные прошивки Arduino (мастер и нода): дальше они
+# Рядом с ярлыком — актуальные прошивки колёс (по файлу на каждое колесо): дальше они
 # сами обновляются при каждом запуске через ярлык (start_desktop.sh).
 "./scripts/sync_firmware_desktop.sh" || echo "⚠ Прошивки на рабочий стол не скопировались — ярлык всё равно создан."
 
