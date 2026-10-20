@@ -35,6 +35,13 @@
   const pendingZero = Object.create(null);
   const pendingCalib = Object.create(null);
   const steerResult = Object.create(null);
+  // Сколько даём колесу доехать и остановиться, прежде чем признать команду
+  // неисполненной. Поворот на 90° — 1,2 с плюс доводка по потенциометру
+  // (до трёх проходов по ~0,3 с): четыре секунды покрывают худший случай и
+  // при этом не держат экран заблокированным, как прежние 15 с.
+  const STEER_SETTLE_MS = 4000;
+  // Аварийный срок на случай молчащей телеметрии (колесо отвалилось от шины).
+  const STEER_TELEMETRY_TIMEOUT_MS = 15000;
 
   function setLive(ok) {
     // Дебаунс «нет связи»: не моргаем всем окном на каждый промах сети.
@@ -2475,12 +2482,35 @@
       const calibError = motor && Number(motor.calibError) > 0 ? Number(motor.calibError) : 0;
       const calibErrorText = (motor && motor.calibErrorText) || (calibError ? 'код ' + calibError : '');
 
-      if (pending && current != null && !busy && Math.abs(current - pending.angle) <= 1) {
-        delete pendingSteer[id];
-        pending = null;
-      } else if (pending && !busy && now - pending.sentAt > 15000) {
-        delete pendingSteer[id];
-        pending = null;
+      // Команда считается исполненной, когда колесо остановилось: телеметрия
+      // знает и то, что оно стоит, и какую цель ему дали. Раньше ждали
+      // попадания ровно в ±1° от заданного угла, а иначе держали колесо (а с
+      // ним и все пресеты) 15 секунд: колесо, вставшее в паре градусов от цели
+      // после доводки по потенциометру, «зависало» молча, и оператор не
+      // понимал, что произошло и почему руль не слушается.
+      if (pending && !busy) {
+        const want = pending.angle;
+        // Доехало — угол совпал. Не доехало, но команда дошла до платы — колесо
+        // встало там, где смогло (упор, остаток после доводки по потенциометру).
+        // И то и другое значит: ждать больше нечего, колесо можно разблокировать.
+        const arrived = current != null && Math.abs(current - want) <= 1;
+        const delivered = target != null && Math.abs(target - want) <= 1;
+        const timedOut = now - pending.sentAt
+          > (current == null ? STEER_TELEMETRY_TIMEOUT_MS : STEER_SETTLE_MS);
+        if (arrived || delivered || timedOut) {
+          delete pendingSteer[id];
+          pending = null;
+          if (!arrived && current != null) {
+            // Не доехало: говорим прямо, вместо молчаливой блокировки. Иначе
+            // оператор видит «команда отправлена» и не понимает, почему тяга
+            // не включается из-за невыровненного руля.
+            steerResult[id] = {
+              text: 'не доехало до ' + want + '°: стоит на ' + current.toFixed(1) + '°',
+              error: true,
+              until: now + 10000,
+            };
+          }
+        }
       }
       if (zeroPending && homed) {
         delete pendingZero[id];
@@ -2597,7 +2627,11 @@
     box.hidden = items.length === 0;
     const html = items.map((item) => {
       const text = String((item && item.text) || '');
-      const warn = /ОШИБКА|нет связи|не доставлена|нет команды|отклонена|заблокирован/.test(text);
+      // Формулировки — те, которыми мастер реально пишет об отказе:
+      // «команда «w 90.0» не выполнена: <причина>», «не доставлена по I2C»,
+      // «кадр битый». Без них главное сообщение о непоехавшем колесе висело
+      // в списке обычным текстом и терялось среди «на связи по I2C».
+      const warn = /ОШИБКА|нет связи|не доставлена|не выполнена|нет команды|отклонена|заблокирован|битый/.test(text);
       const time = item && item.ts ? clockText(new Date(item.ts * 1000)) : '';
       return '<li' + (warn ? ' data-warn="true"' : '') + '><time>' + escapeHtml(time) + '</time> ' + escapeHtml(text) + '</li>';
     }).join('');

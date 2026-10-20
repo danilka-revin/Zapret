@@ -198,6 +198,21 @@ function jsonResponse(body, status) {
 /* Журнал запросов: когда проверка падает, по нему видно, что экран вообще
  * спрашивал у сервера и отправлял ли команду. */
 const netlog = [];
+
+/* Телеметрия по кадрам: в жизни колесо сначала едет, потом останавливается —
+ * и не всегда там, куда его послали. ``motorFrames`` позволяет показать экрану
+ * именно эту последовательность, а не один застывший снимок. */
+let frameIndex = 0;
+function nextState() {
+  const frames = payload.motorFrames;
+  if (!Array.isArray(frames) || frames.length === 0) return payload;
+  const motors = frames[Math.min(frameIndex, frames.length - 1)];
+  frameIndex += 1;
+  return Object.assign({}, payload, {
+    data: Object.assign({}, payload.data, { motors }),
+  });
+}
+
 global.fetch = async (url, init) => {
   const text = String(url);
   netlog.push(text);
@@ -220,7 +235,7 @@ global.fetch = async (url, init) => {
     if (payload.driveRefuse) return jsonResponse({ ok: false, reason: payload.driveRefuse }, 409);
     return jsonResponse({ ok: true, percent: body.percent, maxPercent: 20 }, 200);
   }
-  if (/kiosk_state/.test(text)) return jsonResponse(payload);
+  if (/kiosk_state/.test(text)) return jsonResponse(nextState());
   if (/kiosk_logs/.test(text)) return jsonResponse(payload.logs || emptyJournal);
   if (/camera/.test(text)) return jsonResponse({ ok: true, cameras: [] });
   return jsonResponse({ ok: true });
@@ -229,8 +244,27 @@ global.fetch = async (url, init) => {
 const originalSetTimeout = global.setTimeout;
 global.setTimeout = (cb, ms) => { timeouts.push(cb); return timeouts.length; };
 global.clearTimeout = () => {};
-global.setInterval = () => 0;
+
+/* Интервалы экрана (опрос состояния каждые 250 мс, автоблокировка) в заглушке
+ * пропадали: экран получал телеметрию ровно один раз и дальше жил застывшим
+ * снимком. Без этого нельзя показать, что колесо доехало или остановилось
+ * раньше цели, — а именно по телеметрии экран решает, снята ли команда. */
+const intervals = [];
+global.setInterval = (cb) => { intervals.push(cb); return intervals.length; };
 global.clearInterval = () => {};
+
+/* Виртуальные часы: часть поведения экрана зависит от времени (сколько ждём
+ * колесо, сколько держим сообщение). Включаются только там, где это нужно —
+ * остальные проверки идут на настоящем времени, как раньше. */
+const virtualClock = payload.virtualClock === true;
+const CLOCK_STEP_MS = 250;               // как POLL_MS: один проход = один опрос
+let virtualNow = 1000000;
+if (virtualClock) {
+  const RealDate = Date;
+  global.Date = class extends RealDate {
+    static now() { return virtualNow; }
+  };
+}
 
 /* ------------------------------------------------------------- запуск */
 /* Начальные значения полей берём из robot.html: в браузере ползунок тяги
@@ -271,9 +305,14 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
 async function flush(rounds) {
   for (let i = 0; i < (rounds || 6); i += 1) {
     await sleep(2);
+    if (virtualClock) virtualNow += CLOCK_STEP_MS;
     while (rafQueue.length) {
       const cb = rafQueue.shift();
       try { cb(Date.now()); } catch (err) { renderErrors.push(String(err && err.message || err)); }
+    }
+    // Интервалы не снимаются: каждый проход — новый тик опроса состояния.
+    for (const cb of intervals.slice()) {
+      try { cb(); } catch (err) { renderErrors.push(String(err && err.message || err)); }
     }
     while (timeouts.length) {
       const cb = timeouts.shift();
@@ -346,7 +385,13 @@ function findPreset(id) {
     wheelSliders: ['FL', 'FR', 'RL', 'RR'].map((id) => ({
       id, min: byId('steer-slider-' + id).min, max: byId('steer-slider-' + id).max,
     })),
+    wheels: ['FL', 'FR', 'RL', 'RR'].map((id) => ({
+      id,
+      state: byId('steer-state-' + id).textContent,
+      sliderDisabled: !!byId('steer-slider-' + id).disabled,
+    })),
     status: byId('steer-preset-status').textContent,
+    masterMessages: byId('steer-messages').innerHTML,
     sourceStatus: byId('steer-source-status').textContent,
     dataChip: byId('data-chip').textContent,
     driveStatus: byId('drive-status').textContent,
