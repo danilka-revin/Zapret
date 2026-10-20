@@ -149,3 +149,34 @@ def test_master_source_receives_assignments_and_scans_them_first(monkeypatch):
     assert captured['module_ports']['FR'] == '/dev/serial/by-path/hub:1.2'
     assert captured['ports'][0] == '/dev/serial/by-path/hub:1.2'
     assert captured['port_provider']()[0] == '/dev/serial/by-path/hub:1.2'
+
+
+def test_fragmented_telemetry_is_only_parsed_after_newline():
+    src = source_without_threads()
+    link = slam.load_backend()._WheelLink('/dev/right')
+    assert not src._link_bytes(link, b'@TLM mod=FL de')
+    assert not src._link_bytes(link, b'g=12 tgt=0 cal=1 drive=0\r')
+    assert not src.frames and link.module is None
+    assert src._link_bytes(link, b'\n')
+    assert src.frames['FR'][0]['deg'] == 12
+    assert src.frames['FR'][0]['cal']
+    assert link.module == 'FR'
+
+
+def test_noisy_stream_is_bounded_and_resynchronizes():
+    src = source_without_threads()
+    link = slam.load_backend()._WheelLink('/dev/right')
+    assert not src._link_bytes(link, b'x' * 10000 + b'@TLM mod=FL deg=9\n')
+    assert not src.frames
+    assert len(link.rx) == 0
+    assert src._link_bytes(link, b'@TLM mod=FL deg=1\n@TLM mod=FL deg=2\n')
+    assert src.frames['FR'][0]['deg'] == 2
+
+
+def test_manual_boot_chatter_never_causes_ten_minute_quarantine():
+    src = source_without_threads()
+    src._misses = {}
+    src._rejected = {}
+    for _ in range(5):
+        src._reject_silent('/dev/right', 1024)
+    assert '/dev/right' not in src._rejected

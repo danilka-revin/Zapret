@@ -206,3 +206,111 @@ def test_master_source_gets_the_same_port_etiquette_as_serial(monkeypatch, tmp_p
         assert src.untag_module is lidar.untag_module_port
     finally:
         src._stop = True
+
+
+def test_identified_wheel_keeps_shared_device_lock_until_close(monkeypatch, tmp_path):
+    """A second subsystem cannot reopen/reset the wheel after identification."""
+    from robot_control import lidar
+    pytest.importorskip('serial')
+    monkeypatch.setattr(lidar, 'DATA_DIR', tmp_path)
+    backend = _backend()
+    master_fd, slave_fd = os.openpty()
+    name = os.ttyname(slave_fd)
+    src = backend.MasterSource(name, claim=lidar.try_lock_port,
+                               release=lidar.unlock_port)
+    try:
+        deadline = time.time() + 3
+        while time.time() < deadline and 'FL' not in src.modules:
+            os.write(master_fd, TLM_FL)
+            time.sleep(0.03)
+        assert src.modules.get('FL') == name
+        # Give the worker time to finish identification (old code released here).
+        time.sleep(0.1)
+        second = lidar.try_lock_port(name)
+        try:
+            assert second is None, 'wheel lock was released while UART is open'
+        finally:
+            if second is not None:
+                lidar.unlock_port(second)
+        src._stop = True
+        assert _wait(lambda: not src.links)
+        token = lidar.try_lock_port(name)
+        try:
+            assert token is not None, 'lock leaked after close'
+        finally:
+            if token is not None:
+                lidar.unlock_port(token)
+    finally:
+        src._stop = True
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
+def test_rescan_with_another_alias_does_not_reopen_wheel(monkeypatch, tmp_path):
+    serial = pytest.importorskip('serial')
+    backend = _backend()
+    monkeypatch.setattr(backend.MasterSource, 'RESCAN_S', 0.05)
+    master_fd, slave_fd = os.openpty()
+    name = os.ttyname(slave_fd)
+    alias = tmp_path / 'wheel-alias'
+    alias.symlink_to(name)
+    candidates = [name]
+    opened = []
+    serial_class = serial.Serial
+
+    def counted(*args, **kwargs):
+        opened.append(args[0])
+        return serial_class(*args, **kwargs)
+
+    monkeypatch.setattr(serial, 'Serial', counted)
+    src = backend.MasterSource(name, port_provider=lambda: list(candidates))
+    try:
+        deadline = time.time() + 3
+        while time.time() < deadline and 'FL' not in src.modules:
+            os.write(master_fd, TLM_FL)
+            time.sleep(0.03)
+        assert 'FL' in src.modules
+        candidates[:] = [str(alias)]
+        # Several rescans see only an alias, not the path used to open the port.
+        time.sleep(0.4)
+        assert opened == [name], 'rescan tried to open the same physical tty twice'
+        assert src.modules['FL'] == name
+    finally:
+        src._stop = True
+        _wait(lambda: not src.links)
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
+def test_identified_but_silent_stream_reconnects_without_stale_frames(monkeypatch):
+    pytest.importorskip('serial')
+    backend = _backend()
+    monkeypatch.setattr(backend.MasterSource, 'TELEMETRY_TIMEOUT_S', 0.4)
+    monkeypatch.setattr(backend.MasterSource, 'RETRY_S', 0.05)
+    monkeypatch.setattr(backend.MasterSource, 'RESCAN_S', 0.05)
+    master_fd, slave_fd = os.openpty()
+    name = os.ttyname(slave_fd)
+    statuses = []
+    src = backend.MasterSource(name, module_ports={'FR': name},
+                               on_status=lambda level, text: statuses.append(text))
+    try:
+        deadline = time.time() + 3
+        while time.time() < deadline and 'FR' not in src.modules:
+            os.write(master_fd, TLM_FL)
+            time.sleep(0.03)
+        assert 'FR' in src.modules and 'FR' in src.frames
+        assert _wait(lambda: any('нет телеметрии' in text for text in statuses))
+        assert 'FR' not in src.frames
+        assert not next(m for m in src.read()['motors'] if m['id'] == 'FR')['online']
+        # Same path works again, with no manual intervention or quarantine.
+        deadline = time.time() + 3
+        while time.time() < deadline and 'FR' not in src.frames:
+            os.write(master_fd, TLM_FL)
+            time.sleep(0.03)
+        assert 'FR' in src.frames
+        assert name not in src._rejected
+    finally:
+        src._stop = True
+        _wait(lambda: not src.links)
+        os.close(master_fd)
+        os.close(slave_fd)
