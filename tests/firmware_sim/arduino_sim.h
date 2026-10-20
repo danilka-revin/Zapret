@@ -303,6 +303,12 @@ struct Board {
   // Модель руля: phys — где колесо на самом деле, в шагах от «прямо».
   long phys = 0;
   long phys_min = 0, phys_max = 0;
+  // Заклинивание колеса: phys замирает на stall_phys, хотя драйвер продолжает
+  // получать импульсы. Прошивка считает СГЕНЕРИРОВАННЫЕ импульсы, а не
+  // положение колеса, поэтому открытый контур по шагам считает, что доехали.
+  bool stall_enabled = false;
+  long stall_phys = 0;
+  long steps_lost = 0;
   // Модель потенциометра на A0: движок жёстко связан с колесом (1:1),
   // показывает угол (phys + pot_bias_steps) / phys_per_degree.
   bool pot_present = true;
@@ -401,7 +407,13 @@ struct Board {
         ++steps_while_disabled;
         return;
       }
-      phys += level[7] == LOW ? 1 : -1;
+      const long delta = level[7] == LOW ? 1 : -1;
+      if (stall_enabled && ((delta > 0 && phys >= stall_phys) ||
+                            (delta < 0 && phys <= stall_phys))) {
+        ++steps_lost;
+      } else {
+        phys += delta;
+      }
       ++steps;
       if (phys < phys_min) phys_min = phys;
       if (phys > phys_max) phys_max = phys;

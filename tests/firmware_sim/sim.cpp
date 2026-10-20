@@ -1240,6 +1240,72 @@ static void scenario_pot_distrust() {
   // В пределах доверия датчик по-прежнему доворачивает колесо (см. pot_feedback).
 }
 
+// Заклинивание колеса: драйвер продолжает получать импульсы, а колесо стоит.
+// Прошивка считает СГЕНЕРИРОВАННЫЕ импульсы (current_step += step_dir), поэтому
+// открытый контур по шагам уверен, что цель достигнута. Без откалиброванного
+// потенциометра заметить это нечем — телеметрия рапортует 35° при колесе на 4°.
+static void scenario_stalled_wheel_without_pot() {
+  boot({&board_fr});
+  calibrate_fr();
+  board_fr.stall_enabled = true;
+  board_fr.stall_phys = 533;                 // колесо клинит на 4°
+  board_fr.serial.output.clear();
+  board_fr.serial.send("w 35");
+  sim::run_for_ms(2);
+  CHECK(wait_until(fr_settled, 8000), "w 35 не закончилась");
+  CHECK(board_fr.phys == 533, "колесо заклинило на 533 шагах, а не %ld", board_fr.phys);
+  CHECK(board_fr.steps_lost > 4000, "потерянные импульсы посчитаны: %ld",
+        board_fr.steps_lost);
+  CHECK(FR::stepNow() == 4667, "счётчик шагов рапортует 35°: %ld", (long)FR::stepNow());
+  CHECK(!FR::pot_calibrated, "без q доводка выключена — расхождение некому заметить");
+}
+
+// То же заклинивание, но потенциометр откалиброван: датчик видит настоящие 4°,
+// расхождение с целью больше POT_TRUST_DEG, и оператору честно говорят, что
+// колесо не там. Доводка при этом не пытается «догнать» цель через датчик.
+static void scenario_stalled_wheel_with_pot() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  board_fr.stall_enabled = true;
+  board_fr.stall_phys = 533;
+  board_fr.serial.output.clear();
+  board_fr.serial.send("w 35");
+  sim::run_for_ms(2);
+  CHECK(wait_until(fr_settled, 8000), "w 35 не закончилась");
+  CHECK(board_fr.phys == 533, "колесо на 533 шагах: %ld", board_fr.phys);
+  CHECK(has(board_fr, "расхождение"), "заклинивание названо оператору: %s",
+        board_fr.serial.output.c_str());
+  CHECK(has(board_fr, "доводка отключена"), "доводка честно отключена: %s",
+        board_fr.serial.output.c_str());
+}
+
+// Наклон потенциометра — свойство железа, а не сессии. Пока он жил только в
+// RAM, доводка после каждой перезагрузки молча выключалась (pot_calibrated =
+// false), и колесо снова ездило вслепую. Теперь q достаточно выполнить один раз.
+static void scenario_pot_slope_survives_reboot() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  const float slope = FR::pot_counts_per_degree;
+  CHECK(slope > 0.0f, "наклон измерен");
+  // Перезагрузка платы. setup() не обнуляет глобалы скетча (в реальном AVR их
+  // сбрасывает старт процессора), поэтому RAM-состояние pot гасим руками —
+  // иначе pot_calibrated доживёт с прошлой калибровки и сценарий пройдёт
+  // впустую, ничего не проверив.
+  FR::pot_calibrated = false;
+  FR::pot_zero_valid = false;
+  FR::pot_counts_per_degree = FR::POT_NOMINAL_COUNTS_PER_DEG;
+  board_fr.serial.output.clear();
+  FR::setup();
+  sim::run_for_ms(10);
+  CHECK(FR::pot_calibrated, "наклон восстановлен из EEPROM без повторной q");
+  CHECK(FR::pot_counts_per_degree == slope, "наклон тот же: %f != %f",
+        (double)FR::pot_counts_per_degree, (double)slope);
+  CHECK(has(board_fr, "наклон из EEPROM"), "оператору сказано, что наклон из памяти: %s",
+        board_fr.serial.output.c_str());
+}
+
 static void scenario_preset_burst() {
   calibrate_all();
   const long rr_zero = (long)node_rr::stepNow();
@@ -1407,6 +1473,9 @@ static const Scenario SCENARIOS[] = {
     {"slave_rejects_command", scenario_slave_rejects_command},
     {"i2c_frame_freshness", scenario_i2c_frame_freshness},
     {"pot_distrust", scenario_pot_distrust},
+    {"stalled_wheel_without_pot", scenario_stalled_wheel_without_pot},
+    {"stalled_wheel_with_pot", scenario_stalled_wheel_with_pot},
+    {"pot_slope_survives_reboot", scenario_pot_slope_survives_reboot},
     {"preset_burst", scenario_preset_burst},
 };
 
