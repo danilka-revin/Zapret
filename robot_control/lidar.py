@@ -600,9 +600,12 @@ class ScanAccumulator:
     """Собирает точки в виток и публикует его.
 
     Лидару нужно время на оборот (RPLIDAR A1 — 5…10 Гц, LD06/LD19 — 10…15 Гц),
-    поэтому публикуем не каждую точку, а готовый виток; если виток не
-    закрывается (клоны без достоверного бита начала), отдаём накопленное по
-    паузе, чтобы на экране не было пустой карты.
+    поэтому публикуем не каждую точку, а готовый виток. Виток закрывает бит
+    начала (RPLIDAR), номер пакета 0 (LDS-01) или скачок угла через 0° (LD06);
+    если виток не закрывается (клоны без достоверного бита начала), отдаём
+    накопленное по паузе, чтобы не сидеть без карты. Пауза подстраивается под
+    реальный период витка: медленный лидар (или мотор, сбрасывающий обороты)
+    не режется паузой на «то 200 точек, то 50, то 15».
     """
 
     def __init__(
@@ -619,6 +622,8 @@ class ScanAccumulator:
         self._clock = clock
         self._points: list[dict[str, float]] = []
         self._published_at = clock()
+        self._rev_at: float | None = None   # время прошлой границы витка
+        self._rev_period = 0.0              # период витка, с
         self.published = 0
 
     @property
@@ -628,11 +633,20 @@ class ScanAccumulator:
     def add(self, points: Sequence[dict[str, float]], revolution_done: bool = False) -> bool:
         """Добавляет точки. True — опубликовали виток (или накопленное по паузе)."""
         published = False
+        now = self._clock()
         if revolution_done:
+            if self._rev_at is not None:
+                period = now - self._rev_at
+                if period > 0:
+                    # медленный максимум: период не «проседает» от одного
+                    # сбоя, а к новым оборотам подстраивается
+                    self._rev_period = max(period, self._rev_period * 0.9)
+            self._rev_at = now
             published = self.flush()
         if points:
             self._points.extend(points)
-        if len(self._points) >= self._min_points and self._clock() - self._published_at >= self._gap_s:
+        gap = self._gap_s if not self._rev_period else max(self._gap_s, self._rev_period * 1.6)
+        if len(self._points) >= self._min_points and now - self._published_at >= gap:
             published = self.flush() or published
         return published
 
@@ -710,7 +724,12 @@ class Ld06Stream:
                 continue
             self.packets += 1
             start_angle = (packet[4] | (packet[5] << 8)) * 0.01
-            revolution = self._prev_start is not None and start_angle + 1e-9 < self._prev_start
+            # Границей витка служит только большой скачок через 0° (359→0).
+            # Лёгкое убывание расчётного угла между пакетами (дрожь расчёта)
+            # концом витка не является: раньше оно резало виток на куски, и
+            # экран мерцал — «то 200 точек, то 50, то 15».
+            revolution = (self._prev_start is not None
+                          and self._prev_start - start_angle > 180.0)
             self._prev_start = start_angle
             out.append((pts, revolution))
 
@@ -2401,11 +2420,28 @@ class LidarManager:
             except (ValueError, TypeError):
                 continue
 
-        with self.lock:
-            self.scan = valid
-            self.scan_at = time.time()
-            self.source_type = source_label
+        self._adopt_scan(valid, source_label)
         return len(valid)
+
+    def _adopt_scan(self, points: list[dict[str, float]], source_label: str) -> None:
+        """Кладёт скан, не давая крошечным обрывкам гасить свежую карту.
+
+        Пока прежний скан свежий и здоров (≥ ``LIDAR_MIN_POINTS`` точек),
+        его не заменяет «скан» из считанных точек: на старте/сбое драйвера
+        или от чужого потока такие обрывки приходят постоянно, и счётчик на
+        экране мигал «200 → 15 → 50», а карта прыгала. Устаревший скан
+        заменяется любым, даже пустым, — тогда экран честно скажет
+        «нет скана».
+        """
+        with self.lock:
+            now = time.time()
+            healthy = (len(self.scan) >= LIDAR_MIN_POINTS
+                       and (now - self.scan_at) < LIDAR_MAX_AGE_S)
+            if healthy and len(points) < LIDAR_MIN_POINTS:
+                return
+            self.scan = list(points)
+            self.scan_at = now
+            self.source_type = source_label
 
     def feed_scan_msg(
         self,
@@ -2419,10 +2455,7 @@ class LidarManager:
     ) -> int:
         """Принимает параметры LaserScan и сохраняет точки."""
         pts = scan_from_ranges(ranges, angle_min, angle_max, angle_increment, range_min, range_max)
-        with self.lock:
-            self.scan = pts
-            self.scan_at = time.time()
-            self.source_type = source_label
+        self._adopt_scan(pts, source_label)
         return len(pts)
 
     def get_scan(self, max_age: float = LIDAR_MAX_AGE_S) -> Optional[list[dict[str, float]]]:

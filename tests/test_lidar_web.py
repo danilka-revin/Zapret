@@ -580,6 +580,40 @@ def test_both_screens_get_the_same_real_scan(client, operator, kiosk_client, man
     assert kiosk_client.get("/api/lidar").get_json()["scan"] == scan
 
 
+def test_tiny_scan_does_not_replace_fresh_full_scan(manager):
+    """Обрывок в 15 точек не гасит свежий полный скан.
+
+    Пока прежний скан свежий и большой, его не заменяет «скан» из считанных
+    точек — именно так счётчик на экране мигал «200 → 15 → 50», а карта
+    прыгала при каждом обрыве потока. Возвращает feed_points число принятых
+    точек — его видит тот, кто запостил.
+    """
+    full = [{"a": round(-3.1 + i * 0.017, 4), "r": 1.0} for i in range(360)]
+    assert manager.feed_points(full, "api") == 360
+    tiny = [{"a": 1, "r": 1.0} for _ in range(15)]
+    assert manager.feed_points(tiny, "peer") == 15
+    assert manager.get_scan() == full
+    assert manager.source_type == "api"
+    # пустой скан тоже не затирает свежий
+    assert manager.feed_points([], "api") == 0
+    assert manager.get_scan() == full
+
+
+def test_stale_scan_is_replaced_by_any(manager):
+    """Протухший скан заменяется любым — иначе экран век сидит бы без карты."""
+    full = [{"a": round(-3.1 + i * 0.017, 4), "r": 1.0} for i in range(360)]
+    manager.feed_points(full, "api")
+    manager.scan_at = time.time() - 10.0
+    tiny = [{"a": 1, "r": 1.0}]
+    assert manager.feed_points(tiny, "peer") == 1
+    assert manager.get_scan() == tiny
+    assert manager.source_type == "peer"
+    # и следующий обрывок принимается — здорового скана уже нет
+    even_tinier = [{"a": 2, "r": 2.0}, {"a": 3, "r": 3.0}]
+    assert manager.feed_points(even_tinier, "api") == 2
+    assert manager.get_scan() == even_tinier
+
+
 def test_status_reports_interpreter_and_pyserial(manager):
     """В статусе видно, каким интерпретатором запущен процесс и есть ли pyserial."""
     status = manager.get_status()
