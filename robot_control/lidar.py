@@ -1021,7 +1021,9 @@ def excluded_ports() -> set[str]:
     """Порты, которые лидару трогать нельзя: мастер и модули шасси."""
     ports: set[str] = set()
     raw = os.environ.get("RC_LIDAR_EXCLUDE") or ""
-    for name in ("RC_SLAM_PORT", "RC_SLAM_MASTER_PORT"):
+    for name in ("RC_SLAM_PORT", "RC_SLAM_MASTER_PORT",
+                 "RC_WHEEL_FL_PORT", "RC_WHEEL_FR_PORT",
+                 "RC_WHEEL_RL_PORT", "RC_WHEEL_RR_PORT"):
         value = os.environ.get(name)
         if value:
             raw = raw + "," + value
@@ -1488,6 +1490,12 @@ def lidar_holds_port(port: str) -> bool:
     active = lidar_active_port()
     if active is not None and _same_port(active, port):
         return True
+    # Explicit wheel assignments need not wait for a scan of unrelated USB ports.
+    # An already active lidar above still owns its port.
+    for module in ("FL", "FR", "RL", "RR"):
+        assigned = os.environ.get(f"RC_WHEEL_{module}_PORT", "").strip()
+        if assigned and _same_port(assigned, port):
+            return False
     return lidar_search_priority() > 0.0
 
 

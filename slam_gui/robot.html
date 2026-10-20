@@ -546,6 +546,17 @@
           </div>
         </header>
 
+        <details id="wheel-port-settings" class="bms-setup">
+          <summary>USB-порты колёс · ручное назначение</summary>
+          <p>Выберите, к какому USB-порту разветвителя подключено каждое колесо. Ручной выбор важнее имени в прошивке. «Авто» — определять по плате. Стабильный путь <code>/dev/serial/by-path/…</code> привязан к гнезду разветвителя; номера ttyUSB/ttyACM могут меняться.</p>
+          <div id="wheel-port-fields" class="cam-settings-grid"></div>
+          <div class="cam-settings-actions">
+            <button id="wheel-ports-refresh" type="button">Обновить список USB</button>
+            <button id="wheel-ports-save" type="button" class="primary" disabled>Сохранить порты</button>
+          </div>
+          <p id="wheel-ports-msg" role="status">Остановите робот перед изменением. После сохранения перезапустите программу для применения.</p>
+        </details>
+
         <section class="steer-modes" aria-labelledby="steer-modes-title">
           <div class="steer-modes-head">
             <div><b id="steer-modes-title">Режим движения</b><small>Пресет выставляет все четыре колеса в пределах <span data-steer-limit>±100°</span>. Кнопки движения — в самом низу экрана: удерживайте их.</small></div>
@@ -843,6 +854,7 @@
   <script src="map_view.js"></script>
   <script src="pot_mode.js"></script>
   <script src="robot.js"></script>
+  <script src="wheel_settings.js"></script>
   <script src="battery.js"></script>
   <script src="lidar_settings.js"></script>
   <script src="power.js"></script>

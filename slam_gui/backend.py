@@ -414,10 +414,12 @@ class MasterSource:
 
     def __init__(self, port, baud=115200, on_message=None, on_status=None,
                  port_provider=None, probe=None, claim=None, release=None,
-                 yield_to_lidar=None, tag_module=None, untag_module=None):
+                 yield_to_lidar=None, tag_module=None, untag_module=None,
+                 module_ports=None):
         ports = [port] if isinstance(port, str) else [p for p in (port or []) if p]
         if not ports:
             ports = ["/dev/ttyACM0"]
+        self.module_ports = {m: p for m, p in (module_ports or {}).items() if p}
         self.configured_port = ports[0]
         self.port = None                 # первый опознанный порт (для экрана)
         self.ports = ports
@@ -445,8 +447,7 @@ class MasterSource:
         #: Отметка «на этом порту подтвердилось колесо» (её видит лидар).
         self.tag_module = tag_module
         self.untag_module = untag_module
-        # Идентификация по @TLM/@ID обязательна: какое колесо на каком порту,
-        # решает прошивка платы, а не настройки. probe оставлен для совместимости.
+        # Даже ручное назначение требует @TLM/@ID: в лидар команды не пишем.
         self.probe = True if probe is None else bool(probe)
         self.last_error = ""
         self._last_status = None
@@ -812,7 +813,12 @@ class MasterSource:
                 if target and link.module != target:
                     continue
                 try:
-                    link.commands.put_nowait(command)
+                    routed = command
+                    if target and self._assigned_module(link.path):
+                        # The port identifies the wheel; firmware may have another name.
+                        parts = bytes(command).decode("ascii").split()
+                        routed = ("w " + " ".join(parts[2:]) + "\n").encode("ascii")
+                    link.commands.put_nowait(routed)
                 except queue.Full:
                     pass
 
@@ -875,10 +881,23 @@ class MasterSource:
                 % (module, owner, link.path))
         return False
 
+    def _assigned_module(self, path):
+        real = os.path.realpath(path)
+        return next((m for m, p in getattr(self, "module_ports", {}).items()
+                     if os.path.realpath(p) == real), None)
+
     def _link_line(self, link, line):
-        module = self._line_module(line)
-        if module is not None and not self._bind_module(link, module):
-            return
+        reported = self._line_module(line)
+        assigned = self._assigned_module(link.path)
+        module = assigned or reported
+        if reported is not None:
+            # An automatically discovered board cannot take a manually reserved role.
+            if not assigned and reported in getattr(self, "module_ports", {}):
+                return
+            if not self._bind_module(link, module):
+                return
+            if assigned and line.strip().startswith(TLM_PREFIX):
+                line = re.sub(r"(?i)(\bmod=)[^\s]+", lambda m: m[1] + assigned, line)
         self.feed(line)
 
     # ------------------------------------------------------------ потоки портов #

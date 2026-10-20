@@ -1001,6 +1001,28 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         eventlog.record("ok", "карта сохранена: %s" % result["paths"]["pgm"], source="карта")
         return jsonify(result)
 
+    @app.get("/api/wheels/settings")
+    def api_wheel_settings():
+        from .wheel_settings import settings_payload
+        result = settings_payload()
+        result["canEdit"] = True
+        return jsonify(result)
+
+    @app.post("/api/wheels/settings")
+    def api_wheel_settings_save():
+        from .wheel_settings import save_settings
+        if request.headers.get("X-Robot-Control") != "wheel-settings":
+            return jsonify({"ok": False, "error": "Требуется X-Robot-Control: wheel-settings"}), 400
+        body = request.get_json(silent=True)
+        try:
+            result = save_settings(body)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except OSError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        eventlog.record("ok", "Порты колёс сохранены. Для применения нужен перезапуск программы.", source="колёса")
+        return jsonify(result)
+
     # ------------------------ Настройки камер ------------------------- #
     # Отдельные порты передней и задней камер. На борту (8090) можно менять
     # без PIN и без перезапуска; пульт (8080) берёт скан по HTTP и только читает.
@@ -1081,7 +1103,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         })
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
-    for filename in ("pot_mode.js", "robot.css", "robot.js", "battery.js", "lidar_settings.css",
+    for filename in ("wheel_settings.js", "pot_mode.js", "robot.css", "robot.js", "battery.js", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "map_view.js",
                      "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):
