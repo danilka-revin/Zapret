@@ -29,10 +29,11 @@ pytestmark = pytest.mark.skipif(NODE is None, reason="node нужен для п�
 MODULES = ["FL", "FR", "RL", "RR"]
 
 
-def motor(module, *, angle=0.0, online=True, homed=True, moving=False):
+def motor(module, *, angle=0.0, target=None, online=True, homed=True, moving=False):
     return {
         "id": module, "online": online, "homed": homed, "homeSource": "opto" if homed else "none",
-        "angle": angle, "targetAngle": angle, "moving": moving, "calibrating": False,
+        "angle": angle, "targetAngle": angle if target is None else target,
+        "moving": moving, "calibrating": False,
         "cycling": False, "opto": False, "calibError": 0, "drivePercent": 0, "rpm": 0.0,
         "firmware": 3, "pot": True,
     }
@@ -201,4 +202,77 @@ def test_presets_are_blocked_while_the_robot_is_moving(tmp_path):
 def test_stop_button_sends_zero_thrust(tmp_path):
     report = run_screen(tmp_path, payload(actions=[{"type": "drive", "direction": 1},
                                                    {"type": "stop"}]))
-    assert [item["percent"] for item in report["drives"]] == [8, 0, 0]
+    percents = [item["percent"] for item in report["drives"]]
+    # Пока кнопку держат, экран повторяет команду: прошивка сбрасывает тягу
+    # через 650 мс без подтверждения. СТОП и отпускание дают ноль — и после
+    # первого нуля никаких «8» быть не должно, иначе робот поедет сам.
+    assert percents[0] == 8
+    assert percents[-1] == 0
+    first_zero = percents.index(0)
+    assert percents[first_zero:] == [0] * (len(percents) - first_zero)
+
+
+def test_wheel_that_stopped_short_does_not_hang_the_screen(tmp_path):
+    """Колесо, вставшее в паре градусов от цели, не должно вешать экран.
+
+    Раньше команда считалась исполненной только при попадании в ±1° от
+    заданного угла. Если колесо останавливалось рядом, но не в цель (остаток
+    после доводки по потенциометру, упор), экран держал его — а вместе с ним и
+    все пресеты — заблокированным ровно 15 секунд, показывая лишь «команда
+    отправлена». Так и получалось: «одно колесо зависает, потом рулится только
+    отдельно».
+    """
+    frames = [
+        [motor(module) for module in MODULES],
+        [motor(module, angle=45.0, target=90.0, moving=True) for module in MODULES],
+        # Три колеса доехали, а RR остановилось в 87,4° при цели 90°.
+        [motor(module, angle=90.0, target=90.0) for module in MODULES[:3]]
+        + [motor("RR", angle=87.4, target=90.0)],
+    ]
+    report = run_screen(tmp_path, payload(
+        actions=[{"type": "preset", "id": "side-right", "rounds": 8}],
+        motorFrames=frames,
+    ))
+    assert angles_sent(report) == [(module, 90) for module in MODULES]
+    wheels = {item["id"]: item for item in report["wheels"]}
+    # Как только колесо остановилось, им снова можно рулить.
+    assert wheels["RR"]["sliderDisabled"] is False
+    # И оператор видит, что угол не тот, а не молчаливую блокировку.
+    assert "не доехало до 90" in wheels["RR"]["state"]
+    assert "87.4" in wheels["RR"]["state"]
+    # Одно недоехавшее колесо не выключает пресеты всему роботу.
+    assert preset(report, "straight")["disabled"] is False
+    assert preset(report, "side-left")["disabled"] is False
+    # Доехавшим колёсам лишних сообщений не пишем.
+    assert "не доехало" not in wheels["FL"]["state"]
+
+
+def test_wheel_that_never_started_is_reported_and_unlocked(tmp_path):
+    """Команда не дошла до платы: ждём недолго, потом говорим и отпускаем."""
+    body = payload(actions=[{"type": "preset", "id": "side-right", "rounds": 24}],
+                   virtualClock=True)
+    report = run_screen(tmp_path, body)
+    wheels = {item["id"]: item for item in report["wheels"]}
+    assert wheels["RR"]["sliderDisabled"] is False
+    assert "не доехало до 90" in wheels["RR"]["state"]
+    assert "стоит на 0.0" in wheels["RR"]["state"]
+
+
+def test_master_refusal_is_marked_as_a_warning_on_the_panel(tmp_path):
+    """Отказ платы виден на панели руления как отказ, а не обычная строка.
+
+    Мастер пишет «команда «w 90.0» не выполнена: <причина>», когда слейв не
+    подтвердил поворот. Именно это сообщение объясняет, почему колесо не
+    поехало, — оно обязано выделяться, иначе теряется среди «на связи по I2C».
+    """
+    body = payload()
+    body["data"]["masterMessages"] = [
+        {"ts": 1000, "text": "RR на связи по I2C (адрес 4)"},
+        {"ts": 1001, "text": "RR: команда «w 90.0» не выполнена: включена тяга — сначала b"},
+    ]
+    report = run_screen(tmp_path, body)
+    html = report["masterMessages"]
+    assert "не выполнена" in html
+    assert 'data-warn="true"' in html
+    # Обычное сообщение об связи остаётся без пометки.
+    assert html.count('data-warn="true"') == 1

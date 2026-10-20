@@ -20,6 +20,11 @@
   const pending = Object.create(null);
   const feedback = Object.create(null);
   const sending = Object.create(null);
+  // Сколько даём колесу доехать и остановиться, прежде чем признать команду
+  // неисполненной: 90° — это 1,2 с хода плюс доводка по потенциометру.
+  const PENDING_SETTLE_MS = 4000;
+  // Аварийный срок, если телеметрия от колеса вообще перестала приходить.
+  const PENDING_TELEMETRY_TIMEOUT_MS = 15000;
   const $ = (id) => document.getElementById(id);
 
   function clampAngle(value) {
@@ -447,10 +452,33 @@
     const target = online && Number.isFinite(+motor.targetAngle) ? Number(motor.targetAngle) : current;
     const entry = pending[id];
     if (entry && entry.calib && calibrating) entry.started = true;
-    if (entry && ((entry.zero && zeroed) || (entry.calib && entry.started && !calibrating) ||
-        (!entry.zero && !entry.calib && current != null &&
-        Math.abs(current - Number(entry.angle)) <= 1 && !moving))) delete pending[id];
-    const activePending = pending[id] && Date.now() - pending[id].at < 15000;
+    const steerEntry = entry && !entry.zero && !entry.calib;
+    if (steerEntry && !moving) {
+      // Колесо остановилось. Цель достигнута — либо команда дошла до платы и
+      // колесо встало там, где смогло (упор, остаток после доводки по
+      // потенциометру). Держать карточку заблокированной дальше незачем:
+      // раньше она отвисала лишь через 15 с, и всё это время колесо нельзя
+      // было ни тронуть, ни понять, что с ним случилось.
+      const want = Number(entry.angle);
+      const arrived = current != null && Math.abs(current - want) <= 1;
+      const delivered = Math.abs(target - want) <= 1;
+      const limit = current == null ? PENDING_TELEMETRY_TIMEOUT_MS : PENDING_SETTLE_MS;
+      if (arrived || delivered || Date.now() - entry.at > limit) {
+        delete pending[id];
+        if (!arrived && current != null) {
+          // Не доехало: колесо разблокировано, но оператор должен видеть, что
+          // угол не тот — иначе тяга встанет в «руль не выровнен».
+          feedback[id] = {
+            text: 'не доехало до ' + want + '°: стоит на ' + current.toFixed(1) + '°',
+            error: true,
+            until: Date.now() + 10000,
+          };
+        }
+      }
+    } else if (entry && ((entry.zero && zeroed) || (entry.calib && entry.started && !calibrating))) {
+      delete pending[id];
+    }
+    const activePending = pending[id] && Date.now() - pending[id].at < PENDING_TELEMETRY_TIMEOUT_MS;
     if (pending[id] && !activePending) delete pending[id];
     // Пока команда в полёте, карточка «занята»: второй запрос по тому же колесу
     // плата отклонила бы как module_busy.

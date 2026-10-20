@@ -1197,6 +1197,40 @@ static void scenario_slave_rejects_command() {
         "выполненная команда не сопровождается предупреждением");
 }
 
+// Пресет бортового экрана — это четыре команды подряд: FL, FR, RL, RR с
+// интервалом в десятки миллисекунд (экран шлёт их по очереди, не дожидаясь
+// окончания поворота). Проверяем, что мастер раздаёт всю пачку и что последнее
+// в ней колесо не теряется: жалоба «RR всегда ничего не исполняет» означала бы,
+// что четвёртая команда до слейва не доходит.
+static void scenario_preset_burst() {
+  calibrate_all();
+  const long rr_zero = (long)node_rr::stepNow();
+  const size_t mark = board_fl.serial.output.size();
+  board_fl.serial.send("w FL 90");
+  sim::run_for_ms(15);
+  board_fl.serial.send("w FR 90");
+  sim::run_for_ms(15);
+  board_fl.serial.send("w RL 90");
+  sim::run_for_ms(15);
+  board_fl.serial.send("w RR 90");
+  CHECK(wait_until(all_idle, 20000), "все четыре колеса доехали и остановились");
+  CHECK(M::stepNow() == 12000, "FL: 90° — это 12000 шагов, а не %ld", (long)M::stepNow());
+  CHECK(node_fr::stepNow() == 12000, "FR: %ld шагов", (long)node_fr::stepNow());
+  CHECK(node_rl::stepNow() == 12000, "RL: %ld шагов", (long)node_rl::stepNow());
+  CHECK((long)node_rr::stepNow() == rr_zero + 12000,
+        "RR — последний в пачке — доехал: %ld шагов от нуля %ld",
+        (long)node_rr::stepNow(), rr_zero);
+  // Цели в кадрах слейвов (0 = FR, 1 = RL, 2 = RR) — те самые 90°, иначе экран
+  // не увидел бы выполненной команды и держал бы колесо заблокированным.
+  CHECK(M::slave_target[0] == 12000 && M::slave_target[1] == 12000 &&
+            M::slave_target[2] == 12000,
+        "цели слейвов в телеметрии: %ld %ld %ld", (long)M::slave_target[0],
+        (long)M::slave_target[1], (long)M::slave_target[2]);
+  const std::string tail = board_fl.serial.output.substr(mark);
+  CHECK(tail.find("не выполнена") == std::string::npos,
+        "ни одно колесо пачки не отказало: %s", tail.c_str());
+}
+
 // Счётчик кадров 4-битный, а кадр слейв обновляет каждые 50 мс: опрос,
 // пришедшийся ровно на 16 кадров позже (800 мс — так бывает вокруг диагностики
 // шины), видит тот же номер. По одному номеру полностью живой модуль
@@ -1334,6 +1368,7 @@ static const Scenario SCENARIOS[] = {
     {"bus_stall_loop_alive", scenario_bus_stall_keeps_the_loop_alive},
     {"slave_rejects_command", scenario_slave_rejects_command},
     {"i2c_frame_freshness", scenario_i2c_frame_freshness},
+    {"preset_burst", scenario_preset_burst},
 };
 
 static int run_one(const Scenario& scenario) {
