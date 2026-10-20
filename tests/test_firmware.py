@@ -192,6 +192,66 @@ def test_master_holds_module_telemetry_through_short_bus_outages():
     assert "memset(buffer, 0, sizeof(buffer))" in node
 
 
+def test_bus_work_is_time_budgeted_and_never_starves_the_loop():
+    """Обращения к Wire блокирующие: без бюджета опрос зависшей шины вставал
+    поперёк телеметрии и heartbeat тяги.
+
+    На удерживаемой SDA один запрос стоит полного таймаута (25 мс), а опрос
+    трёх слейвов с повторами, пробы медленных ступеней и скан 1…119 адресов шли
+    одним куском: симуляция показывала 1,34 с на один проход loop(). Сервер
+    считает модуль живым 1 с (STALE_S), watchdog тяги ждёт команду 650 мс —
+    на экране это выглядело как «шина отвалилась, колёса пропали».
+    """
+    master = _text(MASTER)
+    assert "I2C_LOOP_BUDGET_US = 20000" in master
+    assert "poll_cursor" in master                 # недопрошенных допрашиваем в следующий раз
+    assert "I2C_SWEEP_BUDGET_US" in master         # скан адресов тоже ограничен по времени
+    # Расклинка — по времени молчания, а не по числу опросов: на удерживаемой
+    # шине опрос стоит таймаута, и «8 опросов» растягивались больше чем на 3 с.
+    assert "I2C_SILENT_BEFORE_RECOVERY_MS = 2000" in master
+    assert "I2C_SILENT_ROUNDS_BEFORE_RECOVERY" not in master
+    # Самое дорогое (пробы ступеней, скан) — только на стоянке: heartbeat тяги
+    # приходит раз в 650 мс, и терять его ради журнала нельзя.
+    assert "if (drive_active) return false;" in master
+    assert "sweep_requested && !drive_active" in master
+    assert "i2cDiagnose(false)" in master and "i2cDiagnose(true)" in master
+    # Мёртвой плате хватает одного запроса: четыре попытки по таймауту — 100 мс.
+    assert "I2C_RETRY_WHILE_MISSED" in master
+
+
+def test_master_reports_a_command_the_slave_silently_refused():
+    """ACK на шине — это «байты дошли», а не «колесо поехало».
+
+    Слейв отказывает молча: ноль не задан, идёт калибровка, включена тяга или
+    прошивка платы старая и режет угол (после подъёма предела до ±90° — ровно
+    так выглядит «крутится только одно колесо»). Мастер обязан проверить
+    выполнение по кадру и назвать причину.
+    """
+    master = _text(MASTER)
+    assert "expectFromSlave" in master and "confirmSlaveCommand" in master
+    assert "COMMAND_CONFIRM_MS" in master
+    assert "slave_expect" in master
+    assert "команда «%s» не выполнена: %s" in master
+    # Причина берётся из первого неподтвердившего кадра: к концу ожидания
+    # плата могла освободиться, и объяснение оказалось бы неверным.
+    assert "refused_seen" in master
+    for reason in ("ноль не задан", "идёт калибровка", "включена тяга", "перепрошить"):
+        assert reason in master, reason
+
+
+def test_live_frame_is_not_only_a_new_counter():
+    """Счётчик 4-битный: опрос через ровно 16 кадров видел тот же номер.
+
+    Слейв обновляет кадр каждые 50 мс, поэтому пауза в 800 мс (вокруг
+    диагностики шины) давала тот же счётчик — и живой модуль объявлялся
+    потерянным. Живым кадр считает смена счётчика ИЛИ любого поля; застывший
+    слейв (loop() встал, TWI отдаёт старый буфер) не меняется ничем.
+    """
+    master = _text(MASTER)
+    assert "slaveFrameChanged" in master
+    assert "if (seq != slave_seq[i]) {" not in master
+
+
 def test_master_accepts_monitor_commands_of_the_tested_sketch():
     master = _text(MASTER)
     core = _core(MASTER)

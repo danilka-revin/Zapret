@@ -142,6 +142,7 @@ class SimWire {
   int tx_address = -1;
   long transmissions = 0;
   uint32_t clock_hz = 400000;            // скорость шины у МАСТЕРА (setClock)
+  uint32_t timeout_us = 1000000;         // Wire.setWireTimeout: сколько ждать ответ
   // Маргинальный шлейф: плата отвечает только на 100 кГц. Так выглядит дальний
   // модуль (обычно RR) с длинным проводом и внутренними подтяжками: на 400 кГц
   // он NACK-ает, на 100 кГц — работает. Мастер обязан сам это заметить.
@@ -172,9 +173,21 @@ class SimWire {
   // Wire.end(): плата снимает свой адрес с шины (как twi_disable на AVR).
   void end() { unregister(); }
   void setClock(uint32_t hz) { clock_hz = hz; }
-  void setWireTimeout(uint32_t, bool) {}
+  // Таймаут Wire на AVR отсчитывается на ВСЮ передачу: пока мастер ждёт ответ,
+  // loop() стоит. Симуляция обязана это время тратить, иначе блокировки шины в
+  // прошивке не видны (опрос «зависшей» шины выглядит бесплатным).
+  void setWireTimeout(uint32_t us, bool) { timeout_us = us ? us : 1000000; }
   void onReceive(void (*fn)(int)) { on_receive = fn; }
   void onRequest(void (*fn)()) { on_request = fn; }
+  // Время передачи: старт + по 9 бит на байт (данные + ACK) + стоп.
+  static int64_t wire_us(uint32_t hz, size_t bytes) {
+    if (hz == 0) hz = 100000;
+    return (int64_t)(((uint64_t)bytes + 2) * 9 * 1000000 / hz);
+  }
+  // Отказ адреса (NACK) на железе возвращается сразу — ждём только адресную фазу.
+  void spend_nack() { sim::advance(wire_us(clock_hz, 1)); }
+  // Зависшая шина: мастер крутится до таймаута (twi_timeout_us).
+  void spend_timeout() { sim::advance((int64_t)timeout_us); }
   // Общая модель отказа транзакции к этой плате. hz — скорость шины МАСТЕРА:
   // маргинальный шлейф глушит именно её, а не тактование самой платы.
   bool bus_fail(uint32_t hz) {
@@ -205,25 +218,45 @@ class SimWire {
   uint8_t endTransmission() {
     ++transmissions;
     SimWire* slave = tx_address >= 0 && tx_address < 128 ? bus[tx_address] : nullptr;
-    if (i2c_bus_stuck) return 4;         // шина удерживается: BUS ERROR
-    if (!slave || !slave->on_receive) return 2;   // NACK адреса
-    if (slave->bus_fail(clock_hz)) return 2;      // помеха/скорость/обрыв
+    if (i2c_bus_stuck) {                 // шина удерживается: BUS ERROR после таймаута
+      spend_timeout();
+      return 4;
+    }
+    if (!slave || !slave->on_receive) {  // NACK адреса
+      spend_nack();
+      return 2;
+    }
+    if (slave->bus_fail(clock_hz)) {     // помеха/скорость/обрыв
+      spend_nack();
+      return 2;
+    }
     slave->rx.clear();
     for (uint8_t value : tx) slave->rx.push_back(value);
     slave->on_receive((int)tx.size());
+    sim::advance(wire_us(clock_hz, tx.size() + 1));
     return 0;
   }
   uint8_t requestFrom(uint8_t addr, uint8_t quantity) {
     rx.clear();
     SimWire* slave = addr < 128 ? bus[addr] : nullptr;
-    if (i2c_bus_stuck) return 0;         // таймаут: шина не отпускает SDA
-    if (!slave || !slave->on_request) return 0;
-    if (slave->bus_fail(clock_hz)) return 0;      // помеха/скорость/обрыв
+    if (i2c_bus_stuck) {                 // таймаут: шина не отпускает SDA
+      spend_timeout();
+      return 0;
+    }
+    if (!slave || !slave->on_request) {
+      spend_nack();
+      return 0;
+    }
+    if (slave->bus_fail(clock_hz)) {     // помеха/скорость/обрыв
+      spend_nack();
+      return 0;
+    }
     slave->tx.clear();
     slave->on_request();
     for (uint8_t i = 0; i < quantity; ++i) {
       rx.push_back(i < slave->tx.size() ? slave->tx[i] : 0xFF);  // дальше — линия в 1
     }
+    sim::advance(wire_us(clock_hz, (size_t)quantity + 1));
     // Помеха: кадр пришёл битым один раз.
     if (slave->corrupt_frames > 0 && !rx.empty()) {
       rx[0] = '#';
@@ -305,7 +338,12 @@ struct Board {
     min_high_us = min_period_us = 1000000;
     last_rise_us = -1;
     steps = 0;
+    max_loop_us = 0;
   }
+
+  // Самый долгий проход loop(): пока мастер ждёт Wire, loop() стоит — не качает
+  // USB (телеметрия, heartbeat тяги) и не обновляет watchdog тяги (650 мс).
+  int64_t max_loop_us = 0;
 
   bool opto_active() {
     if (opto_stuck) return true;
@@ -422,7 +460,11 @@ inline void run_for_ms(double ms) {
     tick_all();
     if (++loop_round & 1) now_us = next_tick_us - 1;
     for (Board* board : boards) {
-      if (board->loop_fn) board->loop_fn();
+      if (!board->loop_fn) continue;
+      const int64_t started = now_us;
+      board->loop_fn();
+      const int64_t spent = now_us - started;
+      if (spent > board->max_loop_us) board->max_loop_us = spent;
     }
   }
 }

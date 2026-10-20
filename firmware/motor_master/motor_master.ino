@@ -1413,9 +1413,27 @@ const uint8_t I2C_SCL_PIN = 21;               // Mega: D21 = SCL
 // 31 кГц — уже ~9,5 мс: таймаут обязан покрывать самую медленную ступень с
 // запасом, иначе «переход на медленную скорость» обрывал бы нормальный ответ.
 const uint16_t I2C_TIMEOUT_US = 25000;
-// 8 опросов подряд (2 с) без единого ACK — шину пора расклинивать.
-const uint8_t I2C_SILENT_ROUNDS_BEFORE_RECOVERY = 8;
+// БЮДЖЕТ ШИНЫ. Обращение к Wire блокирующее: на удерживаемой SDA один запрос
+// стоит полного таймаута (25 мс), а опрос трёх слейвов с повторами, пробы
+// медленных ступеней и скан адресов шли одним куском внутри loop(). На роботе
+// это выглядело как «шина отвалилась»: @TLM замолкал на секунды (сервер гасит
+// колёса через 1 с), команды оператора висели в очереди, а watchdog тяги
+// срабатывал не от отсутствия heartbeat, а потому что loop() до него не доходил
+// (на симуляции — 1,34 с на один проход). Теперь у шины есть бюджет на проход:
+// не успели — допрашиваем остальных слейвов в следующий раз.
+const uint32_t I2C_LOOP_BUDGET_US = 20000;
+// Один кусок полного скана адресов (команда «i2c» и старт): 119 адресов с
+// таймаутом 2,5 мс — это 300 мс, а с перебором ступеней и больше секунды.
+const uint32_t I2C_SWEEP_BUDGET_US = 100000;
+// Шина молчит дольше этого — расклиниваем. Считаем ВРЕМЕНЕМ, а не числом
+// опросов: на удерживаемой SDA опрос стоит полного таймаута, и «8 опросов»
+// растягивались до трёх с лишним секунд без связи.
+const uint32_t I2C_SILENT_BEFORE_RECOVERY_MS = 2000;
 const uint32_t I2C_RECOVERY_INTERVAL_MS = 5000;
+// Со второго пропуска подряд плата, скорее всего, молчит вовсе: повторять
+// запрос четырежды (по таймауту каждый) — это 100 мс без loop() на одном
+// слейве. Повторы нужны маргинальной шине, а не мёртвой.
+const uint8_t I2C_RETRY_WHILE_MISSED = 2;
 // Потери кадров считаем не только «подряд», но и скользящим окном восьми
 // опросов: при маргинальной шине кадры идут через раз (то 4 модуля видны, то 2),
 // и счётчик подряд идущих пропусков сбрасывается каждым удачным кадром — мастер
@@ -1466,12 +1484,44 @@ uint32_t slave_offline_note_ms[NUM_SLAVES] = {0, 0, 0}; // когда печат
 uint32_t i2c_clock_hz = I2C_CLOCK_HZ;          // текущая ступень (см. I2C_SPEED_TIERS)
 uint8_t i2c_speed_tier = 0;                    // индекс ступени в I2C_SPEED_TIERS
 bool i2c_auto_slow = false;                    // уже уходили с 400 кГц
-uint8_t bus_silent_rounds = 0;                 // опросов подряд без единого ACK
+uint32_t bus_silent_since_ms = 0;              // с какого момента ни одного ACK
 uint32_t bus_recovered_at_ms = 0;
-uint32_t i2c_health_ms = 0;                    // последний полный скан «пока не все на связи»
-uint32_t i2c_health_forced_ms = 0;             // последний внеплановый скан при потере
+uint32_t i2c_health_ms = 0;                    // последняя проверка «пока не все на связи»
+uint32_t i2c_health_forced_ms = 0;             // последняя внеплановая проверка при потере
 bool boot_scan_done = false;
 uint32_t boot_scan_at_ms = 0;
+uint8_t poll_cursor = 0;                       // с какого слейва продолжаем опрос
+// Отложенный полный скан адресов: команда «i2c» заказала, но тяга включена —
+// опрос подождёт остановки (иначе он встанет поперёк heartbeat тяги).
+bool sweep_requested = false;
+
+// --- подтверждение команд слейвам ------------------------------------------
+// ACK на шине означает только «байты до платы дошли». Выполнила ли она их —
+// видно по следующему кадру: слейв отказывает молча, если ноль не задан, идёт
+// калибровка/качание, включена тяга или прошивка платы старая и режет угол
+// (после поднятия предела до ±90° именно так выглядит «крутится только одно
+// колесо»). Без проверки экран рапортовал «команда принята» при стоящем колесе.
+const uint8_t EXPECT_NONE = 0;
+const uint8_t EXPECT_TARGET = 1;               // ждём конкретную цель в шагах
+const uint8_t EXPECT_ZERO = 2;                 // ждём бит «ноль задан»
+const uint8_t EXPECT_CALIB = 3;                // ждём бит «идёт калибровка»
+// Слейв отдаёт кадр каждые 50 мс: за 1,2 с их проходит больше двадцати.
+const uint32_t COMMAND_CONFIRM_MS = 1200;
+struct SlaveExpectation {
+  uint8_t kind;
+  int32_t target;
+  uint32_t sent_ms;
+  char text[12];                               // команда для журнала («w 90.0»)
+  // Причина отказа запоминается по ПЕРВОМУ же кадру, который команду не
+  // подтвердил: к моменту, когда истечёт срок ожидания, плата может уже
+  // освободиться (тягу снимет watchdog), и объяснение оказалось бы неверным.
+  bool refused_seen;
+  uint16_t refused_status;
+  int8_t refused_drive;
+};
+SlaveExpectation slave_expect[NUM_SLAVES] = {{EXPECT_NONE, 0, 0, "", false, 0, 0},
+                                             {EXPECT_NONE, 0, 0, "", false, 0, 0},
+                                             {EXPECT_NONE, 0, 0, "", false, 0, 0}};
 
 uint32_t last_telemetry_ms = 0;
 char serial_line[48];
@@ -1495,21 +1545,49 @@ bool slaveFresh(uint8_t index, uint32_t now) {
 }
 
 // ------------------------- диагностика шины ----------------------------------
-// Ровно тот же опрос, что делает сервер командой «i2c»: кто вообще ACK-ает.
-// Возвращает число найденных, в found — до capacity адресов.
-uint8_t i2cScanBus(uint8_t* found, uint8_t capacity) {
-  uint8_t count = 0;
-  // На зависшей шине каждый адрес ждёт таймаут: на 119 адресах с 2,5 мс это
-  // треть секунды. На самой медленной ступени (31 кГц) один байт адреса идёт
-  // ~0,3 мс, так что 2,5 мс хватает и на медленный опрос, и на растяжение такта.
+// Опрос одного адреса: ACK-ает ли он вообще. Таймаут короткий — на зависшей
+// шине каждый адрес ждёт его целиком, и 119 адресов с 2,5 мс это уже треть
+// секунды без loop().
+bool i2cProbeAddress(uint8_t address) {
   Wire.setWireTimeout(2500, true);
+  Wire.beginTransmission(address);
+  const bool answered = Wire.endTransmission() == 0;
+  Wire.setWireTimeout(I2C_TIMEOUT_US, true);
+  return answered;
+}
+
+// Ровно тот же опрос, что делает сервер командой «i2c»: кто вообще ACK-ает.
+// Возвращает число найденных, в found — до capacity адресов. cut_short —
+// опрос не дошёл до конца: на удерживаемой шине он стоил бы сотни миллисекунд
+// (с перебором ступеней скорости — больше секунды) одним куском внутри loop().
+// Здоровой шине 119 адресов обходятся в единицы миллисекунд, поэтому обычно
+// опрос проходит целиком и за один раз.
+uint8_t i2cScanBus(uint8_t* found, uint8_t capacity, bool* cut_short = nullptr) {
+  uint8_t count = 0;
+  if (cut_short) *cut_short = false;
+  const uint32_t started_us = micros();
   for (uint8_t address = 1; address < 120; ++address) {
-    Wire.beginTransmission(address);
-    if (Wire.endTransmission() != 0) continue;
+    if ((uint32_t)(micros() - started_us) >= I2C_SWEEP_BUDGET_US) {
+      if (cut_short) *cut_short = true;
+      break;
+    }
+    if (!i2cProbeAddress(address)) continue;
     if (count < capacity) found[count] = address;
     ++count;
   }
-  Wire.setWireTimeout(I2C_TIMEOUT_US, true);
+  return count;
+}
+
+// Дешёвая проверка для автоматического режима: только три своих адреса вместо
+// 119. Полный опрос (он ищет плату, у которой адрес остался чужим в EEPROM)
+// нужен при старте и по команде «i2c» — их задаёт оператор, а не таймер.
+uint8_t i2cProbeSlaves(uint8_t* found, uint8_t capacity) {
+  uint8_t count = 0;
+  for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
+    if (!i2cProbeAddress(SLAVE_ADDRESSES[i])) continue;
+    if (count < capacity) found[count] = SLAVE_ADDRESSES[i];
+    ++count;
+  }
   return count;
 }
 
@@ -1597,12 +1675,18 @@ void i2cReportModules(uint8_t count, const uint8_t* found) {
   }
 }
 
-void i2cDiagnose() {
+// full — полный опрос 1…119 с поиском чужого адреса и перебором ступеней
+// скорости (старт и команда «i2c»); иначе только три своих адреса: такую
+// проверку не страшно делать раз в минуту, пока кто-то не на связи.
+void i2cDiagnose(bool full) {
+  const uint32_t started_us = micros();
   uint8_t found[12];
-  uint8_t count = i2cScanBus(found, sizeof(found));
+  bool cut_short = false;
+  uint8_t count = full ? i2cScanBus(found, sizeof(found), &cut_short)
+                       : i2cProbeSlaves(found, sizeof(found));
   if (count > sizeof(found)) count = sizeof(found);   // в списке — сколько влезло
   uint8_t missing = i2cMissingModules(count, found);
-  if (missing > 0 && (uint8_t)(i2c_speed_tier + 1) < I2C_SPEED_COUNT) {
+  if (full && missing > 0 && (uint8_t)(i2c_speed_tier + 1) < I2C_SPEED_COUNT) {
     // Отвечают не все. Частая причина — скорость шины не для этого шлейфа:
     // длинный провод и только внутренние подтяжки. Раньше мастер падал на
     // 100 кГц, только если не ответил НИКТО; при «RR не видно, остальные
@@ -1617,6 +1701,9 @@ void i2cDiagnose() {
     uint8_t best_found[12];
     memcpy(best_found, found, sizeof(best_found));
     for (uint8_t tier = (uint8_t)(tier_fast + 1); tier < I2C_SPEED_COUNT; ++tier) {
+      // Перебор ступеней — тоже обращения к Wire: на удерживаемой шине каждая
+      // ступень стоит полного скана, поэтому дальше идём, пока есть бюджет.
+      if ((uint32_t)(micros() - started_us) >= I2C_SWEEP_BUDGET_US) break;
       Wire.setClock(I2C_SPEED_TIERS[tier]);
       uint8_t slower_found[12];
       uint8_t slower = i2cScanBus(slower_found, sizeof(slower_found));
@@ -1661,10 +1748,14 @@ void i2cDiagnose() {
   } else {
     note(PSTR("I2C %lu кГц: отвечают %s"), (unsigned long)(i2c_clock_hz / 1000), list);
   }
+  if (cut_short) {
+    note(PSTR("I2C: опрос адресов сокращён — шина не отпускает SDA; смотрите расклинку"));
+  }
   // Адрес, которого нет в прошивке: чаще всего плату когда-то перевели
   // командой «a», и адрес остался в EEPROM (он главнее NODE_ADDRESS, поэтому
-  // перепрошивка motor_node_RR.ino его не возвращает).
-  for (uint8_t k = 0; k < count; ++k) {
+  // перепрошивка motor_node_RR.ino его не возвращает). Ищем его только в
+  // полном опросе: дешёвая проверка своих адресов чужих не видит.
+  for (uint8_t k = 0; full && k < count; ++k) {
     bool expected = false;
     for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
       if (found[k] == SLAVE_ADDRESSES[i]) expected = true;
@@ -1767,9 +1858,13 @@ void reportSlaveChange(uint8_t index, uint16_t before, uint16_t now_status) {
 
 // Один запрос кадра. Пустой ответ повторяем: на 400 кГц с внутренними
 // подтяжками одиночный сбой — обычное дело, а терять из-за него цикл незачем.
-uint8_t requestSlaveFrame(uint8_t index) {
+// retry=false — один запрос без повторов: так опрашиваем плату, которая уже
+// пропустила несколько опросов подряд. На удерживаемой шине каждый запрос стоит
+// полного таймаута (25 мс), и четыре попытки на один опрос — это 100 мс без
+// loop() на каждом слейве.
+uint8_t requestSlaveFrame(uint8_t index, bool retry) {
   uint8_t received = Wire.requestFrom(SLAVE_ADDRESSES[index], (uint8_t)32);
-  if (received == 0) {
+  if (received == 0 && retry) {
     // Пауза перед повтором: после битого кадра TWI слейва может
     // восстанавливаться несколько миллисекунд (его twi_stop крутится в
     // прерывании), мгновенный повтор падает в ту же помеху.
@@ -1783,13 +1878,14 @@ uint8_t requestSlaveFrame(uint8_t index) {
 // (пусть даже кадр битый): это отличает «плата молчит» от коллизии адресов.
 bool readSlaveFrame(uint8_t index, int32_t* current, int32_t* target, uint16_t* status,
                     uint32_t* module_rpm_x10, int8_t* module_drive,
-                    uint8_t* seq, uint8_t* protocol, bool* answered) {
+                    uint8_t* seq, uint8_t* protocol, bool* answered, bool retry = true) {
   *answered = false;
   // Две попытки: requestSlaveFrame уже повторяет пустой ответ, а здесь
   // повторяем ОБРЕЗАННЫЙ/битый кадр. Одиночная помеха не должна превращаться
   // в «нет связи» на четверть секунды.
-  for (uint8_t attempt = 0; attempt < 2; ++attempt) {
-    const uint8_t received = requestSlaveFrame(index);
+  const uint8_t attempts = retry ? 2 : 1;
+  for (uint8_t attempt = 0; attempt < attempts; ++attempt) {
+    const uint8_t received = requestSlaveFrame(index, retry);
     if (received == 0) return false;
     *answered = true;
     char buffer[40];
@@ -1809,7 +1905,7 @@ bool readSlaveFrame(uint8_t index, int32_t* current, int32_t* target, uint16_t* 
                                     module_drive, seq, protocol)) {
       return true;
     }
-    if (attempt == 0) delayMicroseconds(1500);   // дать слейву оправиться от битого кадра
+    if (attempt + 1 < attempts) delayMicroseconds(1500);   // дать слейву оправиться
   }
   return false;
 }
@@ -1834,16 +1930,23 @@ bool trySlowerSpeed(uint8_t index, int32_t* current, int32_t* target, uint16_t* 
                     uint32_t* module_rpm_x10, int8_t* module_drive,
                     uint8_t* seq, uint8_t* protocol) {
   if ((uint8_t)(i2c_speed_tier + 1) >= I2C_SPEED_COUNT) return false;
+  // Во время тяги пробу не делаем: три ступени скорости с повторами — это до
+  // 300 мс без loop(), а heartbeat тяги приходит раз в 650 мс. Скорость подождёт
+  // остановки (тяга всё равно невозможна, пока модуль не отвечает).
+  if (drive_active) return false;
   const uint32_t now = millis();
   if ((uint32_t)(now - slave_slow_tried_ms[index]) < I2C_SLOW_RETRY_INTERVAL_MS) return false;
   slave_slow_tried_ms[index] = now;
   const uint8_t tier_fast = i2c_speed_tier;
   const uint32_t before = i2c_clock_hz;
+  const uint32_t started_us = micros();
   for (uint8_t tier = (uint8_t)(tier_fast + 1); tier < I2C_SPEED_COUNT; ++tier) {
+    // Бюджет прохода: не успели — вернём скорость и попробуем в другой раз.
+    if ((uint32_t)(micros() - started_us) >= I2C_LOOP_BUDGET_US) break;
     Wire.setClock(I2C_SPEED_TIERS[tier]);
     bool ack = false;
     if (readSlaveFrame(index, current, target, status, module_rpm_x10,
-                       module_drive, seq, protocol, &ack)) {
+                       module_drive, seq, protocol, &ack, false)) {
       i2c_speed_tier = tier;
       i2c_clock_hz = I2C_SPEED_TIERS[tier];
       i2c_auto_slow = true;
@@ -1861,12 +1964,94 @@ bool trySlowerSpeed(uint8_t index, int32_t* current, int32_t* target, uint16_t* 
   return false;
 }
 
+// Живой ли кадр: сменился счётчик ИЛИ изменилось хоть одно поле. Счётчик
+// 4-битный, а кадр слейв обновляет каждые 50 мс: если опрос пришёлся ровно на
+// 16 кадров позже (800 мс — так бывает вокруг диагностики шины), номер
+// совпадает, и полностью здоровый модуль объявлялся потерянным. Застывший
+// слейв (loop() встал, TWI отвечает старым буфером) не меняется ничем — его
+// по-прежнему видно.
+bool slaveFrameChanged(uint8_t index, int32_t current, int32_t target, uint16_t status,
+                       uint32_t module_rpm_x10, int8_t module_drive, uint8_t seq) {
+  return seq != slave_seq[index] || current != slave_current[index] ||
+         target != slave_target[index] || status != slave_status[index] ||
+         module_rpm_x10 != slave_rpm_x10[index] || module_drive != slave_drive[index];
+}
+
+// Команда слейву отправлена — ждём, что он её действительно выполнил.
+void expectFromSlave(uint8_t index, const char* command) {
+  SlaveExpectation& expectation = slave_expect[index];
+  expectation.kind = EXPECT_NONE;
+  expectation.target = 0;
+  expectation.sent_ms = millis();
+  expectation.refused_seen = false;
+  expectation.refused_status = 0;
+  expectation.refused_drive = 0;
+  strncpy(expectation.text, command, sizeof(expectation.text) - 1);
+  expectation.text[sizeof(expectation.text) - 1] = '\0';
+  if (strcmp_P(command, PSTR("z")) == 0 || strcasecmp_P(command, PSTR("w zero")) == 0) {
+    expectation.kind = EXPECT_ZERO;
+    return;
+  }
+  if (strcmp_P(command, PSTR("k")) == 0 || strcasecmp_P(command, PSTR("w calib")) == 0) {
+    expectation.kind = EXPECT_CALIB;
+    return;
+  }
+  if (strcmp_P(command, PSTR("h")) == 0) {     // «домой» — цель предсказуема: 0
+    expectation.kind = EXPECT_TARGET;
+    expectation.target = 0;
+    return;
+  }
+  // Предсказать можно только абсолютный угол: у «d» цель считается от своего нуля.
+  if (toupper((unsigned char)command[0]) != 'W' || command[1] != ' ') return;
+  float degrees = 0.0f;
+  if (!parseFloatToken(command + 2, &degrees)) return;
+  expectation.kind = EXPECT_TARGET;
+  expectation.target = degreesToSteps(degrees);
+}
+
+// Свежий кадр получен — сверяем с ожиданием и говорим, если плата отказала.
+void confirmSlaveCommand(uint8_t index, uint32_t now) {
+  SlaveExpectation& expectation = slave_expect[index];
+  const uint8_t kind = expectation.kind;
+  if (kind == EXPECT_NONE) return;
+  const uint16_t status = slave_status[index];
+  bool done = false;
+  if (kind == EXPECT_TARGET) done = slave_target[index] == expectation.target;
+  else if (kind == EXPECT_ZERO) done = (status & STATUS_ZERO) != 0;
+  else done = (status & STATUS_CALIB) != 0;
+  if (done) {
+    expectation.kind = EXPECT_NONE;
+    return;
+  }
+  if (!expectation.refused_seen) {
+    expectation.refused_seen = true;
+    expectation.refused_status = status;
+    expectation.refused_drive = slave_drive[index];
+  }
+  if ((uint32_t)(now - expectation.sent_ms) < COMMAND_CONFIRM_MS) return;
+  expectation.kind = EXPECT_NONE;
+  const uint16_t refused = expectation.refused_status;
+  char why[96];                        // кириллица: 2 байта на символ
+  if (!(refused & STATUS_ZERO)) strcpy_P(why, PSTR("ноль не задан — сначала k или z"));
+  else if (refused & STATUS_CALIB) strcpy_P(why, PSTR("идёт калибровка"));
+  else if (refused & STATUS_CYCLE) strcpy_P(why, PSTR("идёт качание — выключите c c"));
+  else if (expectation.refused_drive != 0) strcpy_P(why, PSTR("включена тяга — сначала b"));
+  else if (kind == EXPECT_TARGET) strcpy_P(why, PSTR("старая прошивка режет угол — перепрошить"));
+  else strcpy_P(why, PSTR("плата не подтвердила команду"));
+  noteModule(SLAVE_MODULE_IDS[index], PSTR("команда «%s» не выполнена: %s"), expectation.text, why);
+}
+
 void pollSlaves() {
   const uint32_t now = millis();
+  const uint32_t pass_started_us = micros();
   uint8_t heard = 0;                   // сколько слейвов вообще ACK-нули адрес
   bool answered[NUM_SLAVES] = {false, false, false};
-  for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
-    slave_fresh[i] = false;
+  for (uint8_t i = 0; i < NUM_SLAVES; ++i) slave_fresh[i] = false;
+  uint8_t polled = 0;
+  for (uint8_t k = 0; k < NUM_SLAVES; ++k) {
+    // С прошлого места: если бюджет прохода кончился, никто не остаётся
+    // недопрошенным навсегда.
+    const uint8_t i = (uint8_t)((poll_cursor + k) % NUM_SLAVES);
     int32_t current = 0;
     int32_t target = 0;
     uint16_t status = 0;
@@ -1875,8 +2060,11 @@ void pollSlaves() {
     uint8_t seq = 0;
     uint8_t protocol = 0;
     bool ack = false;
+    // Плате, которая пропустила уже два опроса подряд, хватит одного запроса:
+    // на удерживаемой шине каждый запрос стоит полного таймаута.
     bool parsed = readSlaveFrame(i, &current, &target, &status, &module_rpm_x10,
-                                 &module_drive, &seq, &protocol, &ack);
+                                 &module_drive, &seq, &protocol, &ack,
+                                 slave_missed[i] < I2C_RETRY_WHILE_MISSED);
     answered[i] = ack;
     if (ack) ++heard;
     // Пропуски считаем и подряд, и окном последних восьми опросов: при
@@ -1902,8 +2090,7 @@ void pollSlaves() {
     slave_loss8[i] = (uint8_t)((slave_loss8[i] << 1) | (parsed ? 0 : 1));
     if (parsed) {
       slave_seen[i] = true;
-      // Кадр с тем же номером — loop() слейва его не обновляет: связи нет.
-      if (seq != slave_seq[i]) {
+      if (slaveFrameChanged(i, current, target, status, module_rpm_x10, module_drive, seq)) {
         slave_seq[i] = seq;
         slave_protocol[i] = protocol;
         reportSlaveChange(i, slave_status[i], status);
@@ -1916,26 +2103,36 @@ void pollSlaves() {
         slave_last_frame_ms[i] = now;
         slave_online[i] = true;
         slave_fresh[i] = true;
+        confirmSlaveCommand(i, now);
       }
       slave_missed[i] = 0;
     }
     if (slave_online[i] && (uint32_t)(now - slave_last_seen_ms[i]) > SLAVE_STALE_MS) {
       slave_online[i] = false;
+      slave_expect[i].kind = EXPECT_NONE;   // пропала связь — ждать подтверждения нечего
       // Журнал не мигает вместе со связью: повторная «нет связи» — не чаще
       // раза в I2C_NOTE_REPEAT_MS.
       if ((uint32_t)(now - slave_offline_note_ms[i]) >= I2C_NOTE_REPEAT_MS) {
         slave_offline_note_ms[i] = now;
         noteModule(SLAVE_MODULE_IDS[i], PSTR("нет связи по I2C (адрес %d)"), (int)SLAVE_ADDRESSES[i]);
       }
-      // Полный скан — сразу (но не чаще раза в полминуты), не ожидая очередной
-      // минуты: в журнале окажется, кто отвечает, нет ли лишнего адреса и
-      // помогает ли более медленная скорость.
+      // Проверка шины — сразу (но не чаще раза в полминуты), не ожидая
+      // очередной минуты: в журнале окажется, кто отвечает.
       if ((uint32_t)(now - i2c_health_forced_ms) >= I2C_HEALTH_FORCE_INTERVAL_MS) {
         i2c_health_forced_ms = now;
         i2c_health_ms = now - I2C_HEALTH_PERIOD_MS;
       }
     }
+    ++polled;
+    // Бюджет прохода: остальных слейвов допросим в следующий раз (период
+    // 250 мс при SLAVE_STALE_MS = 1 с — запас есть). Без этого один проход
+    // по зависшей шине стоил больше секунды, и телеметрия замолкала.
+    if (polled < NUM_SLAVES && (uint32_t)(micros() - pass_started_us) >= I2C_LOOP_BUDGET_US) {
+      poll_cursor = (uint8_t)((i + 1) % NUM_SLAVES);
+      break;
+    }
   }
+  if (polled == NUM_SLAVES) poll_cursor = 0;
   // Адрес отвечает, а кадр не разбирается: так выглядит коллизия адресов
   // (три платы прошиты одним файлом) или очень старая прошивка слейва.
   for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
@@ -1946,32 +2143,37 @@ void pollSlaves() {
     noteModule(SLAVE_MODULE_IDS[i], PSTR("адрес %d отвечает, но кадр битый — две платы на одном адресе или старая прошивка"),
                (int)SLAVE_ADDRESSES[i]);
   }
-  // Никто не ответил ни разу за 2 с — почти наверняка шина удерживается
-  // (слейв завис, помеха, плата без питания). Расклиниваем один раз в 5 с,
-  // чтобы не зациклиться и не забить журнал.
-  if (heard == 0) {
-    if (bus_silent_rounds < 255) ++bus_silent_rounds;
-    if (bus_silent_rounds >= I2C_SILENT_ROUNDS_BEFORE_RECOVERY &&
-        (uint32_t)(now - bus_recovered_at_ms) >= I2C_RECOVERY_INTERVAL_MS) {
-      bus_recovered_at_ms = now;
-      bus_silent_rounds = 0;
-      i2cRecoverBus();
-      note(PSTR("I2C: шина молчит — TWI перезапущен, расклинка SCL выполнена"));
-    }
-  } else {
-    bus_silent_rounds = 0;
+  // Шина молчит дольше I2C_SILENT_BEFORE_RECOVERY_MS — почти наверняка её
+  // удерживают (слейв завис, помеха, плата без питания). Расклиниваем, но не
+  // чаще раза в I2C_RECOVERY_INTERVAL_MS, чтобы не зациклиться и не забить
+  // журнал. Порог — ВРЕМЯ, а не число опросов: на удерживаемой SDA опрос стоит
+  // полного таймаута, и «8 опросов» растягивались на три с лишним секунды.
+  if (heard > 0) {
+    bus_silent_since_ms = now;
+  } else if ((uint32_t)(now - bus_silent_since_ms) >= I2C_SILENT_BEFORE_RECOVERY_MS &&
+             (uint32_t)(now - bus_recovered_at_ms) >= I2C_RECOVERY_INTERVAL_MS) {
+    bus_recovered_at_ms = now;
+    bus_silent_since_ms = now;
+    i2cRecoverBus();
+    note(PSTR("I2C: шина молчит — TWI перезапущен, расклинка SCL выполнена"));
   }
-  // Пока кто-то не на связи — полный скан раз в минуту (и сразу при потере):
-  // он печатает, кто отвечает, сам пробует 100 кГц и подсказывает про лишний
-  // адрес в EEPROM. Так «RR не виден» не остаётся без объяснения в журнале.
-  if ((uint32_t)(now - i2c_health_ms) >= I2C_HEALTH_PERIOD_MS) {
+  // Отложенный оператором опрос шины: во время тяги не сканируем.
+  if (sweep_requested && !drive_active) {
+    sweep_requested = false;
+    i2cDiagnose(true);
+  }
+  // Пока кто-то не на связи — дешёвая проверка раз в минуту (и сразу при
+  // потере): она печатает, кто отвечает и не помогает ли более медленная
+  // скорость. Во время тяги не проверяем вовсе: даже три адреса с таймаутом —
+  // это время, которое нужнее heartbeat тяги (650 мс).
+  if (!drive_active && (uint32_t)(now - i2c_health_ms) >= I2C_HEALTH_PERIOD_MS) {
     bool missing = false;
     for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
       if (!slave_online[i]) missing = true;
     }
     if (missing) {
       i2c_health_ms = now;
-      i2cDiagnose();
+      i2cDiagnose(false);
     }
   }
 }
@@ -2060,7 +2262,9 @@ void broadcastCommand(const char* command) {
     if (!sendToSlave(i, command) && !sendToSlave(i, command)) {
       noteModule(SLAVE_MODULE_IDS[i], PSTR("команда «%s» не доставлена по I2C (адрес %d)"),
                  command, (int)SLAVE_ADDRESSES[i]);
+      continue;
     }
+    expectFromSlave(i, command);   // дошла — проверим, выполнена ли
   }
   char local[48];
   strncpy(local, command, sizeof(local) - 1);
@@ -2138,7 +2342,13 @@ void handleServerSteer(char* module, char* value, char* extra) {
     if (!sendToSlave(i, command) && !sendToSlave(i, command)) {
       noteModule(SLAVE_MODULE_IDS[i], PSTR("команда «%s» не доставлена по I2C (адрес %d)"),
                  command, (int)SLAVE_ADDRESSES[i]);
+      return;
     }
+    // ACK — это только «байты дошли». Выполнение проверим по кадру: слейв
+    // отказывает молча (нет нуля, идёт калибровка, включена тяга, старая
+    // прошивка режет угол), и без проверки экран рапортует успех при
+    // стоящем колесе — «крутится только одно колесо».
+    expectFromSlave(i, command);
     return;
   }
   note(PSTR("неизвестный модуль %s (есть FL, FR, RL, RR, ALL)"), module);
@@ -2190,7 +2400,16 @@ void processSerialLine(char* line) {
   } else if (strcasecmp_P(command, PSTR("p")) == 0) {
     printReport();
   } else if (strcasecmp_P(command, PSTR("i2c")) == 0 || strcasecmp_P(command, PSTR("scan")) == 0) {
-    i2cDiagnose();
+    // Полный опрос 1…119 адресов — самый дорогой на шине: во время тяги он
+    // встал бы поперёк heartbeat (650 мс). Откладываем до остановки.
+    if (drive_active) {
+      if (!sweep_requested) {
+        sweep_requested = true;
+        note(PSTR("I2C: опрос шины после остановки тяги — сейчас идёт heartbeat"));
+      }
+    } else {
+      i2cDiagnose(true);
+    }
   } else if (strcasecmp_P(command, PSTR("a")) == 0 || strcasecmp_P(command, PSTR("addr")) == 0) {
     // Адрес — свойство конкретной платы: рассылать его всем нельзя, иначе все
     // три слейва получат один и тот же адрес.
@@ -2253,6 +2472,7 @@ void setup() {
   // Первую расклинку шины и первое предупреждение о битом кадре разрешаем
   // сразу: «в прошлый раз» этого не было.
   bus_recovered_at_ms = millis() - I2C_RECOVERY_INTERVAL_MS;
+  bus_silent_since_ms = millis();      // шина молчит с момента включения
   i2c_health_forced_ms = millis() - I2C_HEALTH_FORCE_INTERVAL_MS;
   for (uint8_t i = 0; i < NUM_SLAVES; ++i) {
     slave_frame_hint_ms[i] = millis() - 10000;
@@ -2279,7 +2499,7 @@ void loop() {
     pollSlaves();
     if (!boot_scan_done && (int32_t)(now - boot_scan_at_ms) >= 0) {
       boot_scan_done = true;
-      i2cDiagnose();                 // одна строка в журнал: кто реально отвечает
+      i2cDiagnose(true);             // одна строка в журнал: кто реально отвечает
     }
     // Телеметрию печатаем, только когда весь блок @TLM влезает целиком:
     // обрезанный блок оставит сервер без кадров некоторых модулей. Строки
