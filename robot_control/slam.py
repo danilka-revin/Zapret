@@ -574,6 +574,7 @@ ASSETS = {
     "battery.js": "battery_js",
     "steering.css": "steering_css",
     "steering.js": "steering_js",
+    "wheel_settings.js": "wheel_settings_js",
     # общие пресеты руления: одни и те же углы на киоске и веб-пульте
     "steer_presets.js": "steer_presets_js",
     "pot_mode.js": "pot_mode_js",
@@ -753,7 +754,16 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
         # колесо называет себя в @TLM/@ID, и сервер сам ведёт карту
         # «колесо → порт» (см. slam_gui/backend.py MasterSource).
         from .battery import reserved_ports
-        from .master_port import configured_port, diagnostics, master_ports
+        from .master_port import (
+            configured_port, diagnostics, master_ports,
+            reserved_ports as wheel_reserved_ports,
+        )
+        from .wheel_settings import current_settings
+
+        assignments = {m: p for m, p in current_settings().items() if p}
+        blocked = wheel_reserved_ports()
+        assignments = {m: p for m, p in assignments.items()
+                       if p not in blocked and os.path.realpath(p) not in blocked}
 
         port = configured_port()
         if port in reserved_ports() or os.path.realpath(port) in reserved_ports():
@@ -772,15 +782,16 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
         elif info["hint"]:
             log.info("колёса: %s", info["hint"])
 
-        candidates = info["candidates"] or [port]
-        # Каждый порт проверяется по строке @TLM/@ID: какое колесо на каком
-        # порту, решает прошивка платы. Сообщения прошивки («# FR: Калибровка
+        candidates = list(assignments.values()) + (info["candidates"] or [port])
+        # Каждый порт проверяется по строке @TLM/@ID. Ручное назначение
+        # важнее имени платы. Сообщения прошивки («# FR: Калибровка
         # ЗАВЕРШЕНА!») — в журнал экрана; поиск/обрыв порта — тоже.
         return mod.MasterSource(
             candidates,
             on_message=note_master_message,
             on_status=note_master_status,
-            port_provider=lambda: master_ports(port),
+            module_ports=assignments,
+            port_provider=lambda: list(assignments.values()) + master_ports(port),
             probe=True,
             # Порты — общий ресурс с лидаром (он тоже на USB): пока лидар ищет
             # свой порт, колёса ждут; порт, не назвавшийся колесом, колёса
@@ -1301,6 +1312,14 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
             mgr.feed_frame(cam_id, data)
             return jsonify({"ok": True})
         return jsonify({"ok": False, "error": "empty data"}), 400
+
+    @bp.get("/api/wheels/settings")
+    @guard
+    def api_wheel_settings():
+        from .wheel_settings import settings_payload
+        result = settings_payload()
+        result["canEdit"] = False
+        return jsonify(result)
 
     @bp.get("/api/camera/settings")
     @guard

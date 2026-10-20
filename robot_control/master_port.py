@@ -28,7 +28,7 @@ ENV_ALIASES = ("RC_SLAM_MASTER_PORT",)
 #: Порт по умолчанию, если не задано ничего другого.
 DEFAULT_PORT = "/dev/ttyACM0"
 #: Сначала постоянные имена by-id, потом обычные имена ядра.
-PORT_PATTERNS = ("/dev/serial/by-id/*", "/dev/ttyACM*", "/dev/ttyUSB*")
+PORT_PATTERNS = ("/dev/serial/by-path/*", "/dev/serial/by-id/*", "/dev/ttyACM*", "/dev/ttyUSB*")
 #: Признак телеметрии мастера в строке монитора.
 TELEMETRY_PREFIX = "@TLM "
 
