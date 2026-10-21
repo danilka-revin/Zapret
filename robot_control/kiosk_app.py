@@ -482,6 +482,16 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     if not config.testing:
         battery.start()
 
+    from .connections import ConnectionsMonitor
+    connections = ConnectionsMonitor()
+    app.extensions["rc_connections"] = connections
+
+    @app.get("/api/connections")
+    def api_connections():
+        response = jsonify(connections.snapshot())
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.get("/api/battery")
     def api_battery():
         snap = battery.snapshot()
