@@ -70,6 +70,11 @@ class El {
   }
   addEventListener(name, listener) { (this.events[name] ||= []).push(listener); }
   removeEventListener() {}
+  insertAdjacentElement(position, element) { this.adjacent = element; }
+  dispatchEvent(event) { this.fire(event.type); return true; }
+  setPointerCapture(id) { this.capture = id; }
+  hasPointerCapture(id) { return this.capture === id; }
+  releasePointerCapture() { this.capture = null; }
   appendChild(child) { this.children.push(child); child.parentElement = this; return child; }
   /* Экран ищет карточки колёс, кнопки пресетов и колёса схемы по атрибутам.
    * Настоящего разбора HTML здесь нет, поэтому селектор по атрибуту отдаёт
@@ -133,6 +138,7 @@ global.document = {
   title: '',
   getElementById: byId,
   createElement: (tag) => new El('', tag),
+  createElementNS: (_ns, tag) => new El('', tag),
   createDocumentFragment: () => new El('', 'fragment'),
   createTextNode: (text) => ({ textContent: text }),
   querySelector: (selector) => (selector === '.kiosk' ? byId('kiosk-root') : new El('', 'div')),
@@ -303,6 +309,7 @@ if (payload.remoteView) {
   byId('ctrl-overlay').hidden = true;
   document.body.dataset.remoteView = payload.remoteView;
 }
+if (payload.dials) load('steer_dial.js');
 load('robot.js');
 
 const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
@@ -348,7 +355,16 @@ function findPreset(id) {
 
   const actions = payload.actions || [];
   for (const action of actions) {
-    if (action.type === 'preset') {
+    if (action.type === 'dial') {
+      const slider = byId('steer-slider-' + (action.module || 'FL'));
+      const dial = global.RCSteerDial.attach(slider).element;
+      const pos = angle => ({pointerId:1, button:0, clientX:160+120*Math.sin(angle*Math.PI/180), clientY:160-120*Math.cos(angle*Math.PI/180)});
+      dial.fire('pointerdown', pos(action.angle));
+      if (action.move != null) dial.fire('pointermove', pos(action.move));
+      if (action.disable) { slider.disabled = true; global.RCSteerDial.sync(slider, null); }
+      dial.fire(action.cancel ? 'pointercancel' : 'pointerup', pos(action.move == null ? action.angle : action.move));
+      await flush(action.rounds || 4);
+    } else if (action.type === 'preset') {
       const button = findPreset(action.id);
       if (!button) { renderErrors.push('пресет не найден: ' + action.id); continue; }
       button.fire('click');
@@ -382,6 +398,10 @@ function findPreset(id) {
   }
 
   const result = {
+    dialStates: ['FL', 'FR', 'RL', 'RR'].map(id => {
+      const dial = global.RCSteerDial && global.RCSteerDial.attach(byId('steer-slider-' + id));
+      return dial ? {id, disabled:dial.element.getAttribute('aria-disabled'), value:dial.element.getAttribute('aria-valuenow')} : null;
+    }),
     batteryVisible: !byId('swipe-battery-view').hidden,
     motorsVisible: !byId('swipe-motors-view').hidden,
     presets: presetButtons(),

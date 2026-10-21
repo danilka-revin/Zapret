@@ -549,6 +549,8 @@ def _drive_command(source, body):
 
 #: Статика интерфейса: имя файла → endpoint. Отдаётся только этот список.
 ASSETS = {
+    "steer_dial.js": "steer_dial_js",
+    "steer_dial.css": "steer_dial_css",
     "connections.css": "connections_css",
     "connections.js": "connections_js",
     "main.css": "main_css",

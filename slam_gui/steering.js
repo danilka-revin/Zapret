@@ -4,6 +4,7 @@
 
   if (window.RCSteeringPanel) return;
   const IDS = ['FL', 'FR', 'RL', 'RR'];
+  const WHEEL_NAMES = {FL:'Переднее левое', FR:'Переднее правое', RL:'Заднее левое', RR:'Заднее правое'};
   /** Запасной предел угла, пока сервер не ответил; совпадает с прошивкой. */
   const FALLBACK_LIMIT_DEG = 90;
   let limitDeg = FALLBACK_LIMIT_DEG;
@@ -105,7 +106,7 @@
         </section>
         <div class="rc-steering-grid">${IDS.map((id) => `
           <article class="rc-steering-card" data-rc-steering="${id}">
-            <header><b>${id}</b><span data-status>нет связи</span></header>
+            <header><b>${id}<small>${WHEEL_NAMES[id]}</small></b><span data-status>нет связи</span></header>
             <div class="rc-steering-values"><span>Сейчас <b data-current>—</b></span><span>Цель <b data-target>0°</b></span></div>
             <input data-range type="range" min="-100" max="100" step="1" value="0" aria-label="${id}, целевой угол" disabled>
             <div class="rc-steering-actions">
@@ -490,6 +491,7 @@
     card.querySelector('[data-current]').textContent = current == null ? '—' : current.toFixed(1) + '°';
     card.querySelector('[data-target]').textContent = Math.round(+range.value || 0) + '°';
     range.disabled = !ready;
+    if (window.RCSteerDial) window.RCSteerDial.sync(range, current);
     card.querySelectorAll('[data-step], [data-center]').forEach((button) => { button.disabled = !ready; });
     card.querySelector('[data-send]').disabled = !ready || !card.dataset.dirty;
     card.querySelector('[data-origin]').disabled = !canZero;
@@ -673,6 +675,7 @@
   function bindCard(id) {
     const card = document.querySelector('[data-rc-steering="' + id + '"]');
     const range = card.querySelector('[data-range]');
+    if (window.RCSteerDial) window.RCSteerDial.attach(range);
     range.addEventListener('input', () => { markCardDirty(id, range.value); });
     // Как на бортовом экране: отпустил ползунок — команда ушла. Раньше здесь
     // требовалось ещё нажать «Повернуть», а на экране робота — нет: одно и то
