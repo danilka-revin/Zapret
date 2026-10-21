@@ -28,13 +28,13 @@ def cli():
 
 def test_save_env_rewrites_only_master_line(tmp_path, cli):
     env = tmp_path / ".env"
-    env.write_text("RC_SECRET_KEY=abc\n# комментарий\nRC_SLAM_PORT=/dev/ttyACM0\n"
+    env.write_text("RC_SECRET_KEY=abc\n# комментарий\nRC_WHEEL_FL_PORT=/dev/ttyACM0\n"
                    "RC_LIDAR_PORT=/dev/ttyUSB1\n", encoding="utf-8")
     env.chmod(0o640)
-    change = cli.save_env("/dev/ttyUSB0", env)
-    assert change == {"key": "RC_SLAM_PORT", "old": "/dev/ttyACM0", "new": "/dev/ttyUSB0"}
-    assert env.read_text(encoding="utf-8") == (
-        "RC_SECRET_KEY=abc\n# комментарий\nRC_SLAM_PORT=/dev/ttyUSB0\n"
+    change = cli.save_env("/dev/ttyUSB0", env, wheel="FL")
+    assert change == {"key": "RC_WHEEL_FL_PORT", "old": "/dev/ttyACM0", "new": "/dev/ttyUSB0"}
+    assert env.read_text(encoding="utf-8").startswith(
+        "RC_SECRET_KEY=abc\n# комментарий\nRC_WHEEL_FL_PORT=/dev/ttyUSB0\n"
         "RC_LIDAR_PORT=/dev/ttyUSB1\n")
     assert env.stat().st_mode & 0o777 == 0o640
 
@@ -43,7 +43,7 @@ def test_save_env_rejects_bad_port(tmp_path, cli):
     env = tmp_path / ".env"
     for bad in ("ttyUSB0", "/dev/tty; rm -rf /", "/dev/a b", "/dev/x\nRC_SLAM_PORT=/dev/y"):
         with pytest.raises(ValueError):
-            cli.save_env(bad, env)
+            cli.save_env(bad, env, wheel="FL")
     assert not env.exists()
 
 
@@ -87,7 +87,7 @@ def test_probe_finds_master_telemetry(cli):
             except OSError:
                 pass
     assert report["ok"] is True
-    assert report["modules"] == ["FL"]
+    assert report["modules"] == []
     assert report["firmware"] == 2
 
 
@@ -106,3 +106,22 @@ def test_probe_reports_silent_port(cli):
     assert report["ok"] is False
     assert "@TLM" in report["detail"]
     assert report["modules"] == []
+
+
+def test_cli_without_explicit_port_cannot_scan(cli, monkeypatch, tmp_path):
+    opened = []
+    monkeypatch.setattr(cli, 'probe_port', lambda port, **kw: opened.append(port))
+    with pytest.raises(SystemExit) as exc:
+        cli.main(['--env-file', str(tmp_path / '.env')])
+    assert exc.value.code == 2
+    assert opened == []
+
+
+def test_cli_checks_exactly_one_selected_port(cli, monkeypatch, tmp_path):
+    opened = []
+    def probe(port, **kwargs):
+        opened.append(port)
+        return {'ok': True, 'port': port, 'detail': ''}
+    monkeypatch.setattr(cli, 'probe_port', probe)
+    assert cli.main(['--port', '/dev/ttyUSB7', '--json', '--env-file', str(tmp_path / '.env')]) == 0
+    assert opened == ['/dev/ttyUSB7']

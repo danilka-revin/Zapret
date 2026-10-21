@@ -1,18 +1,4 @@
-"""Порты колёс и лидара не отбирают друг у друга USB.
-
-Источник колёс (``MasterSource``) сканирует все ``/dev/ttyUSB*``/``ttyACM*`` и
-раньше держал открытыми **все** найденные порты, включая порт лидара, и писал
-в них команды. Лидар глох: счётчик на экране мигал «200 → 15 → 50», скан
-пропадал. Тесты фиксируют этикет портов, который уже был у ``SerialSource``:
-
-* пока лидар ищет свой порт — колёса ждут (``yield_to_lidar``);
-* порт под замком лидара не открывается (``claim``);
-* порт, не назвавшийся колесом за окно опознания, отпускается и не трогается
-  (на том же USB может быть лидар);
-* в неопознанный порт не уходят даже рассылаемые команды;
-* опознанный порт колеса помечается (``tag_module``), чтобы лидар его не
-  перебирал: открытие порта сбрасывает плату и рвёт телеметрию.
-"""
+"""Manual wheel ports: no unassigned opens, locks and telemetry safety."""
 
 from __future__ import annotations
 
@@ -21,7 +7,6 @@ import queue
 import sys
 import threading
 import time
-import tty
 import types
 
 import pytest
@@ -47,41 +32,19 @@ def _wait(condition, timeout=3.0):
     return condition()
 
 
-def test_port_that_is_not_a_wheel_is_released_and_left_alone():
-    """Бинарный поток без @TLM (так выглядит лидар) отпускается и не трогается.
-
-    Раньше такой порт оставался открытым навсегда: его держал источник колёс,
-    а настоящий драйвер лидара не мог даже открыть устройство.
-    """
+def test_unassigned_ports_are_never_opened(monkeypatch):
     serial = pytest.importorskip("serial")
     backend = _backend()
-    master_fd, slave_fd = os.openpty()
-    name = os.ttyname(slave_fd)
-    tty.setraw(slave_fd)                 # поток лидара — без строк
-    src = backend.MasterSource(name, probe=True)
-    src.PROBE_S = 0.4
-    src.RESCAN_S = 0.2
-    src.RETRY_S = 0.2
+    opened = []
+    monkeypatch.setattr(serial, "Serial", lambda *args, **kwargs: opened.append(args))
+    src = backend.MasterSource('/dev/ttyUSB0', port_provider=lambda: ['/dev/ttyUSB1'])
     try:
-        deadline = time.time() + 4.0
-        while time.time() < deadline and not (name in src._rejected and not src.links):
-            try:
-                os.write(master_fd, bytes(range(256)) * 4)
-            except OSError:              # лидар «выдернули» — не мешает проверке
-                pass
-            time.sleep(0.04)
-        assert name in src._rejected, "порт без @TLM так и остался открытым"
-        assert not src.links
-        # Порт свободен: драйвер лидара может забрать его монопольно.
-        with serial.Serial(name, 115200, timeout=0.2, exclusive=True) as dev:
-            dev.write(b"\x00")
-        # И повторно колёса его не открывают.
-        time.sleep(0.5)
-        assert not src.links
+        time.sleep(0.15)
+        assert src._candidate_ports() == []
+        assert opened == []
+        assert not src.serial_ready.is_set()
     finally:
         src._stop = True
-        os.close(master_fd)
-        os.close(slave_fd)
 
 
 def test_wheel_port_is_identified_tagged_and_gets_commands():
@@ -92,7 +55,7 @@ def test_wheel_port_is_identified_tagged_and_gets_commands():
     name = os.ttyname(slave_fd)
     tagged, untagged, statuses = [], [], []
     src = backend.MasterSource(
-        name, probe=True,
+        name, module_ports={"FL": name},
         tag_module=tagged.append,
         untag_module=untagged.append,
         on_status=lambda level, text: statuses.append((level, text)),
@@ -108,7 +71,6 @@ def test_wheel_port_is_identified_tagged_and_gets_commands():
             time.sleep(0.04)
         assert src.modules.get("FL") == name, "колесо не опознано: %s" % statuses
         assert _wait(lambda: name in tagged), "порт колеса не помечен для лидара"
-        assert name not in src._rejected
 
         # Рассылаемая команда уходит только в опознанный порт.
         src.commands.put(b"b\r\n")
@@ -158,14 +120,13 @@ def test_ports_wait_while_the_lidar_searches():
     master_fd, slave_fd = os.openpty()
     name = os.ttyname(slave_fd)
     allow = {"lidar": True}
-    src = backend.MasterSource(name, probe=True,
+    src = backend.MasterSource(name, module_ports={"FL": name},
                                yield_to_lidar=lambda port: allow["lidar"])
     src.PROBE_S = 5.0
     src.RESCAN_S = 0.2
     try:
         time.sleep(0.5)
         assert not src.links, "колёса открыли порт, пока лидар его искал"
-        assert name not in src._rejected
         allow["lidar"] = False
         assert _wait(lambda: name in src.links), "после поиска лидара порт не открылся"
     finally:
@@ -180,12 +141,11 @@ def test_port_claimed_by_the_lidar_is_not_opened():
     backend = _backend()
     master_fd, slave_fd = os.openpty()
     name = os.ttyname(slave_fd)
-    src = backend.MasterSource(name, probe=True, claim=lambda port: None)  # «занят»
+    src = backend.MasterSource(name, module_ports={"FL": name}, claim=lambda port: None)  # «занят»
     src.RESCAN_S = 0.2
     try:
         time.sleep(0.6)
         assert not src.links, "колёса открыли порт, который держит лидар"
-        assert name not in src._rejected
     finally:
         src._stop = True
         os.close(master_fd)
@@ -216,7 +176,7 @@ def test_identified_wheel_keeps_shared_device_lock_until_close(monkeypatch, tmp_
     backend = _backend()
     master_fd, slave_fd = os.openpty()
     name = os.ttyname(slave_fd)
-    src = backend.MasterSource(name, claim=lidar.try_lock_port,
+    src = backend.MasterSource(name, module_ports={"FL": name}, claim=lidar.try_lock_port,
                                release=lidar.unlock_port)
     try:
         deadline = time.time() + 3
@@ -263,7 +223,7 @@ def test_rescan_with_another_alias_does_not_reopen_wheel(monkeypatch, tmp_path):
         return serial_class(*args, **kwargs)
 
     monkeypatch.setattr(serial, 'Serial', counted)
-    src = backend.MasterSource(name, port_provider=lambda: list(candidates))
+    src = backend.MasterSource(name, module_ports={"FL": name}, port_provider=lambda: list(candidates))
     try:
         deadline = time.time() + 3
         while time.time() < deadline and 'FL' not in src.modules:
@@ -308,7 +268,6 @@ def test_identified_but_silent_stream_reconnects_without_stale_frames(monkeypatc
             os.write(master_fd, TLM_FL)
             time.sleep(0.03)
         assert 'FR' in src.frames
-        assert name not in src._rejected
     finally:
         src._stop = True
         _wait(lambda: not src.links)

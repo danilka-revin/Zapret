@@ -548,7 +548,7 @@
 
         <details id="wheel-port-settings" class="bms-setup">
           <summary>USB-порты колёс · ручное назначение</summary>
-          <p>Выберите, к какому USB-порту разветвителя подключено каждое колесо. Ручной выбор важнее имени в прошивке. «Авто» — определять по плате. Стабильный путь <code>/dev/serial/by-path/…</code> привязан к гнезду разветвителя; номера ttyUSB/ttyACM могут меняться.</p>
+          <p>Для каждого колеса выберите имя его порта: <code>/dev/ttyUSB0</code>, <code>/dev/ttyACM0</code> и т. п. Автоопределение отключено. «Не подключено» оставляет колесо отключённым. Имена в прошивке не используются. Номера портов могут измениться после переподключения USB.</p>
           <div id="wheel-port-fields" class="cam-settings-grid"></div>
           <div class="cam-settings-actions">
             <button id="wheel-ports-refresh" type="button">Обновить список USB</button>

@@ -139,15 +139,16 @@ def test_reserved_ports_are_never_offered_to_the_lidar(tmp_path, monkeypatch):
     assert candidates == [str(lidar_port)]
 
 
-def test_default_master_port_is_reserved_even_without_an_env_value(monkeypatch):
-    """RC_SLAM_SOURCE=master без RC_SLAM_PORT: мастер всё равно на /dev/ttyACM0."""
+def test_only_manually_assigned_wheel_ports_are_reserved(monkeypatch):
     for name in ("RC_SLAM_PORT", "RC_SLAM_MASTER_PORT", "RC_SLAM_PORTS",
-                 "RC_BMS_PORT", "RC_LIDAR_EXCLUDE"):
+                 "RC_BMS_PORT", "RC_LIDAR_EXCLUDE", "RC_WHEEL_FL_PORT",
+                 "RC_WHEEL_FR_PORT", "RC_WHEEL_RL_PORT", "RC_WHEEL_RR_PORT"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("RC_SLAM_SOURCE", "master")
-    assert "/dev/ttyACM0" in ros_drivers.reserved_ports()
-    monkeypatch.setenv("RC_SLAM_SOURCE", "serial")
     assert "/dev/ttyACM0" not in ros_drivers.reserved_ports()
+    monkeypatch.setenv('RC_WHEEL_FR_PORT', '/dev/ttyACM2')
+    assert '/dev/ttyACM2' in ros_drivers.reserved_ports()
+    assert ros_drivers.candidate_ports(['/dev/ttyACM2']) == []
 
 
 def test_driver_command_uses_direct_executable_and_ros_parameters(tmp_path):

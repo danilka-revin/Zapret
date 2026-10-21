@@ -69,8 +69,8 @@
     launch.id = 'rc-steering-launch';
     launch.className = 'rc-steering-launch';
     launch.type = 'button';
-    launch.textContent = 'Рулевое';
-    launch.title = 'Поворот рулевых модулей';
+    launch.textContent = 'Руление и тяга';
+    launch.title = 'Открыть вкладку управления через бортовой сервер';
 
     const overlay = document.createElement('div');
     overlay.id = 'rc-steering-overlay';
@@ -138,10 +138,10 @@
     document.body.append(overlay);
 
     launch.addEventListener('click', () => {
-      overlay.hidden = false;
-      void refresh();
-      if (pollTimer) clearInterval(pollTimer);
-      pollTimer = setInterval(() => void refresh(), 500);
+      const url = new URL('/controls', window.location.href);
+      const token = new URLSearchParams(window.location.search).get('st');
+      if (token) url.searchParams.set('st', token);
+      window.location.assign(url.toString());
     });
     overlay.querySelector('.rc-steering-close').addEventListener('click', close);
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });

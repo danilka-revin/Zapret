@@ -28,6 +28,11 @@
     }
   }
 
+  document.addEventListener('click', function (event) {
+    var link = event.target.closest && event.target.closest('a[href]');
+    if (link) link.href = withToken(link.href);
+  });
+
   var nativeFetch = window.fetch;
   if (typeof nativeFetch === "function") {
     window.fetch = function (input, init) {

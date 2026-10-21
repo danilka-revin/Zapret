@@ -298,6 +298,11 @@ function load(name) {
 }
 load('robot_model.js');
 load('steer_presets.js');      // как в robot.html: общий модуль грузится до экрана
+if (payload.remoteView) {
+  global.RCRemoteControls = true;
+  byId('ctrl-overlay').hidden = true;
+  document.body.dataset.remoteView = payload.remoteView;
+}
 load('robot.js');
 
 const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
@@ -377,6 +382,8 @@ function findPreset(id) {
   }
 
   const result = {
+    batteryVisible: !byId('swipe-battery-view').hidden,
+    motorsVisible: !byId('swipe-motors-view').hidden,
     presets: presetButtons(),
     presetCount: presetButtons().length,
     sharedLimit: global.RCSteerPresets ? global.RCSteerPresets.limit() : null,

@@ -1,6 +1,7 @@
 """Manual wheel-to-USB assignments. Changes take effect after restart."""
 from __future__ import annotations
 
+import glob
 import os
 import re
 import secrets
@@ -8,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 from .config import PROJECT_ROOT
-from .master_port import reserved_ports, serial_ports
+from .master_port import reserved_ports
 
 MODULES = {"FL": "Переднее левое", "FR": "Переднее правое",
            "RL": "Заднее левое", "RR": "Заднее правое"}
@@ -28,7 +29,10 @@ def settings_payload():
     saved = read_env_file(env_file_path())
     settings = {m: saved.get(k, current_settings()[m]) for m, k in ENV_KEYS.items()}
     blocked = reserved_ports()
-    paths = list(dict.fromkeys(serial_ports() + [p for p in settings.values() if p]))
+    paths = sorted(set(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")
+                       + [os.path.realpath(p) for p in settings.values() if p]))
+    # Show kernel port names, not a guessed board identity or preferred alias.
+    settings = {m: os.path.realpath(p) if p else "" for m, p in settings.items()}
     return {"ok": True, "settings": settings, "restartRequired": True,
             "ports": [{"path": p, "present": os.path.exists(p),
                        "reserved": p in blocked or os.path.realpath(p) in blocked}

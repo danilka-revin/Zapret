@@ -616,14 +616,14 @@ static void scenario_drive() {
 
 static void scenario_serial_garbage() {
   boot({&board_fl, &board_fr, &board_rl, &board_rr});
-  for (const char* chunk : {"@TLM mod=RR deg=0.00 tgt=0.00 mov", "\x07\xff#"}) {
+  for (const char* chunk : {"@TLM deg=0.00 tgt=0.00 mov", "\x07\xff#"}) {
     for (const char* p = chunk; *p; ++p) board_fl.serial.input.push_back((uint8_t)*p);
     sim::run_for_ms(1200);               // обрывок без \n висит дольше секунды
   }
   board_fl.serial.send("k");
   sim::run_for_ms(5);
   CHECK(wheel_fl::calib_state != wheel_fl::CAL_IDLE, "после мусора в порту команда k всё равно выполнена");
-  board_fl.serial.send("@TLM mod=FL deg=0.00 tgt=0.00 moving=0 cal=0");
+  board_fl.serial.send("@TLM deg=0.00 tgt=0.00 moving=0 cal=0");
   board_fl.serial.send("# FL: эхо сообщения");
   sim::run_for_ms(5);
   CHECK(!has(board_fl, "Неизв. команда: @TLM") && !has(board_fl, "Неизв. команда: #"),
@@ -669,29 +669,19 @@ static void calibrate_all() {
   sim::run_for_ms(300);                  // телеметрия всех четырёх колёс
 }
 
-// Каждое колесо называет себя: @ID отвечает на запрос, @TLM печатает mod= с
-// именем из прошивки — по этому сервер привязывает порт к колесу сам.
+// Only telemetry, no USB-port/role discovery response.
 static void scenario_identity() {
   boot(all_boards());
   for (sim::Board* board : all_boards()) board->serial.send("@ID");
-  sim::run_for_ms(5);
-  CHECK(has(board_fl, "@ID mod=FL fw=4"), "FL отвечает на @ID: %s", board_fl.serial.output.c_str());
-  CHECK(has(board_fr, "@ID mod=FR fw=4"), "FR отвечает на @ID: %s", board_fr.serial.output.c_str());
-  CHECK(has(board_rl, "@ID mod=RL fw=4"), "RL отвечает на @ID: %s", board_rl.serial.output.c_str());
-  CHECK(has(board_rr, "@ID mod=RR fw=4"), "RR отвечает на @ID: %s", board_rr.serial.output.c_str());
-  sim::run_for_ms(300);                  // телеметрия раз в 250 мс
+  sim::run_for_ms(300);
   for (sim::Board* board : all_boards()) {
-    const std::string tag = std::string("@TLM mod=") + board->name + " ";
-    CHECK(board->serial.output.find(tag) != std::string::npos,
-          "телеметрия %s печатает своё имя: %s", board->name, board->serial.output.c_str());
+    CHECK(!has(*board, "@ID"), "no discovery answer");
+    CHECK(has(*board, "@TLM deg="), "telemetry on selected port");
+    CHECK(!has(*board, "mod="), "role is not reported by firmware");
   }
-  CHECK(!has(board_fl, "@TLM mod=FR") && !has(board_fr, "@TLM mod=FL"),
-        "каждый порт печатает только своё колесо");
-  // Чужое имя в «w» молча игнорируется — перепутанный кабель не крутит не то.
   board_fl.serial.send("w RR 90");
   sim::run_for_ms(200);
-  CHECK(wheel_fl::stepNow() == 0, "w RR на плете FL не выполнен: %ld", (long)wheel_fl::stepNow());
-  CHECK(!has(board_fl, "@TLM mod=FL deg=90"), "FL не поехал на команду RR");
+  CHECK(wheel_fl::stepNow() == 0, "legacy foreign command ignored");
 }
 
 static void scenario_system_calibrate_all() {
@@ -703,8 +693,7 @@ static void scenario_system_calibrate_all() {
         "колёса на нулях датчиков: %ld %ld %ld %ld", board_fl.phys, board_fr.phys, board_rl.phys,
         board_rr.phys);
   for (sim::Board* board : all_boards()) {
-    const std::string tag = std::string("@TLM mod=") + board->name +
-                            " deg=0.00 tgt=0.00 moving=0 cal=1 cycle=0 calib=0";
+    const std::string tag = std::string("@TLM deg=0.00 tgt=0.00 moving=0 cal=1 cycle=0 calib=0");
     CHECK(board->serial.output.find(tag) != std::string::npos,
           "телеметрия %s после калибровки: %s", board->name, board->serial.output.c_str());
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
@@ -729,7 +718,7 @@ static void scenario_system_server_commands() {
         "w FR 12.5 на своём порту: FR=%ld", (long)wheel_fr::stepNow());
   CHECK(wheel_fl::stepNow() == 0 && wheel_rl::stepNow() == 0, "остальные не тронуты");
   sim::run_for_ms(300);                  // телеметрия FR: tgt=12.50 в кадре
-  CHECK(has(board_fr, "@TLM mod=FR deg=12.50 tgt=12.50 moving=0 cal=1"), "телеметрия FR на 12.5°");
+  CHECK(has(board_fr, "@TLM deg=12.50 tgt=12.50 moving=0 cal=1"), "телеметрия FR на 12.5°");
   board_fl.serial.send("w FL -7");
   CHECK(wait_until([] { return !wheel_fl::motorBusy() && wheel_fl::stepNow() == -933; }, 3000),
         "w FL -7 — своё колесо: %ld", (long)wheel_fl::stepNow());
@@ -970,13 +959,13 @@ static void scenario_tlm_dump() {
   board_fr.serial.send("w FR 12.5");
   sim::run_for_ms(700);
   for (sim::Board* board : all_boards()) {
+    std::printf("PORT %s\n", board->name);
     std::fwrite(board->serial.output.data(), 1, board->serial.output.size(), stdout);
   }
 }
 
 // ./sim pty /tmp/wheel — четыре колеса в реальном времени за псевдотерминалами
-// /tmp/wheel-FL … /tmp/wheel-RR: сервер робота находит их сам (RC_SLAM_PORT не
-// обязателен) и видит настоящую логику прошивки — для ручной проверки без железа.
+// /tmp/wheel-FL … /tmp/wheel-RR: задайте вручную RC_WHEEL_FL/FR/RL/RR_PORT и видит настоящую логику прошивки — для ручной проверки без железа.
 static int run_pty(const char* link_base) {
   struct Link {
     int fd;

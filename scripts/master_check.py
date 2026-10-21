@@ -1,30 +1,12 @@
 #!/usr/bin/env python3
-"""Проверка USB-колёс Zapret: на каком порту Arduino и почему «нет связи».
+"""Check only a manually selected wheel port; never scan/open other devices.
 
-Колесо — плата с прошивкой ``firmware/motor_wheel`` (Arduino Mega / Mega Mini,
-USB 115200 бод, имя колеса в ``MODULE_ID``). Каждые 250 мс она печатает
-``@TLM mod=FL …``; по этой строке скрипт узнаёт колесо, а не просто «порт
-открылся». Порт из ``RC_SLAM_PORT`` — первый кандидат; сервер ведёт карту
-«колесо → порт» сам, скрипт помогает найти и закрепить кандидатов.
+  .venv/bin/python scripts/master_check.py --list
+  .venv/bin/python scripts/master_check.py --port /dev/ttyUSB0
+  .venv/bin/python scripts/master_check.py --port /dev/ttyUSB0 --wheel FL --save-env
 
-    .venv/bin/python scripts/master_check.py              # найти мастер сам
-    .venv/bin/python scripts/master_check.py --list       # только список портов
-    .venv/bin/python scripts/master_check.py --port /dev/ttyUSB0
-    .venv/bin/python scripts/master_check.py --seconds 8  # дольше ждать ответа
-    .venv/bin/python scripts/master_check.py --save-env   # записать порт в .env
-    .venv/bin/python scripts/master_check.py --json       # для скриптов
-
-Почему не ``/dev/ttyACM0``: родная Mega видна как ``ttyACM0``, а клоны на
-CH340/FT232/CP2102 — как ``ttyUSB0``. Номер после переподключения меняется,
-поэтому ``--save-env`` пишет постоянное имя ``/dev/serial/by-id/…``, если оно
-есть.
-
-Порт открывается монопольно, и Arduino при этом перезагружается (DTR). После
-проверки/записи порта перезапустите робота и нажмите на экране «Калибровать все
-колёса»: ноль руля после перезапуска платы не сохраняется. Если пульт/экран уже
-занимает порт, скрипт честно скажет «занят» — это не поломка.
-
-Коды возврата: 0 — колесо найдено, 1 — не найдено (причина в выводе).
+Stop the robot before testing a port. No wheel identity is inferred from
+firmware; --wheel is the operator's assignment. A complete @TLM confirms data.
 """
 
 from __future__ import annotations
@@ -39,13 +21,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from robot_control.master_port import (  # noqa: E402
-    ENV_KEY,
     TELEMETRY_PREFIX,
-    diagnostics,
-    master_ports,
     normalize_port,
     serial_ports,
-    stable_port_path,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -135,9 +113,6 @@ def probe_port(port: str, *, seconds: float = 5.0, baud: int = BAUD) -> dict:
                 key, sep, value = token.partition("=")
                 if sep:
                     fields[key] = value
-            module = (fields.get("mod") or "").upper()
-            if module and module not in modules:
-                modules.append(module)
             try:
                 firmware = int(fields.get("fw") or 0) or firmware
             except ValueError:
@@ -161,162 +136,63 @@ def probe_port(port: str, *, seconds: float = 5.0, baud: int = BAUD) -> dict:
 
 
 def describe(configured: str = "") -> list[str]:
-    """Строки отчёта «что видит система» без открытия портов."""
-    info = diagnostics(configured or None)
-    lines = ["Настройка: %s=%s%s" % (
-        ENV_KEY, info["configured"],
-        "" if info["configuredExists"] else "  (не найден)",
-    )]
-    ports = info["ports"]
-    if ports:
-        lines.append("USB-последовательные порты:")
-        for path in ports:
-            real = os.path.realpath(path)
-            note = "" if real == path else " → %s" % real
-            if not os.access(path, os.R_OK | os.W_OK):
-                note += "  [нет прав]"
-            lines.append("  • %s%s" % (path, note))
-    else:
-        lines.append("USB-последовательные порты: не найдены")
-    if info["reserved"]:
-        lines.append("Исключены (лидар/BMS): %s" % ", ".join(info["reserved"]))
-    if info["hint"]:
-        lines.append("Подсказка: %s" % info["hint"])
-    return lines
+    """List kernel USB port names without opening devices."""
+    ports = serial_ports(patterns=("/dev/ttyUSB*", "/dev/ttyACM*"))
+    return ["USB-последовательные порты:"] + ["  • " + p for p in ports]
 
 
-def save_env(port: str, path: Path = ENV_FILE) -> dict:
-    """Записать ``RC_SLAM_PORT`` в ``.env``, не трогая остальные строки."""
-    raw = str(port or "").strip()
-    if not raw.startswith("/"):
-        raise ValueError("нужен полный путь к порту: /dev/ttyUSB0 или /dev/serial/by-id/…")
-    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 or ch in "\"'`$;" for ch in raw):
-        raise ValueError("недопустимые символы в имени порта")
-    port = normalize_port(raw)
-    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
-    out: list[str] = []
-    old = None
-    seen = False
-    for raw in lines:
-        key = raw.strip().split("=", 1)[0].strip() if "=" in raw else ""
-        if key == ENV_KEY and not raw.lstrip().startswith("#"):
-            old = raw.split("=", 1)[1].strip() if "=" in raw else ""
-            if not seen:
-                out.append("%s=%s" % (ENV_KEY, port))
-            seen = True
-        else:
-            out.append(raw)
-    if not seen:
-        out.append("%s=%s" % (ENV_KEY, port))
-    if not path.is_file() and not any(line.startswith("RC_SECRET_KEY=") for line in out):
-        import secrets
-        out.insert(0, "RC_SECRET_KEY=%s" % secrets.token_urlsafe(48))
-    text = "\n".join(out).rstrip("\n") + "\n"
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    try:
-        mode = path.stat().st_mode & 0o777 if path.is_file() else 0o600
-        os.chmod(tmp, mode or 0o600)
-    except OSError:
-        pass
-    os.replace(tmp, path)
-    return {"key": ENV_KEY, "old": old, "new": port}
+def save_env(port: str, path: Path = ENV_FILE, *, wheel: str) -> dict:
+    """Persist exactly the operator-selected port and wheel, never infer either."""
+    from robot_control.wheel_settings import save_settings, current_settings, ENV_KEYS
+    from robot_control.lidar import read_env_file
+    if wheel not in ENV_KEYS:
+        raise ValueError("Выберите колесо FL, FR, RL или RR")
+    values = read_env_file(path)
+    settings = {m: values.get(key, current_settings()[m]) for m, key in ENV_KEYS.items()}
+    key = ENV_KEYS[wheel]
+    old = values.get(key)
+    settings[wheel] = port
+    result = save_settings(settings, env_path=path)
+    return {"key": key, "old": old, "new": result["settings"][wheel]}
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Найти USB-колесо Zapret (@TLM), проверить порт и записать его в .env",
-    )
-    parser.add_argument("--port", default="", help="порт или glob (по умолчанию — из RC_SLAM_PORT и автопоиск)")
-    parser.add_argument("--seconds", type=float, default=5.0,
-                        help="сколько секунд ждать строку @TLM на каждом порту (по умолчанию 5)")
-    parser.add_argument("--list", action="store_true", help="только показать порты и выйти")
-    parser.add_argument("--json", action="store_true", help="вывод в JSON (для скриптов)")
-    parser.add_argument("--save-env", action="store_true",
-                        help="записать найденный порт в .env (постоянное имя by-id, если есть)")
-    parser.add_argument("--env-file", default=str(ENV_FILE),
-                        help="файл .env для --save-env (по умолчанию .env проекта)")
+    parser = argparse.ArgumentParser(description="Проверить вручную выбранный USB-порт колеса без автопоиска")
+    parser.add_argument("--port", default="", help="точное имя порта, например /dev/ttyUSB0")
+    parser.add_argument("--wheel", choices=("FL", "FR", "RL", "RR"), help="назначение порта оператором")
+    parser.add_argument("--seconds", type=float, default=5.0)
+    parser.add_argument("--list", action="store_true", help="только список имён портов; ничего не открывать")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--save-env", action="store_true")
+    parser.add_argument("--env-file", default=str(ENV_FILE))
     args = parser.parse_args(argv)
-
     load_env_file(Path(args.env_file))
-    configured = normalize_port(args.port) or diagnostics()["configured"]
-    ports = master_ports(args.port or None) or [configured]
-
     if args.list:
-        for line in describe(args.port):
+        for line in describe():
             log(line)
-        return 0 if (os.path.exists(configured) or serial_ports()) else 1
-
-    if not args.json:
-        log("Проверка USB-колёс Zapret (Arduino, 115200 бод)")
-        for line in describe(args.port):
-            log(line)
-        log()
-
-    reports = []
-    for port in ports:
-        if not args.json:
-            log("• проверяю %s …" % port)
-        report = probe_port(port, seconds=args.seconds)
-        reports.append(report)
-        if args.json:
-            continue
-        if report["ok"]:
-            modules = ", ".join(report["modules"]) or "—"
-            log("  колесо ответило: @TLM, модулей: %d (%s), fw=%s"
-                % (len(report["modules"]), modules, report["firmware"] or "?"))
-            if (report["firmware"] or 0) < 4:
-                log("  внимание: прошивка до v4 (fw=%s) — перепрошите плату файлом "
-                    "motor_wheel_%s.ino с рабочего стола." % (report["firmware"] or "?",
-                                                              report["modules"][0] if report["modules"] else "XX"))
-        else:
-            log("  не колесо: %s" % (report["detail"] or report["error"] or "нет ответа"))
-    found = next((report for report in reports if report["ok"]), None)
-
-    if args.json:
-        payload = {"ok": bool(found), "reports": reports}
-        if found:
-            payload["port"] = stable_port_path(found["port"])
-        if args.save_env and found:
-            try:
-                payload["env"] = save_env(stable_port_path(found["port"]), Path(args.env_file))
-            except (OSError, ValueError) as exc:
-                payload["envError"] = str(exc)
-        log(json.dumps(payload, ensure_ascii=False))
-        return 0 if found else 1
-
-    log()
-    if not found:
-        log("Колесо не ответило ни на одном порту.")
-        log("• проверьте, что прошит именно firmware/motor_wheel "
-            "(motor_wheel_FL/FR/RL/RR.ino — каждая плата своим файлом), 115200 бод;")
-        log("• закройте монитор порта Arduino IDE; если порт «занят» — остановите "
-            "робота (./scripts/stop.sh): один UART нельзя открыть двум программам;")
-        log("• проверьте кабель (с данными), питание платы и `dmesg | tail` после подключения;")
-        log("• права: sudo usermod -aG dialout $USER, затем выйдите из Ubuntu и войдите снова.")
-        return 1
-
-    stable = stable_port_path(found["port"])
-    log("Колесо найдено: %s (%s)" % (found["port"], ", ".join(found["modules"]) or "?"))
-    if stable != found["port"]:
-        log("Постоянное имя (не меняется после переподключения): %s" % stable)
-    if args.save_env:
+        return 0
+    if not args.port:
+        parser.error("Укажите --port. Автоопределение отключено. Список: --list")
+    if args.save_env and not args.wheel:
+        parser.error("Для сохранения укажите --wheel FL|FR|RL|RR")
+    if any(c in args.port for c in '*?['):
+        parser.error("Нужно точное имя порта, не шаблон")
+    report = probe_port(args.port, seconds=args.seconds)
+    payload = {"ok": report["ok"], "reports": [report]}
+    if args.save_env and report["ok"]:
         try:
-            change = save_env(stable, Path(args.env_file))
+            payload["env"] = save_env(args.port, Path(args.env_file), wheel=args.wheel)
         except (OSError, ValueError) as exc:
-            log("Не удалось записать .env: %s" % exc)
-            return 1
-        log("Записано в %s: %s=%s%s" % (
-            args.env_file, ENV_KEY, change["new"],
-            "" if change["old"] in (None, change["new"]) else " (было %s)" % change["old"],
-        ))
-        log("Перезапустите робота: ./scripts/stop.sh && ./scripts/start_robot.sh")
+            payload.update(ok=False, envError=str(exc))
+    if args.json:
+        log(json.dumps(payload, ensure_ascii=False))
     else:
-        log("Записать в .env: %s=%s" % (ENV_KEY, stable))
-        log("Или запустите: .venv/bin/python scripts/master_check.py --save-env")
-    log("После перезапуска платы нажмите на экране «Калибровать все колёса»: "
-        "ноль руля хранится до выключения.")
-    return 0
+        log("%s: %s" % (args.port, "телеметрия получена" if report["ok"] else report["detail"]))
+        if "envError" in payload:
+            log(payload["envError"])
+        if "env" in payload:
+            log("Сохранено. Остановите робот и перезапустите программу для применения.")
+    return 0 if payload["ok"] else 1
 
 
 if __name__ == "__main__":

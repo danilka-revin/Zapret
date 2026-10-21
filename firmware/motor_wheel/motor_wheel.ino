@@ -1,20 +1,15 @@
 // motor_wheel — прошивка ОДНОГО колеса руля (Arduino Mega 2560 / Mega Mini).
-// Каждая из четырёх плат подключена к серверу собственным
-// USB-кабелем (115200 бод), и на каждой плате прошивка СВОЕГО колеса —
-// FL, FR, RL или RR. Имя колеса зашито в MODULE_ID (в начале файла); рабочий
-// стол получает готовые motor_wheel_FL/FR/RL/RR.ino (scripts/sync_firmware_desktop.sh),
-// прошивать одинаковым файлом все четыре платы не нужно.
-//
-// Сервер сам понимает, куда что подключено: плата называет себя в каждой
-// строке телеметрии «@TLM mod=FL …» (раз в 250 мс) и на запрос «@ID» —
-// какая прошивка на каком порту, определяется без настроек и переключателей,
-// в любом порядке кабелей. Команда с именем чужого колеса («w FR 12.5»,
-// пришедшая на FL) молча игнорируется — перепутанные порты не крутят не то.
+// Каждая плата подключена отдельным USB-кабелем (115200 бод).
+// Порт для каждого колеса оператор выбирает вручную в программе.
+// MODULE_ID используется только для подписей журнала и совместимости старых
+// адресных команд монитора. Программа посылает локальные команды (w 12.5).
+// Телеметрия @TLM раз в 250 мс не сообщает роль колеса и не определяет порт.
+// Все четыре платы можно прошить одним файлом при ручном назначении портов.
 //
 // Команды с USB (как в проверенном скетче): k, q, c, d, h, s, g, z, p, w, t, b.
 //   w 12.5 | w FL 12.5 — поворот колеса; w zero / w calib — ноль и калибровка;
 //   t N — тяга BLDC ±20% (heartbeat раз в <650 мс, иначе плата сама тормозит);
-//   b — тормоз; @ID — имя колеса; ? — справка.
+//   b — тормоз; ? — справка.
 //
 // На каждой плате: свой TB6600 (шаговый руль), оптодатчик нуля на D18,
 // потенциометр положения колеса на A0 и интерфейс BLDC-тяги.
@@ -1459,7 +1454,7 @@ void steeringLoop() {
 
 // ==================== USB: команды и телеметрия колеса =====================
 // Каждое колесо — своя плата со своим USB: сервер открывает все четыре порта,
-// опознаёт колесо по строке @TLM/@ID и шлёт команды на нужный порт. Здесь же
+// использует только вручную выбранный USB-порт. Здесь же
 // страховка прошивки: команда с именем чужого колеса не выполняется.
 char serial_line[48];
 uint8_t serial_length = 0;
@@ -1490,20 +1485,10 @@ uint8_t classifyModuleToken(const char* token) {
 
 void printHelp() {
   note(PSTR("команды: k, q, c [°], c c, d [°] [f/b], h, s, g, z, p, ?"));
-  note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: t [%%], b · @ID — имя колеса"));
+  note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: t [%%], b"));
 }
 
-// «@ID mod=FL fw=4» — ответ на запрос сервера: какое колесо на этом порту.
-// Строка начинается с @, поэтому её не спутать с сообщением «# …» для журнала.
-void printIdentity() {
-  char line[64];
-  const int n = snprintf_P(line, sizeof(line), PSTR("@ID mod=%s fw=%u\r\n"),
-                           MODULE_ID, (unsigned)FIRMWARE_PROTOCOL);
-  if (n > 0) txAppend(line, (uint16_t)n);
-}
-
-// Строка телеметрии одного колеса — тот же формат, что у мастера прежней
-// схемы: сервер (slam_gui/backend.py) разбирает его без изменений.
+// Телеметрия не содержит роли колеса: порт назначает оператор в программе.
 void appendTelemetry() {
   const uint16_t status = moduleStatus();
   char deg[16];
@@ -1516,8 +1501,8 @@ void appendTelemetry() {
   const char* home = !(status & STATUS_ZERO) ? "none"
       : ((status & STATUS_HOME_OPTO) ? "opto" : "manual");
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@TLM mod=%s deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u rpm=%s drive=%d fw=%u pot=%d pm=%d t=%lu\r\n"),
-      MODULE_ID, deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
+      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u rpm=%s drive=%d fw=%u pot=%d pm=%d t=%lu\r\n"),
+      deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
       (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
       home, (unsigned)((status >> 8) & 0x0F), rpm, (int)drive_percent, (unsigned)FIRMWARE_PROTOCOL,
       (status & STATUS_POT) ? 1 : 0,
@@ -1592,10 +1577,7 @@ void readSerialLines() {
       } else if (serial_length > 0) {
         serial_line[serial_length] = '\0';
         if (serial_line[0] == '@') {
-          // «@ID» — запрос имени колеса; «@TLM …» и прочий @ — наше же эхо.
-          const char c1 = (char)tolower((unsigned char)serial_line[1]);
-          const char c2 = (char)tolower((unsigned char)serial_line[2]);
-          if (c1 == 'i' && c2 == 'd') printIdentity();
+          // Любой @ — входное эхо/мусор, не запрос определения колеса.
         } else if (serial_line[0] != '#') {
           handleWheelCommand(serial_line);
         }

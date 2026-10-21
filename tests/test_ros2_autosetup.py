@@ -677,7 +677,7 @@ def test_lidar_script_exports_master_ports_from_env_to_the_supervisor(system):
     (system.project / ".env").write_text(
         "RC_SECRET_KEY=x\nRC_LIDAR_SOURCE=auto\n"
         "RC_SLAM_PORT=/dev/ttyACM0\nRC_SLAM_PORTS=/dev/ttyUSB0,/dev/ttyUSB1\n"
-        "RC_BMS_PORT=/dev/ttyUSB2\n", encoding="utf-8")
+        "RC_BMS_PORT=/dev/ttyUSB2\nRC_WHEEL_FR_PORT=/dev/ttyACM3\n", encoding="utf-8")
     fake_python = system.bin / "python3"
     fake_python.write_text(textwrap.dedent('''\
         #!/usr/bin/env bash
@@ -685,6 +685,7 @@ def test_lidar_script_exports_master_ports_from_env_to_the_supervisor(system):
           echo "RC_SLAM_PORT=${RC_SLAM_PORT:-}" >> "$FAKE_DIR/calls.log"
           echo "RC_SLAM_PORTS=${RC_SLAM_PORTS:-}" >> "$FAKE_DIR/calls.log"
           echo "RC_BMS_PORT=${RC_BMS_PORT:-}" >> "$FAKE_DIR/calls.log"
+          echo "RC_WHEEL_FR_PORT=${RC_WHEEL_FR_PORT:-}" >> "$FAKE_DIR/calls.log"
           exit 0
         fi
         exec %s "$@"
@@ -696,6 +697,7 @@ def test_lidar_script_exports_master_ports_from_env_to_the_supervisor(system):
     assert "RC_SLAM_PORT=/dev/ttyACM0" in calls
     assert "RC_SLAM_PORTS=/dev/ttyUSB0,/dev/ttyUSB1" in calls
     assert "RC_BMS_PORT=/dev/ttyUSB2" in calls
+    assert "RC_WHEEL_FR_PORT=/dev/ttyACM3" in calls
 
 
 def test_keep_alive_restarts_on_sigusr1_and_stops_on_term(system):

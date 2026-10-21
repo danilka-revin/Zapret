@@ -84,6 +84,7 @@
       const j = await r.json();
       if (j && j.ok && j.data) {
         lastData = j.data;
+        if (window.RCRemoteControls && (!j.data.linkOk || !(j.data.drive || {}).canDrive)) releaseDrive();
         if (window.RCRobotModel) window.RCRobotModel.update(j.data);
         setLive(true);
       } else {
@@ -92,6 +93,7 @@
     } catch (e) {
       // AbortError или сеть — не сразу гасим весь экран, даём grace-период
       setLive(false);
+      if (window.RCRemoteControls) { releaseDrive(); lastData = null; }
     } finally {
       clearTimeout(t);
       stateFetchPending = false;
@@ -370,6 +372,10 @@
     initKioskControls();
     initSwipePage();
     initSteeringControls();
+    if (window.RCRemoteControls && window._openSwipe) {
+      const view = document.body.dataset.remoteView === 'battery' ? 'battery' : 'motors';
+      window._openSwipe(view);
+    }
     // Страница карты лидара: опрос сервера и кнопки (сброс, настройки).
     if (window.RCMapView) window.RCMapView.init();
   }
@@ -2453,7 +2459,9 @@
         sourceStatus.textContent = 'Мастер подключён · перед поворотом задайте ручной программный ноль каждому модулю.';
       }
     }
-    if (authStatus) authStatus.textContent = steeringAuthorized ? 'доступ без PIN' : 'управление недоступно';
+    if (authStatus) authStatus.textContent = steeringAuthorized
+      ? (window.RCRemoteControls ? 'оператор · управление через бортовой сервер' : 'доступ без PIN')
+      : 'управление недоступно';
 
     const now = Date.now();
     ['FL', 'FR', 'RL', 'RR'].forEach((id) => {
@@ -2648,6 +2656,7 @@
   }
 
   const DRIVE_REASON_TEXT = {
+    command_expired: 'Команда устарела в сети. Повторите после восстановления связи.',
     serial_unavailable: 'Нет связи с USB-мастером.',
     module_offline: 'Нет свежей телеметрии всех четырёх модулей.',
     drive_firmware_required: 'Обновите прошивку всех четырёх плат для тяги и watchdog.',
@@ -2802,6 +2811,7 @@
     window.addEventListener('pointerup', releaseDrive);
     window.addEventListener('pointercancel', releaseDrive);
     window.addEventListener('blur', releaseDrive);
+    window.addEventListener('pagehide', releaseDrive);
     document.addEventListener('visibilitychange', () => { if (document.hidden) releaseDrive(); });
 
     // Не даём горизонтальному движению по слайдеру закрыть swipe-панель.

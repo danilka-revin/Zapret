@@ -265,18 +265,13 @@ def reserved_ports() -> set[str]:
     Те же переменные, что и в веб-приложении (``robot_control/lidar.py``):
     лидар не должен перебирать порт мастера или аккумулятора.
     """
-    names = ("RC_SLAM_PORT", "RC_BMS_PORT", "RC_SLAM_MASTER_PORT")
+    names = ("RC_SLAM_PORT", "RC_BMS_PORT", "RC_SLAM_MASTER_PORT",
+             "RC_WHEEL_FL_PORT", "RC_WHEEL_FR_PORT", "RC_WHEEL_RL_PORT", "RC_WHEEL_RR_PORT")
     values: list[str] = []
     for name in names:
         raw = (os.environ.get(name) or "").strip()
         if raw:
             values.append(raw)
-    # Как в robot_control/bms_setup.py: при RC_SLAM_SOURCE=master (по умолчанию)
-    # мастер руления — /dev/ttyACM0, даже если RC_SLAM_PORT ещё не записан.
-    # Открытие этого порта перезагружает Arduino, поэтому лидар его не трогает.
-    source = (os.environ.get("RC_SLAM_SOURCE") or "master").strip().lower()
-    if source == "master" and not (os.environ.get("RC_SLAM_PORT") or "").strip():
-        values.append("/dev/ttyACM0")
     for name in ("RC_SLAM_PORTS", "RC_LIDAR_EXCLUDE"):
         raw = os.environ.get(name) or ""
         values.extend(item.strip() for item in raw.replace(";", ",").split(","))

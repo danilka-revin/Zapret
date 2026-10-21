@@ -2,8 +2,8 @@
 
 * Пины, уровни и скорости берутся из скетча, проверенного на железе
   (firmware/reference/steering_tested) — расхождение ловится здесь, а не на роботе.
-* I²C вырезан: каждое колесо — своя плата на своём USB, прошивка называет себя
-  в @TLM/@ID (MODULE_ID = FL/FR/RL/RR), сервер сам ведёт карту «колесо → порт».
+* I²C вырезан: каждое колесо — своя плата на своём USB, порты назначает
+  оператор; новая телеметрия не содержит роль колеса.
 * tests/firmware_sim — хост-симуляция четырёх плат (TB6600, оптодатчик D18):
   калибровка из разных положений, ошибки датчика, команды монитора, тяга и
   watchdog. Нужен g++; без него тест пропускается.
@@ -89,45 +89,25 @@ def test_pins_levels_and_speeds_match_the_tested_sketch():
     assert "setupStepTimer" in core and "ISR(TIMER1_COMPA_vect)" in core
 
 
-def test_wheel_names_identify_the_board_and_are_the_server_names():
-    """MODULE_ID — имя колеса и признак прошивки: четыре разных файла.
-
-    Прошивка называет себя в @TLM (``mod=``) и в ответе на ``@ID`` — сервер по
-    этому сам привязывает порт к колесу. Команда с чужим именем игнорируется:
-    перепутанные кабели не крутят не то колесо.
-    """
+def test_firmware_has_no_usb_role_discovery():
     text = _text(WHEEL)
-    assert '#ifndef MODULE_ID' in text and '#define MODULE_ID "FL"' in text
-    assert 'PSTR("@ID mod=%s fw=%u' in text
-    assert 'PSTR("@TLM mod=%s ' in text
-    # Чужое имя в «w FL …» молча игнорируется, неизвестное — называется в журнале.
-    assert "MOD_OTHER" in text and "classifyModuleToken" in text
-    assert "if (kind == MOD_OTHER) return;" in text
-    assert "неизвестный модуль %s (есть FL, FR, RL, RR, ALL)" in text
-    # Имена колёс — те же, что в сервере (slam_gui/backend.py, MODULE_TITLES).
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("slam_backend_fw", ROOT / "slam_gui" / "backend.py")
-    backend = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(backend)
-    assert tuple(backend.MODULE_TITLES) == MODULE_IDS
-    for module in MODULE_IDS:
-        assert 'PSTR("%s")' % module in text
-    # Прошивка v4 — своё колесо на своём USB (в старой схеме fw=3 был кадр I²C).
-    assert _const(text, "FIRMWARE_PROTOCOL") == "4"
-    # Сервер не упоминает I²C в командном протоколе.
-    backend_text = _text(ROOT / "slam_gui" / "backend.py")
-    assert "sendToSlave" not in backend_text and "broadcastCommand" not in backend_text
+    assert 'printIdentity' not in text
+    assert '@ID' not in text
+    assert 'PSTR("@TLM deg=%s' in text
+    assert 'mod=%s' not in text
+    # Legacy addressed monitor commands remain compatible; the application
+    # sends local commands to the manually selected port.
+    assert 'classifyModuleToken' in text
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '4'
 
 
-def test_telemetry_period_and_identity_answer_are_present():
+def test_telemetry_period_and_safety_fields_are_present():
     text = _text(WHEEL)
     assert int(_const(text, "TELEMETRY_PERIOD_MS")) == 250
     # @TLM выходит целиком: обрезанный блок сервер не разберёт.
     assert "if (txFree() >= 160) appendTelemetry();" in text
-    # @ID отвечает даже между кадрами телеметрии.
-    assert "void printIdentity()" in text and "printIdentity();" in text
     # Строка @TLM несёт все поля, которые ждёт сервер (parse_master_line).
-    for field in ("mod=", "deg=", "tgt=", "moving=", "cal=", "cycle=", "calib=",
+    for field in ("deg=", "tgt=", "moving=", "cal=", "cycle=", "calib=",
                   "opto=", "home=", "err=", "rpm=", "drive=", "fw=", "pot=", "pm=", "t="):
         assert field in text, field
 
@@ -278,8 +258,12 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert result.returncode == 0, result.stderr[-4000:]
     frames = {}
     messages = []
+    module = None
     for line in result.stdout.splitlines():
-        frame = backend.parse_master_line(line)
+        if line.startswith("PORT "):
+            module = line.split()[1]
+            continue
+        frame = backend.parse_master_line(line, module=module)
         if frame:
             frames[frame["mod"]] = frame
         elif line.startswith("# "):
@@ -304,8 +288,12 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     source.commands = queue.Queue(maxsize=4)
     source.serial_ready = threading.Event()
     source.serial_ready.set()
+    module = None
     for line in result.stdout.splitlines():
-        source.feed(line, now=100.0)
+        if line.startswith("PORT "):
+            module = line.split()[1]
+            continue
+        source.feed(line, now=100.0, module=module)
     status = source.drive_status(now=100.2)
     assert status["reason"] == "steering_misaligned"   # FR стоит на 12.5°
     motors = {motor["id"]: motor for motor in source.read(now=100.2)["motors"]}
@@ -331,10 +319,7 @@ def test_server_routes_commands_by_module(simulator):
     assert backend.MasterSource._command_module(b"t 8\n") is None
     assert backend.MasterSource._command_module(b"k\n") is None
     assert backend.MasterSource._command_module(b"b\n") is None
-    assert backend.MasterSource._line_module(
-        "@TLM mod=RR deg=0.00 tgt=0.00 moving=0 cal=1 cycle=0 calib=0 t=1") == "RR"
-    assert backend.MasterSource._line_module("@ID mod=FL fw=4") == "FL"
-    assert backend.MasterSource._line_module("# FL: просто текст") is None
+    assert not hasattr(backend.MasterSource, '_line_module')
 
 
 def _avr_toolchain_available() -> bool:

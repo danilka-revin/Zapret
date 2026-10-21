@@ -60,15 +60,15 @@ def _comports() -> dict[str, Any]:
 def master_ports() -> set[str]:
     """Порты мастера руля и модулей шасси из настроек: их BMS-поиск не открывает.
 
-    RC_SLAM_PORT считается занятым всегда, когда задан (и /dev/ttyACM0 по
-    умолчанию в режиме master): открыть порт Arduino — значит перезагрузить её.
+    Только явно заданные порты: открыть порт Arduino — перезагрузить её.
     """
-    source = (os.environ.get("RC_SLAM_SOURCE") or "").strip().lower()
     ports: set[str] = set()
     master = (os.environ.get("RC_SLAM_PORT") or "").strip()
-    if not master and source == "master":
-        master = "/dev/ttyACM0"
     for value in (master, (os.environ.get("RC_SLAM_MASTER_PORT") or "").strip()):
+        if value:
+            ports |= {value, _real(value)}
+    for module in ("FL", "FR", "RL", "RR"):
+        value = os.environ.get(f"RC_WHEEL_{module}_PORT", "").strip()
         if value:
             ports |= {value, _real(value)}
     for chunk in (os.environ.get("RC_SLAM_PORTS") or "").split(","):
