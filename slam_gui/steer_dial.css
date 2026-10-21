@@ -1,0 +1,27 @@
+/* Shared wheel-angle dial. Theme colors come from either host screen. */
+.steer-dial-wrap { display:grid; justify-items:center; gap:6px; margin:8px 0 16px; color:var(--text,#f4f4f6); }
+.steer-dial-north { color:var(--muted,#aaa); font-size:11px; letter-spacing:.04em; }
+.steer-dial { width:clamp(160px,24vw,220px); max-width:100%; aspect-ratio:1; border-radius:50%; touch-action:none; user-select:none; -webkit-user-select:none; cursor:grab; background:radial-gradient(circle, var(--panel-2,#202127) 0%, transparent 70%); }
+.steer-dial:active { cursor:grabbing; }
+.steer-dial:focus-visible { outline:3px solid var(--accent,#c0505a); outline-offset:4px; }
+.steer-dial[aria-disabled="true"] { cursor:not-allowed; }
+.steer-dial[aria-disabled="true"] .steer-dial-knob { fill:var(--muted,#888); }
+.steer-dial svg { display:block; width:100%; height:100%; overflow:visible; pointer-events:none; }
+.steer-dial-ring { fill:none; stroke:var(--line-2,#383a40); stroke-width:2; }
+.steer-dial-allowed { fill:none; stroke:var(--muted,#999); stroke-width:5; opacity:.4; stroke-linecap:round; }
+.steer-dial-selected { fill:none; stroke:var(--accent,#c0505a); stroke-width:6; stroke-linecap:round; }
+.steer-dial-tick { stroke:var(--muted,#999); stroke-width:1.5; }
+.steer-dial-axis { fill:none; stroke:var(--line-2,#383a40); stroke-width:1; stroke-dasharray:3 4; }
+.steer-dial-actual { fill:none; stroke:var(--text,#f4f4f6); stroke-width:1.5; stroke-dasharray:4 3; opacity:.7; }
+.steer-dial-target { fill:var(--accent,#c0505a); stroke:var(--accent,#c0505a); stroke-width:1; }
+.steer-dial-tread { fill:none; stroke:var(--bg,#111); stroke-width:2; }
+.steer-dial-hub { fill:var(--text,#fff); }
+.steer-dial-knob { fill:var(--accent,#c0505a); stroke:var(--text,#fff); stroke-width:2; }
+.steer-dial-value { font:600 12px/1.5 ui-monospace,monospace; text-align:center; }
+.steer-dial-scale { display:flex; justify-content:space-between; width:100%; gap:6px; color:var(--muted,#aaa); font-size:10px; }
+.steer-dial-legend,.steer-dial-help { font-size:10px; color:var(--muted,#aaa); text-align:center; }
+/* Keep the native range as a no-JS fallback, not a second visible control. */
+.steer-dial-wrap + .steer-range-labels { display:none; }
+@media (max-width:600px) { .steer-dial { width:200px; } }
+
+.steer-card header > b > small, .rc-steering-card header > b > small { display:block; color:var(--muted,#aaa); font-size:10px; font-weight:500; letter-spacing:0; }

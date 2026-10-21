@@ -1469,7 +1469,7 @@
       // Карта открывается и закрывается только кнопками: свайп на ней не
       // перелистывает страницы и не тянет панель.
       if (isOpen && activeSwipeView === 'map') return;
-      if (event.target.closest && event.target.closest('input, button, select, textarea, .cam-viewport, .map-canvas-wrap')) return;
+      if (event.target.closest && event.target.closest('input, button, select, textarea, .steer-dial, .cam-viewport, .map-canvas-wrap')) return;
       tStart(event.touches[0].clientX, event.touches[0].clientY);
     }, {passive: true});
     page.addEventListener('touchmove', (event) => {
@@ -1498,7 +1498,7 @@
       if (event.button !== 0) return;
       // На странице карты нет свайп-навигации — только кнопки.
       if (isOpen && activeSwipeView === 'map') return;
-      if (event.target.closest && event.target.closest('input, button, select, textarea, .cam-viewport, .map-canvas-wrap')) return;
+      if (event.target.closest && event.target.closest('input, button, select, textarea, .steer-dial, .cam-viewport, .map-canvas-wrap')) return;
       mStart(event.clientX, event.clientY, 'page');
     });
     window.addEventListener('mousemove', (event) => {
@@ -2562,6 +2562,7 @@
         !calibPending && !tractionActive && !steerPresetBusy;
       const canCalibrate = canSetZero && !!control.calibration;
       slider.disabled = !ready;
+      if (window.RCSteerDial) window.RCSteerDial.sync(slider, online ? current : null);
       card.querySelectorAll('[data-steer-adjust="' + id + '"], [data-steer-zero="' + id + '"]').forEach((button) => {
         button.disabled = !ready;
       });
@@ -2817,12 +2818,12 @@
     // Не даём горизонтальному движению по слайдеру закрыть swipe-панель.
     ['pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mouseup'].forEach((name) => {
       panel.addEventListener(name, (event) => {
-        if (event.target.closest && event.target.closest('input, button, select, textarea, .cam-viewport, .map-canvas-wrap')) event.stopPropagation();
+        if (event.target.closest && event.target.closest('input, button, select, textarea, .steer-dial, .cam-viewport, .map-canvas-wrap')) event.stopPropagation();
       });
     });
     ['touchstart', 'touchmove', 'touchend'].forEach((name) => {
       panel.addEventListener(name, (event) => {
-        if (event.target.closest && event.target.closest('input, button, select, textarea, .cam-viewport, .map-canvas-wrap')) event.stopPropagation();
+        if (event.target.closest && event.target.closest('input, button, select, textarea, .steer-dial, .cam-viewport, .map-canvas-wrap')) event.stopPropagation();
       }, {passive: true});
     });
 
@@ -3001,7 +3002,8 @@
       const card = panel.querySelector('[data-steer-card="' + id + '"]');
       const calib = panel.querySelector('[data-steer-calib="' + id + '"]');
       if (calib) calib.addEventListener('click', () => { void startCalibration(id); });
-      // Ползунок двигает цель на экране; команда уходит, когда палец отпущен
+      if (window.RCSteerDial) window.RCSteerDial.attach(slider);
+      // Круговой регулятор двигает цель; команда уходит, когда палец отпущен
       // (change), — одна команда на жест, а не поток при каждом шаге.
       if (slider) {
         slider.addEventListener('input', () => markDirty(id, slider.value));
