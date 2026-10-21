@@ -1805,6 +1805,40 @@
     const LOG_STATUS_BASE = 'журнал робота · /api/kiosk_logs';
     let logs = [];
     let logIndex = new Map();
+    const LOG_GROUPS = {wheels:'Колёса и тяга', battery:'АКБ и питание', lidar:'Лидар',
+      cameras:'Камеры', navigation:'Карта и навигация', system:'Система'};
+    const groupFilter = $('log-group-filter');
+    const importantFilter = $('log-important');
+    const groupOpen = new Map();
+    let journalId = null;
+    let logRevision = 0;
+    let renderedRevision = -1;
+    let hiddenThroughSeq = 0;
+
+    function logGroup(entry) {
+      if (Object.prototype.hasOwnProperty.call(LOG_GROUPS, entry.group)) return entry.group;
+      const source = String(entry.source || '').toLowerCase().replace(/^robot_control\./, '');
+      if (/^(lidar|ros_lidar|лидар)/.test(source)) return 'lidar';
+      if (/^(wheel|master|мастер|колёс|колес|руление|тяга|управление)/.test(source)) return 'wheels';
+      if (/^(battery|bms|акб|питание)/.test(source)) return 'battery';
+      if (/^(camera|камер)/.test(source)) return 'cameras';
+      if (/^(navigation|slam_map|карта|навигац)/.test(source)) return 'navigation';
+      return 'system';
+    }
+    function selectedLogGroup() {
+      return groupFilter && Object.prototype.hasOwnProperty.call(LOG_GROUPS, groupFilter.value) ? groupFilter.value : 'all';
+    }
+    function visibleLogs() {
+      const selected = selectedLogGroup();
+      return logs.filter(row => (selected === 'all' || row.group === selected) &&
+        (!(importantFilter && importantFilter.checked) || row.level === 'err' || row.level === 'warn'));
+    }
+    function trimLogs() {
+      while (logs.length > 400) {
+        const dropped = logs.shift();
+        if (dropped && dropped.key) logIndex.delete(dropped.key);
+      }
+    }
 
     function clockLabel(entry) {
       const label = entry && entry.time;
@@ -1825,8 +1859,8 @@
       const now = new Date();
       const ts = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0')
         + ':' + String(now.getSeconds()).padStart(2,'0');
-      logs.push({key: null, ts, level, msg, repeat: 1, local: true});
-      if (logs.length > 220) logs.shift();
+      logs.push({key: null, ts, level, msg, repeat: 1, local: true, group: 'system'});
+      trimLogs(); logRevision++;
       renderLogs();
     }
 
@@ -1837,63 +1871,92 @@
       const seq = Number(entry.seq);
       const msg = String(entry.msg || '');
       if (!Number.isFinite(seq) || !msg) return;
-      const key = seq + '|' + String(entry.ts || '') + '|' + msg;
+      // seq and firstTs survive updates to the last timestamp/message of a
+      // collapsed entry. Using ts+msg here used to duplicate every repeat.
+      const key = seq + '|' + String(entry.firstTs || '');
+      if (seq <= hiddenThroughSeq) return;
       const known = logIndex.get(key);
-      if (known) {
-        known.repeat = Number(entry.repeat) > 0 ? Number(entry.repeat) : known.repeat;
-        known.ts = clockLabel(entry);
-        return;
-      }
       const level = KNOWN_LEVELS.indexOf(String(entry.level)) >= 0 ? String(entry.level) : 'info';
-      const row = {key, ts: clockLabel(entry), level, msg,
+      const row = {key, seq, ts: clockLabel(entry), level, msg,
                    repeat: Number(entry.repeat) > 0 ? Number(entry.repeat) : 1,
-                   source: String(entry.source || ''), local: false};
-      logIndex.set(key, row);
-      logs.push(row);
-      if (logs.length > 220) {
-        const dropped = logs.shift();
-        if (dropped && dropped.key) logIndex.delete(dropped.key);
+                   source: String(entry.source || ''), group: logGroup(entry), local: false};
+      if (known) {
+        if (known.repeat === row.repeat && known.ts === row.ts && known.msg === row.msg &&
+            known.level === row.level && known.group === row.group && known.source === row.source) return;
+        Object.assign(known, row);
+        logs.splice(logs.indexOf(known), 1); logs.push(known);
+      } else {
+        logIndex.set(key, row); logs.push(row);
       }
+      trimLogs(); logRevision++;
     }
 
     function renderLogs() {
       if (!logList) return;
+      const scrollBefore = logList.scrollTop;
       const frag = document.createDocumentFragment();
       logList.innerHTML = '';
-      const slice = logs.slice(-160);
-      slice.forEach((l) => {
-        const row = document.createElement('div');
-        row.className = 'log-line';
-        row.setAttribute('data-level', l.level);
-        if (l.local) row.setAttribute('data-local', '1');
-        const ts = document.createElement('span'); ts.className='log-ts'; ts.textContent = l.ts;
-        const lvl = document.createElement('span'); lvl.className='log-lvl '+l.level; lvl.textContent = l.level;
-        const msg = document.createElement('span'); msg.className='log-msg';
-        msg.textContent = l.repeat > 1 ? l.msg + '  ×' + l.repeat : l.msg;
-        row.appendChild(ts); row.appendChild(lvl); row.appendChild(msg);
-        if (l.source) row.title = 'источник: ' + l.source;
-        frag.appendChild(row);
+      const shown = visibleLogs();
+      Object.entries(LOG_GROUPS).forEach(([id, label]) => {
+        const items = shown.filter(row => row.group === id);
+        if (!items.length) return;
+        const group = document.createElement('details');
+        group.className = 'log-group';
+        group.setAttribute('data-group', id);
+        const errors = items.filter(row => row.level === 'err').length;
+        const warnings = items.filter(row => row.level === 'warn').length;
+        group.setAttribute('data-alert', errors ? 'error' : warnings ? 'warn' : 'none');
+        group.open = selectedLogGroup() !== 'all' ||
+          !!(importantFilter && importantFilter.checked) ||
+          (groupOpen.has(id) ? groupOpen.get(id) : id !== 'lidar');
+        let observedOpen = group.open;
+        group.addEventListener('toggle', () => {
+          // Detached groups can fire toggle after a re-render: don't overwrite
+          // the operator's current choice with an obsolete DOM node.
+          if (group.isConnected && observedOpen !== group.open) {
+            observedOpen = group.open; groupOpen.set(id, group.open);
+          }
+        });
+        const title = document.createElement('summary');
+        const name = document.createElement('b'); name.textContent = label;
+        const count = document.createElement('span'); count.className = 'log-group-count';
+        count.textContent = items.length + ' записей' + (errors ? ' · ошибок: ' + errors : '') +
+          (warnings ? ' · предупреждений: ' + warnings : '');
+        title.appendChild(name); title.appendChild(count); group.appendChild(title);
+        items.forEach((l) => {
+          const row = document.createElement('div');
+          row.className = 'log-line'; row.setAttribute('data-level', l.level);
+          if (l.local) row.setAttribute('data-local', '1');
+          const ts = document.createElement('span'); ts.className='log-ts'; ts.textContent = l.ts;
+          const lvl = document.createElement('span'); lvl.className='log-lvl '+l.level; lvl.textContent = l.level;
+          const msg = document.createElement('span'); msg.className='log-msg';
+          msg.textContent = l.repeat > 1 ? l.msg + '  ×' + l.repeat : l.msg;
+          row.appendChild(ts); row.appendChild(lvl); row.appendChild(msg);
+          if (l.source) row.title = 'источник: ' + l.source;
+          group.appendChild(row);
+        });
+        frag.appendChild(group);
       });
+      if (!shown.length) {
+        const empty = document.createElement('p'); empty.className = 'log-empty';
+        empty.textContent = logs.length ? 'Нет событий по выбранному фильтру' : 'Событий ещё не было';
+        frag.appendChild(empty);
+      }
       logList.appendChild(frag);
-      if (logCount) logCount.textContent = logs.length + '';
+      if (logCount) logCount.textContent = String(shown.length);
       if (logAuto && logAuto.checked) logList.scrollTop = logList.scrollHeight;
+      else logList.scrollTop = scrollBefore;
+      renderedRevision = logRevision;
     }
 
     // Инкрементальное обновление логов без пересборки всего окна: только новые строки
-    let lastLogRenderAt = 0;
-    let lastLogCount = 0;
     async function fetchLogs() {
-      // Троттлинг: не чаще чем раз в 1.2 с, чтобы не дёргать весь интерфейс
-      const now = Date.now();
-      if (now - lastLogRenderAt < 800 && logs.length === lastLogCount) {
-        // пропускаем, если недавно рисовали и новых записей не было
-      }
       let data = null;
       let problem = '';
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 1100);
       try {
-        const r = await fetch('api/kiosk_logs?limit=120', {cache:'no-store', signal: ctrl.signal});
+        const r = await fetch('api/kiosk_logs?limit=400', {cache:'no-store', signal: ctrl.signal});
         if (r.status === 401 || r.status === 403) {
           setLogStatus('журнал робота · нужен вход оператора (8090 — без входа)');
           return;
@@ -1920,16 +1983,13 @@
         setLogStatus('журнал робота · ответ без записей');
         return;
       }
-      const before = logs.length;
-      const beforeKeys = logIndex.size;
-      data.entries.forEach(addJournalEntry);
-      const added = logs.length - before;
-      // Рисуем только если появились новые записи или изменились счётчики
-      if (added > 0 || logIndex.size !== beforeKeys || Date.now() - lastLogRenderAt > 2500) {
-        renderLogs();
-        lastLogRenderAt = Date.now();
-        lastLogCount = logs.length;
+      if (data.journalId && journalId !== data.journalId) {
+        journalId = data.journalId;
+        logs = logs.filter(row => row.local); logIndex = new Map(); hiddenThroughSeq = 0;
+        logRevision++;
       }
+      data.entries.forEach(addJournalEntry);
+      if (renderedRevision !== logRevision) renderLogs();
       describeJournal(data);
     }
 
@@ -1961,15 +2021,23 @@
       setLogStatus(parts.join(' · '));
     }
 
+    if (groupFilter) groupFilter.addEventListener('change', renderLogs);
+    if (importantFilter) importantFilter.addEventListener('change', renderLogs);
     setInterval(fetchLogs, 2500);
     fetchLogs();
 
     if (logClear) logClear.addEventListener('click', () => {
-      logs = []; logIndex = new Map(); renderLogs();
+      logs.forEach(row => { if (row.key) hiddenThroughSeq = Math.max(hiddenThroughSeq, row.seq); });
+      logs = []; logIndex = new Map(); logRevision++; renderLogs();
       pushLocalLog('info','экран: список очищен, журнал на роботе не тронут');
     });
     if (logCopy) logCopy.addEventListener('click', async () => {
-      const txt = logs.map(l => l.ts+' ['+l.level.toUpperCase()+'] '+l.msg).join('\n');
+      const shown = visibleLogs();
+      const txt = Object.entries(LOG_GROUPS).map(([id, label]) => {
+        const items = shown.filter(row => row.group === id);
+        return items.length ? label + '\n' + items.map(l => l.ts+' ['+l.level.toUpperCase()+'] '+
+          (l.source ? '['+l.source+'] ' : '') + l.msg + (l.repeat > 1 ? ' ×'+l.repeat : '')).join('\n') : '';
+      }).filter(Boolean).join('\n\n');
       try { await navigator.clipboard.writeText(txt); pushLocalLog('ok','экран: список скопирован в буфер'); }
       catch(e) { pushLocalLog('warn','экран: не удалось скопировать — выдели вручную'); }
     });

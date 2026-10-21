@@ -352,10 +352,11 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
   // Скрипт собирает строки во фрагменте и лишь потом вставляет его в список —
   // в браузере фрагмент не остаётся узлом, поэтому разворачиваем его сами.
   const logRows = [];
-  (byId('log-list').children || []).forEach((child) => {
-    if (child.tagName === 'FRAGMENT') logRows.push(...(child.children || []));
-    else logRows.push(child);
-  });
+  function collectRows(element) {
+    if (element.className === 'log-line') logRows.push(element);
+    (element.children || []).forEach(collectRows);
+  }
+  collectRows(byId('log-list'));
   const logLines = logRows
     .map((row) => (row.children || []).map((cell) => cell.textContent))
     .filter((parts) => parts.length)

@@ -85,6 +85,7 @@ def proxy_estop(origin: str, release: bool = False):
 # Routes are fixed: the browser cannot pick an upstream URL or serial port.
 CONTROL_ROUTES = {
     'state': ('/api/kiosk_state', {'GET'}, ''),
+    'logs': ('/api/kiosk_logs', {'GET'}, ''),
     'battery': ('/api/battery', {'GET'}, ''),
     'lock': ('/api/kiosk_lock', {'GET'}, ''),
     'lock/open': ('/api/kiosk_lock/open', {'POST'}, 'steering'),
@@ -106,6 +107,9 @@ def proxy_control(origin: str, operation: str):
         return jsonify(ok=False, error='Неизвестная команда управления'), 404
     path, methods, marker = route
     extra = None
+    if operation == 'logs':
+        from .eventlog import clamp_limit
+        path += '?limit=' + str(clamp_limit(request.args.get('limit')))
     if operation == 'drive':
         import time
         # Web and onboard servers run on the robot. Do not execute a heartbeat

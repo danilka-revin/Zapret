@@ -171,3 +171,86 @@ def test_install_is_idempotent():
         assert logging.getLogger(eventlog.ROOT_LOGGER).handlers.count(first) == 1
     finally:
         eventlog.reset()
+
+
+def test_groups_retain_source_and_count_actual_repeats():
+    journal = EventLog()
+    for source, group in [('ros_lidar', 'lidar'), ('wheel_settings', 'wheels'),
+                          ('bms_setup', 'battery'), ('camera', 'cameras'),
+                          ('navigation', 'navigation'), ('pin', 'system')]:
+        journal.record('info', 'событие', source=source)
+        assert journal.entries()[-1]['group'] == group
+        assert journal.entries()[-1]['source'] == source
+    journal.record('warn', 'нет связи', source='мастер')
+    journal.record('warn', 'нет связи', source='мастер')
+    data = journal.payload(limit=1)
+    assert data['groups']['wheels'] == {'label': 'Колёса и тяга', 'count': 2,
+        'events': 3, 'errors': 0, 'warnings': 1}
+    assert data['count'] == 7 and data['shown'] == 1
+
+
+def test_changing_lidar_point_counts_use_one_summary_across_other_groups():
+    now = [1000.0]
+    journal = EventLog(clock=lambda: now[0])
+    journal.record('err', 'тяга заблокирована', source='тяга')
+    for i in range(90):
+        now[0] += 1
+        journal.record('info', f'Скан считан: {300+i} точек', source='lidar')
+    entries = journal.entries()
+    assert len(entries) == 2
+    summary = entries[-1]
+    assert summary['repeat'] == 90 and summary['msg'] == 'Скан считан: 389 точек'
+    assert summary['firstTs'] == 1001 and summary['ts'] == 1090
+    assert entries[0]['level'] == 'err'
+
+
+def test_lidar_errors_and_different_ports_are_not_numeric_summaries():
+    journal = EventLog()
+    for points in (100, 200):
+        journal.record('err', f'Скан: ошибка чтения, {points} точек', source='lidar')
+        journal.record('warn', f'Скан: потеряно {points} точек', source='lidar')
+    for port in ('/dev/ttyUSB0', '/dev/ttyUSB1'):
+        journal.record('info', f'Скан {port}: 100 точек', source='lidar')
+    assert journal.count == 6
+
+
+def test_summary_expires_after_a_real_pause_and_clear_changes_journal_identity():
+    now = [1000.0]
+    journal = EventLog(clock=lambda: now[0])
+    journal.record('info', 'Скан: 100 точек', source='lidar')
+    now[0] += 31
+    journal.record('info', 'Скан: 101 точек', source='lidar')
+    assert journal.count == 2
+    before = journal.payload()['journalId']
+    journal.clear()
+    assert journal.payload()['journalId'] != before
+
+
+def test_lidar_state_logs_transitions_not_points_or_growing_age():
+    from robot_control.slam import note_lidar_status
+    for points in range(300, 350):
+        note_lidar_status({'connected': True, 'source': 'serial:/dev/ttyUSB1',
+                           'reason': f'Считано {points} точек', 'points_count': points})
+    for age in range(4, 60):
+        note_lidar_status({'connected': False, 'source': 'no_signal',
+                           'reason': f'скан устарел ({age}.0 с без точек)'})
+    note_lidar_status({'connected': False, 'source': 'no_signal', 'reason': 'USB-порт занят'})
+    note_lidar_status({'connected': True, 'source': 'serial:/dev/ttyUSB1', 'reason': 'скан идёт'})
+    entries = eventlog.get_event_log().entries()
+    assert len(entries) == 4
+    assert [item['level'] for item in entries] == ['ok', 'warn', 'warn', 'ok']
+    assert 'порт занят' in entries[2]['msg']
+
+
+def test_grouped_log_panel_javascript():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    import pytest
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('node is not installed')
+    result = subprocess.run([node, 'tests/js/grouped_logs.js'],
+                            cwd=Path(__file__).resolve().parents[1],
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr

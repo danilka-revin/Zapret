@@ -261,17 +261,22 @@ def note_lidar_status(status) -> None:
     global _lidar_note
     if not isinstance(status, dict):
         return
+    connected = bool(status.get("connected"))
+    reason = str(status.get("reason", ""))
+    # Scan counters and growing age describe telemetry, not a new event.
+    reason_key = "" if connected else re.sub(
+        r"(?i)(скан устарел)\s*\([^)]*с без точек\)", r"\1", reason)
     key = (
-        bool(status.get("connected")),
+        connected,
         bool(status.get("demo")),
-        str(status.get("reason", "")),
+        reason_key,
         str(status.get("source", "")),
     )
     with _lidar_note_lock:
         if key == _lidar_note:
             return
         _lidar_note = key
-    connected, demo, reason, source = key
+    connected, demo, _reason_key, source = key
     # Причина приходит из статуса со своим «лидар:» (иногда дважды) — на экране
     # это читалось бы как «лидар: … лидар: …», поэтому префикс оставляем один.
     detail = _LIDAR_PREFIX_RE.sub("", reason).strip()

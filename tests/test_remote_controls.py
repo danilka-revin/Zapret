@@ -277,3 +277,20 @@ def test_remote_battery_renderer_and_startup(tmp_path):
     assert rendered['batteryVisible'] and not rendered['motorsVisible']
     assert not rendered['drives']
     assert not rendered['renderErrors']
+
+
+def test_remote_logs_read_board_journal_with_bounded_limit(client, operator, transport):
+    assert client.get('/api/control/logs').status_code in (302, 401)
+    login(client)
+    from robot_control import eventlog
+    eventlog.record('warn', 'Нет связи с FR', source='мастер')
+    response = client.get('/api/control/logs?limit=400')
+    assert response.status_code == 200
+    data = response.json['data']
+    assert data['entries'][-1]['group'] == 'wheels'
+    assert data['groups']['wheels']['warnings'] == 1
+    assert transport[1][-1][0].endswith('/api/kiosk_logs?limit=400')
+    client.get('/api/control/logs?limit=999999&url=https://unrelated.example')
+    assert transport[1][-1][0].endswith('/api/kiosk_logs?limit=5000')
+    assert client.post('/api/control/logs', json={}).status_code == 405
+    assert transport[0].calls == []

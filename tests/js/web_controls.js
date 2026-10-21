@@ -35,6 +35,11 @@ for (const name of ['slam_auth.js', 'web_controls.js']) {
   assert.equal(drive.headers['x-csrf-token'], 'signed-csrf');
   assert.equal(drive.headers['x-robot-control'], 'drive');
   assert.equal(drive.body.percent, 8);
+  await context.window.fetch('api/kiosk_logs?limit=400');
+  const logs = new URL(calls.at(-1).url);
+  assert.equal(logs.pathname, '/api/control/logs');
+  assert.equal(logs.searchParams.get('limit'), '400');
+  assert.equal(logs.searchParams.get('st'), 'signed-session');
   await context.window.fetch('api/kiosk_state');
   assert.equal(new URL(calls.at(-1).url).pathname, '/api/control/state');
   await context.window.fetch(new Request('http://robot.example:8080/api/kiosk_zero', {

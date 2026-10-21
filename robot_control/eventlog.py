@@ -30,6 +30,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from collections import deque
 from typing import Any, Iterable, Mapping
 
@@ -39,6 +40,8 @@ __all__ = [
     "ROOT_LOGGER",
     "EventLog",
     "EventLogHandler",
+    "GROUPS",
+    "event_group",
     "clear",
     "get_event_log",
     "install",
@@ -134,6 +137,42 @@ def clamp_limit(value: Any, *, default: int = DEFAULT_QUERY_LIMIT,
     return max(1, min(maximum, int(match.group())))
 
 
+GROUPS = {
+    "wheels": "Колёса и тяга", "battery": "АКБ и питание", "lidar": "Лидар",
+    "cameras": "Камеры", "navigation": "Карта и навигация", "system": "Система",
+}
+
+
+def event_group(source: str, message: str = "") -> str:
+    """Stable subsystem IDs; retain the original source for diagnostics."""
+    name = source.lower().removeprefix("robot_control.").split(".")[0]
+    for group, prefixes in (
+        ("lidar", ("lidar", "ros_lidar", "лидар")),
+        ("wheels", ("wheel", "master", "мастер", "колёс", "колес", "руление", "тяга", "управление")),
+        ("battery", ("battery", "bms", "акб", "питание")),
+        ("cameras", ("camera", "камер")),
+        ("navigation", ("navigation", "slam_map", "карта", "навигац")),
+    ):
+        if name.startswith(prefixes):
+            return group
+    if message.lower().startswith(("лидар:", "лидар на связи", "скан лидара")):
+        return "lidar"
+    return "system"
+
+
+# Only routine lidar counters are variable summaries. Never generalize errors,
+# angles, port numbers or other numeric diagnostics.
+_POINT_COUNT = re.compile(r"(?i)(?:\d+\s*(?:точ(?:ек|ки|ка)|points?)\b|(?:точек|points?)\s*[:=]\s*\d+)")
+
+
+def _summary_key(level: str, text: str, source: str) -> str | None:
+    if level not in {"info", "ok", "debug"} or event_group(source, text) != "lidar":
+        return None
+    if not re.search(r"(?i)скан|считан|прочитан|получен|scan|read|received", text):
+        return None
+    return _POINT_COUNT.sub("<points>", text) if _POINT_COUNT.search(text) else None
+
+
 class EventLog:
     """Кольцевой буфер настоящих событий процесса (потокобезопасный)."""
 
@@ -148,6 +187,7 @@ class EventLog:
         self._entries: deque[dict[str, Any]] = deque(maxlen=self.limit)
         self._lock = threading.Lock()
         self._seq = 0
+        self._journal_id = uuid.uuid4().hex
         self.dropped = 0
 
     # ------------------------------------------------------------- запись --- #
@@ -164,6 +204,7 @@ class EventLog:
             if repeated is not None:
                 # Тот же повтор внутри окна (лидар не отвечает, тягу держат…):
                 # не плодим строки, а показываем счётчик «×N».
+                repeated["msg"] = text
                 repeated["repeat"] += 1
                 repeated["ts"] = now
                 repeated["time"] = self._clock_label(now)
@@ -174,9 +215,11 @@ class EventLog:
             entry = {
                 "seq": self._seq,
                 "ts": now,
+                "firstTs": now,
                 "time": self._clock_label(now),
                 "level": lvl,
                 "source": src,
+                "group": event_group(src, text),
                 "msg": text,
                 "repeat": 1,
             }
@@ -198,7 +241,7 @@ class EventLog:
     def entries(self, limit: int | None = None, *, oldest_first: bool = True) -> list[dict[str, Any]]:
         """Записи журнала: по умолчанию от старых к новым, как читают лог."""
         with self._lock:
-            items = list(self._entries)
+            items = [dict(item) for item in self._entries]
         if limit is not None and limit > 0:
             items = items[-int(limit):]
         if not oldest_first:
@@ -220,6 +263,7 @@ class EventLog:
             self._entries.clear()
             self.dropped = 0
             self._seq = 0
+            self._journal_id = uuid.uuid4().hex
         return count
 
     @property
@@ -239,13 +283,29 @@ class EventLog:
 
         ``demo`` всегда ``False``: этот журнал не выдуман (демо-режима нет).
         """
-        shown = self.entries(limit)
+        # One coherent snapshot, including counts while logging continues.
+        with self._lock:
+            items = [dict(entry) for entry in self._entries]
+            dropped, journal_id = self.dropped, self._journal_id
+        shown = items[-limit:] if limit and limit > 0 else items
+        levels = {level: 0 for level in _LEVELS}
+        groups = {key: {"label": label, "count": 0, "events": 0, "errors": 0, "warnings": 0}
+                  for key, label in GROUPS.items()}
+        for entry in items:
+            levels[entry["level"]] += 1
+            group = groups[entry["group"]]
+            group["count"] += 1
+            group["events"] += entry["repeat"]
+            group["errors"] += int(entry["level"] == "err")
+            group["warnings"] += int(entry["level"] == "warn")
         return {
             "entries": shown,
-            "count": self.count,
+            "count": len(items),
             "shown": len(shown),
-            "dropped": self.dropped,
-            "levels": self.totals(),
+            "dropped": dropped,
+            "levels": levels,
+            "groups": groups,
+            "journalId": journal_id,
             "limit": self.limit,
             "uptimeSec": uptime_sec,
             "source": source,
@@ -262,12 +322,17 @@ class EventLog:
         настоящие события (лидар написал строку — тяга продолжает удерживаться),
         и без этого одна и та же ситуация распадалась бы на несколько записей.
         """
-        deadline = now - self.collapse_window
-        for item in reversed(list(self._entries)[-self.COLLAPSE_SCAN:]):
+        summary = _summary_key(level, text, source)
+        # Scan the bounded buffer for routine summaries even if many other
+        # subsystems logged in between; keep the last real message and time.
+        deadline = now - (max(30.0, self.collapse_window) if summary else self.collapse_window)
+        candidates = list(self._entries) if summary else list(self._entries)[-self.COLLAPSE_SCAN:]
+        for item in reversed(candidates):
             if item["ts"] < deadline:
                 return None
-            if (item["level"] == level and item["msg"] == text
-                    and item["source"] == source):
+            if (item["level"] == level and item["source"] == source
+                    and (item["msg"] == text or (summary is not None
+                         and _summary_key(level, item["msg"], source) == summary))):
                 return item
         return None
 
