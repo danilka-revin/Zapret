@@ -1,18 +1,7 @@
-"""USB-порты колёс: поиск вместо жёсткого ``/dev/ttyACM0``.
+"""USB port names and reservations. Wheel assignments are manual only.
 
-Колёса руля — четыре Arduino Mega с прошивкой ``firmware/motor_wheel``
-(FL/FR/RL/RR, по USB-кабелю на плату): USB 115200 бод, каждые 250 мс строка
-``@TLM mod=FL …``. Имя порта зависит от USB-переходника:
-
-* Arduino Mega с родным ATmega16U2 — ``/dev/ttyACM0``;
-* клоны и Mega Mini на CH340/FT232/CP2102 — ``/dev/ttyUSB0``;
-* после переподключения номер может смениться (``ttyUSB0`` → ``ttyUSB1``).
-
-Поэтому жёсткого ``RC_SLAM_PORT=/dev/ttyACM0`` не хватает: здесь собирается
-очередь кандидатов (настроенный порт первым, затем все остальные USB), а
-какое колесо на каком порту, сервер определяет сам по @TLM/@ID. Порты лидара
-и BMS не трогаются — их открытие сбрасывает чужие платы и ворует байты у
-драйвера.
+Listing serial devices never opens them. Legacy RC_SLAM_PORT diagnostics are
+retained for compatibility; the wheel source uses only RC_WHEEL_*_PORT.
 """
 
 from __future__ import annotations
@@ -51,7 +40,7 @@ def normalize_port(value: str) -> str:
 
     ``ttyUSB0`` и ``usb0`` люди пишут без ``/dev/`` — добавляем его, если такой
     файл существует. Остальное возвращаем как есть: путь откроет pyserial и
-    скажет понятную ошибку, а автопоиск всё равно проверит другие порты.
+    скажет понятную ошибку. Никакие запасные порты не проверяются.
     """
     text = str(value or "").strip().strip('"').strip("'")
     text = re.sub(r"[\x00-\x1f\x7f]", "", text).strip()
@@ -130,31 +119,18 @@ def reserved_ports() -> set[str]:
 
 
 def master_ports(configured: str | None = None) -> list[str]:
-    """Очередь портов для мастера: настроенный первым, затем остальные USB.
-
-    Настроенный порт попадает в очередь, даже если его сейчас нет: когда
-    Arduino подклюжат, ядро создаст именно его (или другой — его найдёт
-    повторное сканирование). Занятые лидаром и BMS порты исключаются.
-    """
-    first = normalize_port(configured) if configured is not None else configured_port()
-    first = first or DEFAULT_PORT
+    """Only explicitly assigned wheel ports; no fallback or USB scan."""
+    from .wheel_settings import current_settings
     blocked = reserved_ports()
-    out: list[str] = []
-    seen: set[str] = set()
-
-    def add(path: str, *, must_exist: bool) -> None:
-        path = normalize_port(path)
-        if not path or (must_exist and not os.path.exists(path)):
-            return
+    out, seen = [], set()
+    for path in current_settings().values():
+        if not path:
+            continue
         real = _real(path)
         if real in seen or path in blocked or real in blocked:
-            return
+            continue
         seen.add(real)
         out.append(path)
-
-    add(first, must_exist=False)
-    for path in serial_ports():
-        add(path, must_exist=True)
     return out
 
 
@@ -181,35 +157,18 @@ def conflict_note(configured: str | None = None) -> str:
         return ""
     blocked = reserved_ports()
     if first in blocked or _real(first) in blocked:
-        return ("RC_SLAM_PORT=%s занят лидаром или BMS — мастер будет искать "
-                "другой USB-порт; поправьте .env" % first)
+        return ("RC_SLAM_PORT=%s занят лидаром или BMS — выберите "
+                "порт вручную; поправьте .env" % first)
     return ""
 
 
 def port_hint(configured: str | None = None) -> str:
-    """Короткий совет оператору, почему мастера ещё нет на связи."""
-    first = normalize_port(configured) if configured is not None else configured_port()
-    first = first or DEFAULT_PORT
-    conflict = conflict_note(first)
-    ports = serial_ports()
-    candidates = [p for p in master_ports(first) if p != first]
-
-    if conflict:
-        return conflict
-    if os.path.exists(first):
-        if not os.access(first, os.R_OK | os.W_OK):
-            return ("нет прав на %s: sudo usermod -aG dialout $USER и войдите заново "
-                    "(или перезапустите службу)" % first)
-        return ""
+    """No device probing: direct the operator to manual assignments."""
+    ports = master_ports()
     if not ports:
-        return ("USB-последовательных портов нет: проверьте кабель (нужен кабель "
-                "с данными, не только зарядный), питание платы и `dmesg | tail`")
-    if candidates:
-        return ("%s не найден; в системе есть %s — сервер сам опознает колёса "
-                "по @TLM, но не больше портов, чем кабелей"
-                % (first, ", ".join(candidates[:3])))
-    return ("%s не найден; подключите колёса по USB (до четырёх плат) "
-            "или поправьте RC_SLAM_PORT" % first)
+        return "Порты колёс не назначены: бортовой экран → Тяга и руление → USB-порты колёс"
+    missing = [p for p in ports if not os.path.exists(p)]
+    return "Назначенные порты не найдены: " + ", ".join(missing) if missing else ""
 
 
 def diagnostics(configured: str | None = None) -> dict[str, Any]:

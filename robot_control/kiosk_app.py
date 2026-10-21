@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import re
 import secrets
@@ -913,6 +914,15 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "error": "no source"}), 503
         if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        deadline = request.headers.get("X-Robot-Command-Deadline")
+        body = request.get_json(silent=True)
+        if deadline is not None and isinstance(body, dict) and body.get("percent") != 0:
+            try:
+                expires = float(deadline)
+                if not math.isfinite(expires) or time.time() > expires:
+                    raise ValueError("expired")
+            except (TypeError, ValueError):
+                return jsonify(ok=False, reason="command_expired"), 408
         navigation.cancel("Ручная тяга — автономный маршрут остановлен.")
         result, status = dispatch_drive_command(state.source, request.get_json(silent=True))
         return jsonify(result), status

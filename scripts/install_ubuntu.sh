@@ -81,7 +81,7 @@ if [[ ! -f .env ]]; then
     echo "RC_BIND_HOST=0.0.0.0"
     echo "RC_PORT=8080"
     echo "RC_SLAM_SOURCE=master"
-    echo "RC_SLAM_PORT=/dev/ttyACM0"
+    for wheel in FL FR RL RR; do echo "RC_WHEEL_${wheel}_PORT="; done
     echo "RC_UPDATE_REMOTE=origin"
     echo "RC_UPDATE_BRANCH=main"
   } > .env

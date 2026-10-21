@@ -17,32 +17,16 @@ def test_normalize_port_accepts_bare_tty_name(monkeypatch):
     assert master_port.normalize_port(" ttyUSB0 ") == "/dev/ttyUSB0"
 
 
-def test_master_ports_keeps_missing_configured_port_first(monkeypatch):
-    monkeypatch.setattr(master_port, "serial_ports",
-                        lambda patterns=master_port.PORT_PATTERNS: ["/dev/ttyUSB0"])
-    monkeypatch.setattr(master_port, "reserved_ports", lambda: set())
-    monkeypatch.setattr(master_port.os.path, "exists", lambda path: path == "/dev/ttyUSB0")
-    assert master_port.master_ports("/dev/ttyACM0") == ["/dev/ttyACM0", "/dev/ttyUSB0"]
-
-
-def test_master_ports_skips_lidar_and_bms(monkeypatch):
-    monkeypatch.setattr(master_port, "serial_ports",
-                        lambda patterns=master_port.PORT_PATTERNS:
-                        ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2"])
-    monkeypatch.setattr(master_port, "reserved_ports",
-                        lambda: {"/dev/ttyUSB1", "/dev/ttyUSB2"})
-    monkeypatch.setattr(master_port.os.path, "exists", lambda path: True)
-    assert master_port.master_ports("/dev/ttyUSB0") == ["/dev/ttyUSB0"]
-
-
-def test_master_ports_skips_configured_port_that_belongs_to_lidar(monkeypatch):
-    monkeypatch.setattr(master_port, "serial_ports",
-                        lambda patterns=master_port.PORT_PATTERNS:
-                        ["/dev/ttyUSB0", "/dev/ttyUSB1"])
-    monkeypatch.setattr(master_port, "reserved_ports", lambda: {"/dev/ttyUSB1"})
-    monkeypatch.setattr(master_port.os.path, "exists", lambda path: True)
-    assert master_port.master_ports("/dev/ttyUSB1") == ["/dev/ttyUSB0"]
-    assert "лидаром или BMS" in master_port.conflict_note("/dev/ttyUSB1")
+def test_master_ports_lists_only_manual_assignments_without_scanning(monkeypatch):
+    for m in ('FL', 'FR', 'RL', 'RR'):
+        monkeypatch.delenv(f'RC_WHEEL_{m}_PORT', raising=False)
+    monkeypatch.setattr(master_port, 'serial_ports', lambda: (_ for _ in ()).throw(AssertionError('scan')))
+    monkeypatch.setattr(master_port, 'reserved_ports', lambda: set())
+    assert master_port.master_ports('/dev/ttyACM0') == []
+    monkeypatch.setenv('RC_WHEEL_FR_PORT', '/dev/ttyUSB3')
+    assert master_port.master_ports('/dev/ttyACM0') == ['/dev/ttyUSB3']
+    monkeypatch.setattr(master_port, 'reserved_ports', lambda: {'/dev/ttyUSB3'})
+    assert master_port.master_ports() == []
 
 
 def test_master_source_explains_permission_and_busy_errors():
@@ -54,7 +38,7 @@ def test_master_source_explains_permission_and_busy_errors():
 
 
 @pytest.mark.skipif(os.name != "posix", reason="нужен POSIX pty")
-def test_master_source_finds_master_on_second_port(monkeypatch):
+def test_master_source_opens_only_manually_selected_port(monkeypatch):
     """Первый порт молчит, на втором идёт @TLM — источник переключается сам."""
     backend = slam.load_backend()
     monkeypatch.setattr(backend.MasterSource, "PROBE_S", 0.6)
@@ -84,7 +68,7 @@ def test_master_source_finds_master_on_second_port(monkeypatch):
     thread = threading.Thread(target=emulate_master, daemon=True)
     thread.start()
     statuses = []
-    source = backend.MasterSource([silent_name, name], probe=True,
+    source = backend.MasterSource([silent_name, name], module_ports={"FL": name},
                                   on_status=lambda level, text: statuses.append((level, text)))
     try:
         deadline = time.time() + 5.0
@@ -106,25 +90,16 @@ def test_master_source_finds_master_on_second_port(monkeypatch):
                 pass
 
 
-def test_make_source_master_uses_other_ports_when_configured_is_missing(monkeypatch):
-    """RC_SLAM_PORT=/dev/ttyACM0, а Arduino на ttyUSB0: очередь портов, не отказ."""
+def test_make_source_never_uses_legacy_port_or_discovered_devices(monkeypatch):
     backend = slam.load_backend()
-    monkeypatch.setenv("RC_SLAM_PORT", "/dev/definitely-missing-master")
-    monkeypatch.delenv("RC_SLAM_MASTER_PORT", raising=False)
-    monkeypatch.setattr(master_port, "serial_ports",
-                        lambda patterns=master_port.PORT_PATTERNS: ["/dev/ttyUSB0"])
-    monkeypatch.setattr(master_port, "reserved_ports", lambda: set())
-    # configured-порт не существует, а найденный кандидат — да
-    real_exists = os.path.exists
-    monkeypatch.setattr(master_port.os.path, "exists",
-                        lambda path: path == "/dev/ttyUSB0" or real_exists(path))
-    # В тесте не открываем настоящие порты машины: очередь проверяем по списку.
-    monkeypatch.setattr(backend.MasterSource, "_candidate_ports", lambda self: [])
-    source = slam.make_source("master")
+    for module in ('FL', 'FR', 'RL', 'RR'):
+        monkeypatch.delenv(f'RC_WHEEL_{module}_PORT', raising=False)
+    monkeypatch.setenv('RC_SLAM_PORT', '/dev/ttyACM0')
+    monkeypatch.setattr(master_port, 'serial_ports', lambda: (_ for _ in ()).throw(AssertionError('scan')))
+    source = slam.make_source('master')
     try:
-        assert isinstance(source, backend.MasterSource)
-        assert source.configured_port == "/dev/definitely-missing-master"
-        assert "/dev/ttyUSB0" in source.ports
-        assert source.probe is True
+        assert source.configured_port is None
+        assert source.ports == []
+        assert source._candidate_ports() == []
     finally:
         source._stop = True

@@ -575,6 +575,7 @@ ASSETS = {
     "steering.css": "steering_css",
     "steering.js": "steering_js",
     "wheel_settings.js": "wheel_settings_js",
+    "web_controls.js": "web_controls_js",
     # общие пресеты руления: одни и те же углы на киоске и веб-пульте
     "steer_presets.js": "steer_presets_js",
     "pot_mode.js": "pot_mode_js",
@@ -724,7 +725,7 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
     """Источник данных робота.
 
     ``master``: четыре колеса по одному USB каждое (см. firmware/motor_wheel).
-    Сервер сам опознаёт, какое колесо на каком порту (строки "@TLM"/"@ID").
+    Порты FL/FR/RL/RR задаются только вручную (RC_WHEEL_*_PORT).
     Порты открывает только владелец (``master_role="owner"`` — бортовой экран);
     пульт (``"peer"``) читает телеметрию с экрана и порты не трогает.
     ``auto``: ROS 2, если есть rclpy; иначе UART-модули, если есть pyserial и
@@ -749,55 +750,21 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
     if mode == "master" and master_role == "peer":
         return mod.MasterPeerSource(peer_kiosk_url())
     if mode == "master":
-        # Колёса на своих USB: настроенный порт — первый кандидат, затем все
-        # остальные USB. Порядок кабелей и номера ttyUSBx не важны: каждое
-        # колесо называет себя в @TLM/@ID, и сервер сам ведёт карту
-        # «колесо → порт» (см. slam_gui/backend.py MasterSource).
-        from .battery import reserved_ports
-        from .master_port import (
-            configured_port, diagnostics, master_ports,
-            reserved_ports as wheel_reserved_ports,
-        )
+        from .master_port import reserved_ports
         from .wheel_settings import current_settings
 
         assignments = {m: p for m, p in current_settings().items() if p}
-        blocked = wheel_reserved_ports()
-        assignments = {m: p for m, p in assignments.items()
-                       if p not in blocked and os.path.realpath(p) not in blocked}
-
-        port = configured_port()
-        if port in reserved_ports() or os.path.realpath(port) in reserved_ports():
-            log.error("Шасси: RC_SLAM_PORT совпадает с RC_BMS_PORT — колёса отключены")
-            return mod.NoSource()
-
-        info = diagnostics(port)
-        if info["configuredExists"]:
-            log.info("колёса: %s первым · кандидаты: %s", port,
-                     ", ".join(info["candidates"]) or "нет")
-        else:
-            log.warning("колёса: %s не найден — ищу на всех USB-портах (%s)",
-                        port, ", ".join(info["ports"]) or "портов нет")
-        if info["conflict"]:
-            log.warning("колёса: %s", info["conflict"])
-        elif info["hint"]:
-            log.info("колёса: %s", info["hint"])
-
-        candidates = list(assignments.values()) + (info["candidates"] or [port])
-        # Каждый порт проверяется по строке @TLM/@ID. Ручное назначение
-        # важнее имени платы. Сообщения прошивки («# FR: Калибровка
-        # ЗАВЕРШЕНА!») — в журнал экрана; поиск/обрыв порта — тоже.
+        blocked = reserved_ports()
+        for module, path in list(assignments.items()):
+            if path in blocked or os.path.realpath(path) in blocked:
+                log.error("Колесо %s: порт %s занят лидаром/BMS — отключено", module, path)
+                assignments.pop(module)
+        if not assignments:
+            log.warning("Порты колёс не назначены: выберите их на бортовом экране → Тяга и руление")
         return mod.MasterSource(
-            candidates,
+            module_ports=assignments,
             on_message=note_master_message,
             on_status=note_master_status,
-            module_ports=assignments,
-            port_provider=lambda: list(assignments.values()) + master_ports(port),
-            probe=True,
-            # Порты — общий ресурс с лидаром (он тоже на USB): пока лидар ищет
-            # свой порт, колёса ждут; порт, не назвавшийся колесом, колёса
-            # отпускают; опознанный порт колеса помечается, чтобы лидар его не
-            # перебирал. Без этого источник колёс держал открытыми все
-            # USB-порты, включая лидар, — и лидар глох.
             claim=try_lock_port,
             release=unlock_port,
             yield_to_lidar=lidar_holds_port,
@@ -936,6 +903,73 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         return _send(MAIN_PAGE)
 
     bp.add_url_rule("/main.html", endpoint="main_page", view_func=guard(main_screen))
+
+    def remote_screen(view):
+        # Reuse the onboard controls, including hold-to-drive and loss-of-focus
+        # braking. No second copy of motor limits, presets or USB ownership.
+        html = (GUI_DIR / KIOSK_PAGE).read_text(encoding="utf-8")
+        title = 'АКБ · веб-пульт' if view == 'battery' else 'Руление и тяга · веб-пульт'
+        html = html.replace('<title>Экран робота</title>', f'<title>{title}</title>')
+        html = html.replace('<body class="kiosk-body">',
+                            f'<body class="kiosk-body" data-remote-view="{view}">')
+        html = html.replace('<header class="swipe-head">',
+            '<header class="swipe-head"><a class="swipe-close" href="/">Пульт</a>'
+            '<a class="swipe-close" href="/controls">Руление и тяга</a>'
+            '<a class="swipe-close" href="/battery" id="remote-battery-link">АКБ</a>')
+        # Remote battery view is strictly read-only. The onboard process owns
+        # the UART and its connection settings.
+        html = html.replace('id="bms-setup-open"', 'id="bms-setup-open" hidden')
+        html = html.replace('<h3>Аккумулятор · JBD BMS</h3>',
+            '<h3>АКБ · полная информация JBD BMS</h3>'
+            '<p>Данные с борта · только чтение. Подключение BMS настраивается на бортовом экране.</p>')
+        html = html.replace('<h3>Тяга и руление</h3>',
+            '<h3>Руление и тяга · веб-пульт</h3><p><a href="/">Пульт</a> · '
+            '<a href="/console">Сервис</a> · <a href="/map">Карта</a> · '
+            '<a href="/exit">Выход</a></p>'
+            '<p><button id="remote-estop" class="traction-stop" type="button">E-STOP</button> '
+            '<button id="remote-estop-release" type="button">Снять E-STOP по PIN</button></p>'
+            '<p id="remote-control-message" role="status"></p>')
+        html = html.replace('<script src="robot.js"></script>',
+            '<script src="/slam_auth.js"></script><script src="/web_controls.js"></script>'
+            '<script src="robot.js"></script>')
+        return Response(html, mimetype="text/html", headers={"Cache-Control": "no-store"})
+
+    @bp.get("/controls")
+    @guard
+    def remote_controls_screen():
+        return remote_screen("motors")
+
+    @bp.get("/battery")
+    @guard
+    def remote_battery_screen():
+        return remote_screen("battery")
+
+    @bp.get("/api/control/battery/report.csv")
+    @guard
+    def remote_battery_report():
+        from .map_peer import proxy_battery_report
+        return proxy_battery_report(peer_kiosk_url().removesuffix("/api/kiosk_state"))
+
+    @bp.get("/api/control/session")
+    @guard
+    def remote_control_session():
+        return jsonify(ok=True, csrfToken=csrf_token_provider() if csrf_token_provider else "")
+
+    @bp.route("/api/control/<path:operation>", methods=["GET", "POST"])
+    @guard
+    def remote_control_command(operation):
+        from .map_peer import CONTROL_ROUTES, proxy_control
+        route = CONTROL_ROUTES.get(operation)
+        if route is None:
+            return jsonify(ok=False, error="Неизвестная команда управления"), 404
+        if request.method not in route[1]:
+            return jsonify(ok=False, error="Метод не поддерживается"), 405
+        if request.method == "POST":
+            if request.headers.get(STEERING_COMMAND_HEADER) != route[2]:
+                return jsonify(ok=False, reason="request_header_required"), 400
+            if csrf_header_ok is not None and not csrf_header_ok():
+                return jsonify(ok=False, reason="csrf_required"), 400
+        return proxy_control(peer_kiosk_url().removesuffix("/api/kiosk_state"), operation)
 
     @bp.get("/console", endpoint="console")
     @guard

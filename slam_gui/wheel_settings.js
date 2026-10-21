@@ -27,9 +27,10 @@
         const select = document.createElement('select');
         select.dataset.module = module;
         select.setAttribute('aria-label', 'USB-порт: ' + title);
-        select.add(new Option('Авто · по имени платы', ''));
+        select.add(new Option('Не подключено · порт не выбран', ''));
         for (const port of data.ports || []) {
-          const option = new Option(port.path + (port.reserved ? ' · занят/исключён' : !port.present ? ' · не подключён' : ''), port.path);
+          const option = new Option(port.path, port.path);
+          option.title = port.reserved ? 'Порт занят/исключён' : !port.present ? 'Устройство сейчас отсутствует' : port.path;
           option.disabled = port.reserved;
           select.add(option);
         }

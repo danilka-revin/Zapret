@@ -90,6 +90,8 @@ const context = {
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 (async () => {
   context.window = context;
+  const remote = process.argv.includes('--remote');
+  context.RCRemoteControls = remote;
   vm.runInNewContext(fs.readFileSync('slam_gui/battery.js', 'utf8'), context);
   await flush();
   // Все банки — таблица точных значений и плитки.
@@ -132,6 +134,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.match(thresholds, /Перенапряжение банки 3\.650 В · возврат 3\.400 В/);
   assert.match(thresholds, /Перегрузка по разряду 60\.00 А/);
   assert.equal(el('bms-report').attrs['aria-disabled'], 'false');
+  assert.equal(el('bms-report').attrs.href, remote ? 'api/control/battery/report.csv' : 'api/battery/report.csv');
   assert.equal(el('swipe-live').textContent, '● BMS');
   // Потеря связи: данные остаются, но явно устаревшие, CSV недоступен.
   fail = true;
@@ -168,7 +171,16 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   page.hidden = false;
   observer();
   await flush(); await flush();
-  assert.equal(el('bms-setup').hidden, false);
+  assert.equal(el('bms-setup').hidden, remote);
+  if (remote) {
+    assert.equal(el('bms-setup').hidden, true, 'remote view must not auto-open settings');
+    context.RCBattery.openSetup(true);
+    assert.equal(el('bms-setup').hidden, true);
+    assert.equal(posts.length, 0);
+    assert.match(el('bms-updated').textContent, /на бортовом экране/);
+    console.log('Remote battery: all fields, CSV, stale data and read-only setup OK');
+    return;
+  }
   const ports = el('bms-port-list').children;
   assert.equal(ports.length, 2);
   const masterRadio = find(ports[0], (node) => node.tag === 'input');

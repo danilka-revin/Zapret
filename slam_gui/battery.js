@@ -70,11 +70,14 @@
     text('bms-updated', data
       ? 'Измерено: ' + new Date(data.updatedAt * 1000).toLocaleString('ru-RU') + (available ? '' : ' · последние известные данные')
       : (transportOk && !configured
-        ? 'BMS ещё не подключена: нажмите «Подключение BMS», выберите порт и «Сохранить и подключить».'
+        ? (window.RCRemoteControls
+          ? 'BMS ещё не подключена: настройте порт на бортовом экране → «АКБ» → «Подключение BMS».'
+          : 'BMS ещё не подключена: нажмите «Подключение BMS», выберите порт и «Сохранить и подключить».')
         : 'Нет измерений: проверьте кабель USB-UART и питание BMS.'));
     const report = $('bms-report');
     report.setAttribute('aria-disabled', available ? 'false' : 'true');
-    if (available) report.setAttribute('href', 'api/battery/report.csv');
+    if (available) report.setAttribute('href', window.RCRemoteControls
+      ? 'api/control/battery/report.csv' : 'api/battery/report.csv');
     else report.removeAttribute('href');
     const live = $('swipe-live');
     if (!page.hidden && live) live.textContent = available ? (snapshot.complete ? '● BMS' : 'НЕ ВСЕ БАНКИ') : 'НЕТ ДАННЫХ BMS';
@@ -304,7 +307,8 @@
       if (!response.ok) throw new Error('http ' + response.status);
       const result = await response.json();
       if (!result.ok || !result.battery) throw new Error('invalid battery response');
-      snapshot = result.battery;
+      snapshot = window.RCRemoteControls
+        ? Object.assign({}, result.battery, {setupAvailable: false}) : result.battery;
       receivedAt = Date.now();
       transportOk = true;
     } catch (error) {
@@ -459,6 +463,7 @@
   }
 
   function openSetup(open) {
+    if (window.RCRemoteControls) return;
     setupOpen = open;
     const block = $('bms-setup');
     if (block) block.hidden = !open;

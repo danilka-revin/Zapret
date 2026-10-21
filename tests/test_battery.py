@@ -360,8 +360,13 @@ def test_explicit_chassis_sources_cannot_open_bms_port(monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setenv("RC_BMS_PORT", "/dev/fake-bms")
     monkeypatch.setenv("RC_SLAM_PORT", "/dev/fake-bms")
+    monkeypatch.setenv("RC_WHEEL_FL_PORT", "/dev/fake-bms")
     source = make_source("master")
-    assert source.name == "none"
+    try:
+        assert source.name == "master"
+        assert "/dev/fake-bms" not in source.ports
+    finally:
+        source._stop = True
     mod = SimpleNamespace(SerialSource=lambda ports, **kwargs: ports)
     assert chassis_source(mod, ["/dev/fake-bms", "/dev/fake-module"]) == ["/dev/fake-module"]
 

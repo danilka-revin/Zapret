@@ -13,7 +13,7 @@ MAX_NAV_REPLY_BYTES = 2 * 1024 * 1024
 
 
 def _forward_json(origin: str, path: str, *, methods: set[str], limit: int,
-                  timeout: float = 4.0, control_header: str = ""):
+                  timeout: float = 4.0, control_header: str = "", extra_headers=None):
     if request.method not in methods:
         return jsonify(ok=False, error="Метод не поддерживается"), 405
     body = None
@@ -27,6 +27,7 @@ def _forward_json(origin: str, path: str, *, methods: set[str], limit: int,
     # постоянный маркер команды распознаёт операторская и бортовая страницы.
     if control_header and request.headers.get("X-Robot-Control") == control_header:
         headers["X-Robot-Control"] = control_header
+    headers.update(extra_headers or {})
     upstream = Request(origin + path, data=body, headers=headers, method=request.method)
     try:
         try:
@@ -79,3 +80,53 @@ def proxy_estop(origin: str, release: bool = False):
     return _forward_json(origin, "/api/estop" + suffix,
                          methods={"POST"}, limit=MAX_NAV_REPLY_BYTES,
                          timeout=4.0, control_header="drive")
+
+
+# Routes are fixed: the browser cannot pick an upstream URL or serial port.
+CONTROL_ROUTES = {
+    'state': ('/api/kiosk_state', {'GET'}, ''),
+    'battery': ('/api/battery', {'GET'}, ''),
+    'lock': ('/api/kiosk_lock', {'GET'}, ''),
+    'lock/open': ('/api/kiosk_lock/open', {'POST'}, 'steering'),
+    'lock/close': ('/api/kiosk_lock/close', {'POST'}, 'steering'),
+    'steer': ('/api/kiosk_steer', {'POST'}, 'steering'),
+    'zero': ('/api/kiosk_zero', {'POST'}, 'steering'),
+    'calibrate': ('/api/kiosk_calibrate', {'POST'}, 'steering'),
+    'pot_mode': ('/api/kiosk_pot_mode', {'POST'}, 'steering'),
+    'drive': ('/api/kiosk_drive', {'POST'}, 'drive'),
+    'estop': ('/api/estop', {'POST'}, 'drive'),
+    'estop/release': ('/api/estop/release', {'POST'}, 'drive'),
+    'wheels/settings': ('/api/wheels/settings', {'GET', 'POST'}, 'wheel-settings'),
+}
+
+
+def proxy_control(origin: str, operation: str):
+    route = CONTROL_ROUTES.get(operation)
+    if route is None:
+        return jsonify(ok=False, error='Неизвестная команда управления'), 404
+    path, methods, marker = route
+    extra = None
+    if operation == 'drive':
+        import time
+        # Web and onboard servers run on the robot. Do not execute a heartbeat
+        # that sat in a server/network queue after the operator released it.
+        extra = {'X-Robot-Command-Deadline': str(time.time() + 0.5)}
+    return _forward_json(origin, path, methods=methods, limit=MAX_NAV_REPLY_BYTES,
+                         timeout=0.6 if operation == 'drive' else 1.0,
+                         control_header=marker, extra_headers=extra)
+
+
+def proxy_battery_report(origin: str):
+    """Build a read-only CSV from the same onboard snapshot as the battery tab."""
+    from .battery import report_response
+    response = proxy_control(origin, 'battery')
+    if isinstance(response, tuple) or response.status_code != 200:
+        return response
+    payload = response.get_json(silent=True) or {}
+    snapshot = payload.get('battery')
+    if not isinstance(snapshot, dict):
+        return jsonify(ok=False, error='Бортовой сервер не вернул данные АКБ'), 503
+    try:
+        return report_response(snapshot)
+    except (KeyError, TypeError, ValueError):
+        return jsonify(ok=False, error='Неполный ответ BMS от бортового сервера'), 503

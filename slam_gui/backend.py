@@ -269,7 +269,7 @@ CALIB_ERRORS = {
 }
 
 
-def parse_master_line(line):
+def parse_master_line(line, module=None):
     """Строка монитора мастера "@TLM mod=FL deg=-9.25 moving=1 ..." → dict.
 
     Остальные строки монитора (текст для человека) возвращают None.
@@ -283,7 +283,7 @@ def parse_master_line(line):
         if sep:
             fields[key] = value
     try:
-        module = fields["mod"].upper()
+        module = module or fields["mod"].upper()
         angle = float(fields["deg"])
         target = float(fields.get("tgt", "0"))
         rpm = float(fields["rpm"]) if "rpm" in fields else None
@@ -345,46 +345,12 @@ _UNCLAIMED = object()
 
 
 class MasterSource:
-    """Четыре колеса — четыре USB-порта: руление и низкоскоростная тяга.
+    """Четыре USB-колеса, только ручное назначение ``module_ports``.
 
-    Связь с колёсами — только USB-UART: каждая плата со своей прошивкой (``firmware/motor_wheel``,
-    имя колеса зашито в ``MODULE_ID``) подключена собственным USB-кабелем.
-    Сервер сам понимает, куда что подключено: плата называет себя в каждой
-    строке «@TLM mod=FL …» (раз в 250 мс) и на запрос «@ID» — порядок кабелей
-    и номера ``ttyUSBx`` не важны. Порт, приславший имя колеса, которое уже
-    опознано за другим портом, в кадры не идёт: две одинаковые прошивки видно
-    сразу («перепрошите одну плату»), а не как мигающая связь.
-
-    Ноль руля — калибровка по оптодатчику D18 (``w FL calib`` / ``k`` для всех)
-    или ручной ``w FL zero``. Тяга — только удерживаемая команда ±20% (``t N``)
-    на все порты, разрешённая при свежей телеметрии, заданном нуле всех четырёх
-    модулей и одинаковом направлении колёс. Плата сама отключает PWM и
-    включает тормоз через 650 мс без heartbeat; если порт колеса пропал прямо
-    в движении — тормоз уходит на остальные порты (fail closed).
-
-    Адресная команда «w FL 12.5» уходит только на порт колеса FL; рассылаемые
-    (``k, q, t, b, pm, s, …``) — на все опознанные порты колёс. Прошивка
-    дополнительно игнорирует команды с чужим именем, поэтому перепутанный
-    кабель не крутит не то колесо.
-
-    Порты — общий ресурс с лидаром (он тоже на USB, и его порт открывать
-    нельзя). Поэтому те же три механизма, что у ``SerialSource``:
-
-      * ``claim``/``release`` (:func:`try_lock_port`) — межпроцессный замок
-        порта: пока его держит лидар, колёса порт не открывают;
-      * ``yield_to_lidar`` (:func:`lidar_holds_port`) — пока лидар ищет свой
-        порт, колёса ждут (иначе его перебор упирается в порты, которые
-        держим мы);
-      * ``tag_module``/``untag_module`` (:func:`tag_module_port`) — отметка
-        «здесь колесо»: лидар такой порт не перебирает (его открытие
-        сбрасывает плату и рвёт телеметрию).
-
-    Неопознанные порты автопоиска отпускаются и временно исключаются.
-    Явно назначенные оператором порты повторно проверяются после паузы:
-    USB-разветвитель мог перезапустить плату, которая ещё загружается.
-    Раньше источник колёс держал открытыми
-    ВСЕ найденные USB-порты — включая лидар, — и писал в них команды: лидар
-    глох, счётчик на экране мигал «200 → 15 → 50».
+    Пустой порт отключает колесо. Не выбранные оператором устройства не
+    открываются, имена плат и ответы @ID не определяют назначение порта.
+    Свежая телеметрия @TLM всё ещё обязательна для команд; межпроцессный
+    замок, остановка тяги и watchdog не зависят от имени колеса в прошивке.
     """
 
     name = "master"
@@ -396,7 +362,7 @@ class MasterSource:
     MAX_STEER_DEG = STEER_LIMIT_DEG
     MAX_DRIVE_PERCENT = 20
     MESSAGE_LIMIT = 40
-    #: Сколько ждать строку @TLM/@ID после открытия порта (плата перезагружается).
+    #: Сколько ждать строку @TLM после открытия порта (плата перезагружается).
     PROBE_S = 5.0
     #: Пауза перед повторным открытием порта, с которого ничего не пришло.
     RETRY_S = 2.0
@@ -405,30 +371,29 @@ class MasterSource:
     MAX_LINE_BYTES = 1024
     #: Как часто менеджер пересматривает список портов-кандидатов.
     RESCAN_S = 2.0
-    #: Как часто предупреждать о двух платах с одной прошивкой колеса.
-    CONFLICT_NOTE_S = 10.0
-    #: Сколько байт «чужого» потока достаточно, чтобы понять: это не колесо
-    #: (непрерывный бинарный поток лидара), и сразу отпустить порт.
-    PROBE_GARBAGE_BYTES = 64
-    #: Сколько тихих попыток (ни потока, ни @TLM) даём порту: плата могла ещё
-    #: не загрузиться. После них порт тоже отпускается надолго.
-    REJECT_MISSES = 3
-    #: На сколько порт, не назвавшийся колесом, перестаёт быть кандидатом.
-    #: Отказ снимается сам, как только устройство исчезнет из системы (кабель
-    #: переткнули) — на его месте может появиться настоящее колесо.
-    REJECT_TTL_S = 600.0
     #: Как часто обновляем отметку «здесь колесо» (её срок жизни — 60 с).
     TAG_REFRESH_S = 15.0
 
-    def __init__(self, port, baud=115200, on_message=None, on_status=None,
+    def __init__(self, port=None, baud=115200, on_message=None, on_status=None,
                  port_provider=None, probe=None, claim=None, release=None,
                  yield_to_lidar=None, tag_module=None, untag_module=None,
                  module_ports=None):
-        ports = [port] if isinstance(port, str) else [p for p in (port or []) if p]
-        if not ports:
-            ports = ["/dev/ttyACM0"]
-        self.module_ports = {m: p for m, p in (module_ports or {}).items() if p}
-        self.configured_port = ports[0]
+        # Legacy positional ports/providers are deliberately NOT candidates.
+        # Without a wheel-to-port assignment, never open any device.
+        self.module_ports = {}
+        seen = set()
+        for module, path in (module_ports or {}).items():
+            if not path:
+                continue
+            if module not in MODULE_TITLES:
+                raise ValueError("Неизвестное колесо: %s" % module)
+            real = os.path.realpath(path)
+            if real in seen:
+                raise ValueError("Один USB-порт нельзя назначить двум колёсам")
+            seen.add(real)
+            self.module_ports[module] = path
+        ports = list(self.module_ports.values())
+        self.configured_port = ports[0] if ports else None
         self.port = None                 # первый опознанный порт (для экрана)
         self.ports = ports
         self.candidates = [p for p in ports if os.path.exists(p)]
@@ -444,7 +409,6 @@ class MasterSource:
         self.messages = []               # строки «# FL: …» прошивки: (время, текст)
         self.on_message = on_message     # их же — в журнал экрана
         self.on_status = on_status       # «порт не найден / колёса на связи»
-        self.port_provider = port_provider   # пересканировать порты при обрыве
         #: Межпроцессный замок порта (см. docstring класса): ``claim(port)`` →
         #: владение или ``None`` (порт занят лидаром/вторым процессом),
         #: ``release(владение)`` — снять.
@@ -455,17 +419,12 @@ class MasterSource:
         #: Отметка «на этом порту подтвердилось колесо» (её видит лидар).
         self.tag_module = tag_module
         self.untag_module = untag_module
-        # Даже ручное назначение требует @TLM/@ID: в лидар команды не пишем.
-        self.probe = True if probe is None else bool(probe)
         self.last_error = ""
         self._last_status = None
         self._stop = False
         self._serial = None
         self._spawning = set()
         self._cooldown = {}              # порт → время следующей попытки открыть
-        self._rejected = {}              # порт → до какого времени не трогать
-        self._misses = {}                # порт → сколько раз молчал без @TLM
-        self._conflict_noted = {}        # модуль → момент предупреждения о дубле
         threading.Thread(target=self._reader, daemon=True).start()
 
     @staticmethod
@@ -495,14 +454,14 @@ class MasterSource:
             except Exception:                 # noqa: BLE001 — журнал не ломает чтение
                 pass
 
-    def feed(self, line, now=None):
+    def feed(self, line, now=None, module=None):
         """Принимает строку монитора; True, если это телеметрия.
 
         Строки «# FL: …» — сообщения прошивки для человека (калибровка, ошибки
         датчика): они сохраняются и уходят в журнал.
         """
         now = time.time() if now is None else now
-        frame = parse_master_line(line)
+        frame = parse_master_line(line, module=module)
         if frame is None:
             text = (line or "").strip()
             if text.startswith("# ") and len(text) > 2:
@@ -842,71 +801,29 @@ class MasterSource:
             finally:
                 link.commands.task_done()
 
-    # ------------------------------------------------------------- идентификация #
-    @staticmethod
-    def _line_module(line):
-        """Имя колеса из строки @TLM/@ID, иначе None (не идентификация)."""
-        text = (line or "").strip()
-        if text.startswith(TLM_PREFIX):
-            frame = parse_master_line(text)
-            return frame["mod"] if frame else None
-        if text[:3].upper() == "@ID":
-            for token in text[3:].split():
-                key, sep, value = token.partition("=")
-                if sep and key.lower() == "mod":
-                    name = value.strip().upper()
-                    return name if name in MODULE_TITLES else None
-        return None
-
-    def _bind_module(self, link, module):
-        """Привязать колесо к порту. False — это дубль уже занятого имени."""
-        now = time.time()
-        with self.lock:
-            owner = self.modules.get(module)
-            if owner is None:
-                self.modules[module] = link.path
-                link.module = module
-                fresh = True
-            elif owner == link.path:
-                if link.module != module:
-                    link.module = module
-                return True
-            else:
-                fresh = False
-            if self.port is None:
-                self.port = link.path
-        if fresh:
-            self.serial_ready.set()
-            self._note_status("ok", "мастер на связи: %s · колесо %s" % (link.path, module))
-            return True
-        with self.lock:
-            last = self._conflict_noted.get(module, 0.0)
-            self._conflict_noted[module] = now
-        if now - last > self.CONFLICT_NOTE_S:
-            self._note_status(
-                "warn",
-                "прошивка %s и на %s, и на %s — перепрошите одну плату"
-                % (module, owner, link.path))
-        return False
-
     def _assigned_module(self, path):
         real = os.path.realpath(path)
         return next((m for m, p in getattr(self, "module_ports", {}).items()
                      if os.path.realpath(p) == real), None)
 
     def _link_line(self, link, line):
-        reported = self._line_module(line)
-        assigned = self._assigned_module(link.path)
-        module = assigned or reported
-        if reported is not None:
-            # An automatically discovered board cannot take a manually reserved role.
-            if not assigned and reported in getattr(self, "module_ports", {}):
-                return False
-            if not self._bind_module(link, module):
-                return False
-            if assigned and line.strip().startswith(TLM_PREFIX):
-                line = re.sub(r"(?i)(\bmod=)[^\s]+", lambda m: m[1] + assigned, line)
-        return self.feed(line)
+        module = self._assigned_module(link.path)
+        if module is None:
+            return False
+        # Role comes from the selected port, never from mod= or @ID.
+        # Validate actual telemetry before enabling commands to that port.
+        if not self.feed(line, module=module):
+            return False
+        with self.lock:
+            fresh = link.module is None
+            self.modules[module] = link.path
+            link.module = module
+            if self.port is None:
+                self.port = link.path
+        self.serial_ready.set()
+        if fresh:
+            self._note_status("ok", "мастер на связи: %s · колесо %s (ручной порт)" % (link.path, module))
+        return True
 
     def _link_bytes(self, link, raw):
         """UART timeouts may split a line; only a newline completes a frame.
@@ -931,16 +848,8 @@ class MasterSource:
 
     # ------------------------------------------------------------ потоки портов #
     def _candidate_ports(self):
-        """Существующие порты: настроенный, остальные из настроек и свежий скан."""
-        provider = getattr(self, "port_provider", None)
-        if callable(provider):
-            try:
-                # Свежий скан важнее старого списка: порт мог перейти лидару.
-                ports = list(provider() or [])
-            except Exception:             # noqa: BLE001 — скан не критичен
-                ports = list(self.ports)
-        else:
-            ports = list(self.ports)
+        """Проверить наличие только вручную назначенных портов, без USB-поиска."""
+        ports = list(self.module_ports.values())
         out, seen = [], set()
         for path in ports:
             path = str(path or "").strip()
@@ -1002,58 +911,15 @@ class MasterSource:
         except Exception:                 # noqa: BLE001 — отметка не критична
             pass
 
-    def _reject_port(self, path, why):
-        """Порт не назвался колесом: отпустить и больше не трогать.
-
-        Его может держать лидар, BMS или чужой адаптер — открывать такой порт
-        повторно нельзя (см. docstring класса).
-        """
-        with self.lock:
-            self._rejected[path] = time.monotonic() + self.REJECT_TTL_S
-        self._note_status("warn", "порт %s: %s — не трогаю его" % (path, why))
-
-    def _reject_silent(self, path, streamed):
-        """Решить судьбу порта, который не назвал себя колесом за ``PROBE_S``.
-
-        Поток байт без единой строки @TLM — это не колесо (так выглядит лидар):
-        отказ сразу. Порт, который просто молчит, получает несколько попыток:
-        плата могла ещё не загрузиться после сброса при открытии.
-        """
-        if self._assigned_module(path):
-            # An explicitly selected wheel may still be booting after a hub
-            # power dip. Never quarantine it for ten minutes for boot chatter.
-            self._note_status(
-                "warn", "порт %s: нет @TLM/@ID — проверю снова; проверьте питание USB-разветвителя и прошивку" % path)
-            return
-        if streamed >= self.PROBE_GARBAGE_BYTES:
-            self._misses.pop(path, None)
-            self._reject_port(path, "поток без @TLM (похоже, это не колесо)")
-            return
-        with self.lock:
-            misses = self._misses.get(path, 0) + 1
-            self._misses[path] = misses
-        if misses >= self.REJECT_MISSES:
-            self._reject_port(path, "молчит: нет @TLM за %d попыток" % misses)
-        else:
-            self._note_status("warn", "порт %s: колесо не ответило — попробую ещё" % path)
-
     def _open_new_links(self):
         """Открыть порты, которых ещё нет в работе: каждый — своё колесо."""
         candidates = self._candidate_ports()
         now = time.monotonic()
-        # Устройство исчезло из системы (кабель переткнули) — отказ и счётчик
-        # «молчал» к этому пути больше не относятся: тут может быть колесо.
-        with self.lock:
-            for path in list(self._rejected):
-                if self._rejected[path] <= now or not os.path.exists(path):
-                    self._rejected.pop(path, None)
-                    self._misses.pop(path, None)
         if not candidates and not self.links:
             self.serial_ready.clear()
             self._note_status(
                 "warn",
-                "мастер: USB-порт не найден (RC_SLAM_PORT=%s) — ждём подключения"
-                % self.configured_port)
+                "колёса: назначенные USB-порты недоступны — проверьте ручной выбор портов")
             return
         waiting_for_lidar = False
         for candidate in candidates:
@@ -1067,8 +933,6 @@ class MasterSource:
                 if device in busy:
                     continue
                 if self._cooldown.get(candidate, 0.0) > now:
-                    continue
-                if self._rejected.get(candidate, 0.0) > now:
                     continue
             if self._lidar_needs(candidate):
                 # Лидар ищет свой порт (или уже читает этот): колёса ждут, иначе
@@ -1085,18 +949,11 @@ class MasterSource:
             self._note_status("warn", "колёса: лидар ищет свой порт — жду")
 
     def _link_worker(self, link):
-        """Порт одного колеса: сначала опознание по @TLM, потом чтение и команды.
-
-        Порт, который за ``PROBE_S`` не назвал себя колесом, отпускается и
-        больше не трогается (см. ``_reject_port``): на том же USB-переходнике
-        может быть лидар, а держать его открытым и писать в него команды
-        нельзя — лидар глох, и счётчик на экране мигал «200 → 15 → 50».
-        """
+        """Читать только назначенный порт; готовность — по свежей @TLM."""
         serial = self._serial
         dev = None
         token = self._claim(link.path)
         identified = False
-        streamed = 0
         try:
             if token is None:
                 # Замок держит лидар или второй процесс робота: порт не наш,
@@ -1109,15 +966,14 @@ class MasterSource:
             dev = serial.Serial(link.path, self.baud, timeout=0.2, exclusive=True)
             with self.lock:
                 self.links[link.path] = link
-            # Окно опознания: плата после сброса при открытии печатает @TLM.
+            # Ждём свежую телеметрию после возможного сброса при открытии.
             deadline = time.monotonic() + self.PROBE_S
             while not self._stop and link.module is None and time.monotonic() < deadline:
                 raw = dev.readline()
                 if raw:
-                    streamed += len(raw)
                     self._link_bytes(link, raw)
             if link.module is None:
-                self._reject_silent(link.path, streamed)
+                self._note_status("warn", "порт %s: нет @TLM — проверю снова; проверьте питание USB и прошивку" % link.path)
                 return
             identified = True
             # Отметка «здесь колесо»: лидар такой порт не перебирает — его
@@ -1257,9 +1113,9 @@ class MasterPeerSource:
 
     Порт мастера один, и владеет им бортовой экран (8090). Если открыть его ещё
     раз из пульта, два процесса читают одни и те же байты, строки рвутся, а
-    команды отбрасываются. Поэтому пульт только опрашивает публичный
-    ``/api/kiosk_state`` экрана и показывает моторы; управление (руление, ноль,
-    тяга) доступно только на самом экране.
+    команды отбрасываются. Этот источник только опрашивает телеметрию.
+    Веб-вкладка /controls посылает команды через отдельный авторизованный
+    HTTP-прокси /api/control/* на борт, не вызывая методы этого источника.
     """
 
     name = "master-peer"

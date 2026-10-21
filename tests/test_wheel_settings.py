@@ -116,7 +116,8 @@ def test_auto_port_cannot_take_manually_reserved_role():
     assert link.module is None
     assert not src.frames
     src._link_line(link, '@TLM mod=FL deg=0')
-    assert link.module == 'FL'
+    assert link.module is None
+    assert not src.frames
 
 
 def test_manual_ports_excluded_from_lidar_but_active_lidar_keeps_ownership(monkeypatch):
@@ -140,15 +141,15 @@ def test_master_source_receives_assignments_and_scans_them_first(monkeypatch):
     backend = slam.load_backend()
     captured = {}
 
-    def source(ports, **kwargs):
-        captured.update(ports=ports, **kwargs)
+    def source(**kwargs):
+        captured.update(**kwargs)
         return captured
 
     monkeypatch.setattr(backend, 'MasterSource', source)
     slam.make_source('master')
     assert captured['module_ports']['FR'] == '/dev/serial/by-path/hub:1.2'
-    assert captured['ports'][0] == '/dev/serial/by-path/hub:1.2'
-    assert captured['port_provider']()[0] == '/dev/serial/by-path/hub:1.2'
+    assert 'port_provider' not in captured
+    assert 'ports' not in captured
 
 
 def test_fragmented_telemetry_is_only_parsed_after_newline():
@@ -173,10 +174,42 @@ def test_noisy_stream_is_bounded_and_resynchronizes():
     assert src.frames['FR'][0]['deg'] == 2
 
 
-def test_manual_boot_chatter_never_causes_ten_minute_quarantine():
+def test_identity_lines_cannot_enable_an_assigned_port():
     src = source_without_threads()
-    src._misses = {}
-    src._rejected = {}
-    for _ in range(5):
-        src._reject_silent('/dev/right', 1024)
-    assert '/dev/right' not in src._rejected
+    link = slam.load_backend()._WheelLink('/dev/right')
+    assert not src._link_bytes(link, b'@ID mod=FR fw=4\n')
+    assert link.module is None and not src.frames
+    assert src._link_bytes(link, b'@TLM deg=7 tgt=0 cal=1\n')
+    assert link.module == 'FR'
+    assert src.frames['FR'][0]['deg'] == 7
+
+
+def test_old_unknown_firmware_name_cannot_override_manual_assignment():
+    src = source_without_threads()
+    link = slam.load_backend()._WheelLink('/dev/right')
+    assert src._link_bytes(link, b'@TLM mod=UNKNOWN deg=7 tgt=0 cal=1\n')
+    assert link.module == 'FR'
+
+
+def test_port_list_uses_real_names_and_never_opens_devices(settings_file, monkeypatch):
+    monkeypatch.setattr(wheel_settings.glob, 'glob', lambda pattern:
+                        ['/dev/ttyUSB0'] if 'USB' in pattern else ['/dev/ttyACM2'])
+    monkeypatch.setattr(wheel_settings.os.path, 'realpath',
+                        lambda p: '/dev/ttyUSB0' if '/serial/' in p else p)
+    settings_file.write_text('RC_WHEEL_FL_PORT=/dev/serial/by-path/hub:1.0\n')
+    data = wheel_settings.settings_payload()
+    assert [p['path'] for p in data['ports']] == ['/dev/ttyACM2', '/dev/ttyUSB0']
+    assert data['settings']['FL'] == '/dev/ttyUSB0'
+
+
+def test_wheel_ui_has_no_auto_option(kiosk_client):
+    script = kiosk_client.get('/wheel_settings.js').text
+    assert 'Авто · по имени платы' not in script
+    assert "new Option('Не подключено · порт не выбран', '')" in script
+    assert 'new Option(port.path, port.path)' in script
+
+
+def test_duplicate_assignments_fail_before_opening_serial(monkeypatch):
+    backend = slam.load_backend()
+    with pytest.raises(ValueError, match='двум'):
+        backend.MasterSource(module_ports={'FL': '/dev/ttyUSB0', 'FR': '/dev/ttyUSB0'})

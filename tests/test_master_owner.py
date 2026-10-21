@@ -51,7 +51,7 @@ def test_master_port_is_opened_exclusively_by_one_process():
     master_fd, slave_fd = os.openpty()
     try:
         name = os.ttyname(slave_fd)
-        owner = backend.MasterSource(name)
+        owner = backend.MasterSource(module_ports={"FL": name})
         deadline = time.time() + 3.0
         while not owner.serial_ready.is_set() and time.time() < deadline:
             # плата «перезагрузилась» при открытии и вскоре печатает @TLM
@@ -62,7 +62,7 @@ def test_master_port_is_opened_exclusively_by_one_process():
                 pass
             time.sleep(0.05)
         assert owner.serial_ready.is_set(), "владелец должен опознать колесо"
-        assert owner.modules.get("FL") == name, "FL привязан к порту автоматически"
+        assert owner.modules.get("FL") == name, "FL привязан к выбранному порту"
 
         with pytest.raises(serial.SerialException):
             serial.Serial(name, 115200, timeout=0.1, exclusive=True)
