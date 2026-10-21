@@ -309,6 +309,15 @@
           <button id="log-clear" class="log-clear" type="button">Очистить</button>
           <button id="log-copy" class="log-clear" type="button" title="Копировать">Копировать</button>
         </header>
+        <div class="log-filters">
+          <label>Группа <select id="log-group-filter" aria-label="Группа журнала">
+            <option value="all">Все группы</option><option value="wheels">Колёса и тяга</option>
+            <option value="battery">АКБ и питание</option><option value="lidar">Лидар</option>
+            <option value="cameras">Камеры</option><option value="navigation">Карта и навигация</option>
+            <option value="system">Система</option>
+          </select></label>
+          <label><input id="log-important" type="checkbox" /> Только ошибки и предупреждения</label>
+        </div>
         <div id="log-list" class="log-list" role="log" aria-live="polite"></div>
         <footer class="log-foot">
           <span id="log-status">журнал робота · /api/kiosk_logs</span>

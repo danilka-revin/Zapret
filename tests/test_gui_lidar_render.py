@@ -361,12 +361,12 @@ def test_log_panel_shows_real_journal_lines(tmp_path):
     lines = report["logLines"]
     assert report["renderErrors"] == [], report["renderErrors"]
     assert [line["msg"].split("  ×")[0] for line in lines] == [
-        "лидар на связи (serial:ttyUSB1, 360 точек)",
         "руление отклонено: угол вне допуска ±32°",
+        "лидар на связи (serial:ttyUSB1, 360 точек)",
         "PIN не принят (бортовой экран): неверный PIN",
     ]
-    assert [line["level"] for line in lines] == ["ok", "warn", "warn"]
-    assert lines[0]["time"] == "12:00:01"
+    assert [line["level"] for line in lines] == ["warn", "ok", "warn"]
+    assert lines[1]["time"] == "12:00:01"
     # повторяющееся событие подписано счётчиком, а не размножено строками
     assert lines[2]["msg"].endswith("×4")
     # подпись под журналом — про настоящий журнал, с числом записей и ошибок
