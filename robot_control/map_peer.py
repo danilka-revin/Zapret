@@ -130,3 +130,9 @@ def proxy_battery_report(origin: str):
         return report_response(snapshot)
     except (KeyError, TypeError, ValueError):
         return jsonify(ok=False, error='Неполный ответ BMS от бортового сервера'), 503
+
+
+def proxy_connections(origin: str):
+    """Inventory belongs to the onboard computer, not the browser or web peer."""
+    return _forward_json(origin, '/api/connections', methods={'GET'},
+                         limit=MAX_NAV_REPLY_BYTES, timeout=1.0)

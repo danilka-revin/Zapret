@@ -549,6 +549,8 @@ def _drive_command(source, body):
 
 #: Статика интерфейса: имя файла → endpoint. Отдаётся только этот список.
 ASSETS = {
+    "connections.css": "connections_css",
+    "connections.js": "connections_js",
     "main.css": "main_css",
     "main.js": "main_js",
     # карта лидара в стиле RViz (зум, сетка, Decay Time) — общая для пульта и бортового экрана
@@ -938,6 +940,17 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     @guard
     def remote_controls_screen():
         return remote_screen("motors")
+
+    @bp.get("/connections")
+    @guard
+    def connections_screen():
+        return _send("connections.html")
+
+    @bp.get("/api/connections")
+    @guard
+    def connections_snapshot():
+        from .map_peer import proxy_connections
+        return proxy_connections(peer_kiosk_url().removesuffix("/api/kiosk_state"))
 
     @bp.get("/battery")
     @guard

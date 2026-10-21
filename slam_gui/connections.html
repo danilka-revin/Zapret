@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0c0d10">
+  <title>Подключения · Пульт робота</title>
+  <link rel="stylesheet" href="connections.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">RUS <span>/ ПУЛЬТ РОБОТА</span></a>
+    <nav aria-label="Разделы пульта">
+      <a href="/">Главный экран</a><a href="/controls">Руление и тяга</a><a href="/battery">АКБ</a>
+      <a href="/connections" aria-current="page">Подключения</a>
+    </nav>
+  </header>
+  <main>
+    <div class="page-heading">
+      <div><p class="eyebrow">БОРТОВОЙ КОМПЬЮТЕР / ОБОРУДОВАНИЕ</p><h1>Подключения</h1>
+        <p class="lead">Проводные и беспроводные устройства в одном месте.</p></div>
+      <button id="connections-refresh" type="button">↻ Обновить</button>
+    </div>
+    <div class="statusbar" role="status" aria-live="polite">
+      <span id="connections-status">Ожидание бортового сервера…</span>
+      <span id="connections-host">Компьютер: —</span><span id="connections-updated">Обновление: —</span>
+    </div>
+    <div class="notice">Только просмотр · без подключения к портам, поиска Wi-Fi и Bluetooth-сопряжения.
+      Показаны устройства, которые видит ОС на борту, а не на телефоне или компьютере с браузером.</div>
+    <div class="inventory-grid">
+      <section class="panel" aria-labelledby="usb-title"><header><div><span class="section-icon">USB</span><h2 id="usb-title">USB-устройства</h2></div><span id="usb-count" class="count">—</span></header>
+        <p class="section-note">Разветвители, платы, адаптеры и периферия</p><div id="usb-items" class="items">Ожидание данных…</div><p id="usb-warning" class="warning" hidden></p></section>
+      <section class="panel" aria-labelledby="serial-title"><header><div><span class="section-icon">I/O</span><h2 id="serial-title">COM / UART-порты</h2></div><span id="serial-count" class="count">—</span></header>
+        <p class="section-note">Фактические имена портов · назначения только из настроек</p><div id="serial-items" class="items">Ожидание данных…</div><p id="serial-warning" class="warning" hidden></p></section>
+      <section class="panel wide" aria-labelledby="network-title"><header><div><span class="section-icon">NET</span><h2 id="network-title">Ethernet и Wi-Fi</h2></div><span id="network-count" class="count">—</span></header>
+        <p class="section-note">Физические и виртуальные интерфейсы, IP-адреса и состояние канала</p><div id="network-items" class="items network-items">Ожидание данных…</div><p id="network-warning" class="warning" hidden></p></section>
+      <section class="panel" aria-labelledby="bluetooth-title"><header><div><span class="section-icon">BT</span><h2 id="bluetooth-title">Bluetooth</h2></div><span id="bluetooth-count" class="count">—</span></header>
+        <p class="section-note">Адаптеры и известные ОС устройства · сопряжено ≠ подключено</p><div id="bluetooth-items" class="items">Ожидание данных…</div><p id="bluetooth-warning" class="warning" hidden></p></section>
+      <section class="panel" aria-labelledby="peripherals-title"><header><div><span class="section-icon">DEV</span><h2 id="peripherals-title">Периферия</h2></div><span id="peripherals-count" class="count">—</span></header>
+        <p class="section-note">Камеры, ввод, накопители и подключённые мониторы</p><div id="peripherals-items" class="items">Ожидание данных…</div><p id="peripherals-warning" class="warning" hidden></p></section>
+      <section class="panel wide" aria-labelledby="peers-title"><header><div><span class="section-icon">LAN</span><h2 id="peers-title">Соседи в локальной сети</h2></div><span id="peers-count" class="count">—</span></header>
+        <p class="section-note">Кэш ARP / NDP: известные адреса, а не гарантированный список подключённых клиентов</p><div id="peers-items" class="items network-items">Ожидание данных…</div><p id="peers-warning" class="warning" hidden></p></section>
+    </div>
+    <footer>Автообновление каждые 5 секунд. Недоступные сведения отмечаются отдельно.
+      USB-устройство может одновременно отображаться в списке портов или периферии.
+      Соседние Wi-Fi сети и устройства вне списка ОС не сканируются.</footer>
+  </main>
+  <script src="slam_auth.js"></script><script src="connections.js"></script>
+</body>
+</html>
