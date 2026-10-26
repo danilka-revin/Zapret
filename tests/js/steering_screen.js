@@ -205,6 +205,11 @@ function jsonResponse(body, status) {
  * спрашивал у сервера и отправлял ли команду. */
 const netlog = [];
 
+/* Команды настройки привода (api/kiosk_drive_config). Отдельный журнал: в
+ * жизни это не тяга, а смена режима выхода — экран обязан отправлять её по
+ * одной и только при выключенной тяге. */
+const driveCfgSent = [];
+
 /* Телеметрия по кадрам: в жизни колесо сначала едет, потом останавливается —
  * и не всегда там, куда его послали. ``motorFrames`` позволяет показать экрану
  * именно эту последовательность, а не один застывший снимок. */
@@ -235,6 +240,15 @@ global.fetch = async (url, init) => {
       return jsonResponse({ ok: false, reason: 'angle_limit', limit }, 400);
     }
     return jsonResponse({ ok: true, queued: true, module: module.toUpperCase(), angle: Number(body.angle) }, 200);
+  }
+  if (/drive_config/.test(text)) {
+    driveCfgSent.push({
+      action: body.action,
+      value: body.value === undefined ? null : body.value,
+      header: (init.headers || {})['X-Robot-Control'] || null,
+    });
+    if (payload.driveCfgRefuse) return jsonResponse({ ok: false, reason: payload.driveCfgRefuse }, 409);
+    return jsonResponse({ ok: true, queued: true, action: body.action }, 200);
   }
   if (/kiosk_drive|api\/drive/.test(text)) {
     drives.push({ percent: body.percent });
@@ -394,6 +408,23 @@ function findPreset(id) {
     } else if (action.type === 'stop') {
       byId('drive-stop').fire('click');
       await flush(3);
+    } else if (action.type === 'drivecfg') {
+      const fields = {
+        output: 'drive-cfg-output', tach: 'drive-cfg-tach', brake: 'drive-cfg-brake',
+        limit: 'drive-cfg-limit', vmin: 'drive-cfg-vmin', vmax: 'drive-cfg-vmax',
+      };
+      Object.keys(fields).forEach((key) => {
+        if (action[key] === undefined) return;
+        const el = byId(fields[key]);
+        el.value = String(action[key]);
+        if (el.tagName === 'INPUT') el.fire('input');
+      });
+      await flush(1);
+      if (action.apply !== false) byId('drive-cfg-apply').fire('click');
+      await flush(action.rounds || 8);
+    } else if (action.type === 'drivecfg-reset') {
+      byId('drive-cfg-reset').fire('click');
+      await flush(action.rounds || 6);
     }
   }
 
@@ -422,11 +453,25 @@ function findPreset(id) {
     sourceStatus: byId('steer-source-status').textContent,
     dataChip: byId('data-chip').textContent,
     driveStatus: byId('drive-status').textContent,
+    driveSpeedMax: byId('drive-speed').max,
+    rpmText: ['FL', 'FR', 'RL', 'RR'].map((id) => byId('rpm-' + id).textContent),
+    driveCfg: {
+      output: byId('drive-cfg-output').value,
+      tach: byId('drive-cfg-tach').value,
+      brake: byId('drive-cfg-brake').value,
+      limit: byId('drive-cfg-limit').value,
+      vmin: byId('drive-cfg-vmin').value,
+      vmax: byId('drive-cfg-vmax').value,
+      applyDisabled: !!byId('drive-cfg-apply').disabled,
+      resetDisabled: !!byId('drive-cfg-reset').disabled,
+      status: byId('drive-cfg-status').textContent,
+    },
     heroAngle: byId('steer-hero-angle').textContent,
     heroMode: byId('steer-hero-mode').textContent,
     masterValue: byId('steer-master-value').textContent,
     sent,
     drives,
+    driveCfgSent,
     netlog,
     renderErrors,
   };

@@ -1663,6 +1663,42 @@ body.swipe-open .kiosk {
 .traction-actions .traction-stop { border-color: rgba(192, 80, 90, .7); background: rgba(192, 80, 90, .22); color: var(--text); }
 .traction-actions button:disabled { opacity: .38; cursor: not-allowed; }
 .traction-warning { grid-column: 1 / -1; line-height: 1.45; }
+
+/* Настройка привода: выход ШИМ или 0–5 В, тахометр, тормоз, предел и мВ.
+   Раньше способ управления мотором был зашит в прошивку — теперь это
+   настройка платы, и экран показывает подтверждённые телеметрией значения. */
+.drive-setup {
+  grid-column: 1 / -1;
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  background: var(--bg-2);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.drive-setup > summary { cursor: pointer; color: var(--text); font-size: 13px; font-weight: 800; }
+.drive-setup-hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.drive-setup-hint b { color: var(--text); }
+.drive-setup-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; }
+.drive-setup-grid label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.drive-setup-grid select {
+  width: 100%; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line-2);
+  background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px;
+}
+.drive-setup-grid input[type="range"] { width: 100%; accent-color: var(--accent); }
+.drive-setup-grid b { color: var(--text); font-variant-numeric: tabular-nums; }
+.drive-setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.drive-setup-actions button {
+  padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line-2);
+  background: var(--bg-2); color: var(--text); font: inherit; font-size: 12px;
+  font-weight: 800; cursor: pointer;
+}
+.drive-setup-actions button.quiet { color: var(--muted); }
+.drive-setup-actions button:disabled { opacity: .45; cursor: not-allowed; }
+#drive-cfg-status { color: var(--muted); font-size: 11px; font-weight: 700; }
+@media (max-width: 900px) { .drive-setup-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 560px) { .drive-setup-grid { grid-template-columns: 1fr; } }
 .steer-source-status { min-height: 18px; margin: 0; color: var(--muted); font-size: 12px; font-weight: 700; }
 .steer-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .steer-card {

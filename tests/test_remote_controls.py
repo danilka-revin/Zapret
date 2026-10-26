@@ -49,6 +49,10 @@ class Motors:
         self.calls.append(('drive', percent))
         return {'ok': True, 'percent': percent}
 
+    def set_drive_config(self, action, value=None):
+        self.calls.append(('drive_config', action, value))
+        return {'ok': True, 'queued': True}
+
 
 @pytest.fixture
 def transport(kiosk_client, monkeypatch):
@@ -103,6 +107,10 @@ def test_controls_page_reuses_full_motor_ui(client, operator):
     ('zero', {'module': 'FL'}, 'steering', ('zero', 'FL')),
     ('calibrate', {'module': 'ALL'}, 'steering', ('calibrate', 'ALL')),
     ('pot_mode', {'action': 'on'}, 'steering', ('pot_mode', 'on')),
+    ('drive_config', {'action': 'tach', 'value': 'off'}, 'steering',
+     ('drive_config', 'tach', 'off')),
+    ('drive_config', {'action': 'voltage', 'value': {'minMv': 500, 'maxMv': 4500}}, 'steering',
+     ('drive_config', 'voltage', {'minMv': 500, 'maxMv': 4500})),
     ('drive', {'percent': -8}, 'drive', ('drive', -8)),
     ('drive', {'percent': 0}, 'drive', ('drive', 0)),
 ])

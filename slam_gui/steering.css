@@ -75,6 +75,8 @@
 .rc-drive-actions button.stop { border-color: #c0505a; background: #2a161c; color: #f4f4f6; }
 .rc-drive-actions button:disabled { opacity: .4; cursor: not-allowed; }
 .rc-drive-warning { display: block; margin-top: 9px; color: #f4f4f6; }
+/* Настройка привода подтверждается телеметрией: режим, тахометр, предел. */
+.rc-drive-mode { display: block; margin-top: 9px; color: #a2949a; font-size: 10px; line-height: 1.5; }
 .rc-steering-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .rc-steering-card { min-width: 0; padding: 13px; border: 1px solid #2a2428; border-radius: 12px; background: #17171a; }
 .rc-steering-card.error { border-color: #c0505a; }

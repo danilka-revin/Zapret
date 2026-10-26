@@ -1164,3 +1164,33 @@ def test_pot_mode_api(kiosk_app, kiosk_client):
         assert kiosk_client.post('/api/kiosk_pot_mode', json=body, headers=headers).status_code == 400
     for action in ('off', 'on', 'calibrate'):
         assert kiosk_client.post('/api/kiosk_pot_mode', json={'action': action}, headers=headers).status_code == 200
+
+
+def test_drive_config_api(kiosk_app, kiosk_client):
+    """Настройка привода: та же защита, что у режима потенциометра."""
+    class Source:
+        supports_drive = True
+
+        def set_drive_config(self, action, value=None):
+            if action == 'invalid_value':
+                return {"ok": False, "reason": "invalid_value"}
+            return {"ok": True, "queued": True, "action": action}
+
+    kiosk_app.extensions['rc_slam'].source = Source()
+    headers = {'X-Robot-Control': 'steering'}
+    assert kiosk_client.post('/api/kiosk_drive_config',
+                             json={'action': 'output', 'value': 'volt'}).status_code == 400
+    for body in ({}, {'action': []}, {'action': 'output', 'value': 'volt', 'extra': 1}):
+        assert kiosk_client.post('/api/kiosk_drive_config', json=body, headers=headers).status_code == 400
+    for body in ({'action': 'output', 'value': 'volt'},
+                 {'action': 'tach', 'value': 'off'},
+                 {'action': 'brake', 'value': 'off'},
+                 {'action': 'limit', 'value': 30},
+                 {'action': 'voltage', 'value': {'minMv': 500, 'maxMv': 4500}},
+                 {'action': 'defaults'}):
+        assert kiosk_client.post('/api/kiosk_drive_config', json=body,
+                                 headers=headers).status_code == 200, body
+    refused = kiosk_client.post('/api/kiosk_drive_config',
+                                json={'action': 'invalid_value'}, headers=headers)
+    assert refused.status_code == 400
+    assert refused.get_json()['reason'] == 'invalid_value'
