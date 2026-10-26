@@ -205,7 +205,9 @@
       const angle = hasAngle ? Math.max(-90, Math.min(90, +m.angle)) : 0;
       setText($('angle-' + id), hasAngle ? Math.round(angle) + '°' : '—');
       if (wheel) wheel.style.transform = 'rotate(' + angle.toFixed(1) + 'deg)';
-      setText($('rpm-' + id), m.rpm == null ? '—' : fmt(m.rpm, 0));
+      // Тахометр может быть не подключён (настройка привода): «0 об/мин» тогда
+      // означало бы измеренный ноль, поэтому на карточке честное «нет».
+      setText($('rpm-' + id), m.tach === false ? 'нет' : (m.rpm == null ? '—' : fmt(m.rpm, 0)));
       setText($('temp-' + id), m.temp == null ? '—' : fmt(m.temp, 0));
     });
   }
@@ -2737,14 +2739,257 @@
     pin_required: 'PIN истёк; плата остановится по watchdog.'
   };
 
+  /* ============ Настройка привода тяги (ШИМ / 0–5 В, тахометр) ============
+   * Раньше способ управления мотором был зашит в прошивку: колесо с аналоговым
+   * входом 0–5 В или снятым тахометром приходилось перепрошивать. Теперь это
+   * настройка платы (команда m), и экран показывает то, что подтвердила
+   * телеметрия @TLM: dm=, tach=, dmax=, vmin=, vmax=, out=.
+   */
+  const DRIVE_CONFIG_REASON_TEXT = {
+    invalid_action: 'Неизвестное действие настройки привода.',
+    invalid_value: 'Недопустимое значение: проверьте предел и милливольты.',
+    firmware_update_required: 'Прошивка плат не умеет настройку привода — обновите все четыре.',
+    module_offline: 'Нужна свежая телеметрия всех четырёх плат.',
+    module_busy: 'Сначала остановите тягу и дождитесь, пока колёса встанут.',
+    serial_unavailable: 'Нет связи с USB-платами.',
+    command_queue_full: 'Очередь команд занята — повторите.',
+    pin_required: 'PIN истёк — разблокируйте управление.',
+    estop: 'Включён E-STOP: настройка привода заблокирована.',
+    control_not_supported: 'Настройка привода доступна только в режиме master.',
+    request_header_required: 'Запрос без заголовка команды.',
+    command_failed: 'Платы не приняли настройку.'
+  };
+  const DRIVE_CONFIG_FIELDS = ['drive-cfg-output', 'drive-cfg-tach', 'drive-cfg-brake',
+    'drive-cfg-limit', 'drive-cfg-vmin', 'drive-cfg-vmax'];
+  // Заводские значения прошивки: аналоговый выход 0–5 В, тахометр и тормоз.
+  const DRIVE_CONFIG_DEFAULTS = { output: 'volt', tach: 'on', brake: 'on', limit: 20, minMv: 0, maxMv: 5000 };
+  let driveCfgPending = false;
+  let driveCfgQueue = Promise.resolve();
+  let driveCfgDesired = null;      // ожидаемое подтверждение плат
+  let driveCfgMessage = '';
+  let driveCfgMessageUntil = 0;
+
+  /** Напряжение выхода для процента тяги — только в режиме 0–5 В. */
+  function driveVoltageFor(percent, config) {
+    const cfg = config || {};
+    if (cfg.outputMode !== 'volt') return null;
+    const min = Number(cfg.minMv) || 0;
+    const max = Number.isFinite(Number(cfg.maxMv)) ? Number(cfg.maxMv) : 5000;
+    const limit = Math.max(1, Number(cfg.maxPercent) || 20);
+    const value = Math.max(0, Math.min(limit, Math.abs(Number(percent) || 0)));
+    const mv = min + (max - min) * value / limit;
+    return Math.round(mv);
+  }
+
+  function driveConfigSignature(cfg) {
+    const c = cfg || {};
+    return [c.outputMode, c.tach, c.brake, c.maxPercent, c.minMv, c.maxMv].join('|');
+  }
+
+  function driveConfigEnabled(d, cfg, authorized) {
+    const drive = (d || {}).drive || {};
+    const motors = Array.isArray((d || {}).motors) ? d.motors : [];
+    const busy = !!drive.active || Number(drive.commandedPercent || 0) !== 0 ||
+      motors.some((m) => m && (m.moving || m.calibrating || m.cycling || Number(m.drivePercent || 0) !== 0));
+    const ready = !!cfg.supported && !cfg.mixed;
+    return { enabled: !!authorized && ready && !busy && !driveCfgPending, busy: busy, ready: ready };
+  }
+
+  function setDriveCfgOutput(id, value) {
+    const el = $(id);
+    if (el) el.value = value;
+  }
+
+  function renderDriveConfigPanel(d, authorized) {
+    const output = $('drive-cfg-output');
+    if (!output) return;
+    const config = ((d || {}).drive || {}).config || {};
+    const state = driveConfigEnabled(d, config, authorized);
+    // Пока оператор ведёт ползунок, значения из телеметрии его не перебивают.
+    const active = document.activeElement && document.activeElement.id;
+    const editing = DRIVE_CONFIG_FIELDS.indexOf(String(active || '')) >= 0;
+    if (!editing) {
+      setDriveCfgOutput('drive-cfg-output', config.outputMode || 'volt');
+      setDriveCfgOutput('drive-cfg-tach', config.tach === false ? 'off' : 'on');
+      setDriveCfgOutput('drive-cfg-brake', config.brake === false ? 'off' : 'on');
+      const limit = Math.max(1, Math.min(100, Number(config.maxPercent) || 20));
+      const minMv = Math.max(0, Math.min(5000, Number(config.minMv) || 0));
+      const maxMv = Math.max(1, Math.min(5000, Number.isFinite(Number(config.maxMv)) ? Number(config.maxMv) : 5000));
+      setDriveCfgOutput('drive-cfg-limit', String(limit));
+      setDriveCfgOutput('drive-cfg-vmin', String(minMv));
+      setDriveCfgOutput('drive-cfg-vmax', String(maxMv));
+      setText($('drive-cfg-limit-value'), String(limit));
+      setText($('drive-cfg-vmin-value'), String(minMv));
+      setText($('drive-cfg-vmax-value'), String(maxMv));
+    }
+    // Предел у ползунка vmin не должен уехать выше vmax и наоборот.
+    const vminEl = $('drive-cfg-vmin');
+    const vmaxEl = $('drive-cfg-vmax');
+    if (vminEl && vmaxEl) {
+      const max = Math.max(0, Number(vmaxEl.value) || 0);
+      const min = Math.max(0, Number(vminEl.value) || 0);
+      vminEl.max = String(Math.min(5000, Math.max(0, max)));
+      vmaxEl.min = String(Math.min(5000, Math.max(50, min)));
+    }
+    if (driveCfgDesired && config.supported && driveConfigSignature(config) === driveCfgDesired.signature) {
+      driveCfgDesired = null;
+      driveCfgMessage = 'Платы подтвердили настройку привода.';
+      driveCfgMessageUntil = Date.now() + 6000;
+    } else if (driveCfgDesired && Date.now() > driveCfgDesired.deadline) {
+      driveCfgDesired = null;
+      driveCfgMessage = 'Платы не подтвердили настройку — проверьте связь и журнал плат.';
+      driveCfgMessageUntil = Date.now() + 8000;
+    }
+    const apply = $('drive-cfg-apply');
+    const reset = $('drive-cfg-reset');
+    const disabled = !state.enabled || !!driveCfgDesired;
+    if (apply) apply.disabled = disabled;
+    if (reset) reset.disabled = disabled;
+    let text;
+    if (driveCfgMessage && Date.now() < driveCfgMessageUntil) {
+      text = driveCfgMessage;
+    } else if (!config.supported) {
+      text = ((d || {}).drive || {}).available
+        ? 'Прошивка плат не умеет настройку привода — обновите все четыре.'
+        : 'Нет телеметрии плат: настройка недоступна.';
+    } else if (config.mixed) {
+      text = 'Настройка плат различается — выберите общий режим и примените.';
+    } else if (!authorized) {
+      text = 'Настройка привода требует разблокированного управления.';
+    } else if (state.busy) {
+      text = 'Сначала остановите тягу и дождитесь остановки колёс.';
+    } else {
+      text = 'Подтверждено: ' + (config.outputMode === 'volt' ? '0–5 В' : 'ШИМ') +
+        ' · тахометр ' + (config.tach ? 'есть' : 'нет') +
+        ' · тормоз ' + (config.brake ? 'есть' : 'нет') +
+        ' · предел ' + (config.maxPercent || 20) + '%' +
+        (config.outputMode === 'volt'
+          ? ' · ' + (config.minMv || 0) + '–' + (config.maxMv || 5000) + ' мВ, выход ' + (config.outputMv || 0) + ' мВ'
+          : ' · выход ' + (config.outputMv || 0) + ' мВ');
+    }
+    const status = $('drive-cfg-status');
+    if (status) status.textContent = text;
+  }
+
+  async function sendDriveConfig(payload) {
+    driveCfgPending = true;
+    renderDriveConfigPanel(lastData || {}, steeringAuthorized);
+    try {
+      const response = await fetch('api/kiosk_drive_config', {
+        method: 'POST', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
+        body: JSON.stringify(payload)
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.ok) {
+        const reason = body.reason || (response.status === 401 ? 'pin_required' : 'command_failed');
+        if (response.status === 401 || reason === 'pin_required') steeringAuthorized = false;
+        driveCfgMessage = DRIVE_CONFIG_REASON_TEXT[reason] || ('Отказ плат: ' + reason);
+        driveCfgMessageUntil = Date.now() + 8000;
+        return false;
+      }
+      return true;
+    } catch (error) {
+      driveCfgMessage = 'Связь потеряна: настройка не отправлена.';
+      driveCfgMessageUntil = Date.now() + 8000;
+      return false;
+    } finally {
+      driveCfgPending = false;
+    }
+  }
+
+  /** Настройки уходят по одной: шесть команд подряд в один порт — это очередь. */
+  function queueDriveConfig(payload) {
+    const run = () => sendDriveConfig(payload);
+    driveCfgQueue = driveCfgQueue.then(run, run);
+    return driveCfgQueue;
+  }
+
+  function driveConfigFormValues() {
+    const output = $('drive-cfg-output');
+    const tach = $('drive-cfg-tach');
+    const brake = $('drive-cfg-brake');
+    const limitEl = $('drive-cfg-limit');
+    const vminEl = $('drive-cfg-vmin');
+    const vmaxEl = $('drive-cfg-vmax');
+    return {
+      output: output ? String(output.value || 'volt') : 'volt',
+      tach: tach ? String(tach.value || 'on') : 'on',
+      brake: brake ? String(brake.value || 'on') : 'on',
+      limit: Math.max(1, Math.min(100, Number(limitEl && limitEl.value) || 20)),
+      minMv: Math.max(0, Math.min(5000, Number(vminEl && vminEl.value) || 0)),
+      maxMv: Math.max(1, Math.min(5000, Number(vmaxEl && vmaxEl.value) || 5000))
+    };
+  }
+
+  /** Готова ли панель принимать настройку прямо сейчас. */
+  function driveConfigReadyToSend() {
+    const config = ((lastData || {}).drive || {}).config || {};
+    const state = driveConfigEnabled(lastData || {}, config, steeringAuthorized);
+    return state.enabled && !driveCfgDesired;
+  }
+
+  async function applyDriveConfig() {
+    // Кнопка могла остаться нажатой со старым снимком: не отправляем то, что
+    // нельзя менять на ходу, даже если браузер дал click.
+    if (!driveConfigReadyToSend()) return;
+    const values = driveConfigFormValues();
+    if (values.minMv > values.maxMv) {
+      driveCfgMessage = 'Мёртвая зона не может быть больше полной шкалы.';
+      driveCfgMessageUntil = Date.now() + 8000;
+      renderDriveConfigPanel(lastData || {}, steeringAuthorized);
+      return;
+    }
+    driveCfgMessage = 'Отправка настройки платам…';
+    driveCfgMessageUntil = Date.now() + 8000;
+    renderDriveConfigPanel(lastData || {}, steeringAuthorized);
+    const steps = [
+      { action: 'output', value: values.output },
+      { action: 'tach', value: values.tach },
+      { action: 'brake', value: values.brake },
+      { action: 'limit', value: values.limit },
+      { action: 'voltage', value: { minMv: values.minMv, maxMv: values.maxMv } }
+    ];
+    for (const step of steps) {
+      if (!(await queueDriveConfig(step))) return;
+    }
+    driveCfgDesired = {
+      signature: [values.output, values.tach === 'on', values.brake === 'on',
+        values.limit, values.minMv, values.maxMv].join('|'),
+      deadline: Date.now() + 8000
+    };
+    driveCfgMessage = 'Команда отправлена · ждём подтверждения телеметрии…';
+    driveCfgMessageUntil = Date.now() + 8000;
+    renderDriveConfigPanel(lastData || {}, steeringAuthorized);
+  }
+
+  async function resetDriveConfig() {
+    if (!driveConfigReadyToSend()) return;
+    driveCfgMessage = 'Отправка заводских значений…';
+    driveCfgMessageUntil = Date.now() + 8000;
+    renderDriveConfigPanel(lastData || {}, steeringAuthorized);
+    if (!(await queueDriveConfig({ action: 'defaults' }))) return;
+    driveCfgDesired = {
+      signature: [DRIVE_CONFIG_DEFAULTS.output, true, true,
+        DRIVE_CONFIG_DEFAULTS.limit, DRIVE_CONFIG_DEFAULTS.minMv, DRIVE_CONFIG_DEFAULTS.maxMv].join('|'),
+      deadline: Date.now() + 8000
+    };
+    driveCfgMessage = 'Заводские отправлены · ждём подтверждения плат…';
+    driveCfgMessageUntil = Date.now() + 8000;
+    renderDriveConfigPanel(lastData || {}, steeringAuthorized);
+  }
+
   function renderDriveControls(data) {
     const status = $('drive-status');
     const speed = $('drive-speed');
     if (!status || !speed) return;
     const d = data || {};
     const drive = d.drive || {};
+    const config = drive.config || {};
     const supported = !!(d.steeringControl && d.steeringControl.available);
-    const max = Math.max(1, Math.min(20, Number(drive.maxPercent) || 20));
+    // Предел приходит из телеметрии плат (dmax): заводские 20 %, но настройка
+    // привода может поднять его до 100 %. Сервер выше своего потолка не пустит.
+    const max = Math.max(1, Math.min(100, Number(drive.maxPercent) || 20));
     speed.max = String(max);
     if (Number(speed.value) > max) speed.value = String(max);
     setText($('drive-speed-value'), String(speed.value));
@@ -2757,13 +3002,17 @@
     if (forward) forward.disabled = !enabled || !drive.canDrive;
     if (stop) stop.disabled = !enabled;
     const reason = drive.reason && DRIVE_REASON_TEXT[drive.reason];
+    const mode = config.outputMode === 'volt' ? '0–5 В' : (config.outputMode === 'pwm' ? 'ШИМ' : '');
+    const voltage = driveVoltageFor(speed.value, config);
     if (!supported && String((d.steeringControl || {}).source || '') === 'master-peer') status.textContent = 'Тяга — только на бортовом экране (порт 8090).';
     else if (!supported) status.textContent = 'Тяга доступна при RC_SLAM_SOURCE=master.';
     else if (!steeringAuthorized) status.textContent = 'Управление временно недоступно.';
     else if (reason) status.textContent = reason;
-    else if (drive.active) status.textContent = 'Движение включено · отпустите кнопку для торможения.';
-    else status.textContent = 'Готово · модули на связи, колёса выровнены.';
+    else if (drive.active) status.textContent = 'Движение включено · ' + speed.value + '%' + (voltage != null ? ' ≈ ' + voltage + ' мВ' : '') + ' · отпустите кнопку для торможения.';
+    else if (voltage != null) status.textContent = 'Готово · ' + mode + ' · ' + speed.value + '% ≈ ' + voltage + ' мВ · колёса выровнены.';
+    else status.textContent = 'Готово · ' + (mode ? mode + ' · ' : '') + 'модули на связи, колёса выровнены.';
     status.dataset.ready = String(!!drive.canDrive && enabled);
+    renderDriveConfigPanel(d, steeringAuthorized);
   }
 
   function startDrive(direction) {
@@ -2877,6 +3126,20 @@
     bindHoldButton('drive-forward', 1);
     const driveStopButton = $('drive-stop');
     if (driveStopButton) driveStopButton.addEventListener('click', () => { void stopDrive(); });
+
+    // Настройка привода: ползунки показывают значение сразу, платы получают
+    // её одной кнопкой — и только при выключенной тяге.
+    const cfgApply = $('drive-cfg-apply');
+    if (cfgApply) cfgApply.addEventListener('click', () => { void applyDriveConfig(); });
+    const cfgReset = $('drive-cfg-reset');
+    if (cfgReset) cfgReset.addEventListener('click', () => { void resetDriveConfig(); });
+    [['drive-cfg-limit', 'drive-cfg-limit-value', ''],
+      ['drive-cfg-vmin', 'drive-cfg-vmin-value', ' мВ'],
+      ['drive-cfg-vmax', 'drive-cfg-vmax-value', ' мВ']].forEach(([id, out, suffix]) => {
+      const slider = $(id);
+      if (!slider) return;
+      slider.addEventListener('input', () => setText($(out), String(slider.value) + suffix));
+    });
     window.addEventListener('pointerup', releaseDrive);
     window.addEventListener('pointercancel', releaseDrive);
     window.addEventListener('blur', releaseDrive);

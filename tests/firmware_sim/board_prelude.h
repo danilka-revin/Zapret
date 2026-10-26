@@ -10,6 +10,7 @@ inline void analogReference(uint8_t) {}
 inline void analogWrite(uint8_t pin, int value) { sim_board.analog[pin] = value; }
 inline uint8_t digitalPinToInterrupt(uint8_t pin) { return pin == 2 ? 4 : 0xFF; }
 inline void attachInterrupt(uint8_t, void (*fn)(), int) { sim_board.tach_fn = fn; }
+inline void detachInterrupt(uint8_t) { sim_board.tach_fn = nullptr; }
 static sim::SimSerial& Serial = sim_board.serial;
 
 // EEPROM платы (avr/eeprom.h): адрес — просто номер ячейки, как на AVR.

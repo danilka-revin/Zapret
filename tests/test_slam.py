@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from conftest import login
+from robot_control import slam
 
 DEFAULT_PIN = "7232"  # заводской PIN грузового отсека из backend.py
 
@@ -625,3 +626,162 @@ def test_pot_mode_requires_all_boards_and_idle_telemetry():
     assert src.set_pot_mode('off', now=102)['reason'] == 'module_offline'
     src.serial_ready.clear()
     assert src.set_pot_mode('off', now=100.2)['reason'] == 'serial_unavailable'
+
+
+# --------------------------- гибкая настройка тяги --------------------------- #
+def _drive_frame(module, *, dm=0, tach=1, dmax=20, vmin=0, vmax=5000, out=0,
+                 brk=1, dr=0, deg=0.0, drive=0):
+    return ("@TLM mod=%s deg=%.2f tgt=0.00 moving=0 cal=1 cycle=0 calib=0 rpm=0.0 "
+            "drive=%d fw=4 pot=1 pm=1 dm=%d tach=%d dmax=%d vmin=%d vmax=%d brk=%d dir=%d out=%d"
+            % (module, deg, drive, dm, tach, dmax, vmin, vmax, brk, dr, out))
+
+
+def test_master_telemetry_parses_flexible_drive_configuration():
+    """Прошивка с командой m: режим выхода, тахометр, предел, мВ, фактический выход."""
+    backend = _load_backend()
+    frame = backend.parse_master_line(
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=8 fw=4 dm=1 tach=0 "
+        "dmax=40 vmin=500 vmax=4500 brk=0 dir=1 out=1620 t=1")
+    assert frame["driveMode"] == "volt" and frame["tach"] is False
+    assert frame["driveMaxPercent"] == 40
+    assert (frame["driveMinMv"], frame["driveMaxMv"]) == (500, 4500)
+    assert frame["driveOutputMv"] == 1620
+    assert frame["brake"] is False and frame["dirReverse"] is True
+
+    # Прошивка без команды m: поля отсутствуют, а не выдуманы нулями.
+    legacy = backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=0 fw=4")
+    assert legacy["driveMode"] is None and legacy["tach"] is None
+    assert legacy["driveMaxPercent"] is None
+
+    # Мусор и противоречия не превращаются в «настройку по умолчанию».
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dm=9") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dm=1 tach=7") is None
+    assert backend.parse_master_line(
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dm=1 vmin=4000 vmax=100") is None
+    assert backend.parse_master_line(
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dm=1 dmax=101") is None
+    # Тяга не может превышать собственный предел платы.
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=30 dm=1 dmax=20") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=30 dmax=50") is not None
+
+
+def test_drive_limit_follows_the_plates_and_server_ceiling():
+    """Предел тяги берётся из телеметрии плат, но не выше потолка сервера."""
+    backend = _load_backend()
+    src = _bare_master_source(backend)
+    for module in ("FL", "FR", "RL", "RR"):
+        src.feed(_drive_frame(module), now=100.0)
+    assert src.drive_limit_percent(now=100.2) == 20
+    assert src.drive_status(now=100.2)["maxPercent"] == 20
+
+    for module in ("FL", "FR", "RL", "RR"):
+        src.feed(_drive_frame(module, dmax=50), now=100.0)
+    assert src.drive_limit_percent(now=100.2) == 50
+    assert src.drive(30, now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"t 30\n"
+
+    # Одна плата осторожнее — общий предел по ней: сервер не обещает больше.
+    src.feed(_drive_frame("RR", dmax=10), now=100.0)
+    assert src.drive_limit_percent(now=100.2) == 10
+    assert src.drive(30, now=100.3)["reason"] == "drive_limit"
+    assert src.drive(30, now=100.3)["limit"] == 10
+
+
+def test_drive_config_is_mixed_when_the_plates_disagree():
+    backend = _load_backend()
+    src = _bare_master_source(backend)
+    for module in ("FL", "FR", "RL"):
+        src.feed(_drive_frame(module), now=100.0)
+    src.feed(_drive_frame("RR", dm=1, dmax=40), now=100.0)
+    config = src.drive_config(now=100.2)
+    assert config["supported"] is True and config["mixed"] is True
+    assert config["outputMode"] is None and config["maxPercent"] is None
+    assert config["perModule"]["RR"]["outputMode"] == "volt"
+    # Смешанный режим — не повод разрешить тягу: общий предел неизвестен.
+    assert src.drive_limit_percent(now=100.2) == backend.MAX_DRIVE_PERCENT
+
+
+def test_set_drive_config_commands_and_guards():
+    backend = _load_backend()
+    src = _bare_master_source(backend, maxsize=8)
+    for module in ("FL", "FR", "RL", "RR"):
+        src.feed(_drive_frame(module), now=100.0)
+
+    assert src.set_drive_config("output", "volt", now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m volt\n"
+    assert src.set_drive_config("output", "pwm", now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m pwm\n"
+    assert src.set_drive_config("tach", "off", now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m tach 0\n"
+    assert src.set_drive_config("tach", "on", now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m tach 1\n"
+    assert src.set_drive_config("brake", "off", now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m brake 0\n"
+    assert src.set_drive_config("limit", 45, now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m max 45\n"
+    assert src.set_drive_config("voltage", {"minMv": 500, "maxMv": 4500}, now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m vmin 500\n"
+    assert src.commands.get_nowait() == b"m vmax 4500\n"
+    assert src.set_drive_config("defaults", now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m reset\n"
+
+    # Недопустимые значения не уходят на платы.
+    for action, value in (("output", "analog"), ("tach", "yes"), ("limit", 0),
+                          ("limit", 101), ("limit", "abc"), ("voltage", {"minMv": 4000, "maxMv": 100}),
+                          ("voltage", {"minMv": 0}), ("voltage", {"minMv": 0, "maxMv": 6000}),
+                          ("unknown", None)):
+        result = src.set_drive_config(action, value, now=100.2)
+        expected = "invalid_action" if action == "unknown" else "invalid_value"
+        assert result["ok"] is False and result["reason"] == expected, (action, value)
+    assert src.commands.empty()
+
+    # Настройка — только при выключенной тяге и стоящих колёсах.
+    src.drive_percent = 8
+    assert src.set_drive_config("limit", 30, now=100.2)["reason"] == "module_busy"
+    src.drive_percent = 0
+    src.feed(_drive_frame("FR", dm=0, deg=4.0), now=100.0)
+    src.frames["FR"] = (dict(src.frames["FR"][0], moving=True), 100.0)
+    assert src.set_drive_config("limit", 30, now=100.2)["reason"] == "module_busy"
+
+    src.feed(_drive_frame("FR"), now=100.0)
+    src.serial_ready.clear()
+    assert src.set_drive_config("limit", 30, now=100.2)["reason"] == "serial_unavailable"
+    src.serial_ready.set()
+    assert src.set_drive_config("limit", 30, now=100.3)["ok"] is True
+
+    # Старая прошивка (без dm/tach/dmax) настройку не принимает.
+    legacy = _bare_master_source(backend)
+    for module in ("FL", "FR", "RL", "RR"):
+        legacy.feed("@TLM mod=%s deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=0 fw=4" % module, now=100.0)
+    assert legacy.set_drive_config("limit", 30, now=100.2)["reason"] == "firmware_update_required"
+
+
+def test_dispatch_drive_config_maps_reasons_to_http_codes():
+    class Source:
+        def __init__(self, result):
+            self.result = result
+            self.calls = []
+
+        def set_drive_config(self, action, value=None):
+            self.calls.append((action, value))
+            return self.result
+
+    for reason, code in (("module_offline", 503), ("serial_unavailable", 503),
+                         ("command_queue_full", 429), ("invalid_value", 400),
+                         ("invalid_action", 400), ("payload", 400), ("module_busy", 409),
+                         ("firmware_update_required", 409)):
+        source = Source({"ok": False, "reason": reason})
+        result, status = slam.dispatch_drive_config(source, {"action": "limit", "value": 30})
+        assert result["reason"] == reason and status == code, reason
+
+    source = Source({"ok": True, "queued": True})
+    result, status = slam.dispatch_drive_config(source, {"action": "limit", "value": 30})
+    assert result["ok"] is True and status == 200
+    assert source.calls == [("limit", 30)]
+
+    result, status = slam.dispatch_drive_config(Source({}), {"action": "limit", "oops": 1})
+    assert status == 400 and result["reason"] == "payload"
+    result, status = slam.dispatch_drive_config(Source({}), {"action": "limit", "value": 30})
+    assert status == 409 and result["reason"] == "command_failed"
+    result, status = slam.dispatch_drive_config(object(), {"action": "limit", "value": 30})
+    assert status == 409 and result["reason"] == "control_not_supported"

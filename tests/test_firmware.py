@@ -98,17 +98,20 @@ def test_firmware_has_no_usb_role_discovery():
     # Legacy addressed monitor commands remain compatible; the application
     # sends local commands to the manually selected port.
     assert 'classifyModuleToken' in text
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '4'
+    # v5 — своё колесо плюс настройка тяги командой m (v4 — без неё).
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '5'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
     text = _text(WHEEL)
     assert int(_const(text, "TELEMETRY_PERIOD_MS")) == 250
     # @TLM выходит целиком: обрезанный блок сервер не разберёт.
-    assert "if (txFree() >= 160) appendTelemetry();" in text
+    assert "if (txFree() >= 210) appendTelemetry();" in text
     # Строка @TLM несёт все поля, которые ждёт сервер (parse_master_line).
     for field in ("deg=", "tgt=", "moving=", "cal=", "cycle=", "calib=",
-                  "opto=", "home=", "err=", "rpm=", "drive=", "fw=", "pot=", "pm=", "t="):
+                  "opto=", "home=", "err=", "rpm=", "drive=", "fw=", "pot=", "pm=", "t=",
+                  # гибкая настройка тяги: режим выхода, тахометр, предел, мВ, выход
+                  "dm=", "tach=", "dmax=", "vmin=", "vmax=", "brk=", "dir=", "out="):
         assert field in text, field
 
 
@@ -271,7 +274,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 4 and frame["calibError"] == 0
+        assert frame["firmware"] == 5 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] == 0.0
         assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False

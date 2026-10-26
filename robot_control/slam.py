@@ -71,7 +71,10 @@ DRIVE_COMMAND_HEADER_VALUE = "drive"
 #: оператора, поэтому запрос на остановку помечается так же, как команды
 #: движения — сторонний POST из браузера такой заголовок поставить не может.
 STOP_COMMAND_HEADER_VALUE = "stop"
+#: Заводской предел тяги. Плата может прислать свой (поле dmax= прошивки с
+#: командой m): экран и API берут предел из телеметрии, но не выше потолка.
 MAX_DRIVE_PERCENT = 20
+DRIVE_ABS_MAX_PERCENT = 100
 
 
 def grant_steering_access(now=None):
@@ -162,7 +165,10 @@ COMMAND_REASON_TEXT = {
     "invalid_angle": "неверный угол",
     "angle_limit": "угол вне допуска руля",
     "invalid_drive": "неверная величина тяги",
-    "drive_limit": "тяга вне допуска ±%d%%" % MAX_DRIVE_PERCENT,
+    "drive_limit": "тяга вне допуска (см. предел в настройке привода)",
+    "invalid_action": "неизвестное действие настройки привода",
+    "invalid_value": "недопустимое значение настройки привода",
+    "firmware_update_required": "прошивка плат не умеет настройку тяги",
     "estop": "E-STOP: движение заблокировано, снимите защёлку с PIN",
     "control_not_supported": "источник данных не умеет адресное управление",
     "module_offline": "модуль не на связи",
@@ -429,6 +435,57 @@ def _steering_zero(source, body):
     return {"ok": False, "reason": reason}, status
 
 
+def _drive_limit(source) -> int:
+    """Предел тяги источника: свой у платы, но не выше потолка сервера."""
+    getter = getattr(source, "drive_limit_percent", None)
+    limit = None
+    if callable(getter):
+        try:
+            limit = int(getter())
+        except Exception:                     # noqa: BLE001 — источник не должен ронять пульт
+            limit = None
+    if limit is None:
+        limit = int(getattr(source, "MAX_DRIVE_PERCENT", MAX_DRIVE_PERCENT) or MAX_DRIVE_PERCENT)
+    return max(1, min(limit, DRIVE_ABS_MAX_PERCENT))
+
+
+def dispatch_drive_config(source, body):
+    """Настройка привода тяги: выход ШИМ/0–5 В, тахометр, тормоз, предел, мВ."""
+    action = body.get("action") if isinstance(body, dict) else None
+    result, status = _drive_config(source, body)
+    if not result.get("ok"):
+        note_command_rejected("настройка привода (%s)" % (action or "?"),
+                              str(result.get("reason", "")))
+    else:
+        eventlog.record("ok", "настройка привода тяги: %s" % (action or ""), source="тяга")
+    return result, status
+
+
+def _drive_config(source, body):
+    if estop_latch.latched() is not None:
+        return {"ok": False, "reason": "estop"}, 409
+    if not isinstance(body, dict) or set(body) - {"action", "value"}:
+        return {"ok": False, "reason": "payload"}, 400
+    action = body.get("action")
+    if not isinstance(action, str):
+        return {"ok": False, "reason": "payload"}, 400
+    command = getattr(source, "set_drive_config", None)
+    if not callable(command):
+        return {"ok": False, "reason": "control_not_supported"}, 409
+    result = command(action, body.get("value"))
+    if result.get("ok"):
+        return result, 200
+    reason = result.get("reason", "command_failed")
+    status = 409
+    if reason in {"serial_unavailable", "module_offline"}:
+        status = 503
+    elif reason == "command_queue_full":
+        status = 429
+    elif reason in {"payload", "invalid_action", "invalid_value"}:
+        status = 400
+    return dict(result, ok=False, reason=reason), status
+
+
 def dispatch_pot_mode(source, body):
     if estop_latch.latched() is not None:
         return {"ok": False, "reason": "estop"}, 409
@@ -529,8 +586,9 @@ def _drive_command(source, body):
         return {"ok": False, "reason": "invalid_drive"}, 400
     if percent != 0 and estop_latch.latched() is not None:
         return {"ok": False, "reason": "estop"}, 409
-    if abs(percent) > MAX_DRIVE_PERCENT:
-        return {"ok": False, "reason": "drive_limit", "limit": MAX_DRIVE_PERCENT}, 400
+    limit = _drive_limit(source)
+    if abs(percent) > limit:
+        return {"ok": False, "reason": "drive_limit", "limit": limit}, 400
     if not getattr(source, "supports_drive", False):
         return {"ok": False, "reason": "control_not_supported"}, 409
     command = getattr(source, "drive", None)
@@ -540,7 +598,7 @@ def _drive_command(source, body):
     if result.get("ok"):
         note_drive_command(result.get("percent", round(percent)))
         return {"ok": True, "queued": True, "percent": result.get("percent", round(percent)),
-                "maxPercent": MAX_DRIVE_PERCENT}, 200
+                "maxPercent": result.get("maxPercent", limit)}, 200
     reason = result.get("reason", "command_failed")
     status = 409
     if reason in {"serial_unavailable", "module_offline"}:
@@ -1246,6 +1304,17 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         result, status = dispatch_drive_command(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
+    @bp.post("/api/kiosk_drive_config")
+    def api_kiosk_drive_config():
+        """Настройка привода тяги: выход (ШИМ / 0–5 В), тахометр, тормоз, предел."""
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        if not steering_access_valid():
+            note_pin_required("настройка привода")
+            return jsonify({"ok": False, "reason": "pin_required"}), 401
+        result, status = dispatch_drive_config(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
     # -------------------------------- API -------------------------------- #
     @bp.get("/api/state")
     @guard
@@ -1275,6 +1344,16 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         if not steering_access_valid():
             return jsonify({"ok": False, "reason": "pin_required"}), 401
         result, status = dispatch_drive_command(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
+    @bp.post("/api/drive_config")
+    @guard
+    def api_drive_config():
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        if not steering_access_valid():
+            return jsonify({"ok": False, "reason": "pin_required"}), 401
+        result, status = dispatch_drive_config(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
     # ----------------------------- ЛИДАР --------------------------------- #

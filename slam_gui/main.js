@@ -90,12 +90,21 @@
     return m.id + ': ' + s.label + (s.key === 'hot' ? ', ' + fmt(m.temp, 0) + ' °C' : '');
   }
 
+  /* Тахометр может быть не подключён (настройка привода: m tach 0). Тогда
+   * rpm не измеряется, и «движение» нельзя определять по оборотам — берём
+   * команду тяги платы. Иначе стоящий робот показывал бы «0 об/мин» как факт,
+   * а ползущий на 8 % — «готов». */
+  function moduleMoving(m) {
+    if (m && m.tach === false) return Number(m.drivePercent || 0) !== 0;
+    return Math.abs(Number(m && m.rpm) || 0) > MOVE_RPM;
+  }
+
   function moduleState(m) {
     if (m.online === false) return { key: 'offline', label: 'нет связи', sev: 'err' };
     if (m.fault) return { key: 'fault', label: 'авария', sev: 'err' };
     if (m.homed === false) return { key: 'homing', label: 'хоминг', sev: 'warn' };
     if (Number(m.temp) > TEMP_ALARM_C) return { key: 'hot', label: 'перегрев', sev: 'err' };
-    if (Math.abs(Number(m.rpm) || 0) > MOVE_RPM) return { key: 'move', label: 'движение', sev: 'move' };
+    if (moduleMoving(m)) return { key: 'move', label: 'движение', sev: 'move' };
     return { key: 'ready', label: 'готов', sev: 'ok' };
   }
 
@@ -360,7 +369,7 @@
       const m = motors.find((x) => x.id === id);
       if (!m) return;
       if (m.online !== false) online += 1;
-      if (Math.abs(Number(m.rpm) || 0) > MOVE_RPM) moving += 1;
+      if (moduleMoving(m)) moving += 1;
     });
     setText($('chassis-meta'), view.hasData
       ? 'в движении ' + moving + ' из ' + MODULES.length + ' · на связи ' + online + ' из ' + MODULES.length
@@ -407,7 +416,8 @@
         wheel.style.transform = 'rotate(' + angle.toFixed(1) + 'deg)';
       }
       setText(angleEl, hasAngle ? Math.round(angle) + '°' : '—');
-      setText(rpmEl, typeof m.rpm === 'number' ? fmt(m.rpm, 0) : '—');
+      // Нет тахометра — «нет», а не выдуманный ноль оборотов.
+      setText(rpmEl, m.tach === false ? 'нет' : (typeof m.rpm === 'number' ? fmt(m.rpm, 0) : '—'));
 
       const warm = hasTemp(m);
       setText(tempEl, warm ? fmt(m.temp, 0) : '—');

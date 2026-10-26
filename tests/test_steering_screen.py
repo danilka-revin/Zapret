@@ -39,9 +39,22 @@ def motor(module, *, angle=0.0, target=None, online=True, homed=True, moving=Fal
     }
 
 
+def drive_config(**overrides):
+    """Гибкая настройка привода в ответе сервера (поля dm/tach/dmax/vmin/vmax/out)."""
+    config = {
+        "supported": True, "confirmed": True, "mixed": False,
+        "outputMode": "pwm", "tach": True, "brake": True,
+        "maxPercent": 20, "minMv": 0, "maxMv": 5000, "outputMv": 0,
+        "dirReverse": False, "perModule": {},
+    }
+    config.update(overrides)
+    return config
+
+
 def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_reason=None,
-            actions=None, **extra):
+            actions=None, drive=None, **extra):
     data = {
+
         "linkOk": True,
         "steeringControl": {
             "available": available, "source": "master" if available else "none",
@@ -50,7 +63,7 @@ def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_re
         },
         "drive": {"available": available, "canDrive": can_drive, "reason": drive_reason,
                   "maxPercent": 20, "commandedPercent": 0, "active": False,
-                  "alignmentToleranceDeg": 2.5},
+                  "config": drive_config(), "alignmentToleranceDeg": 2.5},
         "motors": motors if motors is not None else [motor(m) for m in MODULES],
         "masterMessages": [],
     }
@@ -276,3 +289,87 @@ def test_master_refusal_is_marked_as_a_warning_on_the_panel(tmp_path):
     assert 'data-warn="true"' in html
     # Обычное сообщение об связи остаётся без пометки.
     assert html.count('data-warn="true"') == 1
+
+
+def with_drive_config(body, **overrides):
+    """Подменить настройку привода в готовом ответе сервера."""
+    body["data"]["drive"].update(overrides.pop("drive", {}))
+    body["data"]["drive"]["config"] = drive_config(**overrides)
+    return body
+
+
+def test_drive_panel_shows_the_confirmed_drive_setup(tmp_path):
+    """Веб-пульт и борт видят то же, что подтвердили платы: 0–5 В, без тахометра."""
+    body = with_drive_config(
+        payload(), outputMode="volt", tach=False, brake=False, maxPercent=60,
+        minMv=500, maxMv=4500, outputMv=2500)
+    body["data"]["drive"]["maxPercent"] = 60
+    body["data"]["motors"] = [dict(motor(m), tach=False, driveMode="volt") for m in MODULES]
+    report = run_screen(tmp_path, body)
+    cfg = report["driveCfg"]
+    assert cfg["output"] == "volt" and cfg["tach"] == "off" and cfg["brake"] == "off"
+    assert cfg["limit"] == "60" and cfg["vmin"] == "500" and cfg["vmax"] == "4500"
+    assert cfg["applyDisabled"] is False
+    assert "0–5 В" in cfg["status"] and "тахометр нет" in cfg["status"]
+    # Ползунок тяги идёт за платой, а не за зашитыми 20 %.
+    assert report["driveSpeedMax"] == "60"
+    # Без тахометра оборотов нет — карточка пишет «нет», а не 0.
+    assert report["rpmText"] == ["нет"] * 4
+
+
+def test_drive_setup_is_sent_as_individual_commands(tmp_path):
+    """Настройка уходит по одной команде: шесть подряд в порт — это очередь."""
+    report = run_screen(tmp_path, with_drive_config(
+        payload(actions=[{"type": "drivecfg", "output": "volt", "tach": "off",
+                          "brake": "on", "limit": 35, "vmin": 500, "vmax": 4500}])))
+    sent = report["driveCfgSent"]
+    assert [item["action"] for item in sent] == ["output", "tach", "brake", "limit", "voltage"]
+    assert sent[0]["value"] == "volt"
+    assert sent[1]["value"] == "off"
+    assert sent[3]["value"] == 35
+    assert sent[4]["value"] == {"minMv": 500, "maxMv": 4500}
+    assert all(item["header"] == "steering" for item in sent)
+    assert report["renderErrors"] == []
+
+
+def test_drive_setup_is_blocked_while_the_traction_is_active(tmp_path):
+    """Смена режима под работающим мотором — рывок: экран не отправляет её."""
+    body = with_drive_config(payload(actions=[{"type": "drivecfg", "limit": 30}]),
+                             maxPercent=20)
+    body["data"]["drive"].update(active=True, commandedPercent=8, canDrive=False)
+    report = run_screen(tmp_path, body)
+    assert report["driveCfgSent"] == []
+    assert report["driveCfg"]["applyDisabled"] is True
+    assert "остановите тягу" in report["driveCfg"]["status"]
+
+
+def test_drive_setup_is_honest_about_old_firmware(tmp_path):
+    body = payload(actions=[{"type": "drivecfg", "limit": 40}])
+    body["data"]["drive"]["config"] = {"supported": False, "outputMode": None, "tach": None,
+                                       "maxPercent": None, "minMv": None, "maxMv": None,
+                                       "outputMv": None, "brake": None, "dirReverse": None}
+    report = run_screen(tmp_path, body)
+    assert report["driveCfgSent"] == []
+    assert report["driveCfg"]["applyDisabled"] is True
+    assert "не умеет" in report["driveCfg"]["status"]
+
+
+def test_drive_setup_refusal_is_explained(tmp_path):
+    report = run_screen(tmp_path, with_drive_config(
+        payload(actions=[{"type": "drivecfg", "limit": 30}], driveCfgRefuse="module_busy")))
+    assert report["driveCfgSent"]
+    assert "остановите тягу" in report["driveCfg"]["status"].lower()
+
+
+def test_drive_setup_rejects_dead_zone_above_full_scale(tmp_path):
+    report = run_screen(tmp_path, with_drive_config(
+        payload(actions=[{"type": "drivecfg", "vmin": 4000, "vmax": 1000}])))
+    assert report["driveCfgSent"] == []
+    assert "больше полной шкалы" in report["driveCfg"]["status"]
+
+
+def test_drive_setup_defaults_are_one_command(tmp_path):
+    body = with_drive_config(payload(actions=[{"type": "drivecfg-reset"}]),
+                             outputMode="volt", tach=False, maxPercent=60, minMv=500, maxMv=4500)
+    report = run_screen(tmp_path, body)
+    assert [item["action"] for item in report["driveCfgSent"]] == ["defaults"]

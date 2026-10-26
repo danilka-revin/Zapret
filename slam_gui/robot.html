@@ -655,14 +655,65 @@
             <div><b>Движение</b><span>Удерживайте кнопку · отпустили — тормоз</span></div>
             <span id="drive-status" role="status">Нужен ноль всех колёс (калибровка)</span>
           </div>
+
+          <!-- Настройка привода: у разных контроллеров вход скорости — аналог
+               0–5 В или ШИМ, тахометр SC и тормозной вход могут отсутствовать.
+               Настройка живёт в EEPROM платы и подтверждается телеметрией. -->
+          <details id="drive-setup" class="drive-setup">
+            <summary>Настройка привода · 0–5 В или ШИМ, тахометр</summary>
+            <p class="drive-setup-hint">
+              Плата D3 → вход скорости регулятора. <b>0–5 В</b> (заводской) — тот же analogWrite
+              через RC-фильтр или внешний ЦАП: 255/255 = 5 В, <i>vmin</i> — мёртвая зона
+              регулятора, <i>vmax</i> — полная шкала. <b>ШИМ</b> — процент и есть скважность
+              (t 8 → 20/255) для контроллеров, которые сами сглаживают вход.
+              Тахометр SC (D2) можно не подключать: тогда обороты честно «нет датчика», а не ноль.
+              Менять можно только при выключенной тяге; настройка сохраняется в EEPROM платы и
+              переживает перезапуск по USB. Подтверждение — в телеметрии @TLM (dm/tach/dmax).
+            </p>
+            <div class="drive-setup-grid">
+              <label>Выход на регулятор
+                <select id="drive-cfg-output" aria-label="Выход на регулятор скорости">
+                  <option value="volt">0–5 В (analogWrite)</option>
+                  <option value="pwm">ШИМ (скважность)</option>
+                </select>
+              </label>
+              <label>Тахометр SC (D2)
+                <select id="drive-cfg-tach" aria-label="Тахометр подключён">
+                  <option value="on">подключён</option>
+                  <option value="off">не подключён</option>
+                </select>
+              </label>
+              <label>Тормозной вход BRAKE
+                <select id="drive-cfg-brake" aria-label="Тормозной вход подключён">
+                  <option value="on">подключён</option>
+                  <option value="off">не подключён</option>
+                </select>
+              </label>
+              <label>Предел тяги <b><output id="drive-cfg-limit-value">20</output>%</b>
+                <input id="drive-cfg-limit" type="range" min="1" max="100" step="1" value="20" aria-label="Предел тяги, процент">
+              </label>
+              <label>Мёртвая зона vmin <b><output id="drive-cfg-vmin-value">0</output> мВ</b>
+                <input id="drive-cfg-vmin" type="range" min="0" max="5000" step="50" value="0" aria-label="Минимальное напряжение, милливольты">
+              </label>
+              <label>Полная шкала vmax <b><output id="drive-cfg-vmax-value">5000</output> мВ</b>
+                <input id="drive-cfg-vmax" type="range" min="50" max="5000" step="50" value="5000" aria-label="Максимальное напряжение, милливольты">
+              </label>
+            </div>
+            <div class="drive-setup-actions">
+              <button id="drive-cfg-apply" type="button" disabled>Применить ко всем колёсам</button>
+              <button id="drive-cfg-reset" type="button" class="quiet" disabled>Заводские</button>
+              <span id="drive-cfg-status" role="status">проверка настройки…</span>
+            </div>
+          </details>
+
           <div class="traction-actions">
             <button id="drive-back" type="button" disabled>◀ Зажать: назад</button>
             <button id="drive-forward" type="button" disabled>Зажать: вперёд ▶</button>
             <button id="drive-stop" class="traction-stop" type="button" disabled>СТОП</button>
           </div>
-          <label class="traction-speed">Предел PWM <b><output id="drive-speed-value">8</output>%</b>
+          <label class="traction-speed">Предел <b><output id="drive-speed-value">8</output>%</b>
             <input id="drive-speed" type="range" min="1" max="20" value="8" disabled></label>
-          <small class="traction-warning">Лимит 20%. Программный стоп и watchdog (650 мс) не заменяют физическую аварийную кнопку. Первые испытания — с вывешенными колёсами.</small>
+          <small class="traction-warning">Тяга ограничена пределом привода (заводские 20%, меняется в настройке). Программный стоп и watchdog (650 мс) не заменяют физическую аварийную кнопку. Первые испытания — с вывешенными колёсами.</small>
         </section>
       </section>
     </div>

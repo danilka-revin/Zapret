@@ -35,6 +35,15 @@ for (const name of ['slam_auth.js', 'web_controls.js']) {
   assert.equal(drive.headers['x-csrf-token'], 'signed-csrf');
   assert.equal(drive.headers['x-robot-control'], 'drive');
   assert.equal(drive.body.percent, 8);
+  await context.window.fetch('api/kiosk_drive_config', {method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Robot-Control': 'steering'},
+    body: JSON.stringify({action: 'output', value: 'volt'})});
+  const config = calls.at(-1);
+  assert.equal(new URL(config.url).pathname, '/api/control/drive_config');
+  assert.equal(config.headers['x-robot-control'], 'steering');
+  assert.equal(config.headers['x-csrf-token'], 'signed-csrf');
+  assert.equal(config.body.action, 'output');
+  assert.equal(config.body.value, 'volt');
   await context.window.fetch('api/kiosk_logs?limit=400');
   const logs = new URL(calls.at(-1).url);
   assert.equal(logs.pathname, '/api/control/logs');
