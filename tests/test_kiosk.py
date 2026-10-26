@@ -349,6 +349,57 @@ def test_kiosk_drive_is_available_without_pin_and_accepts_only_bounded_percent(k
     assert source.commands == [-12.5, 0]
 
 
+def test_kiosk_drive_single_wheel_uses_its_own_command(kiosk_app, kiosk_client):
+    """Тяга одного колеса: {module, percent} на борт, как {module, angle} у руля."""
+    class FakeWheelSource:
+        name = "master"
+        supports_drive = True
+        supports_individual_drive = True
+
+        def __init__(self):
+            self.calls = []
+
+        def drive(self, percent):
+            self.calls.append(("all", percent))
+            return {"ok": True, "percent": round(percent)}
+
+        def drive_module(self, module, percent):
+            self.calls.append((module, percent))
+            if module == "RL":
+                return {"ok": False, "reason": "module_offline"}
+            return {"ok": True, "queued": True, "module": module, "percent": round(percent)}
+
+    source = FakeWheelSource()
+    kiosk_app.extensions["rc_slam"].source = source
+    header = {"X-Robot-Control": "drive"}
+
+    # Заголовок команды обязателен и здесь.
+    assert kiosk_client.post("/api/kiosk_drive",
+                             json={"module": "FL", "percent": 8}).status_code == 400
+    response = kiosk_client.post("/api/kiosk_drive", json={"module": "fl", "percent": 6},
+                                 headers=header)
+    assert response.status_code == 200 and response.get_json()["module"] == "FL"
+    assert source.calls == [("FL", 6)]
+
+    # Ноль колеса проходит всегда и останавливает только его.
+    assert kiosk_client.post("/api/kiosk_drive", json={"module": "FL", "percent": 0},
+                             headers=header).status_code == 200
+    assert source.calls[-1] == ("FL", 0)
+
+    # Отказы: неизвестное колесо, лишнее поле, отказ платы.
+    for invalid in ({"module": "XX", "percent": 6}, {"module": "FL"},
+                    {"module": "FL", "percent": 6, "direction": "forward"}):
+        assert kiosk_client.post("/api/kiosk_drive", json=invalid, headers=header).status_code == 400
+    refused = kiosk_client.post("/api/kiosk_drive", json={"module": "RL", "percent": 6},
+                                headers=header)
+    assert refused.status_code == 503 and refused.get_json()["reason"] == "module_offline"
+
+    # Общая команда осталась прежней.
+    assert kiosk_client.post("/api/kiosk_drive", json={"percent": 4},
+                             headers=header).status_code == 200
+    assert source.calls[-1] == ("all", 4)
+
+
 def test_kiosk_state_exposes_the_current_estop_latch(kiosk_client):
     from robot_control import estop
 

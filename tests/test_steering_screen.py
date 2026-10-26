@@ -51,8 +51,16 @@ def drive_config(**overrides):
     return config
 
 
+def per_module_state(**overrides):
+    """Готовность одиночной тяги по колёсам (drive.perModule от сервера)."""
+    state = {"canDrive": True, "reason": None, "percent": 0, "commandedPercent": 0,
+             "outputMv": 0, "rpm": 0.0, "tach": True}
+    state.update(overrides)
+    return {module: dict(state) for module in MODULES}
+
+
 def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_reason=None,
-            actions=None, drive=None, **extra):
+            actions=None, drive=None, per_module=None, **extra):
     data = {
 
         "linkOk": True,
@@ -63,6 +71,8 @@ def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_re
         },
         "drive": {"available": available, "canDrive": can_drive, "reason": drive_reason,
                   "maxPercent": 20, "commandedPercent": 0, "active": False,
+                  "individual": True, "commandedModules": {},
+                  "perModule": per_module if per_module is not None else per_module_state(),
                   "config": drive_config(), "alignmentToleranceDeg": 2.5},
         "motors": motors if motors is not None else [motor(m) for m in MODULES],
         "masterMessages": [],
@@ -95,6 +105,95 @@ def test_screen_renders_without_errors(tmp_path):
     report = run_screen(tmp_path, payload())
     assert report["renderErrors"] == []
     assert report["dataChip"] == "в реальном времени"
+
+
+def wheel_drive(mod):
+    return next(item for item in mod["wheelDrive"] if item["id"] == "FL") if isinstance(mod, dict) else None
+
+
+def test_each_wheel_card_has_its_own_drive_controls(tmp_path):
+    """В карточке колеса — своя тяга: кнопки, ползунок и свой предел."""
+    report = run_screen(tmp_path, payload())
+    assert report["renderErrors"] == []
+    cards = {item["id"]: item for item in report["wheelDrive"]}
+    assert sorted(cards) == MODULES
+    # Все колёса на связи и с нулём — кнопки доступны, ползунок тоже.
+    assert all(not item["backDisabled"] and not item["forwardDisabled"] for item in cards.values())
+    assert all(item["sliderMax"] == "20" for item in cards.values())
+    assert all(item["state"] == "стоит" for item in cards.values())
+
+
+def test_single_wheel_drive_sends_only_that_wheel(tmp_path):
+    """Удержание «вперёд» в карточке FL: только {module: FL}, без общей тяги."""
+    report = run_screen(tmp_path, payload(actions=[
+        {"type": "wheel-drive", "id": "FL", "direction": 1, "percent": 6}]))
+    assert report["drives"], report["netlog"]
+    assert all(item["module"] == "FL" for item in report["drives"])
+    assert report["drives"][0]["percent"] == 6
+    # Отпустили — 0 именно этому колесу, а не «стоп всем».
+    assert report["drives"][-1] == {"module": "FL", "percent": 0}
+    assert all(item["percent"] in (0, 6) for item in report["drives"])
+
+
+def test_two_wheels_drive_opposite_directions(tmp_path):
+    """Разворот на месте: FL вперёд, FR назад — у каждого своя команда."""
+    report = run_screen(tmp_path, payload(actions=[
+        {"type": "wheel-drive", "id": "FL", "direction": 1, "keep": True},
+        {"type": "wheel-drive", "id": "FR", "direction": -1, "keep": True},
+        {"type": "stop"}]))
+    per_wheel = [item for item in report["drives"] if item["module"]]
+    assert {item["module"] for item in per_wheel} == {"FL", "FR"}
+    assert any(item["module"] == "FL" and item["percent"] > 0 for item in per_wheel)
+    assert any(item["module"] == "FR" and item["percent"] < 0 for item in per_wheel)
+    # Общий СТОП гасит всё: одиночные нули каждому колесу и общая нулевая.
+    assert {"module": "FL", "percent": 0} in report["drives"]
+    assert {"module": "FR", "percent": 0} in report["drives"]
+    # Общая нулевая тоже уходит: на плате это «b» — тормоз всем колёсам.
+    assert any(item["module"] is None and item["percent"] == 0 for item in report["drives"])
+
+
+def test_single_wheel_drive_is_blocked_when_that_wheel_is_not_ready(tmp_path):
+    """Колесо без нуля не крутится одно — кнопки серые и ничего не отправляют."""
+    ready = per_module_state()
+    ready["RL"] = dict(ready["RL"], canDrive=False, reason="not_homed")
+    report = run_screen(tmp_path, payload(per_module=ready, actions=[
+        {"type": "wheel-drive", "id": "RL", "direction": 1},
+        {"type": "wheel-drive", "id": "FL", "direction": 1}]))
+    cards = {item["id"]: item for item in report["wheelDrive"]}
+    assert cards["RL"]["backDisabled"] and cards["RL"]["forwardDisabled"]
+    assert cards["RL"]["state"] == "Сначала откалибруйте колёса по датчику (или задайте 0° вручную)."
+    assert cards["FL"]["forwardDisabled"] is False
+    # Команда ушла только готовому колесу.
+    assert {item["module"] for item in report["drives"]} == {"FL"}
+
+
+def test_wheel_drive_stop_button_stops_only_that_wheel(tmp_path):
+    report = run_screen(tmp_path, payload(actions=[
+        {"type": "wheel-drive", "id": "FR", "direction": 1, "keep": True},
+        {"type": "wheel-stop", "id": "FR"}]))
+    assert all(item["module"] == "FR" for item in report["drives"])
+    assert report["drives"][-1] == {"module": "FR", "percent": 0}
+
+
+def test_wheel_drive_refusal_stops_the_heartbeat_and_is_shown(tmp_path):
+    """Отказ платы виден в карточке, и экран не повторяет его 5 раз в секунду."""
+    report = run_screen(tmp_path, payload(driveRefuse="module_busy", actions=[
+        {"type": "wheel-drive", "id": "FL", "direction": 1, "keep": True}]))
+    cards = {item["id"]: item for item in report["wheelDrive"]}
+    assert cards["FL"]["state"] == "Дождитесь остановки рулевых модулей."
+    assert len(report["drives"]) == 1, report["drives"]
+
+
+def test_wheel_drive_shows_reported_output_and_honest_rpm(tmp_path):
+    """В карточке видно, что реально уходит на мотор; без тахометра — «rpm нет»."""
+    motors = [motor(m) for m in MODULES]
+    motors[0] = dict(motors[0], drivePercent=6, driveOutputMv=1500, tach=False, rpm=0.0)
+    report = run_screen(tmp_path, payload(motors=motors, actions=[
+        {"type": "wheel-drive", "id": "FL", "direction": 1}]))
+    cards = {item["id"]: item for item in report["wheelDrive"]}
+    assert "1500 мВ" in cards["FL"]["output"]
+    assert "rpm нет" in cards["FL"]["output"]
+    assert cards["FL"]["state"].startswith("вперёд")
 
 
 def test_all_presets_are_rendered_in_order(tmp_path):
@@ -142,9 +241,10 @@ def test_wheel_slider_sends_one_command_on_release(tmp_path):
 
 
 def test_unavailable_pivot_sends_nothing_and_explains_why(tmp_path):
+    """Пресет «Разворот» не включает тягу, а отправляет к одиночной тяге колёс."""
     report = run_screen(tmp_path, payload(actions=[{"type": "preset", "id": "pivot"}]))
     assert report["sent"] == []
-    assert "одна тяга" in report["status"]
+    assert "по отдельности" in report["status"]
 
 
 def test_old_firmware_limit_shrinks_sliders_and_blocks_wide_presets(tmp_path):

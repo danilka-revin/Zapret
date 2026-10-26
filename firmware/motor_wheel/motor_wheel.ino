@@ -1747,7 +1747,7 @@ uint8_t classifyModuleToken(const char* token) {
 
 void printHelp() {
   note(PSTR("команды: k, q, c [°], c c, d [°] [f/b], h, s, g, z, p, ?"));
-  note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: t [%%], b"));
+  note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: t [FL] %%, b (своё колесо)"));
   note(PSTR("двигатель: m [pwm|volt|tach 0|1|brake 0|1|max %|vmin мВ|vmax мВ]"));
 }
 
@@ -1791,6 +1791,36 @@ void handleWheelCommand(char* line) {
   if (!command) return;
   if (strcasecmp_P(command, PSTR("?")) == 0 || strcasecmp_P(command, PSTR("help")) == 0) {
     printHelp();
+    return;
+  }
+  // Тяга одного колеса: «t FL 8». Сервер шлёт имя колеса адресной команде
+  // (своё колесо — на своём USB), поэтому своё имя принимаем, а чужое молча
+  // пропускаем, как и «w FR 90» на FL. Без имени — прежняя команда всем.
+  if (strcasecmp_P(command, PSTR("t")) == 0) {
+    char* arg1 = strtok_r(nullptr, " \t", &save);
+    const uint8_t kind = classifyModuleToken(arg1);
+    if (kind == MOD_OTHER) return;
+    if (kind == MOD_MINE || kind == MOD_ALL) {
+      char* arg2 = strtok_r(nullptr, " \t", &save);
+      char* extra = strtok_r(nullptr, " \t", &save);
+      if (!arg2 || extra) {
+        note(PSTR("Шаблон: t [FL] -%u…%u (0 — стоп); b — тормоз"),
+             (unsigned)drive_max_percent, (unsigned)drive_max_percent);
+        return;
+      }
+      char local[16];
+      snprintf_P(local, sizeof(local), PSTR("t %s"), arg2);
+      handleModuleCommand(local);
+      return;
+    }
+    if (kind == MOD_UNKNOWN && arg1 != nullptr && isalpha((unsigned char)arg1[0]) &&
+        strtok_r(nullptr, " \t", &save)) {
+      // «t FX 8» — не имя колеса и не число: подсказываем, какие имена есть.
+      note(PSTR("неизвестный модуль %s (есть FL, FR, RL, RR, ALL)"), arg1);
+      return;
+    }
+    // «t», «t 8» — прежняя команда на это колесо.
+    handleModuleCommand(line);
     return;
   }
   if (strcasecmp_P(command, PSTR("w")) == 0) {

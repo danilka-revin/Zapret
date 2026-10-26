@@ -17,6 +17,7 @@ class Reply(io.BytesIO):
 
 
 class Motors:
+    supports_individual_drive = True
     name = 'master'
     supports_individual_steer = supports_drive = supports_calibration = True
     MAX_STEER_DEG = 100
@@ -48,6 +49,10 @@ class Motors:
     def drive(self, percent):
         self.calls.append(('drive', percent))
         return {'ok': True, 'percent': percent}
+
+    def drive_module(self, module, percent):
+        self.calls.append(('drive', module, percent))
+        return {'ok': True, 'queued': True, 'module': module, 'percent': round(percent)}
 
     def set_drive_config(self, action, value=None):
         self.calls.append(('drive_config', action, value))
@@ -113,6 +118,10 @@ def test_controls_page_reuses_full_motor_ui(client, operator):
      ('drive_config', 'voltage', {'minMv': 500, 'maxMv': 4500})),
     ('drive', {'percent': -8}, 'drive', ('drive', -8)),
     ('drive', {'percent': 0}, 'drive', ('drive', 0)),
+    # Тяга одного колеса идёт тем же маршрутом и тем же заголовком команды.
+    ('drive', {'module': 'FL', 'percent': 6}, 'drive', ('drive', 'FL', 6)),
+    ('drive', {'module': 'fr', 'percent': -3}, 'drive', ('drive', 'FR', -3)),
+    ('drive', {'module': 'RL', 'percent': 0}, 'drive', ('drive', 'RL', 0)),
 ])
 def test_all_commands_reach_onboard_owner(client, operator, transport, operation, body, marker, expected):
     login(client)

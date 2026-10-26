@@ -257,6 +257,7 @@ class NoSource:
                 "mode": None, "route": None, "speedMps": None, "powerKw": None,
                 "drive": {"available": False, "canDrive": False, "reason": "source_unavailable",
                           "maxPercent": MAX_DRIVE_PERCENT, "commandedPercent": 0,
+                          "commandedModules": {}, "individual": False, "perModule": {},
                           "active": False, "reportedPercent": {},
                           "config": {"supported": False, "outputMode": None, "tach": None,
                                      "maxPercent": None, "minMv": None, "maxMv": None,
@@ -400,6 +401,10 @@ class MasterSource:
     name = "master"
     supports_individual_steer = True
     supports_drive = True
+    #: Каждое колесо — своё USB и своя плата, поэтому тягу можно давать одному
+    #: колесу («t FL 8»), не трогая остальные: так делают разворот на месте и
+    #: проверку одного мотора.
+    supports_individual_drive = True
     supports_calibration = True
     STALE_S = 1.0
     DRIVE_STALE_S = 0.75
@@ -447,6 +452,9 @@ class MasterSource:
         self.modules = {}                # модуль → порт (кто где опознан)
         self.links = {}                  # порт → _WheelLink открытого порта
         self.drive_percent = 0
+        #: Тяга отдельных колёс: модуль → последний отправленный процент.
+        #: Пусто, пока едет «вся телега» общей командой t N.
+        self.drive_modules = {}
         self.drive_last_command = 0.0
         self.commands = queue.Queue(maxsize=16)
         self.serial_ready = threading.Event()
@@ -537,21 +545,32 @@ class MasterSource:
     # --------------------------------------------------------------- команды #
     @staticmethod
     def _command_module(command):
-        """Какому колесу адресована команда: «w FL 12.5» → ``FL``, иначе всем.
+        """Какому колесу адресована команда: «w FL 12.5» или «t FL 8» → ``FL``.
 
         Прошивка колеса и так игнорирует чужое имя, но сервер предпочитает
-        не слать лишние байты: адресная команда уходит на свой порт.
+        не слать лишние байты: адресная команда уходит на свой порт. Имя
+        снимается перед отправкой (см. :meth:`_fanout_commands`), потому что
+        прошивка ждёт «w 12.5» и «t 8».
         """
         try:
             text = bytes(command).decode("ascii", "ignore").strip()
         except Exception:                     # noqa: BLE001 — битые байты не команда
             return None
         parts = text.split()
-        if len(parts) >= 2 and parts[0].lower() == "w":
+        if len(parts) >= 2 and parts[0].lower() in ("w", "t"):
             token = parts[1].upper()
             if token in MODULE_TITLES:
                 return token
         return None
+
+    def _module_drive_active(self, module=None):
+        """Идёт ли тяга: общая (все колёса) или конкретного колеса."""
+        if self.drive_percent != 0:
+            return True
+        values = getattr(self, "drive_modules", None) or {}
+        if module is None:
+            return any(percent != 0 for percent in values.values())
+        return values.get(module, 0) != 0
 
     def set_pot_mode(self, action, now=None):
         """Режим потенциометра всех четырёх плат: pm 0/1 или калибровка q."""
@@ -560,7 +579,7 @@ class MasterSource:
         now = time.time() if now is None else now
         with self.lock:
             frames = dict(self.frames)
-            drive_active = self.drive_percent != 0
+            drive_active = self._module_drive_active()
         if any(mid not in frames or now - frames[mid][1] >= self.STALE_S for mid in MODULE_TITLES):
             return {"ok": False, "reason": "module_offline"}
         values = [frames[mid][0] for mid in MODULE_TITLES]
@@ -595,7 +614,7 @@ class MasterSource:
         now = time.time() if now is None else now
         with self.lock:
             frames = dict(self.frames)
-            drive_active = self.drive_percent != 0
+            drive_active = self._module_drive_active()
         if drive_active:
             return {"ok": False, "reason": "module_busy"}
         targets = list(MODULE_TITLES) if module == "ALL" else [module]
@@ -635,7 +654,10 @@ class MasterSource:
         now = time.time() if now is None else now
         with self.lock:
             entry = self.frames.get(module)
-            drive_active = self.drive_percent != 0
+            # Крутить руль можно только у стоящего колеса: прошивка тоже это
+            # запрещает («руль заблокирован: включена тяга»), но экран должен
+            # получить понятный отказ, а не молчание.
+            drive_active = self._module_drive_active(module)
         if drive_active:
             return {"ok": False, "reason": "module_busy"}
         if entry is None or now - entry[1] >= self.STALE_S:
@@ -665,7 +687,7 @@ class MasterSource:
         now = time.time() if now is None else now
         with self.lock:
             entry = self.frames.get(module)
-            drive_active = self.drive_percent != 0
+            drive_active = self._module_drive_active(module)
         if drive_active:
             return {"ok": False, "reason": "module_busy"}
         if entry is None or now - entry[1] >= self.STALE_S:
@@ -758,10 +780,16 @@ class MasterSource:
         return max(1, min(int(limit), DRIVE_ABS_MAX_PERCENT))
 
     def drive_status(self, now=None):
+        """Готовность тяги: общей (все колёса) и каждого колеса по отдельности.
+
+        Общая тяга требует выровненных колёс; одиночная — только своего колеса:
+        разворот на месте и проверка одного мотора как раз едут вразнобой.
+        """
         now = time.time() if now is None else now
         with self.lock:
             frames = dict(self.frames)
             commanded = self.drive_percent
+            commanded_modules = dict(getattr(self, "drive_modules", None) or {})
         motors = {}
         reason = ""
         fresh_frames = {}
@@ -789,6 +817,34 @@ class MasterSource:
             if max(angles) - min(angles) > DRIVE_ANGLE_ALIGNMENT_DEG:
                 reason = "steering_misaligned"
 
+        # По колесу: своё «можно/нельзя» и понятная причина. Общая ошибка
+        # (рассинхрон углов, чужое колесо не на связи) одиночную тягу этого
+        # колеса не запрещает — иначе кнопки «вперёд/назад» в карточке стояли
+        # бы серыми, пока соседнее колесо не выставлено.
+        per_module = {}
+        for module in MODULE_TITLES:
+            frame = fresh_frames.get(module)
+            why = ""
+            if not self.serial_ready.is_set():
+                why = "serial_unavailable"
+            elif frame is None:
+                why = "module_offline"
+            elif frame.get("drivePercent") is None:
+                why = "drive_firmware_required"
+            elif not frame.get("cal"):
+                why = "not_homed"
+            elif frame.get("calib") or frame.get("cycle") or frame.get("moving"):
+                why = "module_busy"
+            per_module[module] = {
+                "canDrive": not why,
+                "reason": why or None,
+                "percent": motors.get(module),
+                "commandedPercent": commanded_modules.get(module, 0),
+                "outputMv": frame.get("driveOutputMv") if frame else None,
+                "rpm": frame.get("rpm") if frame else None,
+                "tach": frame.get("tach") if frame else None,
+            }
+
         config = self.drive_config(now)
         return {
             "available": self.serial_ready.is_set(),
@@ -796,6 +852,9 @@ class MasterSource:
             "reason": reason or None,
             "maxPercent": self.drive_limit_percent(now),
             "commandedPercent": commanded,
+            "commandedModules": commanded_modules,
+            "individual": bool(getattr(self, "supports_individual_drive", False)),
+            "perModule": per_module,
             "active": any(value not in (None, 0) for value in motors.values()),
             "reportedPercent": motors,
             "reportedOutputMv": {module: frame.get("driveOutputMv")
@@ -841,9 +900,65 @@ class MasterSource:
                 return {"ok": False, "reason": "command_queue_full"}
         with self.lock:
             self.drive_percent = target
+            # Общая команда адресована всем колёсам: прежние одиночные
+            # значения больше ничего не значат.
+            self.drive_modules = {}
             self.drive_last_command = now
         return {"ok": True, "queued": True, "percent": target,
                 "maxPercent": limit}
+
+    def drive_module(self, module, percent, now=None):
+        """Тяга одного колеса: «t FL 8» уходит только на порт этого колеса.
+
+        В отличие от общей тяги, здесь не требуется выравнивание всех колёс:
+        смысл команды — крутить одно колесо (проверка мотора, разворот на
+        месте, когда FL/RL едут вперёд, а FR/RR назад). Своё колесо всё равно
+        должно быть на связи, с заданным нулём и стоять.
+        """
+        module = str(module or "").upper()
+        if module not in MODULE_TITLES:
+            return {"ok": False, "reason": "invalid_module"}
+        try:
+            percent = float(percent)
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "invalid_drive"}
+        if not math.isfinite(percent):
+            return {"ok": False, "reason": "invalid_drive"}
+        limit = self.drive_limit_percent(now)
+        if abs(percent) > limit:
+            return {"ok": False, "reason": "drive_limit", "limit": limit}
+        if not self.serial_ready.is_set():
+            return {"ok": False, "reason": "serial_unavailable"}
+
+        now = time.time() if now is None else now
+        target = int(round(percent))
+        if target != 0:
+            with self.lock:
+                entry = self.frames.get(module)
+            if entry is None or now - entry[1] >= self.DRIVE_STALE_S:
+                return {"ok": False, "reason": "module_offline"}
+            frame = entry[0]
+            if frame.get("drivePercent") is None:
+                return {"ok": False, "reason": "drive_firmware_required"}
+            if not frame.get("cal"):
+                return {"ok": False, "reason": "not_homed"}
+            if frame.get("calib") or frame.get("cycle") or frame.get("moving"):
+                return {"ok": False, "reason": "module_busy"}
+
+        # Имя колеса в команде: прошивка берёт только своё (чужое молча
+        # пропускает), а сервер всё равно шлёт её лишь на этот порт.
+        command = ("t %s %d\n" % (module, target)).encode("ascii")
+        try:
+            self.commands.put_nowait(command)
+        except queue.Full:
+            return {"ok": False, "reason": "command_queue_full"}
+        with self.lock:
+            modules = dict(getattr(self, "drive_modules", None) or {})
+            modules[module] = target
+            self.drive_modules = modules
+            self.drive_last_command = now
+        return {"ok": True, "queued": True, "module": module,
+                "percent": target, "maxPercent": limit}
 
     def stop_drive(self, now=None):
         return self.drive(0, now)
@@ -866,7 +981,7 @@ class MasterSource:
         now = time.time() if now is None else now
         with self.lock:
             frames = dict(self.frames)
-            drive_active = self.drive_percent != 0
+            drive_active = self._module_drive_active()
         if any(mid not in frames or now - frames[mid][1] >= self.STALE_S for mid in MODULE_TITLES):
             return {"ok": False, "reason": "module_offline"}
         values = [frames[mid][0] for mid in MODULE_TITLES]
@@ -941,6 +1056,7 @@ class MasterSource:
         with self.lock:
             links = list((getattr(self, "links", None) or {}).values())
             self.drive_percent = 0
+            self.drive_modules = {}
             self.drive_last_command = 0.0
         for link in links:
             try:
@@ -977,9 +1093,10 @@ class MasterSource:
                 try:
                     routed = command
                     if target and self._assigned_module(link.path):
-                        # The port identifies the wheel; firmware may have another name.
+                        # Порт уже определяет колесо: имя в команде лишнее, а
+                        # прошивка ждёт «w 12.5» / «t 8» без него.
                         parts = bytes(command).decode("ascii").split()
-                        routed = ("w " + " ".join(parts[2:]) + "\n").encode("ascii")
+                        routed = (" ".join([parts[0]] + parts[2:]) + "\n").encode("ascii")
                     link.commands.put_nowait(routed)
                 except queue.Full:
                     pass
@@ -1223,8 +1340,9 @@ class MasterSource:
                 self._tag(link.path, on=False)
             if lost_module and not self._stop:
                 self._note_status("warn", "колесо %s: порт %s пропал" % (lost_module, link.path))
-                # Fail closed: потеря колеса в движении гасит тягу везде.
-                if self.drive_percent != 0:
+                # Fail closed: потеря колеса в движении гасит тягу везде —
+                # и общую, и одиночную (колесо могло ехать одно).
+                if self._module_drive_active():
                     self._brake_all()
 
     def _reader(self):

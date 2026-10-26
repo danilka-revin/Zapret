@@ -610,7 +610,7 @@
         </section>
 
         <details class="steer-fine" id="steer-fine">
-          <summary>Точная настройка каждого колеса · калибровка</summary>
+          <summary>Точная настройка каждого колеса · калибровка, тяга</summary>
           <div class="steer-grid">
             <article class="steer-card" data-steer-card="FL">
               <header><b>FL<small>Переднее левое</small></b><span id="steer-state-FL" class="steer-state">—</span></header>
@@ -618,6 +618,13 @@
               <div class="steer-meta"><span id="steer-home-FL" data-home="none">ноль: —</span><span id="steer-opto-FL" data-opto="unknown">датчик: —</span></div>
               <input id="steer-slider-FL" data-steer-slider="FL" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол переднего левого рулевого модуля" disabled />
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
+              <div class="steer-drive" data-drive-card="FL">
+                <div class="steer-readout"><span>Тяга <b id="drive-module-state-FL">—</b></span><span>Выход <b id="drive-module-output-FL">—</b></span></div>
+                <label class="steer-drive-speed">Тяга <b><output id="drive-module-value-FL">8</output>%</b>
+                  <input id="drive-module-FL" data-drive-module-slider="FL" type="range" min="1" max="20" step="1" value="8" aria-label="Тяга колеса переднее левое, процент" disabled />
+                </label>
+                <div class="steer-actions steer-drive-actions"><button type="button" class="steer-drive-back" id="drive-module-back-FL" data-drive-module="FL" data-drive-direction="-1" disabled>◀ назад</button><button type="button" class="steer-drive-fwd" id="drive-module-forward-FL" data-drive-module="FL" data-drive-direction="1" disabled>вперёд ▶</button><button type="button" class="steer-drive-stop" id="drive-module-stop-FL" data-drive-module-stop="FL" disabled>СТОП</button></div>
+              </div>
               <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="FL" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="FL" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="FL" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="FL" disabled>0°</button><button type="button" data-steer-adjust="FL" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="FL" disabled>Повернуть FL</button></div>
             </article>
             <article class="steer-card" data-steer-card="FR">
@@ -626,6 +633,13 @@
               <div class="steer-meta"><span id="steer-home-FR" data-home="none">ноль: —</span><span id="steer-opto-FR" data-opto="unknown">датчик: —</span></div>
               <input id="steer-slider-FR" data-steer-slider="FR" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол переднего правого рулевого модуля" disabled />
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
+              <div class="steer-drive" data-drive-card="FR">
+                <div class="steer-readout"><span>Тяга <b id="drive-module-state-FR">—</b></span><span>Выход <b id="drive-module-output-FR">—</b></span></div>
+                <label class="steer-drive-speed">Тяга <b><output id="drive-module-value-FR">8</output>%</b>
+                  <input id="drive-module-FR" data-drive-module-slider="FR" type="range" min="1" max="20" step="1" value="8" aria-label="Тяга колеса переднее правое, процент" disabled />
+                </label>
+                <div class="steer-actions steer-drive-actions"><button type="button" class="steer-drive-back" id="drive-module-back-FR" data-drive-module="FR" data-drive-direction="-1" disabled>◀ назад</button><button type="button" class="steer-drive-fwd" id="drive-module-forward-FR" data-drive-module="FR" data-drive-direction="1" disabled>вперёд ▶</button><button type="button" class="steer-drive-stop" id="drive-module-stop-FR" data-drive-module-stop="FR" disabled>СТОП</button></div>
+              </div>
               <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="FR" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="FR" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="FR" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="FR" disabled>0°</button><button type="button" data-steer-adjust="FR" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="FR" disabled>Повернуть FR</button></div>
             </article>
             <article class="steer-card" data-steer-card="RL">
@@ -634,6 +648,13 @@
               <div class="steer-meta"><span id="steer-home-RL" data-home="none">ноль: —</span><span id="steer-opto-RL" data-opto="unknown">датчик: —</span></div>
               <input id="steer-slider-RL" data-steer-slider="RL" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол заднего левого рулевого модуля" disabled />
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
+              <div class="steer-drive" data-drive-card="RL">
+                <div class="steer-readout"><span>Тяга <b id="drive-module-state-RL">—</b></span><span>Выход <b id="drive-module-output-RL">—</b></span></div>
+                <label class="steer-drive-speed">Тяга <b><output id="drive-module-value-RL">8</output>%</b>
+                  <input id="drive-module-RL" data-drive-module-slider="RL" type="range" min="1" max="20" step="1" value="8" aria-label="Тяга колеса заднее левое, процент" disabled />
+                </label>
+                <div class="steer-actions steer-drive-actions"><button type="button" class="steer-drive-back" id="drive-module-back-RL" data-drive-module="RL" data-drive-direction="-1" disabled>◀ назад</button><button type="button" class="steer-drive-fwd" id="drive-module-forward-RL" data-drive-module="RL" data-drive-direction="1" disabled>вперёд ▶</button><button type="button" class="steer-drive-stop" id="drive-module-stop-RL" data-drive-module-stop="RL" disabled>СТОП</button></div>
+              </div>
               <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="RL" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="RL" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="RL" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="RL" disabled>0°</button><button type="button" data-steer-adjust="RL" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="RL" disabled>Повернуть RL</button></div>
             </article>
             <article class="steer-card" data-steer-card="RR">
@@ -642,13 +663,20 @@
               <div class="steer-meta"><span id="steer-home-RR" data-home="none">ноль: —</span><span id="steer-opto-RR" data-opto="unknown">датчик: —</span></div>
               <input id="steer-slider-RR" data-steer-slider="RR" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол заднего правого рулевого модуля" disabled />
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
+              <div class="steer-drive" data-drive-card="RR">
+                <div class="steer-readout"><span>Тяга <b id="drive-module-state-RR">—</b></span><span>Выход <b id="drive-module-output-RR">—</b></span></div>
+                <label class="steer-drive-speed">Тяга <b><output id="drive-module-value-RR">8</output>%</b>
+                  <input id="drive-module-RR" data-drive-module-slider="RR" type="range" min="1" max="20" step="1" value="8" aria-label="Тяга колеса заднее правое, процент" disabled />
+                </label>
+                <div class="steer-actions steer-drive-actions"><button type="button" class="steer-drive-back" id="drive-module-back-RR" data-drive-module="RR" data-drive-direction="-1" disabled>◀ назад</button><button type="button" class="steer-drive-fwd" id="drive-module-forward-RR" data-drive-module="RR" data-drive-direction="1" disabled>вперёд ▶</button><button type="button" class="steer-drive-stop" id="drive-module-stop-RR" data-drive-module-stop="RR" disabled>СТОП</button></div>
+              </div>
               <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="RR" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="RR" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="RR" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="RR" disabled>0°</button><button type="button" data-steer-adjust="RR" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="RR" disabled>Повернуть RR</button></div>
             </article>
           </div>
           <ul id="steer-messages" class="steer-messages" aria-label="Сообщения прошивки руля" hidden></ul>
         </details>
 
-        <p class="steer-footnote">Ноль задаёт «Калибровка» по оптодатчику D18; «0° вручную» — запасной вариант, если датчик снят. Ноль сбрасывается при перезапуске Arduino. Пресеты и общий ползунок выставляют цель всем четырём колёсам в пределах <span data-steer-limit>±100°</span>: 0° — прямо, 45° — диагональ (краб), 90° — чистый боковой ход. Тяга включается только удержанием кнопок «Движение» в самом низу экрана и лишь при совпадении углов в пределах 2,5°. Разворот на месте эта прошивка не выполняет: у неё одна тяга на все колёса.</p>
+        <p class="steer-footnote">Тяга в карточке колеса — только это колесо: удерживайте «вперёд/назад», отпустили — тормоз этого колеса, остальные не трогаются. Так делают разворот на месте (левые колёса вперёд, правые назад) и проверку одного мотора; углы при этом могут расходиться, поэтому общая тяга (кнопки внизу) по-прежнему требует выравнивания всех четырёх. Пока колесо едет, его руль не поворачивается — прошивка этого не разрешает. Ноль задаёт «Калибровка» по оптодатчику D18; «0° вручную» — запасной вариант, если датчик снят. Ноль сбрасывается при перезапуске Arduino. Пресеты и общий ползунок выставляют цель всем четырём колёсам в пределах <span data-steer-limit>±100°</span>: 0° — прямо, 45° — диагональ (краб), 90° — чистый боковой ход. Кнопки «Движение» внизу дают тягу всем четырём колёсам и лишь при совпадении углов в пределах 2,5°; одиночная тяга в карточках выравнивания не требует.</p>
 
         <section class="traction-controls" aria-label="Тяговые BLDC-моторы">
           <div class="traction-head">
