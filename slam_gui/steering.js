@@ -779,8 +779,15 @@
     }
     else {
       const pulse = drivePulseFor(slider.value, config);
+      // Угол колёс тягу не запирает (краб, боковой ход) — только подпись.
+      let angleText = 'колёса выровнены';
+      const spread = Number(drive.spreadDeg);
+      if (drive.aligned === false && Number.isFinite(spread)) {
+        angleText = 'колёса под углом (разброс ' + spread.toFixed(1).replace('.', ',') +
+          '°) — поедет под этим углом';
+      }
       statusEl.textContent = 'Готово · ' + (pulse != null ? slider.value + '% ≈ ' + pulse + ' мкс · ' : '') +
-        'все модули на связи и колёса выровнены.';
+        'все модули на связи, ' + angleText + '.';
     }
     statusEl.dataset.ready = String(!!drive.canDrive && authorizedForDrive);
     renderManeuvers();

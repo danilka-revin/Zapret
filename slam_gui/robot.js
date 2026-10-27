@@ -2742,6 +2742,8 @@
     drive_firmware_required: 'Обновите прошивку всех четырёх плат для тяги и watchdog.',
     not_homed: 'Сначала откалибруйте колёса по датчику (или задайте 0° вручную).',
     module_busy: 'Дождитесь остановки рулевых модулей.',
+    // Старый сервер ещё мог запирать тягу по углам — текст оставлен, чтобы
+    // отказ был понятен и после обновления одного экрана без другого.
     steering_misaligned: 'Колёса должны смотреть в одном направлении (±2,5°).',
     control_not_supported: 'Тяга доступна только в режиме master.',
     command_queue_full: 'Очередь команд занята.',
@@ -3453,6 +3455,16 @@
     renderManeuvers(lastData || {});
   }
 
+  /** Подпись про углы колёс: «выровнены» или «под углом N°» — без запретов. */
+  function driveAngleText(drive) {
+    const spread = Number((drive || {}).spreadDeg);
+    if ((drive || {}).aligned === false && Number.isFinite(spread)) {
+      const degrees = spread.toFixed(1).replace('.', ',');
+      return ' · колёса под углом (разброс ' + degrees + '°) — поедет под этим углом';
+    }
+    return ' · колёса выровнены';
+  }
+
   function renderDriveControls(data) {
     const status = $('drive-status');
     const speed = $('drive-speed');
@@ -3477,14 +3489,17 @@
     if (stop) stop.disabled = !enabled;
     const reason = drive.reason && DRIVE_REASON_TEXT[drive.reason];
     const mode = config.outputMode === 'servo' ? 'серво-ШИМ 50 Гц' : '';
+    // Угол колёс тягу не запирает: ехать можно на любом (краб, боком). Экран
+    // лишь говорит, что робот поедет под углом, а не прямо.
+    const angleText = driveAngleText(drive);
     const pulse = drivePulseFor(speed.value, config);
     if (!supported && String((d.steeringControl || {}).source || '') === 'master-peer') status.textContent = 'Тяга — только на бортовом экране (порт 8090).';
     else if (!supported) status.textContent = 'Тяга доступна при RC_SLAM_SOURCE=master.';
     else if (!steeringAuthorized) status.textContent = 'Управление временно недоступно.';
     else if (reason) status.textContent = reason;
     else if (drive.active) status.textContent = 'Движение включено · ' + speed.value + '%' + (pulse != null ? ' ≈ ' + pulse + ' мкс' : '') + ' · отпустите кнопку для торможения.';
-    else if (pulse != null) status.textContent = 'Готово · ' + mode + ' · ' + speed.value + '% ≈ ' + pulse + ' мкс · колёса выровнены.';
-    else status.textContent = 'Готово · ' + (mode ? mode + ' · ' : '') + 'модули на связи, колёса выровнены.';
+    else if (pulse != null) status.textContent = 'Готово · ' + mode + ' · ' + speed.value + '% ≈ ' + pulse + ' мкс' + angleText + '.';
+    else status.textContent = 'Готово · ' + (mode ? mode + ' · ' : '') + 'модули на связи' + angleText + '.';
     status.dataset.ready = String(!!drive.canDrive && enabled);
     // Тяга каждого колеса: своя готовность и свои кнопки в карточке.
     ['FL', 'FR', 'RL', 'RR'].forEach((id) => renderModuleDriveCard(id, d, supported));

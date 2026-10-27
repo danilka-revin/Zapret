@@ -456,7 +456,7 @@ def test_master_telemetry_parses_bldc_rpm_and_drive_percent():
         "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=21") is None
 
 
-def test_master_source_drive_requires_aligned_zeroed_modules_and_prioritizes_stop():
+def test_master_source_drive_works_at_any_angle_and_prioritizes_stop():
     import queue
     import threading
 
@@ -490,8 +490,19 @@ def test_master_source_drive_requires_aligned_zeroed_modules_and_prioritizes_sto
     assert src.commands.get_nowait() == b"b\n"
     assert src.commands.empty()
 
+    # Колёса разъехались по углу — но это больше не запрет: поворотные модули
+    # ездят на любом угле (краб, боком), плата этого не требует. Разброс отдаём
+    # справкой, чтобы экран сказал «стоят под углом», а не «тяга запрещена».
     src.feed("@TLM mod=RR deg=4.0 tgt=4.0 moving=0 cal=1 rpm=0 drive=0", now=100.5)
-    assert src.drive_status(now=100.6)["reason"] == "steering_misaligned"
+    status = src.drive_status(now=100.6)
+    assert status["canDrive"] is True and status["reason"] is None
+    assert status["aligned"] is False and status["spreadDeg"] == 4.0
+    assert src.drive(9, now=100.6)["ok"] is True
+    assert src.commands.get_nowait() == b"t 9\n"
+
+    # А вот остановленный руль по-прежнему обязателен: под тягой не поворачиваем.
+    src.feed("@TLM mod=RR deg=4.0 tgt=4.0 moving=1 cal=1 rpm=0 drive=0", now=100.7)
+    assert src.drive_status(now=100.8)["reason"] == "module_busy"
 
 
 def test_master_line_v2_reports_zero_source_calibration_error_and_firmware():
@@ -885,7 +896,7 @@ def test_drive_config_is_mixed_when_the_plates_disagree():
 
 
 def test_individual_drive_targets_only_its_own_wheel():
-    """Тяга одного колеса: «t FL 8» на своё колесо, без выравнивания всех."""
+    """Тяга одного колеса: «t FL 8» на своё колесо, независимо от соседей."""
     backend = _load_backend()
     src = _bare_master_source(backend)
     src.drive_modules = {}
@@ -895,9 +906,10 @@ def test_individual_drive_targets_only_its_own_wheel():
     src.feed(_drive_frame("RR"), now=100.0)
 
     status = src.drive_status(now=100.2)
-    # Общая тяга запрещена (колёса не выровнены), одиночная — нет: именно так
-    # крутят одно колесо на стенде и делают разворот на месте.
-    assert status["canDrive"] is False and status["reason"] == "steering_misaligned"
+    # Колесо смотрит в сторону — и общая, и одиночная тяга при этом разрешены:
+    # так едут крабом и разворачиваются на месте. Справка об углах остаётся.
+    assert status["canDrive"] is True and status["reason"] is None
+    assert status["aligned"] is False and status["spreadDeg"] == 9.0
     assert status["individual"] is True
     assert status["perModule"]["FL"]["canDrive"] is True
     assert set(status["perModule"]) == {"FL", "FR", "RL", "RR"}
@@ -1265,3 +1277,36 @@ def test_dispatch_drive_config_maps_reasons_to_http_codes():
     assert status == 409 and result["reason"] == "command_failed"
     result, status = slam.dispatch_drive_config(object(), {"action": "limit", "value": 30})
     assert status == 409 and result["reason"] == "control_not_supported"
+
+
+def test_drive_api_allows_any_steering_angle_end_to_end(kiosk_client):
+    """Сквозная проверка: колёса под углом 30° — тяга по API проходит.
+
+    Раньше общая тяга запиралась разбросом углов («steering_misaligned»), и
+    поехать крабом или боком было нельзя. Теперь угол не проверяется: важны
+    связь, ноль и остановленный руль.
+    """
+    import time
+
+    backend = _load_backend()
+    src = _bare_master_source(backend)
+    now = time.time()
+    # Колёса стоят крабом и не идеально ровно: разброс 15° — раньше это был
+    # запрет общей тяги, теперь только подпись на экране.
+    for module, deg in (("FL", 30.0), ("FR", 30.0), ("RL", 30.0), ("RR", 45.0)):
+        src.feed(_drive_frame(module, deg=deg), now=now)
+    src.drive_limit_percent = lambda now=None: 20
+    src.drive_config = lambda now=None: {"supported": True, "limitPercent": 20,
+                                         "outputMode": "servo", "tach": True,
+                                         "perModule": {}}
+    src.maneuver_status = lambda now=None: {"supported": False, "active": False}
+    kiosk_client.application.extensions["rc_slam"].source = src
+
+    status = src.drive_status()
+    assert status["canDrive"] is True and status["reason"] is None
+    assert status["aligned"] is False and status["spreadDeg"] == 15.0
+
+    response = kiosk_client.post("/api/kiosk_drive", json={"percent": 8},
+                                 headers={"X-Robot-Control": "drive"})
+    assert response.status_code == 200, response.get_json()
+    assert src.commands.get_nowait() == b"t 8\n"
