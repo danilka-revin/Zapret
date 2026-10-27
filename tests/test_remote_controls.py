@@ -58,6 +58,18 @@ class Motors:
         self.calls.append(('drive_config', action, value, module))
         return {'ok': True, 'queued': True}
 
+    def start_maneuver(self, name):
+        self.calls.append(('maneuver', 'start', name))
+        return {'ok': True, 'maneuver': {'name': name, 'state': 'steering'}}
+
+    def stop_maneuver(self):
+        self.calls.append(('maneuver', 'stop'))
+        return {'ok': True, 'maneuver': {'state': 'cancelled'}}
+
+    def set_maneuver_config(self, name, values):
+        self.calls.append(('maneuver_config', name, values))
+        return {'ok': True}
+
 
 @pytest.fixture
 def transport(kiosk_client, monkeypatch):
@@ -124,6 +136,12 @@ def test_controls_page_reuses_full_motor_ui(client, operator):
     # сервера, иначе реверс получили бы все четыре платы сразу.
     ('drive_config', {'action': 'direction', 'module': 'FR', 'value': 'reverse'}, 'steering',
      ('drive_config', 'direction', 'reverse', 'FR')),
+    # Манёвры: старт/стоп пресета и правка его чисел идут как команды руления.
+    ('maneuver', {'action': 'start', 'name': 'forward'}, 'steering',
+     ('maneuver', 'start', 'forward')),
+    ('maneuver', {'action': 'stop'}, 'steering', ('maneuver', 'stop')),
+    ('maneuver_config', {'name': 'spin_left', 'values': {'angleDeg': 90, 'percent': 10}},
+     'steering', ('maneuver_config', 'spin_left', {'angleDeg': 90, 'percent': 10})),
     ('drive', {'percent': -8}, 'drive', ('drive', -8)),
     ('drive', {'percent': 0}, 'drive', ('drive', 0)),
     # Тяга одного колеса идёт тем же маршрутом и тем же заголовком команды.

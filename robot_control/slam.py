@@ -174,6 +174,10 @@ COMMAND_REASON_TEXT = {
     "drive_limit": "тяга вне допуска (см. предел в настройке привода)",
     "invalid_action": "неизвестное действие настройки привода",
     "invalid_value": "недопустимое значение настройки привода",
+    "invalid_maneuver": "неизвестный манёвр",
+    "maneuver_busy": "другой манёвр уже идёт — сначала СТОП",
+    "steering_timeout": "колёса не успели встать в углы манёвра",
+    "drive_not_ready": "тяга сейчас недоступна",
     "firmware_update_required": "прошивка плат не умеет настройку тяги",
     "estop": "E-STOP: движение заблокировано, снимите защёлку с PIN",
     "control_not_supported": "источник данных не умеет адресное управление",
@@ -479,6 +483,88 @@ def dispatch_drive_config(source, body):
     else:
         eventlog.record("ok", "настройка привода тяги: %s" % where, source="тяга")
     return result, status
+
+
+def dispatch_maneuver(source, body):
+    """Пресет-манёвр тяги: «метр вперёд», «развернуться на 90°».
+
+    Тело: ``{"action": "start", "name": "forward"}`` или
+    ``{"action": "stop"}``. Дальше сервер ведёт манёвр сам: ставит углы,
+    держит тягу, считает путь по тахометру и гасит её на цели.
+    """
+    action = body.get("action") if isinstance(body, dict) else None
+    where = action or "?"
+    result, status = _maneuver(source, body)
+    if not result.get("ok"):
+        note_command_rejected("манёвр (%s)" % where, str(result.get("reason", "")))
+    else:
+        name = body.get("name") or ""
+        eventlog.record("ok", "манёвр %s %s" % (where, name) if name else "манёвр %s" % where,
+                        source="тяга")
+    return result, status
+
+
+def _maneuver(source, body):
+    if not isinstance(body, dict) or set(body) - {"action", "name"}:
+        return {"ok": False, "reason": "payload"}, 400
+    action = body.get("action")
+    if action not in ("start", "stop"):
+        return {"ok": False, "reason": "invalid_action"}, 400
+    if action == "start" and estop_latch.latched() is not None:
+        return {"ok": False, "reason": "estop"}, 409
+    if action == "stop":
+        stop = getattr(source, "stop_maneuver", None)
+        if not callable(stop):
+            return {"ok": False, "reason": "control_not_supported"}, 409
+        return stop(), 200
+    name = body.get("name")
+    if not isinstance(name, str) or not name:
+        return {"ok": False, "reason": "invalid_maneuver"}, 400
+    start = getattr(source, "start_maneuver", None)
+    if not callable(start):
+        return {"ok": False, "reason": "control_not_supported"}, 409
+    result = start(name)
+    if result.get("ok"):
+        return result, 200
+    reason = result.get("reason", "command_failed")
+    status = 409
+    if reason in {"serial_unavailable", "module_offline"}:
+        status = 503
+    elif reason == "command_queue_full":
+        status = 429
+    elif reason in {"invalid_maneuver", "invalid_value", "payload", "invalid_action"}:
+        status = 400
+    return dict(result, ok=False, reason=reason), status
+
+
+def dispatch_maneuver_config(source, body):
+    """Правка пресета манёвра: метры, градусы, рабочий процент, геометрия шасси."""
+    result, status = _maneuver_config(source, body)
+    if not result.get("ok"):
+        note_command_rejected("настройка манёвра", str(result.get("reason", "")))
+    else:
+        eventlog.record("ok", "настройка манёвра: %s" % (body.get("name") or "?"), source="тяга")
+    return result, status
+
+
+def _maneuver_config(source, body):
+    if not isinstance(body, dict) or set(body) - {"name", "values"}:
+        return {"ok": False, "reason": "payload"}, 400
+    name = body.get("name")
+    values = body.get("values")
+    if not isinstance(name, str) or not isinstance(values, dict):
+        return {"ok": False, "reason": "payload"}, 400
+    update = getattr(source, "set_maneuver_config", None)
+    if not callable(update):
+        return {"ok": False, "reason": "control_not_supported"}, 409
+    result = update(name, values)
+    if result.get("ok"):
+        return result, 200
+    reason = result.get("reason", "command_failed")
+    status = 409
+    if reason in {"payload", "invalid_maneuver", "invalid_value", "invalid_action"}:
+        status = 400
+    return dict(result, ok=False, reason=reason), status
 
 
 def _drive_config(source, body):
@@ -1217,6 +1303,8 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
             "source": snap.get("source"),
             "steeringControl": steering_control_info(state.source),
             "drive": snap.get("drive"),
+            # Пресеты манёвров тяги: метры/градусы, процент, геометрия шасси.
+            "maneuverConfig": snap.get("maneuverConfig"),
             "masterPort": snap.get("masterPort"),
             "masterMessages": snap.get("masterMessages") or [],
             "estop": (snap.get("estop") if getattr(state.source, "name", "") == "master-peer"
@@ -1359,6 +1447,28 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         result, status = dispatch_drive_command(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
+    @bp.post("/api/kiosk_maneuver")
+    def api_kiosk_maneuver():
+        """Манёвр-пресет: «метр вперёд», «90° на месте» (start/stop)."""
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        if not steering_access_valid():
+            note_pin_required("манёвр")
+            return jsonify({"ok": False, "reason": "pin_required"}), 401
+        result, status = dispatch_maneuver(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
+    @bp.post("/api/kiosk_maneuver_config")
+    def api_kiosk_maneuver_config():
+        """Настройка пресетов манёвров (метры, градусы, процент, шасси)."""
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        if not steering_access_valid():
+            note_pin_required("настройка манёвра")
+            return jsonify({"ok": False, "reason": "pin_required"}), 401
+        result, status = dispatch_maneuver_config(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
     @bp.post("/api/kiosk_drive_config")
     def api_kiosk_drive_config():
         """Настройка привода тяги: серво-ШИМ (нейтраль/размах), тахометр, тормоз, стоп, предел."""
@@ -1399,6 +1509,28 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         if not steering_access_valid():
             return jsonify({"ok": False, "reason": "pin_required"}), 401
         result, status = dispatch_drive_command(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
+    @bp.post("/api/maneuver")
+    @guard
+    def api_maneuver():
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        if not steering_access_valid():
+            note_pin_required("манёвр")
+            return jsonify({"ok": False, "reason": "pin_required"}), 401
+        result, status = dispatch_maneuver(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
+    @bp.post("/api/maneuver_config")
+    @guard
+    def api_maneuver_config():
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        if not steering_access_valid():
+            note_pin_required("настройка манёвра")
+            return jsonify({"ok": False, "reason": "pin_required"}), 401
+        result, status = dispatch_maneuver_config(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
     @bp.post("/api/drive_config")

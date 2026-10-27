@@ -210,6 +210,10 @@ const netlog = [];
  * одной и только при выключенной тяге. */
 const driveCfgSent = [];
 
+/* Манёвры («метр вперёд», «90° на месте»): экран сначала сохраняет числа
+ * пресета, потом просит старт — журнал показывает обе команды по порядку. */
+const maneuversSent = [];
+
 /* Телеметрия по кадрам: в жизни колесо сначала едет, потом останавливается —
  * и не всегда там, куда его послали. ``motorFrames`` позволяет показать экрану
  * именно эту последовательность, а не один застывший снимок. */
@@ -250,6 +254,21 @@ global.fetch = async (url, init) => {
     });
     if (payload.driveCfgRefuse) return jsonResponse({ ok: false, reason: payload.driveCfgRefuse }, 409);
     return jsonResponse({ ok: true, queued: true, action: body.action }, 200);
+  }
+  if (/kiosk_maneuver_config/.test(text)) {
+    maneuversSent.push({url: text, action: 'config', name: body.name,
+                        values: body.values === undefined ? null : body.values});
+    if (payload.maneuverConfigRefuse) {
+      return jsonResponse({ ok: false, reason: payload.maneuverConfigRefuse }, 400);
+    }
+    return jsonResponse({ ok: true }, 200);
+  }
+  if (/kiosk_maneuver/.test(text)) {
+    maneuversSent.push({url: text, action: body.action, name: body.name || null});
+    if (payload.maneuverRefuse) {
+      return jsonResponse({ ok: false, reason: payload.maneuverRefuse }, 409);
+    }
+    return jsonResponse({ ok: true, maneuver: { state: 'steering' } }, 200);
   }
   if (/kiosk_drive|api\/drive/.test(text)) {
     drives.push({ percent: body.percent, module: body.module === undefined ? null : body.module });
@@ -448,6 +467,23 @@ function findPreset(id) {
       await flush(1);
       if (action.apply !== false) byId('drive-cfg-apply').fire('click');
       await flush(action.rounds || 8);
+    } else if (action.type === 'maneuver') {
+      const id = String(action.id || 'forward');
+      if (action.target !== undefined) {
+        const targetEl = byId('maneuver-target-' + id);
+        targetEl.value = String(action.target);
+        targetEl.fire('input');
+      }
+      if (action.percent !== undefined) {
+        const percentEl = byId('maneuver-percent-' + id);
+        percentEl.value = String(action.percent);
+        percentEl.fire('input');
+      }
+      byId('maneuver-' + id).fire('click');
+      await flush(action.rounds || 8);
+    } else if (action.type === 'maneuver-stop') {
+      byId('maneuver-stop').fire('click');
+      await flush(action.rounds || 6);
     } else if (action.type === 'drivecfg-reset') {
       byId('drive-cfg-reset').fire('click');
       await flush(action.rounds || 6);
@@ -506,6 +542,19 @@ function findPreset(id) {
       resetDisabled: !!byId('drive-cfg-reset').disabled,
       status: byId('drive-cfg-status').textContent,
     },
+    maneuvers: {
+      buttons: ['forward', 'backward', 'left', 'right', 'spin_left', 'spin_right'].map((id) => ({
+        id,
+        disabled: !!byId('maneuver-' + id).disabled,
+        label: byId('maneuver-' + id).textContent,
+        target: byId('maneuver-target-' + id).value,
+        percent: byId('maneuver-percent-' + id).value,
+      })),
+      stopDisabled: !!byId('maneuver-stop').disabled,
+      status: byId('maneuver-status').textContent,
+      active: byId('maneuver-status').dataset.active,
+    },
+    maneuversSent,
     heroAngle: byId('steer-hero-angle').textContent,
     heroMode: byId('steer-hero-mode').textContent,
     masterValue: byId('steer-master-value').textContent,

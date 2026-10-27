@@ -5,6 +5,34 @@
   if (window.RCSteeringPanel) return;
   const IDS = ['FL', 'FR', 'RL', 'RR'];
   const WHEEL_NAMES = {FL:'Переднее левое', FR:'Переднее правое', RL:'Заднее левое', RR:'Заднее правое'};
+  /* Манёвры: цель в метрах или градусах, а не «держать процент». Сервер сам
+   * ставит углы, плавно набирает тягу, меряет путь по тахометру и гасит её на
+   * цели. Здесь только кнопки и числа: правки уходят в api/kiosk_maneuver_config
+   * и живут на борту, поэтому борт и пульт показывают одни и те же числа. */
+  const MANEUVERS = [
+    {id:'forward', title:'Вперёд', unit:'м', key:'distanceM', min:0.05, max:20, step:0.05},
+    {id:'backward', title:'Назад', unit:'м', key:'distanceM', min:0.05, max:20, step:0.05},
+    {id:'left', title:'Боком влево', unit:'м', key:'distanceM', min:0.05, max:20, step:0.05},
+    {id:'right', title:'Боком вправо', unit:'м', key:'distanceM', min:0.05, max:20, step:0.05},
+    {id:'spin_left', title:'Разворот влево', unit:'°', key:'angleDeg', min:5, max:360, step:5},
+    {id:'spin_right', title:'Разворот вправо', unit:'°', key:'angleDeg', min:5, max:360, step:5}
+  ];
+  const MANEUVER_REASON_TEXT = {
+    invalid_maneuver: 'Такого манёвра нет — обновите страницу.',
+    invalid_value: 'Проверьте числа: цель и процент в допустимых пределах.',
+    maneuver_busy: 'Другой манёвр уже идёт — сначала СТОП.',
+    module_busy: 'Сначала остановите тягу и дождитесь, пока колёса встанут.',
+    module_offline: 'Нужна свежая телеметрия всех четырёх колёс.',
+    serial_unavailable: 'Нет связи с USB-платами.',
+    not_homed: 'У колеса нет нуля — сначала калибровка по датчику.',
+    steering_timeout: 'Колёса не успели встать в углы манёвра.',
+    drive_not_ready: 'Тяга сейчас недоступна.',
+    pin_required: 'PIN истёк — разблокируйте управление снова.',
+    estop: 'Включён E-STOP: манёвр заблокирован.',
+    control_not_supported: 'Манёвры доступны только в режиме master.',
+    request_header_required: 'Запрос без заголовка команды.',
+    command_failed: 'Сервер не принял команду.'
+  };
   /** Запасной предел угла, пока сервер не ответил; совпадает с прошивкой. */
   const FALLBACK_LIMIT_DEG = 90;
   let limitDeg = FALLBACK_LIMIT_DEG;
@@ -131,6 +159,21 @@
             <button type="button" id="rc-drive-stop" class="stop" disabled>СТОП</button>
           </div>
           <small id="rc-drive-mode" class="rc-drive-mode">Привод: —</small>
+          <section class="rc-maneuver-panel" aria-label="Манёвры тяги">
+            <div class="rc-maneuver-top"><b>Манёвры</b><small>цель в метрах или градусах — сервер ведёт сам</small></div>
+            <div class="rc-maneuver-list">${MANEUVERS.map((item) => `
+              <div class="rc-maneuver-row" data-rc-maneuver="${item.id}">
+                <b>${item.title}</b>
+                <label>${item.unit}<input type="number" data-maneuver-target min="${item.min}" max="${item.max}" step="${item.step}" value="${item.key === 'distanceM' ? 1 : 90}" aria-label="${item.title}: цель"></label>
+                <label>%<input type="number" data-maneuver-percent min="1" max="100" step="1" value="10" aria-label="${item.title}: рабочий процент"></label>
+                <button type="button" data-maneuver-start disabled>Ехать</button>
+              </div>`).join('')}
+            </div>
+            <div class="rc-maneuver-actions">
+              <button type="button" id="rc-maneuver-stop" class="stop" disabled>СТОП манёвра</button>
+              <small id="rc-maneuver-status" role="status">манёвры недоступны</small>
+            </div>
+          </section>
           <small class="rc-drive-warning">Нейтраль и размах серво-ШИМ, тахометр, тормозная линия и линия STOP настраиваются на экране «Руление и тяга» (вкладка /controls): настройка живёт в EEPROM платы. Программный стоп и watchdog (650 мс), не аварийный выключатель. Перед запуском вывесьте колёса и установите аппаратную аварийную кнопку в силовую цепь.</small>
         </section>
       </section>`;
@@ -525,6 +568,130 @@
     pin_required: 'PIN истёк — разблокируйте управление снова.'
   };
 
+  function maneuverConfigFor(id) {
+    const config = (snapshot && snapshot.maneuverConfig) || null;
+    const presets = (config && config.presets) || {};
+    return presets[id] || null;
+  }
+
+  function renderManeuvers() {
+    const stop = $('rc-maneuver-stop');
+    const statusEl = $('rc-maneuver-status');
+    if (!stop || !statusEl) return;
+    const config = (snapshot && snapshot.maneuverConfig) || null;
+    const supported = !!(config && config.supported !== false);
+    const drive = (snapshot && snapshot.drive) || {};
+    const state = drive.maneuver || {};
+    const active = !!state.active;
+    const control = (snapshot && snapshot.steeringControl) || {};
+    const enabled = supported && authorized && !!control.available && !!drive.canDrive;
+    const focused = document.activeElement;
+    MANEUVERS.forEach((item) => {
+      const row = document.querySelector('[data-rc-maneuver="' + item.id + '"]');
+      if (!row) return;
+      const preset = maneuverConfigFor(item.id) || {};
+      const targetEl = row.querySelector('[data-maneuver-target]');
+      const percentEl = row.querySelector('[data-maneuver-percent]');
+      // Пока оператор набирает число, телеметрия его не перебивает.
+      if (targetEl && focused !== targetEl && preset[item.key] != null) {
+        targetEl.value = String(preset[item.key]);
+      }
+      if (percentEl && focused !== percentEl && preset.percent != null) {
+        percentEl.value = String(preset.percent);
+      }
+      const button = row.querySelector('[data-maneuver-start]');
+      if (button) {
+        button.disabled = !enabled || active;
+        button.textContent = (active && state.name === item.id) ? 'Едем…' : 'Ехать';
+      }
+    });
+    stop.disabled = !authorized || !active;
+    const kind = state.kind === 'distance' ? 'distance' : 'angle';
+    const format = (value) => kind === 'distance'
+      ? (Number(value) || 0).toFixed(2) + ' м' : Math.round(Number(value) || 0) + '°';
+    if (!supported) {
+      statusEl.textContent = 'Пресеты манёвров недоступны: сервер не отдал их настройки.';
+    } else if (!control.available) {
+      statusEl.textContent = 'Манёвры — только в режиме master.';
+    } else if (!authorized) {
+      statusEl.textContent = 'Манёвры требуют разблокированного управления.';
+    } else if (active) {
+      statusEl.textContent = 'Манёвр «' + (state.title || state.name || '') + '»: ' +
+        Math.round((Number(state.progress) || 0) * 100) + '% · ' +
+        format(state.value) + ' из ' + format(state.target) +
+        ' · ' + (state.mode === 'time' ? 'по времени (тахометра нет)' : 'по тахометру');
+    } else if (state.state === 'done' || state.state === 'failed' || state.state === 'cancelled') {
+      statusEl.textContent = state.message || 'Манёвр завершён.';
+    } else if (!drive.canDrive) {
+      statusEl.textContent = 'Манёвры недоступны: ' +
+        (DRIVE_REASON_TEXT[drive.reason] || 'тяга не готова') + '.';
+    } else {
+      statusEl.textContent = 'Готово · выберите манёвр.';
+    }
+    statusEl.dataset.active = String(active);
+  }
+
+  /** Старт манёвра: сначала сохраняем числа из формы, потом пускаем. */
+  async function startManeuver(id) {
+    const item = MANEUVERS.find((entry) => entry.id === id);
+    const row = document.querySelector('[data-rc-maneuver="' + id + '"]');
+    if (!item || !row) return;
+    if (!authorized) {
+      $('rc-maneuver-status').textContent = 'Сначала разблокируйте PIN.';
+      void unlock();
+      return;
+    }
+    const targetEl = row.querySelector('[data-maneuver-target]');
+    const percentEl = row.querySelector('[data-maneuver-percent]');
+    const target = Number(targetEl && targetEl.value);
+    const percent = Number(percentEl && percentEl.value);
+    if (!(target > 0) || !(percent > 0)) {
+      $('rc-maneuver-status').textContent = 'Проверьте числа: цель и процент больше нуля.';
+      return;
+    }
+    const values = {percent: percent};
+    values[item.key] = target;
+    const saved = await json('api/kiosk_maneuver_config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
+      body: JSON.stringify({ name: id, values: values })
+    });
+    if (!saved.response.ok || saved.body.ok === false) {
+      const reason = saved.body.reason || 'command_failed';
+      if (reason === 'pin_required') authorized = false;
+      $('rc-maneuver-status').textContent = MANEUVER_REASON_TEXT[reason] || 'Отказ сервера.';
+      return;
+    }
+    const started = await json('api/kiosk_maneuver', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
+      body: JSON.stringify({ action: 'start', name: id })
+    });
+    if (!started.response.ok || started.body.ok === false) {
+      const reason = started.body.reason || 'command_failed';
+      if (reason === 'pin_required') authorized = false;
+      $('rc-maneuver-status').textContent = MANEUVER_REASON_TEXT[reason] || 'Отказ сервера.';
+      return;
+    }
+    $('rc-maneuver-status').textContent = 'Манёвр «' + item.title + '» начат — сервер ведёт его сам.';
+    renderManeuvers();
+  }
+
+  async function stopManeuver() {
+    const result = await json('api/kiosk_maneuver', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
+      body: JSON.stringify({ action: 'stop' })
+    });
+    if (!result.response.ok || result.body.ok === false) {
+      const reason = result.body.reason || 'command_failed';
+      $('rc-maneuver-status').textContent = MANEUVER_REASON_TEXT[reason] || 'Отказ сервера.';
+      return;
+    }
+    $('rc-maneuver-status').textContent = 'Манёвр остановлен, тяга снята.';
+    renderManeuvers();
+  }
+
   function bindDriveControls() {
     const speed = $('rc-drive-speed');
     if (speed) speed.addEventListener('input', () => {
@@ -543,6 +710,15 @@
     });
     const stop = $('rc-drive-stop');
     if (stop) stop.addEventListener('click', () => { void stopDrive(); });
+    // Манёвры: «Ехать» в строке и общий СТОП манёвра.
+    document.querySelectorAll('[data-rc-maneuver]').forEach((row) => {
+      const button = row.querySelector('[data-maneuver-start]');
+      if (button) button.addEventListener('click', () => {
+        void startManeuver(row.dataset.rcManeuver);
+      });
+    });
+    const maneuverStop = $('rc-maneuver-stop');
+    if (maneuverStop) maneuverStop.addEventListener('click', () => { void stopManeuver(); });
   }
 
   /**
@@ -607,6 +783,7 @@
         'все модули на связи и колёса выровнены.';
     }
     statusEl.dataset.ready = String(!!drive.canDrive && authorizedForDrive);
+    renderManeuvers();
   }
 
   function startDrive(direction) {

@@ -1701,6 +1701,53 @@ body.swipe-open .kiosk {
 #drive-cfg-status { color: var(--muted); font-size: 11px; font-weight: 700; }
 @media (max-width: 900px) { .drive-setup-grid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 560px) { .drive-setup-grid { grid-template-columns: 1fr; } }
+/* Манёвры: цель (метры/градусы) вместо «держать процент». Строка = пресет:
+   название, число цели, рабочий процент и кнопка «Ехать». */
+.drive-maneuvers {
+  grid-column: 1 / -1;
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  background: var(--bg-2);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.drive-maneuvers > summary { cursor: pointer; color: var(--text); font-size: 13px; font-weight: 800; }
+.maneuver-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.maneuver-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+.maneuver-title { color: var(--text); font-size: 12px; font-weight: 800; }
+.maneuver-row label { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.maneuver-row input[type="number"] {
+  width: 68px; padding: 5px 6px; border-radius: 8px; border: 1px solid var(--line-2);
+  background: var(--bg-2); color: var(--text); font: inherit; font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.maneuver-row button {
+  padding: 7px 12px; border-radius: 10px; border: 1px solid var(--line-2);
+  background: var(--bg-2); color: var(--text); font: inherit; font-size: 12px;
+  font-weight: 800; cursor: pointer;
+}
+.maneuver-row button:disabled { opacity: .45; cursor: not-allowed; }
+.maneuver-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.maneuver-actions .traction-stop {
+  padding: 8px 14px; border-radius: 10px; border: 1px solid rgba(192, 80, 90, .7);
+  background: rgba(192, 80, 90, .22); color: var(--text); font: inherit;
+  font-size: 12px; font-weight: 800; cursor: pointer;
+}
+.maneuver-actions .traction-stop:disabled { opacity: .38; cursor: not-allowed; }
+#maneuver-status { color: var(--muted); font-size: 11px; font-weight: 700; }
+#maneuver-status[data-active="true"] { color: var(--accent); }
+@media (max-width: 900px) { .maneuver-list { grid-template-columns: 1fr; } }
 .steer-source-status { min-height: 18px; margin: 0; color: var(--muted); font-size: 12px; font-weight: 700; }
 .steer-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .steer-card {

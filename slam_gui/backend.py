@@ -380,6 +380,20 @@ def parse_master_line(line, module=None):
         return None
 
 
+def _load_maneuvers():
+    """Ядро манёвров (``robot_control/maneuvers.py``) — по возможности.
+
+    ``backend.py`` можно запустить и как отдельный скрипт из ``slam_gui``, где
+    корень репозитория не в ``sys.path``. Тогда манёвры просто недоступны
+    (``maneuver.supported = False``), а не роняют весь сервер при импорте.
+    """
+    try:
+        from robot_control import maneuvers as core
+    except Exception:                     # noqa: BLE001 — без ядра живём дальше
+        return None
+    return core
+
+
 class _WheelLink:
     """Открытый USB-порт колеса: очередь команд и привязанное имя модуля."""
 
@@ -414,6 +428,11 @@ class MasterSource:
     #: проверку одного мотора.
     supports_individual_drive = True
     supports_calibration = True
+    #: Манёвры тяги: настоящий раннер создаётся в ``__init__``; у «пустого»
+    #: источника (тесты, режим без шасси) их просто нет.
+    maneuvers = None
+    maneuver_core = None
+    _maneuver_driving = False
     STALE_S = 1.0
     DRIVE_STALE_S = 0.75
     MAX_STEER_DEG = STEER_LIMIT_DEG
@@ -464,6 +483,14 @@ class MasterSource:
         #: Пусто, пока едет «вся телега» общей командой t N.
         self.drive_modules = {}
         self.drive_last_command = 0.0
+        #: Манёвры тяги («метр вперёд», «90° на месте»). Раннер тикает в потоке
+        #: порта, сам держит heartbeat и сам гасит тягу на цели; его настройки
+        #: (метры, градусы, процент, геометрия шасси) лежат в data/maneuvers.json.
+        self.maneuver_core = _load_maneuvers()
+        self._maneuver_driving = False
+        self.maneuvers = (self.maneuver_core.ManeuverRunner(
+            self.maneuver_core.load_config(), brake=self._brake_all)
+            if self.maneuver_core is not None else None)
         self.commands = queue.Queue(maxsize=16)
         self.serial_ready = threading.Event()
         self.messages = []               # строки «# FL: …» прошивки: (время, текст)
@@ -686,6 +713,7 @@ class MasterSource:
 
     def zero_module(self, module, now=None):
         """Назначить текущую позицию программным нулём; мотор не двигается."""
+        self._cancel_maneuver()
         module = str(module or "").upper()
         if module not in MODULE_TITLES:
             return {"ok": False, "reason": "invalid_module"}
@@ -889,10 +917,12 @@ class MasterSource:
             "reportedPulseUs": {module: frame.get("drivePulseUs")
                                 for module, frame in fresh_frames.items()},
             "config": config,
+            "maneuver": self.maneuver_status(now),
             "alignmentToleranceDeg": DRIVE_ANGLE_ALIGNMENT_DEG,
         }
 
     def drive(self, percent, now=None):
+        self._cancel_maneuver()
         try:
             percent = float(percent)
         except (TypeError, ValueError):
@@ -1107,6 +1137,108 @@ class MasterSource:
         if action == "defaults":
             return [b"m reset\n"]
         return {"ok": False, "reason": "invalid_action"}
+
+    # ------------------------------------------------------------- манёвры # #
+    def maneuver_status(self, now=None):
+        """Состояние последнего манёвра — экран показывает прогресс и итог."""
+        if self.maneuvers is None:
+            return {"supported": False, "active": False, "state": "idle"}
+        status = self.maneuvers.status()
+        status["supported"] = True
+        return status
+
+    def maneuver_config(self):
+        """Пресеты, геометрия шасси и запомненные скорости — для формы экрана."""
+        if self.maneuvers is None:
+            return {"supported": False}
+        payload = self.maneuvers.config_payload()
+        payload["supported"] = True
+        return payload
+
+    def set_maneuver_config(self, name, values):
+        """Правка пресета. Под работающим мотором — отказ (это рывок)."""
+        if self.maneuvers is None:
+            return {"ok": False, "reason": "control_not_supported"}
+        result = self.maneuvers.update_config(name, values)
+        if result.get("ok") and self.maneuver_core is not None:
+            try:
+                self.maneuver_core.save_config(self.maneuvers.config)
+            except OSError as exc:        # noqa: BLE001 — диск не должен ронять пульт
+                result["warning"] = "не сохранено на диск: %s" % exc
+        return result
+
+    def start_maneuver(self, name, now=None):
+        """Запустить манёвр: колёса встанут в углы, дальше сервер ведёт сам."""
+        if self.maneuvers is None:
+            return {"ok": False, "reason": "control_not_supported"}
+        if not self.serial_ready.is_set():
+            return {"ok": False, "reason": "serial_unavailable"}
+        status = self.drive_status(now)
+        if not status["canDrive"]:
+            return {"ok": False, "reason": status["reason"] or "drive_not_ready"}
+        if status["active"] or any(value not in (None, 0)
+                                   for value in (status.get("reportedPercent") or {}).values()):
+            return {"ok": False, "reason": "module_busy"}
+        limit = self.drive_limit_percent(now)
+        result = self.maneuvers.start(name, time.monotonic(), limit_percent=limit)
+        if result.get("ok"):
+            self._note_message("маневр «%s»: цель %.2f" % (
+                name, result["maneuver"]["target"]), time.time())
+        return result
+
+    def stop_maneuver(self, now=None):
+        """Остановить манёвр (кнопка СТОП). Тяга гасится всем колёсам сразу."""
+        if self.maneuvers is None:
+            return {"ok": False, "reason": "control_not_supported"}
+        self.maneuvers.cancel(reason="cancelled")
+        self._brake_all()
+        return {"ok": True, "maneuver": self.maneuver_status()}
+
+    def _maneuver_tick(self):
+        """Один шаг манёвра: кадры телеметрии → руление/тяга → прогресс."""
+        runner = self.maneuvers
+        if runner is None or not runner.status()["active"]:
+            return
+        wall = time.time()
+        with self.lock:
+            frames = {module: entry[0] for module, entry in self.frames.items()
+                      if entry is not None and wall - entry[1] < self.STALE_S}
+        self._maneuver_driving = True
+        try:
+            runner.tick(time.monotonic(), frames, self._maneuver_steer,
+                        self._maneuver_drive)
+        finally:
+            self._maneuver_driving = False
+        status = runner.status()
+        if status["learned"] and status["state"] == runner.DONE:
+            # Измеренная скорость — в файл: следующий прогон без тахометра
+            # поедет по ней, а не по заводской оценке.
+            try:
+                self.maneuver_core.save_config(runner.config)
+            except OSError:
+                pass
+
+    def _maneuver_steer(self, module, angle):
+        try:
+            self.steer_module(module, angle)
+        except Exception:                 # noqa: BLE001 — манёвр не должен падать
+            pass
+
+    def _maneuver_drive(self, module, percent):
+        try:
+            if module is None:
+                self.drive(percent)
+            else:
+                self.drive_module(module, percent)
+        except Exception:                 # noqa: BLE001 — см. выше
+            pass
+
+    def _cancel_maneuver(self, reason="manual"):
+        """Ручная тяга, СТОП или потеря колеса отменяют манёвр."""
+        if self.maneuvers is None or self._maneuver_driving:
+            return
+        if self.maneuvers.status()["active"]:
+            self.maneuvers.cancel(reason=reason)
 
     def _discard_pending_commands(self):
         while True:
@@ -1416,6 +1548,7 @@ class MasterSource:
                 self._note_status("warn", "колесо %s: порт %s пропал" % (lost_module, link.path))
                 # Fail closed: потеря колеса в движении гасит тягу везде —
                 # и общую, и одиночную (колесо могло ехать одно).
+                self._cancel_maneuver("module_offline")
                 if self._module_drive_active():
                     self._brake_all()
 
@@ -1433,6 +1566,7 @@ class MasterSource:
                 next_scan = time.monotonic() + self.RESCAN_S
                 self._open_new_links()
             self._fanout_commands()
+            self._maneuver_tick()
             time.sleep(0.05 if (self.links or self._spawning) else self.RETRY_S)
 
     # -------------------------------------------------------------- телеметрия #
@@ -1480,6 +1614,8 @@ class MasterSource:
         out = NoSource().read()              # АКБ и маршрут пока не передаются
         out["motors"] = motors
         out["drive"] = self.drive_status(now)
+        # Пресеты манёвров — статичная настройка, но экран рисует форму из неё.
+        out["maneuverConfig"] = self.maneuver_config()
         out["mode"] = "МАСТЕР НА СВЯЗИ" if link else None
         out["linkOk"] = link
         out["masterMessages"] = self.recent_messages(8) if hasattr(self, "messages") else []

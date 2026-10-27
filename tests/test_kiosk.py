@@ -1263,3 +1263,58 @@ def test_drive_config_api(kiosk_app, kiosk_client):
     assert kiosk_client.post('/api/kiosk_drive_config',
                              json={'action': 'limit', 'module': 'FL', 'value': 30},
                              headers=headers).status_code == 400
+
+
+def test_maneuver_api(kiosk_app, kiosk_client):
+    """Пресеты-манёвры: «метр вперёд», «90° на месте» — старт, стоп, правка чисел."""
+    class Source:
+        def __init__(self):
+            self.calls = []
+
+        def start_maneuver(self, name):
+            self.calls.append(('start', name))
+            if name == 'телепорт':
+                return {"ok": False, "reason": "invalid_maneuver"}
+            return {"ok": True, "maneuver": {"name": name, "state": "steering"}}
+
+        def stop_maneuver(self):
+            self.calls.append(('stop',))
+            return {"ok": True, "maneuver": {"state": "cancelled"}}
+
+        def set_maneuver_config(self, name, values):
+            self.calls.append(('config', name, values))
+            return {"ok": True}
+
+    source = Source()
+    kiosk_app.extensions['rc_slam'].source = source
+    headers = {'X-Robot-Control': 'steering'}
+    # Без заголовка команды — отказ: это команда движения, а не телеметрия.
+    assert kiosk_client.post('/api/kiosk_maneuver',
+                             json={'action': 'start', 'name': 'forward'}).status_code == 400
+    for body in ({}, {'action': 'start'}, {'action': 'поехали', 'name': 'forward'},
+                 {'action': 'start', 'name': 'forward', 'extra': 1}):
+        assert kiosk_client.post('/api/kiosk_maneuver', json=body,
+                                 headers=headers).status_code == 400, body
+    started = kiosk_client.post('/api/kiosk_maneuver',
+                                json={'action': 'start', 'name': 'forward'}, headers=headers)
+    assert started.status_code == 200, started.get_json()
+    assert started.get_json()['maneuver']['state'] == 'steering'
+    assert source.calls[-1] == ('start', 'forward')
+    assert kiosk_client.post('/api/kiosk_maneuver', json={'action': 'stop'},
+                             headers=headers).status_code == 200
+    assert source.calls[-1] == ('stop',)
+    refused = kiosk_client.post('/api/kiosk_maneuver',
+                                json={'action': 'start', 'name': 'телепорт'}, headers=headers)
+    assert refused.status_code == 400
+    assert refused.get_json()['reason'] == 'invalid_maneuver'
+
+    # Числа пресета правятся отдельным запросом и живут на сервере.
+    saved = kiosk_client.post('/api/kiosk_maneuver_config',
+                              json={'name': 'forward', 'values': {'distanceM': 1.5, 'percent': 10}},
+                              headers=headers)
+    assert saved.status_code == 200
+    assert source.calls[-1] == ('config', 'forward', {'distanceM': 1.5, 'percent': 10})
+    assert kiosk_client.post('/api/kiosk_maneuver_config',
+                             json={'name': 'forward'}, headers=headers).status_code == 400
+    assert kiosk_client.post('/api/kiosk_maneuver_config',
+                             json={'name': 'forward', 'values': {'distanceM': 1.5}}).status_code == 400

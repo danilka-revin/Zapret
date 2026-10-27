@@ -28,6 +28,17 @@ def isolated_estop_latch(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_maneuver_config(tmp_path, monkeypatch):
+    """Пресеты манёвров («метр вперёд», «90°») — файл во временной папке.
+
+    Иначе тест, где манёвр доехал до цели, записал бы измеренную скорость в
+    рабочий data/maneuvers.json и поменял поведение следующего запуска.
+    """
+    monkeypatch.setenv("RC_MANEUVER_CONFIG", str(tmp_path / "maneuvers.json"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def isolated_map_files(tmp_path, monkeypatch):
     """Файлы карты — во временную папку: тесты не трогают рабочий стол."""
     monkeypatch.setenv("RC_MAP_DIR", str(tmp_path / "map"))
