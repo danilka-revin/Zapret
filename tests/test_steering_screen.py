@@ -45,7 +45,7 @@ def drive_config(**overrides):
         "supported": True, "confirmed": True, "mixed": False,
         "outputMode": "servo", "tach": True, "brake": True, "stopInput": True,
         "maxPercent": 20, "limitPercent": 20,
-        "trimUs": 1500, "spanUs": 500, "pulseUs": 0,
+        "trimUs": 1500, "spanUs": 500, "pulseUs": 0, "pulsesPerRev": 1,
         "dirReverse": False, "perModule": {},
     }
     config.update(overrides)
@@ -508,18 +508,21 @@ def test_drive_panel_shows_the_confirmed_drive_setup(tmp_path):
 
 
 def test_drive_setup_is_sent_as_individual_commands(tmp_path):
-    """Настройка уходит по одной команде: шесть подряд в порт — это очередь."""
+    """Настройка уходит по одной команде: семь подряд в порт — это очередь."""
     report = run_screen(tmp_path, with_drive_config(
         payload(actions=[{"type": "drivecfg", "trim": 1620, "span": 300, "tach": "off",
-                          "brake": "on", "stop": "off", "limit": 35}])))
+                          "brake": "on", "stop": "off", "limit": 35, "ppr": 60}])))
     sent = report["driveCfgSent"]
     # Нейтраль и размах — первыми: прошивка проверяет края каждой команды.
-    assert [item["action"] for item in sent] == ["span", "trim", "tach", "brake", "stop", "limit"]
+    assert [item["action"] for item in sent] == ["span", "trim", "ppr", "tach", "brake",
+                                                 "stop", "limit"]
     assert sent[0]["value"] == 300
     assert sent[1]["value"] == 1620
-    assert sent[2]["value"] == "off"
-    assert sent[4]["value"] == "off"
-    assert sent[5]["value"] == 35
+    # Импульсов на оборот — отдельной командой m ppr: от неё зависят об/мин и путь.
+    assert sent[2]["value"] == 60
+    assert sent[3]["value"] == "off"
+    assert sent[5]["value"] == "off"
+    assert sent[6]["value"] == 35
     assert all(item["header"] == "steering" for item in sent)
     assert report["renderErrors"] == []
 
@@ -554,12 +557,78 @@ def test_drive_setup_refusal_is_explained(tmp_path):
     assert "остановите тягу" in report["driveCfg"]["status"].lower()
 
 
-def test_drive_setup_rejects_a_pulse_outside_the_servo_range(tmp_path):
-    """Нейтраль 2000 плюс размах 500 — это 2500 мкс: сервопривод ушёл бы в упор."""
+def test_drive_setup_fits_the_span_instead_of_refusing_the_neutral(tmp_path):
+    """Нейтраль 2000 плюс размах 500 — это 2500 мкс.
+
+    Раньше экран молча отказывался отправлять такую настройку, и нейтраль нельзя
+    было сдвинуть вообще. Теперь отправляется подрезанная пара: импульс остаётся
+    в 1000…2000 мкс, а человек видит, что размах уменьшен.
+    """
     report = run_screen(tmp_path, with_drive_config(
         payload(actions=[{"type": "drivecfg", "trim": 2000, "span": 500}])))
-    assert report["driveCfgSent"] == []
-    assert "1000…2000 мкс" in report["driveCfg"]["status"]
+    sent = report["driveCfgSent"]
+    actions = {item["action"]: item["value"] for item in sent}
+    assert actions["trim"] == 1950
+    assert actions["span"] == 50
+    assert "размах уменьшен" in report["driveCfg"]["status"].lower()
+
+
+def test_drive_panel_shows_pulses_per_rev_and_the_measured_rpm(tmp_path):
+    """Импульсов на оборот видно на панели: именно оно делает об/мин правдой."""
+    body = with_drive_config(payload(), pulsesPerRev=60)
+    body["data"]["motors"] = [dict(motor(m), rpm=60.0) for m in MODULES]
+    report = run_screen(tmp_path, body)
+    cfg = report["driveCfg"]
+    assert cfg["ppr"] == "60"
+    assert "импульсов на оборот 60" in cfg["status"]
+    # Рядом — то, что платы реально насчитали, чтобы было с чем сверять.
+    assert "60 об/мин" in cfg["rpmNow"]
+    assert cfg["fitDisabled"] is False
+
+
+def test_drive_fit_button_recomputes_pulses_from_the_real_rpm(tmp_path):
+    """«Один оборот в секунду — это 60 об/мин»: подбор даёт ppr 60 и уходит на платы."""
+    body = with_drive_config(payload(actions=[
+        {"type": "drivecfg-fit", "fact": 60},
+        {"type": "drivecfg-apply"}]), pulsesPerRev=1)
+    # Платы врут ровно как у оператора: 1 оборот в секунду показан как 3600.
+    body["data"]["motors"] = [dict(motor(m), rpm=3600.0) for m in MODULES]
+    report = run_screen(tmp_path, body)
+    sent = report["driveCfgSent"]
+    assert {"action": "ppr", "value": 60, "module": None, "header": "steering"} in sent
+    assert report["driveCfg"]["ppr"] == "60"
+    assert report["renderErrors"] == []
+
+
+def test_drive_fit_works_while_the_wheel_is_spinning(tmp_path):
+    """Подбор импульсов доступен под тягой: крутящееся колесо — единственный источник правды."""
+    body = with_drive_config(payload(actions=[{"type": "drivecfg-fit", "fact": 60}]),
+                             pulsesPerRev=1)
+    body["data"]["drive"].update(active=True, commandedPercent=8, canDrive=False)
+    body["data"]["motors"] = [dict(motor(m), rpm=3600.0) for m in MODULES]
+    report = run_screen(tmp_path, body)
+    cfg = report["driveCfg"]
+    # Обычная настройка заблокирована, а подбор — нет.
+    assert cfg["applyDisabled"] is True and cfg["fitDisabled"] is False
+    assert [item["action"] for item in report["driveCfgSent"]] == ["ppr"]
+    assert report["driveCfgSent"][0]["value"] == 60
+    assert "отправлено платам" in cfg["status"]
+    assert report["renderErrors"] == []
+
+
+def test_drive_ppr_control_is_off_for_firmware_without_it(tmp_path):
+    """Прошивка без ppr в телеметрии: поле выключено, команду m ppr не шлём."""
+    body = with_drive_config(payload(actions=[{"type": "drivecfg", "limit": 30}]),
+                             pulsesPerRev=None)
+    report = run_screen(tmp_path, body)
+    cfg = report["driveCfg"]
+    assert cfg["fitDisabled"] is True
+    assert [item["action"] for item in report["driveCfgSent"]] == \
+        ["span", "trim", "tach", "brake", "stop", "limit"]
+    # Без команд в статусе видно подтверждённую настройку — и что ppr прошивка
+    # не сообщает, то есть обновлять его нечем.
+    quiet = run_screen(tmp_path, with_drive_config(payload(), pulsesPerRev=None))
+    assert "нет в прошивке" in quiet["driveCfg"]["status"]
 
 
 def test_drive_setup_defaults_are_one_command(tmp_path):
