@@ -320,6 +320,10 @@ def test_server_routes_commands_by_module(simulator):
     assert backend.MasterSource._command_module(b"w FL calib\n") == "FL"
     assert backend.MasterSource._command_module(b"w ALL k\n") is None   # рассылаемая
     assert backend.MasterSource._command_module(b"t 8\n") is None
+    # Тяга одного колеса адресуется так же, как «w FL 12.5».
+    assert backend.MasterSource._command_module(b"t FL 8\n") == "FL"
+    assert backend.MasterSource._command_module(b"t rr -3\n") == "RR"
+    assert backend.MasterSource._command_module(b"t ALL 8\n") is None
     assert backend.MasterSource._command_module(b"k\n") is None
     assert backend.MasterSource._command_module(b"b\n") is None
     assert not hasattr(backend.MasterSource, '_line_module')

@@ -38,11 +38,12 @@ ids.forEach((id) => assert.equal(sideLeft[id], -90));
 const sideRight = presets.anglesFor('side-right');
 ids.forEach((id) => assert.equal(sideRight[id], 90));
 
-// Разворот на месте одной тягой невозможен: пресет не должен делать вид, что он есть.
+// Разворот на месте пресет не включает (он задаёт только углы), но честно
+// говорит, что колёса можно крутить по отдельности — это уже карточки колёс.
 const pivot = presets.byId.pivot;
 assert.equal(pivot.available, false);
 assert.equal(presets.anglesFor('pivot'), null);
-assert.match(pivot.reason, /одна тяга/);
+assert.match(pivot.reason, /по отдельности/);
 assert.match(pivot.reason, /борт/);
 
 assert.equal(presets.clampAngle(150), 100);

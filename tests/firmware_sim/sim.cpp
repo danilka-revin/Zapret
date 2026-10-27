@@ -1153,6 +1153,53 @@ static void scenario_drive_config() {
         "m reset — заводские значения");
 }
 
+// Тяга одного колеса: сервер шлёт «t FL 8» на каждый порт, а колесо берёт
+// только своё имя. Раньше на «t FL 8» плата видела второй аргумент и гасила
+// выход — то есть адресная тяга не работала бы вовсе.
+static void scenario_drive_one_wheel() {
+  calibrate_all();
+  board_fl.serial.send("t FL 8");
+  sim::run_for_ms(2);
+  CHECK(wheel_fl::drive_active && board_fl.analog[3] == DRIVE_DUTY_8,
+        "своё имя во «t FL 8» не мешает тяге: %d", board_fl.analog[3]);
+  CHECK(!wheel_fr::drive_active && board_fr.analog[3] == 0,
+        "чужое имя «t FL 8» на FR ничего не включает: %d", board_fr.analog[3]);
+  CHECK(!wheel_rr::drive_active && board_rr.analog[3] == 0, "и на RR тоже");
+
+  // Heartbeat идёт только на FL: остальные стоят, а через 650 мс FL встаёт сам.
+  for (int i = 0; i < 3; ++i) {
+    board_fl.serial.send("t FL 8");
+    sim::run_for_ms(200);
+  }
+  CHECK(wheel_fl::drive_active, "heartbeat «t FL 8» держит только FL");
+  sim::run_for_ms(700);
+  CHECK(!wheel_fl::drive_active && board_fl.analog[3] == 0, "без heartbeat FL встал по watchdog");
+
+  // Разные колёса едут в разные стороны — так и делается разворот на месте.
+  board_fl.serial.send("t FL 6");
+  board_fr.serial.send("t FR -6");
+  sim::run_for_ms(2);
+  CHECK(wheel_fl::drive_active && wheel_fr::drive_active,
+        "FL и FR едут одновременно");
+  CHECK(board_fl.level[4] != board_fr.level[4], "направления разные: FL=%d FR=%d",
+        board_fl.level[4], board_fr.level[4]);
+  CHECK(board_rl.analog[3] == 0 && board_rr.analog[3] == 0, "RL и RR стоят");
+  board_fl.serial.send("t FL 0");
+  sim::run_for_ms(2);
+  CHECK(!wheel_fl::drive_active && board_fl.analog[3] == 0, "«t FL 0» — стоп только FL");
+  CHECK(wheel_fr::drive_active, "FR продолжает ехать");
+  for (sim::Board* board : all_boards()) board->serial.send("b");
+  sim::run_for_ms(2);
+  CHECK(!wheel_fr::drive_active && board_fr.analog[3] == 0, "b — тормоз всем");
+
+  // Имя без числа и чужое неизвестное имя честно объяснены оператору.
+  board_fl.serial.send("t FL");
+  board_fl.serial.send("t FX 8");
+  sim::run_for_ms(2);
+  CHECK(has(board_fl, "Шаблон: t [FL]"), "подсказка по «t FL» без числа");
+  CHECK(has(board_fl, "неизвестный модуль FX"), "неизвестное имя колеса объяснено");
+}
+
 struct Scenario {
   const char* name;
   void (*fn)();
@@ -1194,6 +1241,7 @@ static const Scenario SCENARIOS[] = {
     {"stalled_wheel_with_pot", scenario_stalled_wheel_with_pot},
     {"pot_slope_survives_reboot", scenario_pot_slope_survives_reboot},
     {"drive_config", scenario_drive_config},
+    {"drive_one_wheel", scenario_drive_one_wheel},
 };
 
 static int run_one(const Scenario& scenario) {

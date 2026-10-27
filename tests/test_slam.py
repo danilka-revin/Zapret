@@ -701,6 +701,188 @@ def test_drive_config_is_mixed_when_the_plates_disagree():
     assert src.drive_limit_percent(now=100.2) == backend.MAX_DRIVE_PERCENT
 
 
+def test_individual_drive_targets_only_its_own_wheel():
+    """Тяга одного колеса: «t FL 8» на своё колесо, без выравнивания всех."""
+    backend = _load_backend()
+    src = _bare_master_source(backend)
+    src.drive_modules = {}
+    src.feed(_drive_frame("FL"), now=100.0)
+    src.feed(_drive_frame("FR", deg=9.0), now=100.0)      # колесо смотрит в сторону
+    src.feed(_drive_frame("RL"), now=100.0)
+    src.feed(_drive_frame("RR"), now=100.0)
+
+    status = src.drive_status(now=100.2)
+    # Общая тяга запрещена (колёса не выровнены), одиночная — нет: именно так
+    # крутят одно колесо на стенде и делают разворот на месте.
+    assert status["canDrive"] is False and status["reason"] == "steering_misaligned"
+    assert status["individual"] is True
+    assert status["perModule"]["FL"]["canDrive"] is True
+    assert set(status["perModule"]) == {"FL", "FR", "RL", "RR"}
+
+    result = src.drive_module("fl", 8, now=100.2)
+    assert result == {"ok": True, "queued": True, "module": "FL", "percent": 8,
+                      "maxPercent": 20}
+    assert src.commands.get_nowait() == b"t FL 8\n"
+    assert src.drive_status(now=100.2)["commandedModules"] == {"FL": 8}
+
+    # Разные колёса — разные значения и свои команды.
+    assert src.drive_module("FR", -6, now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"t FR -6\n"
+    assert src.drive_status(now=100.2)["commandedModules"] == {"FL": 8, "FR": -6}
+    assert src.drive_module("FL", 0, now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"t FL 0\n"
+    assert src.drive_status(now=100.2)["commandedModules"] == {"FL": 0, "FR": -6}
+
+    # Общая команда адресована всем: одиночные значения больше не значат ничего.
+    src.feed(_drive_frame("FR", deg=0.0), now=100.0)
+    assert src.drive(5, now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"t 5\n"
+    assert src.drive_status(now=100.2)["commandedModules"] == {}
+
+
+def test_individual_drive_guards():
+    backend = _load_backend()
+    src = _bare_master_source(backend)
+    src.drive_modules = {}
+    for module in ("FL", "FR", "RL", "RR"):
+        src.feed(_drive_frame(module), now=100.0)
+
+    assert src.drive_module("XX", 8, now=100.2)["reason"] == "invalid_module"
+    assert src.drive_module("FL", "abc", now=100.2)["reason"] == "invalid_drive"
+    assert src.drive_module("FL", 21, now=100.2)["reason"] == "drive_limit"
+    assert src.drive_module("FL", 21, now=100.2)["limit"] == 20
+    # Своё колесо должно быть на связи, с нулём и стоять.
+    src.feed(_drive_frame("RL", deg=0.0).replace("cal=1", "cal=0"), now=100.0)
+    assert src.drive_module("RL", 8, now=100.2)["reason"] == "not_homed"
+    src.feed(_drive_frame("RL", deg=0.0), now=100.0)
+    assert src.drive_module("RL", 8, now=103.0)["reason"] == "module_offline"
+    src.feed(_drive_frame("RL", deg=0.0), now=100.0)
+    src.frames["RL"] = (dict(src.frames["RL"][0], moving=True), 100.0)
+    assert src.drive_module("RL", 8, now=100.2)["reason"] == "module_busy"
+    assert src.commands.empty()
+
+    # Остановка колеса разрешена и «не на связи»: 0 обязан проходить всегда.
+    src.serial_ready.clear()
+    assert src.drive_module("RL", 0, now=100.2)["reason"] == "serial_unavailable"
+    src.serial_ready.set()
+    assert src.drive_module("RL", 0, now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"t RL 0\n"
+
+    # Старая прошивка без поля drive= одиночную тягу не получает.
+    legacy = _bare_master_source(backend)
+    legacy.drive_modules = {}
+    for module in ("FL", "FR", "RL", "RR"):
+        legacy.feed("@TLM mod=%s deg=0 tgt=0 moving=0 cal=1 rpm=0 fw=4" % module, now=100.0)
+    assert legacy.drive_module("FL", 8, now=100.2)["reason"] == "drive_firmware_required"
+
+    # Очередь занята — понятный отказ, а не тишина.
+    full = _bare_master_source(backend, maxsize=1)
+    full.drive_modules = {}
+    for module in ("FL", "FR", "RL", "RR"):
+        full.feed(_drive_frame(module), now=100.0)
+    full.commands.put_nowait(b"w 1\n")
+    assert full.drive_module("FL", 8, now=100.2)["reason"] == "command_queue_full"
+
+
+def test_journal_names_the_wheel_that_was_driven():
+    """В журнале видно колесо: FL вперёд и FR назад — две разные записи, не «0»."""
+    from robot_control import eventlog
+
+    eventlog.reset()
+    try:
+        slam.note_drive_command(8, "FL")
+        slam.note_drive_command(-8, "FR")
+        slam.note_drive_command(0, "FL")
+        slam.note_drive_command(0)
+        messages = [item["msg"] for item in eventlog.get_event_log().entries()]
+        assert "тяга колесо FL +8% (вперёд)" in messages
+        assert "тяга колесо FR -8% (назад)" in messages
+        assert "тяга колесо FL: 0% — тормоз" in messages
+        assert "тяга BLDC: 0% — тормоз" in messages
+        # Heartbeat того же колеса в журнал не попадает.
+        slam.note_drive_command(8, "FL")
+        assert len(eventlog.get_event_log().entries()) == 4
+    finally:
+        eventlog.reset()
+
+
+def test_steering_stays_allowed_for_a_stopped_wheel_next_to_a_driving_one():
+    backend = _load_backend()
+    src = _bare_master_source(backend)
+    src.drive_modules = {}
+    for module in ("FL", "FR", "RL", "RR"):
+        src.feed(_drive_frame(module), now=100.0)
+    assert src.drive_module("FL", 8, now=100.2)["ok"] is True
+    src.commands.get_nowait()
+    assert src.steer_module("FL", 10, now=100.2)["reason"] == "module_busy"
+    assert src.steer_module("FR", 10, now=100.2)["ok"] is True
+    # Калибровка и настройка привода — только когда не едет ни одно колесо.
+    assert src.set_drive_config("limit", 30, now=100.2)["reason"] == "module_busy"
+    assert src.calibrate_module("FR", now=100.2)["reason"] == "module_busy"
+    # Общая команда «стоп» гасит и одиночную тягу.
+    src.feed(_drive_frame("FR", deg=0.0), now=100.0)
+    assert src.drive(0, now=100.2)["ok"] is True
+    assert src.drive_status(now=100.2)["commandedModules"] == {}
+    assert src.steer_module("FL", 10, now=100.2)["ok"] is True
+
+
+def test_dispatch_individual_drive_payload_and_statuses():
+    class Source:
+        supports_drive = True
+        supports_individual_drive = True
+
+        def __init__(self, result=None):
+            self.result = result if result is not None else {"ok": True, "queued": True, "percent": 8,
+                                                             "module": "FL", "maxPercent": 20}
+            self.calls = []
+
+        def drive(self, percent):
+            self.calls.append(("all", percent))
+            return self.result
+
+        def drive_module(self, module, percent):
+            self.calls.append((module, percent))
+            return self.result
+
+    source = Source()
+    result, status = slam.dispatch_drive_command(source, {"module": "fl", "percent": 8})
+    assert status == 200 and result["ok"] is True
+    assert result["module"] == "FL" and result["percent"] == 8
+    assert source.calls == [("FL", 8)]
+    # Без модуля — прежняя общая команда.
+    result, status = slam.dispatch_drive_command(source, {"percent": -4})
+    assert status == 200 and source.calls[-1] == ("all", -4)
+
+    for body, code, reason in (
+            ({"module": "XX", "percent": 8}, 400, "invalid_module"),
+            ({"module": "FL"}, 400, "payload"),
+            ({"module": "FL", "percent": 8, "angle": 0}, 400, "payload"),
+            ({"percent": 8, "module": None}, 400, "invalid_module")):
+        result, status = slam.dispatch_drive_command(Source(), body)
+        assert (status, result["reason"]) == (code, reason), body
+
+    # Источник без адресной тяги честно отказывает, а не шлёт команду всем.
+    class AllOnly(Source):
+        supports_individual_drive = False
+
+    all_only = AllOnly()
+    result, status = slam.dispatch_drive_command(all_only, {"module": "FL", "percent": 8})
+    assert (status, result["reason"]) == (409, "control_not_supported")
+    assert all_only.calls == []
+
+    # Отказы платы → HTTP-коды.
+    for reason, code in (("module_offline", 503), ("serial_unavailable", 503),
+                         ("command_queue_full", 429), ("invalid_module", 400),
+                         ("invalid_drive", 400), ("drive_limit", 400),
+                         ("module_busy", 409), ("not_homed", 409)):
+        result, status = slam.dispatch_drive_command(
+            Source({"ok": False, "reason": reason}), {"module": "FL", "percent": 8})
+        assert result["reason"] == reason and status == code, reason
+    result, status = slam.dispatch_drive_command(
+        Source({"ok": False, "reason": "drive_limit", "limit": 12}), {"module": "FL", "percent": 8})
+    assert result["limit"] == 12
+
+
 def test_set_drive_config_commands_and_guards():
     backend = _load_backend()
     src = _bare_master_source(backend, maxsize=8)

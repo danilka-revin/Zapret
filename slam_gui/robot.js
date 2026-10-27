@@ -31,6 +31,14 @@
   let driveQueued = null;
   let driveSending = false;
   let driveFlush = Promise.resolve();
+  // Тяга отдельных колёс: у каждого свой heartbeat и своё удержание, как у
+  // руления — своя команда на своё колесо.
+  const moduleDrive = Object.create(null);          // модуль → направление (-1/0/1)
+  const moduleDrivePending = Object.create(null);   // модуль → процент в очереди
+  const moduleDriveNote = Object.create(null);      // модуль → {text, until}: отказ платы
+  let moduleDriveTimer = null;
+  let moduleDriveSending = false;
+  let moduleDriveFlush = Promise.resolve();
   const pendingSteer = Object.create(null);
   const pendingZero = Object.create(null);
   const pendingCalib = Object.create(null);
@@ -3012,6 +3020,8 @@
     else if (voltage != null) status.textContent = 'Готово · ' + mode + ' · ' + speed.value + '% ≈ ' + voltage + ' мВ · колёса выровнены.';
     else status.textContent = 'Готово · ' + (mode ? mode + ' · ' : '') + 'модули на связи, колёса выровнены.';
     status.dataset.ready = String(!!drive.canDrive && enabled);
+    // Тяга каждого колеса: своя готовность и свои кнопки в карточке.
+    ['FL', 'FR', 'RL', 'RR'].forEach((id) => renderModuleDriveCard(id, d, supported));
     renderDriveConfigPanel(d, steeringAuthorized);
   }
 
@@ -3046,6 +3056,9 @@
     driveDirection = 0;
     if (driveTimer) clearInterval(driveTimer);
     driveTimer = null;
+    // «СТОП» — это стоп всего: гасим и одиночные тяги, которые держали в
+    // карточках колёс (общая команда ниже остановит все платы).
+    releaseModuleDrive();
     if (!steeringAuthorized) {
       setText($('drive-status'), 'PIN истёк — аппаратный watchdog остановит моторы.');
       return;
@@ -3102,6 +3115,190 @@
     return driveFlush;
   }
 
+  /* ------------------- тяга каждого колеса отдельно ------------------- */
+  /* Команда уходит на сервер как {module, percent} — это адресная тяга, как
+   * {module, angle} у руления. Прошивка получает «t FL 8» и берёт только своё
+   * имя, поэтому одно колесо можно крутить, пока остальные стоят. */
+  function driveModulesInfo(d) {
+    const drive = (d || {}).drive || {};
+    const perModule = drive.perModule || {};
+    return { drive: drive, perModule: perModule };
+  }
+
+  function moduleDrivePercent(id) {
+    const slider = $('drive-module-' + id);
+    const value = Math.abs(Math.round(Number(slider && slider.value) || 8));
+    return Math.max(1, value);
+  }
+
+  function moduleDriveCanDrive(id) {
+    if (!steeringAuthorized) return false;
+    const info = driveModulesInfo(lastData || {});
+    const state = info.perModule[id];
+    return !!(state && state.canDrive);
+  }
+
+  function moduleDriveHeartbeat() {
+    const ids = Object.keys(moduleDrive);
+    if (!ids.length) {
+      if (moduleDriveTimer) clearInterval(moduleDriveTimer);
+      moduleDriveTimer = null;
+      return;
+    }
+    ids.forEach((id) => {
+      void queueModuleDrive(id, moduleDrive[id] * moduleDrivePercent(id));
+    });
+  }
+
+  function startModuleDrive(id, direction) {
+    if (!steeringAuthorized) {
+      if (window._openSteeringAuth) window._openSteeringAuth();
+      return;
+    }
+    if (!moduleDriveCanDrive(id)) {
+      renderDriveControls(lastData || {});
+      return;
+    }
+    moduleDrive[id] = direction;
+    if (!moduleDriveTimer) moduleDriveTimer = setInterval(moduleDriveHeartbeat, 200);
+    moduleDriveHeartbeat();
+  }
+
+  function releaseModuleDrive() {
+    const ids = Object.keys(moduleDrive);
+    if (!ids.length) return;
+    if (moduleDriveTimer) clearInterval(moduleDriveTimer);
+    moduleDriveTimer = null;
+    ids.forEach((id) => {
+      delete moduleDrive[id];
+      if (steeringAuthorized) void queueModuleDrive(id, 0);
+    });
+  }
+
+  function stopModuleDrive(id) {
+    delete moduleDrive[id];
+    if (steeringAuthorized) void queueModuleDrive(id, 0);
+    if (!Object.keys(moduleDrive).length && moduleDriveTimer) {
+      clearInterval(moduleDriveTimer);
+      moduleDriveTimer = null;
+    }
+  }
+
+  /* Команды уходят по одной на колесо, но между собой не смешиваются:
+   * отпустили FL — его 0 не отменяет heartbeat FR. */
+  function queueModuleDrive(id, percent) {
+    moduleDrivePending[id] = percent;
+    if (moduleDriveSending) return moduleDriveFlush;
+    moduleDriveSending = true;
+    moduleDriveFlush = (async () => {
+      while (Object.keys(moduleDrivePending).length) {
+        const module = Object.keys(moduleDrivePending)[0];
+        const target = moduleDrivePending[module];
+        delete moduleDrivePending[module];
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 1200);
+        try {
+          const response = await fetch('api/kiosk_drive', {
+            method: 'POST', cache: 'no-store', signal: controller.signal,
+            headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'drive' },
+            body: JSON.stringify({ module: module, percent: target })
+          });
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok || !body.ok) {
+            const reason = body.reason || (response.status === 401 ? 'pin_required' : 'command_failed');
+            if (response.status === 401 || reason === 'pin_required') steeringAuthorized = false;
+            noteModuleDrive(module, DRIVE_REASON_TEXT[reason] || ('Отказ плат: ' + reason));
+            if (target !== 0) {
+              // Не держим heartbeat колеса, которому сервер отказал: иначе
+              // экран будет повторять отказ пять раз в секунду.
+              delete moduleDrive[module];
+              if (!Object.keys(moduleDrive).length && moduleDriveTimer) {
+                clearInterval(moduleDriveTimer);
+                moduleDriveTimer = null;
+              }
+            }
+          }
+        } catch (error) {
+          noteModuleDrive(module, 'Связь потеряна · плата остановит это колесо по watchdog.');
+          if (target !== 0) {
+            delete moduleDrive[module];
+            if (!Object.keys(moduleDrive).length && moduleDriveTimer) {
+              clearInterval(moduleDriveTimer);
+              moduleDriveTimer = null;
+            }
+          }
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+    })().finally(() => { moduleDriveSending = false; });
+    return moduleDriveFlush;
+  }
+
+  /* Отказ по колесу держим несколько секунд: следующий опрос телеметрии
+   * перерисовал бы «стоит», и оператор не узнал бы, почему не поехало. */
+  function noteModuleDrive(id, text) {
+    moduleDriveNote[id] = { text: text, until: Date.now() + 6000 };
+    renderDriveControls(lastData || {});
+  }
+
+  /* Карточка колеса: своя тяга, свои кнопки. Серые кнопки объясняют причину —
+   * «нет связи», «нужна калибровка», «PIN». */
+  function renderModuleDriveCard(id, d, support) {
+    const stateEl = $('drive-module-state-' + id);
+    const outputEl = $('drive-module-output-' + id);
+    const slider = $('drive-module-' + id);
+    const valueEl = $('drive-module-value-' + id);
+    const back = $('drive-module-back-' + id);
+    const forward = $('drive-module-forward-' + id);
+    const stop = $('drive-module-stop-' + id);
+    if (!stateEl && !slider) return;
+    const info = driveModulesInfo(d);
+    const state = info.perModule[id] || null;
+    const motor = ((d.motors || []).find((m) => m && m.id === id)) || null;
+    const max = Math.max(1, Math.min(100, Number(info.drive.maxPercent) || 20));
+    if (slider) {
+      slider.max = String(max);
+      if (Number(slider.value) > max) slider.value = String(max);
+      if (valueEl) valueEl.textContent = String(slider.value);
+    }
+    const enabled = support && steeringAuthorized && !!state && !!info.drive.available;
+    const canDrive = enabled && !!state.canDrive;
+    const holding = moduleDrive[id] || 0;
+    const percent = motor && motor.drivePercent != null ? Number(motor.drivePercent) : null;
+    const outputMv = motor && motor.driveOutputMv != null ? Number(motor.driveOutputMv) : null;
+    const tach = motor ? motor.tach : null;
+    const rpm = motor && motor.rpm != null ? Number(motor.rpm) : null;
+    if (slider) slider.disabled = !canDrive;
+    if (back) back.disabled = !canDrive;
+    if (forward) forward.disabled = !canDrive;
+    if (stop) stop.disabled = !enabled;
+    const card = stateEl && stateEl.closest ? stateEl.closest('.steer-drive') : null;
+    if (card) card.dataset.active = String(!!holding || (percent != null && percent !== 0));
+
+    // Отказ платы (если он был только что) важнее текущего состояния.
+    const note = moduleDriveNote[id];
+    if (note && note.until <= Date.now()) delete moduleDriveNote[id];
+    const noteText = note && note.until > Date.now() ? note.text : '';
+    let text;
+    if (noteText) text = noteText;
+    else if (!support) text = 'нет тяги на этом экране';
+    else if (!steeringAuthorized) text = 'нужен PIN';
+    else if (!state) text = 'нет телеметрии';
+    else if (!state.canDrive) text = DRIVE_REASON_TEXT[state.reason] || 'не готово';
+    else if (percent != null && percent !== 0) {
+      text = (percent > 0 ? 'вперёд ' : 'назад ') + Math.abs(percent) + '%';
+    } else text = 'стоит';
+    if (stateEl) stateEl.textContent = text;
+    if (outputEl) {
+      const parts = [];
+      if (outputMv != null) parts.push(outputMv + ' мВ');
+      if (tach === false) parts.push('rpm нет');
+      else if (rpm != null) parts.push(Math.round(rpm) + ' об/мин');
+      outputEl.textContent = parts.length ? parts.join(' · ') : '—';
+    }
+  }
+
   function initSteeringControls() {
     const panel = $('swipe-motors-view');
     if (!panel) return;
@@ -3127,6 +3324,33 @@
     const driveStopButton = $('drive-stop');
     if (driveStopButton) driveStopButton.addEventListener('click', () => { void stopDrive(); });
 
+    // Тяга каждого колеса: удержание кнопки в карточке, свой предел скорости
+    // и свой стоп — ровно как «Повернуть» у руля, только удерживаем.
+    ids.forEach((id) => {
+      const speed = $('drive-module-' + id);
+      if (speed) {
+        speed.addEventListener('input', () => {
+          setText($('drive-module-value-' + id), String(speed.value));
+          if (moduleDrive[id]) void queueModuleDrive(id, moduleDrive[id] * moduleDrivePercent(id));
+        });
+      }
+      const bindHold = (buttonId, direction) => {
+        const button = $(buttonId);
+        if (!button) return;
+        button.addEventListener('pointerdown', (event) => {
+          event.preventDefault();
+          startModuleDrive(id, direction);
+          try { button.setPointerCapture(event.pointerId); } catch (error) {}
+        });
+        button.addEventListener('click', (event) => event.preventDefault());
+        button.addEventListener('contextmenu', (event) => event.preventDefault());
+      };
+      bindHold('drive-module-back-' + id, -1);
+      bindHold('drive-module-forward-' + id, 1);
+      const stopButton = $('drive-module-stop-' + id);
+      if (stopButton) stopButton.addEventListener('click', () => stopModuleDrive(id));
+    });
+
     // Настройка привода: ползунки показывают значение сразу, платы получают
     // её одной кнопкой — и только при выключенной тяге.
     const cfgApply = $('drive-cfg-apply');
@@ -3140,11 +3364,12 @@
       if (!slider) return;
       slider.addEventListener('input', () => setText($(out), String(slider.value) + suffix));
     });
-    window.addEventListener('pointerup', releaseDrive);
-    window.addEventListener('pointercancel', releaseDrive);
-    window.addEventListener('blur', releaseDrive);
-    window.addEventListener('pagehide', releaseDrive);
-    document.addEventListener('visibilitychange', () => { if (document.hidden) releaseDrive(); });
+    const releaseAll = () => { releaseDrive(); releaseModuleDrive(); };
+    window.addEventListener('pointerup', releaseAll);
+    window.addEventListener('pointercancel', releaseAll);
+    window.addEventListener('blur', releaseAll);
+    window.addEventListener('pagehide', releaseAll);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
 
     // Не даём горизонтальному движению по слайдеру закрыть swipe-панель.
     ['pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mouseup'].forEach((name) => {

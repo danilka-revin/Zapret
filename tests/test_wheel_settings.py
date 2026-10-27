@@ -93,6 +93,12 @@ def test_same_firmware_name_can_be_manually_assigned_and_commanded():
     src.commands.put(b'w RL calib\n')
     src._fanout_commands()
     assert src.links['/dev/back'].commands.get_nowait() == b'w calib\n'
+    # Тяга одного колеса: «t FR 8» уходит только на порт FR и без имени —
+    # прошивка ждёт «t 8» и на «t FR 8» второй аргумент считает ошибкой.
+    src.commands.put(b't FR 8\n')
+    src._fanout_commands()
+    assert src.links['/dev/right'].commands.get_nowait() == b't 8\n'
+    assert src.links['/dev/back'].commands.empty()
     src.commands.put(b'b\n')
     src._fanout_commands()
     assert all(link.commands.get_nowait() == b'b\n' for link in src.links.values())

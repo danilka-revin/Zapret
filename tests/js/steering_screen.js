@@ -251,7 +251,7 @@ global.fetch = async (url, init) => {
     return jsonResponse({ ok: true, queued: true, action: body.action }, 200);
   }
   if (/kiosk_drive|api\/drive/.test(text)) {
-    drives.push({ percent: body.percent });
+    drives.push({ percent: body.percent, module: body.module === undefined ? null : body.module });
     if (payload.driveRefuse) return jsonResponse({ ok: false, reason: payload.driveRefuse }, 409);
     return jsonResponse({ ok: true, percent: body.percent, maxPercent: 20 }, 200);
   }
@@ -405,6 +405,27 @@ function findPreset(id) {
       await flush(1);
       global.dispatchEvent({ type: 'pointerup' });
       await flush(action.rounds || 3);
+    } else if (action.type === 'wheel-drive') {
+      // Удержание «вперёд/назад» в карточке колеса, как у руления: нажали,
+      // подождали heartbeat, отпустили.
+      const id = String(action.id || 'FL');
+      if (action.percent !== undefined) {
+        const speed = byId('drive-module-' + id);
+        speed.fire('pointerdown', { pointerId: 1 });
+        speed.value = String(action.percent);
+        speed.fire('input');
+        await flush(1);
+      }
+      const button = byId('drive-module-' + (action.direction < 0 ? 'back-' : 'forward-') + id);
+      button.fire('pointerdown', { pointerId: 1 });
+      await flush(action.rounds || 2);
+      if (action.keep !== true) {
+        global.dispatchEvent({ type: 'pointerup' });
+        await flush(action.rounds || 3);
+      }
+    } else if (action.type === 'wheel-stop') {
+      byId('drive-module-stop-' + String(action.id || 'FL')).fire('click');
+      await flush(3);
     } else if (action.type === 'stop') {
       byId('drive-stop').fire('click');
       await flush(3);
@@ -455,6 +476,16 @@ function findPreset(id) {
     driveStatus: byId('drive-status').textContent,
     driveSpeedMax: byId('drive-speed').max,
     rpmText: ['FL', 'FR', 'RL', 'RR'].map((id) => byId('rpm-' + id).textContent),
+    wheelDrive: ['FL', 'FR', 'RL', 'RR'].map((id) => ({
+      id,
+      state: byId('drive-module-state-' + id).textContent,
+      output: byId('drive-module-output-' + id).textContent,
+      sliderMax: byId('drive-module-' + id).max,
+      sliderDisabled: !!byId('drive-module-' + id).disabled,
+      backDisabled: !!byId('drive-module-back-' + id).disabled,
+      forwardDisabled: !!byId('drive-module-forward-' + id).disabled,
+      stopDisabled: !!byId('drive-module-stop-' + id).disabled,
+    })),
     driveCfg: {
       output: byId('drive-cfg-output').value,
       tach: byId('drive-cfg-tach').value,

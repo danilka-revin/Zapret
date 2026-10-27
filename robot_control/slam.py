@@ -135,25 +135,31 @@ _last_drive_percent: float | None = None
 _last_drive_lock = threading.Lock()
 
 
-def note_drive_command(percent: float) -> None:
+def note_drive_command(percent: float, module: str = "") -> None:
     """Записать ступень тяги (0 — тормоз), а не каждый heartbeat удержания.
 
     Кнопку держат, и команда уходит 5 раз в секунду; в журнале отражается
     смена ступени, то есть реальное действие оператора. Повторы внутри
-    ``eventlog`` сворачиваются в счётчик ``×N``.
+    ``eventlog`` сворачиваются в счётчик ``×N``. У одиночной тяги ступень
+    своя на каждое колесо — иначе FL вперёд и FR назад выглядели бы одним
+    «0», и в журнале не осталось бы, что именно крутили.
     """
     global _last_drive_percent
     step = round(float(percent))
+    module = str(module or "").upper()
+    key = (module, step)
     with _last_drive_lock:
-        if _last_drive_percent == step:
+        if _last_drive_percent == key:
             return
-        _last_drive_percent = step
+        _last_drive_percent = key
+    # В журнале видно, что именно крутили: «колесо FL» или «BLDC» (все четыре).
+    label = ("колесо " + module) if module else "BLDC"
     if step == 0:
-        eventlog.record("info", "тяга 0% — тормоз BLDC", source="тяга")
+        eventlog.record("info", "тяга %s: 0%% — тормоз" % label, source="тяга")
     else:
         eventlog.record(
             "ok",
-            "тяга %+d%% (%s)" % (step, "вперёд" if step > 0 else "назад"),
+            "тяга %s %+d%% (%s)" % (label, step, "вперёд" if step > 0 else "назад"),
             source="тяга",
         )
 
@@ -171,6 +177,7 @@ COMMAND_REASON_TEXT = {
     "firmware_update_required": "прошивка плат не умеет настройку тяги",
     "estop": "E-STOP: движение заблокировано, снимите защёлку с PIN",
     "control_not_supported": "источник данных не умеет адресное управление",
+    "drive_firmware_required": "прошивка плат не умеет тягу (нет поля drive=)",
     "module_offline": "модуль не на связи",
     "serial_unavailable": "нет связи по UART",
     "command_queue_full": "очередь команд занята",
@@ -326,6 +333,9 @@ def steering_control_info(source):
     return {
         "available": bool(getattr(source, "supports_individual_steer", False)),
         "source": getattr(source, "name", "unknown"),
+        # Тяга каждого колеса отдельно: если источника нет, экран не рисует
+        # кнопки «вперёд/назад» в карточках колёс.
+        "individualDrive": bool(getattr(source, "supports_individual_drive", False)),
         "zeroMode": "opto" if calibration else "manual",
         "optoUsed": calibration,
         "calibration": calibration,
@@ -565,7 +575,12 @@ def release_estop():
 
 
 def dispatch_drive_command(source, body):
-    """Проверить ограниченную команду тяги (отрицательная величина — назад)."""
+    """Проверить ограниченную команду тяги (отрицательная величина — назад).
+
+    Одна и та же ручка работает для всех колёс (``{"percent": 8}``) и для
+    одного колеса (``{"module": "FL", "percent": 8}``): второй вариант —
+    адресная команда, как ``/api/kiosk_steer`` для руля.
+    """
     result, status = _drive_command(source, body)
     if not result.get("ok"):
         note_command_rejected("тяга", str(result.get("reason", "")))
@@ -573,7 +588,16 @@ def dispatch_drive_command(source, body):
 
 
 def _drive_command(source, body):
-    if not isinstance(body, dict) or set(body) != {"percent"}:
+    if not isinstance(body, dict):
+        return {"ok": False, "reason": "payload"}, 400
+    keys = set(body)
+    module = None
+    if keys == {"module", "percent"}:
+        raw_module = body.get("module")
+        if not isinstance(raw_module, str) or raw_module.upper() not in {"FL", "FR", "RL", "RR"}:
+            return {"ok": False, "reason": "invalid_module"}, 400
+        module = raw_module.upper()
+    elif keys != {"percent"}:
         return {"ok": False, "reason": "payload"}, 400
     raw_percent = body.get("percent")
     if isinstance(raw_percent, bool):
@@ -589,25 +613,38 @@ def _drive_command(source, body):
     limit = _drive_limit(source)
     if abs(percent) > limit:
         return {"ok": False, "reason": "drive_limit", "limit": limit}, 400
-    if not getattr(source, "supports_drive", False):
-        return {"ok": False, "reason": "control_not_supported"}, 409
-    command = getattr(source, "drive", None)
+    if module is not None:
+        # Одиночная тяга — только там, где каждое колесо на своём порту.
+        if not getattr(source, "supports_individual_drive", False):
+            return {"ok": False, "reason": "control_not_supported"}, 409
+        command = getattr(source, "drive_module", None)
+    else:
+        if not getattr(source, "supports_drive", False):
+            return {"ok": False, "reason": "control_not_supported"}, 409
+        command = getattr(source, "drive", None)
     if not callable(command):
         return {"ok": False, "reason": "control_not_supported"}, 409
-    result = command(percent)
+    result = command(module, percent) if module is not None else command(percent)
     if result.get("ok"):
-        note_drive_command(result.get("percent", round(percent)))
-        return {"ok": True, "queued": True, "percent": result.get("percent", round(percent)),
-                "maxPercent": result.get("maxPercent", limit)}, 200
+        applied = result.get("percent", round(percent))
+        note_drive_command(applied, module or "")
+        answer = {"ok": True, "queued": True, "percent": applied,
+                  "maxPercent": result.get("maxPercent", limit)}
+        if module is not None:
+            answer["module"] = module
+        return answer, 200
     reason = result.get("reason", "command_failed")
     status = 409
     if reason in {"serial_unavailable", "module_offline"}:
         status = 503
     elif reason == "command_queue_full":
         status = 429
-    elif reason in {"invalid_drive", "drive_limit", "payload"}:
+    elif reason in {"invalid_drive", "drive_limit", "payload", "invalid_module"}:
         status = 400
-    return {"ok": False, "reason": reason}, status
+    failure = {"ok": False, "reason": reason}
+    if reason == "drive_limit":
+        failure["limit"] = result.get("limit", limit)
+    return failure, status
 
 
 #: Статика интерфейса: имя файла → endpoint. Отдаётся только этот список.
