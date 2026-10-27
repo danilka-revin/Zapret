@@ -416,6 +416,9 @@ class _WheelLink:
         self.rx_discard = False
         self.module = None               # опознанное колесо (FL/FR/RL/RR)
         self.commands = queue.Queue(maxsize=16)
+        #: Открытый pyserial-порт. Нужен, чтобы освободить USB перед
+        #: прошивкой платы (avrdude не может работать с занятым портом).
+        self.serial = None
 
 
 #: Порт не занимался межпроцессным замком: callback не передан (отдельный
@@ -544,6 +547,39 @@ class MasterSource:
             self._note_status("info", "колёса: автопрошивка закончена — подключаюсь к платам")
         except Exception:                 # noqa: BLE001 — журнал не критичен
             pass
+
+    def suspend_ports(self, wait_s=2.0):
+        """Освободить USB-порты под прошивку: закрыть их и не открывать заново.
+
+        Прошивка (avrdude/arduino-cli) не может открыть порт, который читает
+        программа, поэтому перед кнопкой «Прошить модули» порты отпускаются, а
+        после — снова подключаются (``resume_ports``). Движение к этому моменту
+        уже остановлено: тягу снимает вызывающий.
+        """
+        import time as _time
+
+        self._hold_ports = True
+        with self.lock:
+            links = list(self.links.values())
+        for link in links:
+            device = getattr(link, "serial", None)
+            if device is None:
+                continue
+            try:
+                device.close()
+            except Exception:             # noqa: BLE001 — порт уже закрыт
+                pass
+        deadline = _time.monotonic() + max(0.0, float(wait_s))
+        while _time.monotonic() < deadline:
+            with self.lock:
+                if not self.links:
+                    break
+            _time.sleep(0.05)
+        try:
+            self._note_status("info", "колёса: порты освобождены под прошивку плат")
+        except Exception:                 # noqa: BLE001
+            pass
+        return True                       # порты на паузе до resume_ports()
 
     @staticmethod
     def _port_error_hint(exc):
@@ -1531,6 +1567,7 @@ class MasterSource:
             # exclusive: второй процесс не может открыть тот же UART и читать
             # его вперемешку (строки телеметрии рвутся, команды теряются).
             dev = serial.Serial(link.path, self.baud, timeout=0.2, exclusive=True)
+            link.serial = dev
             with self.lock:
                 self.links[link.path] = link
             # Ждём свежую телеметрию после возможного сброса при открытии.

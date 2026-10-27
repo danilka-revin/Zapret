@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,9 @@ def flashing_host(tmp_path, monkeypatch):
     monkeypatch.delenv("RC_FIRMWARE_AUTOFLASH", raising=False)
     monkeypatch.delenv("RC_FIRMWARE_VERIFY", raising=False)
     monkeypatch.delenv("RC_FIRMWARE_AUTOCLI", raising=False)
+    # Ни apt, ни скачивание arduino-cli в тестах не запускаются: установка
+    # инструментов проверяется отдельными тестами (tests/test_avr_upload.py).
+    monkeypatch.setenv("RC_FIRMWARE_INSTALL", "0")
 
     class Host:
         root = tmp_path
@@ -255,14 +259,40 @@ def test_failed_upload_is_reported(flashing_host, monkeypatch):
     assert "прошивка не удалась" in result.stderr
 
 
-def test_without_arduino_cli_the_boards_are_left_alone(flashing_host, monkeypatch):
+def test_without_any_tool_the_boards_are_left_alone(flashing_host, monkeypatch):
     flashing_host.assign("RC_WHEEL_FL_PORT=%s" % flashing_host.port("port-fl"))
-    # PATH без arduino-cli: остаются только системные утилиты.
+    # PATH без arduino-cli и без avr-gcc: остаются только системные утилиты.
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("RC_FIRMWARE_AUTOCLI", "0")
     result = run_flash()
     assert result.returncode == 2
-    assert "arduino-cli не установлен" in result.stderr
+    assert "нечем прошивать" in result.stderr
+    # Главная подсказка — путь, который работает в России и без arduino-cli.
+    assert "sudo apt install gcc-avr avr-libc avrdude" in result.stderr
     assert "motor_wheel_*.ino" in result.stderr
+
+
+def test_flashing_goes_through_avr_gcc_when_arduino_cli_is_missing(flashing_host,
+                                                                  monkeypatch, tmp_path):
+    """Без arduino-cli скрипт выбирает avr-gcc + avrdude, а не сдаётся."""
+    flashing_host.assign("RC_WHEEL_FL_PORT=%s" % flashing_host.port("port-fl"))
+    shims = tmp_path / "avr"
+    shims.mkdir()
+    for name in ("avr-gcc", "avr-g++", "avr-objcopy", "avr-size", "avrdude"):
+        tool = shims / name
+        tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        tool.chmod(0o755)
+    core = tmp_path / "ArduinoCore-avr"
+    (core / "cores" / "arduino").mkdir(parents=True)
+    (core / "cores" / "arduino" / "Arduino.h").write_text("// core\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", "%s%s/usr/bin:/bin" % (shims, os.pathsep))
+    monkeypatch.setenv("RC_ARDUINO_CORE", str(core))
+    monkeypatch.setenv("RC_FIRMWARE_BACKEND", "avr")
+    result = run_flash()
+    # Сборка на пустышках не пройдёт — важно, что скрипт пошёл родным путём,
+    # а не отправил человека на закрытый сайт Arduino.
+    assert "прошиваю без arduino-cli: avr-gcc + avrdude" in result.stdout
+    assert result.returncode == 1
 
 
 def test_switch_off_disables_autoflashing(flashing_host, monkeypatch):
@@ -291,7 +321,8 @@ def test_summary_explains_every_outcome():
     assert "актуальной" in firmware_flash.summarize(
         {"code": 0, "output": "[firmware] прошивать нечего: все назначенные платы уже "
                               "на прошивке fw=6."})
-    assert "arduino-cli" in firmware_flash.summarize({"code": 2})
+    # Код 2 — «нечем прошивать»: подсказка про apt, а не про закрытый сайт Arduino.
+    assert "gcc-avr" in firmware_flash.summarize({"code": 2})
     assert "порты" in firmware_flash.summarize({"code": 3})
     assert "не все" in firmware_flash.summarize({"code": 1})
     assert firmware_flash.summarize({}) == ""
@@ -429,7 +460,10 @@ def test_installer_downloads_the_official_archive(tmp_path, monkeypatch):
     assert result.returncode == 0, result.stdout + result.stderr
     assert (target / "arduino-cli").is_file()
     calls = log.read_text(encoding="utf-8")
-    assert "downloads.arduino.cc/arduino-cli" in calls
+    # Сначала GitHub: downloads.arduino.cc в России блокирован.
+    assert "github.com/arduino/arduino-cli/releases" in calls
+    assert calls.index("github.com") < calls.index("downloads.arduino.cc") \
+        if "downloads.arduino.cc" in calls else True
     assert "core install arduino:avr" in calls
 
 
@@ -575,3 +609,129 @@ def test_update_leaves_a_flash_request(tmp_path):
     request = firmware_flash.pending(manager.root)
     assert request is not None
     assert json.loads((tmp_path / "var" / "firmware-pending.json").read_text(encoding="utf-8"))
+
+# ------------------------------------- кнопка «Прошить модули» на экране --- #
+# Прошивка по кнопке идёт в фоне: экран не должен замирать на минуту, а порты
+# колёс нужно освободить — их держит тот же процесс, что показывает экран.
+
+
+def _flash_project(tmp_path: Path, body: str) -> Path:
+    """Свой «проект» с одним скриптом прошивки: настоящий скрипт не запускаем."""
+    project = tmp_path / "project"
+    (project / "scripts").mkdir(parents=True)
+    (project / "var").mkdir(parents=True)
+    script = project / "scripts" / "flash_firmware.sh"
+    script.write_text(body, encoding="utf-8")
+    script.chmod(0o755)
+    return project
+
+
+def _wait_flash(root: Path, timeout: float = 10.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        state = firmware_flash.flash_state(root)
+        if state["status"] != "busy":
+            return state
+        time.sleep(0.05)
+    raise AssertionError("прошивка не закончилась за %.1f с" % timeout)
+
+
+def test_flash_state_is_idle_without_a_run(tmp_path):
+    state = firmware_flash.flash_state(tmp_path)
+    assert state["status"] == "idle"
+    assert state["pct"] == 0 and state["lines"] == []
+    assert firmware_flash.running() is False
+
+
+def test_button_flash_reports_progress_then_done(tmp_path):
+    project = _flash_project(tmp_path,
+                             "#!/usr/bin/env bash\n"
+                             "echo '[firmware] прошиваю FL → /dev/ttyUSB0…'\n"
+                             "echo '[firmware] колесо FL: прошито (/dev/ttyUSB0)'\n"
+                             "echo '[firmware] итог: прошито 1, уже было актуально 3, "
+                             "ошибок 0, без порта 0, нет устройства 0.'\n")
+    started = firmware_flash.start_flash(None, root=project)
+    assert started["started"] is True and started["status"] == "busy"
+    state = _wait_flash(project)
+    assert state["status"] == "done"
+    assert state["pct"] == 100
+    assert "прошито 1" in state["summary"]
+    assert any("прошито" in line for line in state["lines"])
+
+
+def test_button_flash_explains_a_failure(tmp_path):
+    project = _flash_project(tmp_path,
+                             "#!/usr/bin/env bash\n"
+                             "echo '[firmware] колесо FL: прошивка не удалась (/dev/ttyUSB0)' >&2\n"
+                             "exit 1\n")
+    firmware_flash.start_flash(None, root=project)
+    state = _wait_flash(project)
+    assert state["status"] == "error"
+    assert state["error"]
+    assert any("не удалась" in line for line in state["lines"])
+
+
+def test_second_click_does_not_open_the_same_ports_twice(tmp_path, monkeypatch):
+    """Пока идёт прошивка, повторный запуск возвращает started=False."""
+    class Busy:
+        @staticmethod
+        def is_alive():
+            return True
+
+    monkeypatch.setattr(firmware_flash, "_run_thread", Busy())
+    result = firmware_flash.start_flash(None, root=tmp_path)
+    assert result["started"] is False
+    assert firmware_flash.running() is True
+
+
+def test_flash_frees_the_wheel_ports_and_gives_them_back(tmp_path):
+    """Перед прошивкой порты освобождаются, после — возвращаются колёсам."""
+    project = _flash_project(tmp_path, "#!/usr/bin/env bash\nexit 0\n")
+    calls = []
+
+    class Source:
+        name = "master"
+
+        def stop_drive(self):
+            calls.append("stop_drive")
+
+        def stop_maneuver(self):
+            calls.append("stop_maneuver")
+
+        def suspend_ports(self):
+            calls.append("suspend_ports")
+
+        def resume_ports(self):
+            calls.append("resume_ports")
+
+    firmware_flash.start_flash(Source(), root=project)
+    state = _wait_flash(project)
+    assert state["status"] == "done"
+    assert calls == ["stop_drive", "stop_maneuver", "suspend_ports", "resume_ports"]
+
+
+def test_ports_are_given_back_even_when_flashing_fails(tmp_path):
+    project = _flash_project(tmp_path, "#!/usr/bin/env bash\nexit 7\n")
+    calls = []
+
+    class Source:
+        def suspend_ports(self):
+            calls.append("suspend_ports")
+
+        def resume_ports(self):
+            calls.append("resume_ports")
+
+    firmware_flash.start_flash(Source(), root=project)
+    assert _wait_flash(project)["status"] == "error"
+    assert calls == ["suspend_ports", "resume_ports"]
+
+
+def test_interrupted_flash_is_not_reported_as_running(tmp_path, monkeypatch):
+    """Программу перезапустили посреди прошивки — экран не должен врать «идёт»."""
+    path = firmware_flash.state_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"status": "busy", "pct": 40}), encoding="utf-8")
+    monkeypatch.setattr(firmware_flash, "_run_thread", None)
+    state = firmware_flash.flash_state(tmp_path)
+    assert state["status"] == "error"
+    assert "перезапуск" in state["error"]

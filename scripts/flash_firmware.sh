@@ -22,15 +22,19 @@
 # повторяется, чтобы не ждать неотвечающую плату при каждом старте — лечится
 # --force.
 #
-# arduino-cli нужен для сборки и загрузки. Если его нет, скрипт один раз
-# пытается поставить его сам (scripts/install_arduino_cli.sh, без sudo), а при
-# неудаче честно говорит, что прошить можно копиями motor_wheel_*.ino с рабочего
-# стола через Arduino IDE.
+# Чем шить — выбирается сам, по порядку:
+#   1) arduino-cli, если он есть;
+#   2) scripts/avr_upload.py — сборка обычным avr-gcc и загрузка avrdude, без
+#      arduino-cli вообще (важно там, где сайт Arduino недоступен: ядро AVR и
+#      библиотека Servo качаются с GitHub, а gcc-avr/avrdude ставятся из apt);
+#   3) если нет ни того, ни другого — скрипт пробует доставить avr-gcc/avrdude
+#      (`apt install gcc-avr avr-libc avrdude`) и arduino-cli (GitHub);
+#   4) последний вариант — копии motor_wheel_*.ino с рабочего стола в Arduino IDE.
 #
 # Коды возврата:
 #   0  всё прошито (или прошивать нечего)
 #   1  хотя бы одна плата не прошилась
-#   2  нет arduino-cli — прошивка невозможна (шаг пропускается, не ошибка)
+#   2  нечем прошивать: нет ни arduino-cli, ни avr-gcc/avrdude (шаг пропускается)
 #   3  ни одного порта не выбрано в настройках
 #
 # Флаги: --check (только показать план), --force (прошить даже актуальные),
@@ -255,37 +259,89 @@ if [[ $CHECK -eq 1 ]]; then
   exit 0
 fi
 
-# --- arduino-cli: есть, а если нет — попробовать поставить --------------------
-if ! command -v arduino-cli >/dev/null 2>&1 && [[ -x "$CLI_DIR/arduino-cli" ]]; then
-  PATH="$CLI_DIR:$PATH"
-fi
-if ! command -v arduino-cli >/dev/null 2>&1; then
-  if [[ "${RC_FIRMWARE_AUTOCLI:-1}" != "0" && -f "$ROOT/scripts/install_arduino_cli.sh" ]]; then
-    say "arduino-cli не найден — ставлю сам (без sudo, в $CLI_DIR)…"
-    if bash "$ROOT/scripts/install_arduino_cli.sh" >>"$LOG_FILE" 2>&1; then
-      PATH="$CLI_DIR:$PATH"
-      say "arduino-cli установлен: $(command -v arduino-cli)"
-    else
-      tail -n 5 "$LOG_FILE" | while IFS= read -r line; do warn "  $line"; done
-    fi
+# --- чем шить: arduino-cli или avr-gcc+avrdude ---------------------------------
+PYTHON="${ROOT}/.venv/bin/python"
+[[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || true)"
+AVR_UPLOAD="$ROOT/scripts/avr_upload.py"
+BACKEND=""
+
+cli_ready() {
+  [[ -x "$CLI_DIR/arduino-cli" ]] && PATH="$CLI_DIR:$PATH"
+  command -v arduino-cli >/dev/null 2>&1
+}
+# Готов ли родной путь: avr-gcc + avrdude (ядро докачается при первой прошивке).
+avr_ready() {
+  [[ -n "$PYTHON" && -f "$AVR_UPLOAD" ]] || return 1
+  "$PYTHON" "$AVR_UPLOAD" --check >/dev/null 2>&1
+}
+
+if [[ "${RC_FIRMWARE_BACKEND:-auto}" == "cli" ]]; then
+  cli_ready && BACKEND="cli"
+elif [[ "${RC_FIRMWARE_BACKEND:-auto}" == "avr" ]]; then
+  avr_ready && BACKEND="avr"
+else
+  if cli_ready; then
+    BACKEND="cli"
+  elif avr_ready; then
+    BACKEND="avr"
   fi
 fi
-if ! command -v arduino-cli >/dev/null 2>&1; then
-  warn "arduino-cli не установлен — платы не прошиты автоматически."
-  warn "варианты: подключите интернет (скрипт поставит его сам) или откройте"
-  warn "motor_wheel_*.ino с рабочего стола в Arduino IDE и нажмите «Загрузить»."
+
+# Ничего не готово — попробовать доставить инструменты (это одноразово).
+# RC_FIRMWARE_INSTALL отвечает только за apt-пакеты gcc-avr/avr-libc/avrdude,
+# RC_FIRMWARE_AUTOCLI — только за arduino-cli: их можно включать по отдельности.
+if [[ -z "$BACKEND" && "${RC_FIRMWARE_INSTALL:-1}" != "0" ]]; then
+  if [[ -n "$PYTHON" && -f "$AVR_UPLOAD" ]]; then
+    say "нет ни arduino-cli, ни avr-gcc — ставлю gcc-avr/avr-libc/avrdude (apt)…"
+    "$PYTHON" "$AVR_UPLOAD" --install >>"$LOG_FILE" 2>&1 || true
+    avr_ready && BACKEND="avr"
+  fi
+fi
+if [[ -z "$BACKEND" && "${RC_FIRMWARE_AUTOCLI:-1}" != "0" \
+      && -f "$ROOT/scripts/install_arduino_cli.sh" ]]; then
+  say "arduino-cli не найден — пробую поставить с GitHub (без sudo)…"
+  if bash "$ROOT/scripts/install_arduino_cli.sh" >>"$LOG_FILE" 2>&1; then
+    cli_ready && BACKEND="cli"
+  else
+    tail -n 5 "$LOG_FILE" | while IFS= read -r line; do warn "  $line"; done
+  fi
+fi
+
+if [[ -z "$BACKEND" ]]; then
+  warn "нечем прошивать: нет ни arduino-cli, ни avr-gcc/avrdude."
+  warn "самый простой путь (работает в России, без сайта Arduino):"
+  warn "  sudo apt install gcc-avr avr-libc avrdude"
+  warn "  ./scripts/flash_firmware.sh            # ядро AVR докачается с GitHub"
+  warn "или вручную: motor_wheel_*.ino с рабочего стола в Arduino IDE."
   for line in "${plan[@]}"; do warn "  $line"; done
   exit 2
 fi
-# Ядро AVR должно быть установлено: без него compile упадёт «Platform not installed».
-if ! arduino-cli core list 2>/dev/null | grep -q '^arduino:avr'; then
-  say "ставлю ядро arduino:avr для arduino-cli…"
-  if ! arduino-cli core install arduino:avr >>"$LOG_FILE" 2>&1; then
-    warn "не удалось поставить ядро arduino:avr (нужен интернет) — см. $LOG_FILE"
-    warn "платы не прошиты; повторите ./scripts/flash_firmware.sh, когда будет сеть."
-    exit 2
+
+if [[ "$BACKEND" == "cli" ]]; then
+  say "прошиваю через arduino-cli ($FQBN)"
+  # Ядро AVR должно быть установлено: без него compile упадёт «Platform not installed».
+  if ! arduino-cli core list 2>/dev/null | grep -q '^arduino:avr'; then
+    say "ставлю ядро arduino:avr для arduino-cli…"
+    if ! arduino-cli core install arduino:avr >>"$LOG_FILE" 2>&1; then
+      warn "не удалось поставить ядро arduino:avr — см. $LOG_FILE"
+      warn "попробуйте без arduino-cli: sudo apt install gcc-avr avr-libc avrdude"
+      exit 2
+    fi
   fi
+else
+  say "прошиваю без arduino-cli: avr-gcc + avrdude ($(command -v avr-gcc || echo avr-gcc))"
 fi
+
+# Собрать и залить одну плату выбранным способом.
+flash_board() {
+  local module="$1" port="$2" dir
+  dir="$(sketch_dir "$module")"
+  if [[ "$BACKEND" == "cli" ]]; then
+    arduino-cli compile --upload -p "$port" --fqbn "$FQBN" "$dir" >>"$LOG_FILE" 2>&1
+    return $?
+  fi
+  "$PYTHON" "$AVR_UPLOAD" --sketch-dir "$dir" --port "$port" >>"$LOG_FILE" 2>&1
+}
 
 # --- прошивка -----------------------------------------------------------------
 flashed=0 failed=0
@@ -293,8 +349,7 @@ flashed_modules=()
 for record in "${todo[@]}"; do
   IFS='|' read -r module port real hash why <<<"$record"
   say "прошиваю $module → $port${why:+ ($why)}…"
-  if arduino-cli compile --upload -p "$port" --fqbn "$FQBN" \
-       "$(sketch_dir "$module")" >>"$LOG_FILE" 2>&1; then
+  if flash_board "$module" "$port"; then
     printf '%s %s ok\n' "$hash" "$real" >"$STATE_DIR/$module.flash"
     say "колесо $module: прошито ($port)"
     flashed=$((flashed + 1))

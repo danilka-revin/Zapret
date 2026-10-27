@@ -73,6 +73,13 @@ RL или RR (`motor_wheel.ino`, имя зашито в `MODULE_ID`). Руль v
   трогается, и это видно в журнале;
 * прошивает `arduino-cli compile --upload -p <порт> --fqbn arduino:avr:mega`
   (модель платы меняется `RC_FIRMWARE_FQBN`), журнал — `var/firmware-flash.log`;
+* **`arduino-cli` не обязателен**: без него сборка идёт `avr-gcc`, заливка —
+  `avrdude` (`scripts/avr_upload.py`; ядро `ArduinoCore-avr` 1.8.6 и `Servo`
+  1.2.1 качаются с GitHub, потому что `downloads.arduino.cc` в РФ закрыт).
+  Инструменты ставятся один раз:
+  `sudo apt install gcc-avr avr-libc avrdude`. Способ выбирается
+  `RC_FIRMWARE_BACKEND=auto|cli|avr`; проверка — `python3 scripts/avr_upload.py
+  --check`; своё зеркало — `RC_FIRMWARE_MIRROR`;
 * **актуальность проверяется по плате, а не по своей отметке.** Плата в каждой
   строке `@TLM` сообщает `fw=` — протокол своей прошивки; скрипт сверяет его с
   `FIRMWARE_PROTOCOL` из этого же скетча (`scripts/firmware_probe.py`). Плата с
@@ -84,9 +91,14 @@ RL или RR (`motor_wheel.ino`, имя зашито в `MODULE_ID`). Руль v
   Неудачная попытка тоже запоминается: та же прошивка в тот же порт сама не
   повторяется (чтобы не ждать неотвечающую плату при каждом старте) — лечится
   `--force`;
-* `arduino-cli` нет — скрипт ставит его сам
-  (`scripts/install_arduino_cli.sh`: официальный архив в `~/.local/bin` плюс ядро
-  `arduino:avr`, без sudo, нужен интернет). Не вышло — ничего не ломается: копии
+* **кнопка «Прошить модули» на бортовом экране** («Тяга и руление» → настройка
+  привода) запускает ту же прошивку вручную, без обновления: экран показывает
+  фазу, процент и журнал, порты колёс на это время освобождаются и возвращаются
+  в конце. Запуск — `POST /api/kiosk_firmware_flash` с заголовком
+  `X-Robot-Control: firmware-flash`, состояние — `GET` того же адреса;
+* `arduino-cli` нет и не скачивается (Россия) — скрипт идёт путём
+  `avr-gcc`+`avrdude`, а если инструментов нет, ставит их через apt
+  (`RC_FIRMWARE_INSTALL=0` — не ставить). Не вышло ничего — копии
   `motor_wheel_*.ino` на рабочем столе прошиваются вручную, как раньше;
 * выключить автопрошивку: `RC_FIRMWARE_AUTOFLASH=0`; не ставить `arduino-cli`
   самому: `RC_FIRMWARE_AUTOCLI=0`; не сверять `fw=`: `RC_FIRMWARE_VERIFY=0`.
