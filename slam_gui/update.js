@@ -39,7 +39,7 @@
     overlay.innerHTML = `
       <section class="rc-update-dialog" role="dialog" aria-modal="true" aria-labelledby="rc-update-title">
         <header class="rc-update-head"><div><h2 id="rc-update-title">Обновление с GitHub</h2>
-          <p>Скачиваю коммиты с GitHub → ставлю код fast-forward → переустанавливаю зависимости (ensure_deps.sh, офлайн из vendor/) → собираю и проверяю код → перезапускаю веб-пульт и бортовой экран. Прошивки Arduino кнопка не прошивает.</p></div>
+          <p>Скачиваю коммиты с GitHub → ставлю код fast-forward → переустанавливаю зависимости (ensure_deps.sh, офлайн из vendor/) → собираю и проверяю код → кладу прошивки колёс на рабочий стол → перезапускаю пульт и экран. Платы колёс прошиваются <b>сами</b>: после перезапуска экран прошивает их в те USB-порты, что выбраны в настройках (бортовой экран → «Порты колёс»), через <code>arduino-cli</code>. Файлы <code>motor_wheel_*.ino</code> при этом остаются на рабочем столе — можно прошить и вручную из Arduino IDE.</p></div>
           <button type="button" class="rc-update-close" aria-label="Закрыть">×</button></header>
         <div class="rc-update-facts">
           <div><span>Репозиторий</span><b id="rc-update-repo">—</b></div>

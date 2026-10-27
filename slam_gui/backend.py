@@ -465,7 +465,7 @@ class MasterSource:
     def __init__(self, port=None, baud=115200, on_message=None, on_status=None,
                  port_provider=None, probe=None, claim=None, release=None,
                  yield_to_lidar=None, tag_module=None, untag_module=None,
-                 module_ports=None):
+                 module_ports=None, hold_ports=False):
         # Legacy positional ports/providers are deliberately NOT candidates.
         # Without a wheel-to-port assignment, never open any device.
         self.module_ports = {}
@@ -524,7 +524,26 @@ class MasterSource:
         self._serial = None
         self._spawning = set()
         self._cooldown = {}              # порт → время следующей попытки открыть
+        #: Пока True, порты не открываются. Нужно автопрошивке: платы прошиваются
+        #: до того, как программа займёт их USB, иначе arduino-cli получает
+        #: «порт занят». Экран в это время уже работает и честно показывает,
+        #: что колёс ещё нет.
+        self._hold_ports = bool(hold_ports)
         threading.Thread(target=self._reader, daemon=True).start()
+
+    @property
+    def ports_held(self):
+        """Порты колёс ещё не открываются (идёт автопрошивка)."""
+        return self._hold_ports
+
+    def resume_ports(self):
+        """Разрешить открытие портов после автопрошивки."""
+        self._hold_ports = False
+        self._cooldown.clear()
+        try:
+            self._note_status("info", "колёса: автопрошивка закончена — подключаюсь к платам")
+        except Exception:                 # noqa: BLE001 — журнал не критичен
+            pass
 
     @staticmethod
     def _port_error_hint(exc):
@@ -1594,7 +1613,8 @@ class MasterSource:
         while not self._stop:
             if time.monotonic() >= next_scan:
                 next_scan = time.monotonic() + self.RESCAN_S
-                self._open_new_links()
+                if not self._hold_ports:      # автопрошивка: USB ещё наш
+                    self._open_new_links()
             self._fanout_commands()
             self._maneuver_tick()
             time.sleep(0.05 if (self.links or self._spawning) else self.RETRY_S)

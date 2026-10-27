@@ -31,6 +31,24 @@ def test_save_roundtrip_without_live_rerouting(settings_file):
     assert not any(wheel_settings.settings_payload()['settings'].values())
 
 
+def test_settings_payload_lists_by_id_ports_too(settings_file, monkeypatch):
+    """Порт можно выбрать и по постоянному имени /dev/serial/by-id/… .
+
+    Раньше панель перечисляла только /dev/ttyUSB* и /dev/ttyACM*: если кабели
+    видны лишь под постоянными именами, список был пуст и порт выбрать было
+    не из чего.
+    """
+    from robot_control import master_port
+
+    monkeypatch.setattr(master_port, 'serial_ports',
+                        lambda patterns=None: ['/dev/serial/by-id/usb-1', '/dev/ttyUSB0'])
+    monkeypatch.setattr(wheel_settings.glob, 'glob', lambda pattern: [])
+    payload = wheel_settings.settings_payload()
+    paths = [item['path'] for item in payload['ports']]
+    assert '/dev/serial/by-id/usb-1' in paths
+    assert '/dev/ttyUSB0' in paths
+
+
 @pytest.mark.parametrize('payload', [None, [], {'foo': ''}, {'FL': 5},
     {'FL': '/tmp/file'}, {'FL': '/dev/ttyUSB0\nBAD=1'},
     {'FL': '/dev/ttyUSB0', 'FR': '/dev/ttyUSB0'}])

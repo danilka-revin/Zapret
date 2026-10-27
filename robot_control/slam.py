@@ -929,6 +929,43 @@ def peer_kiosk_url() -> str:
     return f"http://127.0.0.1:{port}/api/kiosk_state"
 
 
+def _start_firmware_flash():
+    """Автопрошивка плат колёс при старте экрана → функция запуска.
+
+    Две причины запускать её здесь:
+
+    * кнопка «Обновить с GitHub» оставляет заявку (robot_control/updater.py) —
+      прошивать в момент обновления нельзя, USB-порты колёс держит этот процесс,
+      а не тот, что ставит код;
+    * прошивка изменилась, а заявки нет (git pull, ручная правка) — тогда скрипт
+      всё равно сверит хеш и прошьёт только изменившиеся платы.
+
+    Скрипт сам решает, что делать: если прошивать нечего, он выходит за доли
+    секунды и порты открываются сразу. Порты берутся из настроек
+    (RC_WHEEL_*_PORT) — из того же места, что и подключение колёс.
+    """
+    try:
+        from .firmware_flash import flash_if_pending
+    except ImportError:                       # pragma: no cover — старые сборки
+        return None
+
+    def run(source):
+        import threading
+
+        def work():
+            try:
+                flash_if_pending(always=True)
+            finally:
+                try:
+                    source.resume_ports()
+                except Exception:             # noqa: BLE001 — колёса важнее отчёта
+                    log.exception("автопрошивка: не удалось вернуть подключение колёс")
+
+        threading.Thread(target=work, daemon=True, name="firmware-flash").start()
+
+    return run
+
+
 def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
     """Источник данных робота.
 
@@ -969,7 +1006,12 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
                 assignments.pop(module)
         if not assignments:
             log.warning("Порты колёс не назначены: выберите их на бортовом экране → Тяга и руление")
-        return mod.MasterSource(
+        # Автопрошивка после обновления с GitHub. Порядок важен: платы должны
+        # быть прошиты, пока их USB никто не занял, поэтому источник создаётся
+        # «на паузе» (порты не открываются), прошивка идёт в фоне, и только
+        # потом колёса подключаются. Экран при этом уже работает.
+        flash = _start_firmware_flash()
+        source = mod.MasterSource(
             module_ports=assignments,
             on_message=note_master_message,
             on_status=note_master_status,
@@ -978,7 +1020,11 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
             yield_to_lidar=lidar_holds_port,
             tag_module=tag_module_port,
             untag_module=untag_module_port,
+            hold_ports=flash is not None,
         )
+        if flash is not None:
+            flash(source)
+        return source
 
     if mode != "auto":
         log.warning("неизвестный RC_SLAM_SOURCE=%r — использую auto", mode)

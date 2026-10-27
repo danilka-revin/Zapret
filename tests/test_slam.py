@@ -695,6 +695,71 @@ def _drive_frame(module, *, tach=1, dmax=20, trim=1500, span=500, us=1500, stp=1
             % (module, deg, rpm, drive, tach, dmax, trim, span, ppr, brk, stp, dr, us))
 
 
+def test_wheel_ports_wait_until_the_firmware_is_flashed():
+    """Автопрошивка: порты колёс не открываются, пока идёт прошивка плат.
+
+    arduino-cli получает «порт занят», если программа уже читает USB. Поэтому
+    источник создаётся «на паузе»: экран работает, колёса подключаются после
+    прошивки.
+    """
+    import time
+
+    backend = _load_backend()
+    original_rescan, original_retry = backend.MasterSource.RESCAN_S, backend.MasterSource.RETRY_S
+    backend.MasterSource.RESCAN_S = 0.05
+    backend.MasterSource.RETRY_S = 0.02      # без колёс поток иначе спит 2 с
+    try:
+        src = backend.MasterSource(module_ports={}, hold_ports=True)
+        opened = []
+        src._open_new_links = lambda: opened.append(1)
+        assert src.ports_held is True
+        time.sleep(0.3)
+        assert opened == [], "пока идёт прошивка, порты открываться не должны"
+        src.resume_ports()
+        assert src.ports_held is False
+        time.sleep(0.3)
+        assert opened, "после прошивки колёса должны подключаться сами"
+        src._stop = True
+    finally:
+        backend.MasterSource.RESCAN_S = original_rescan
+        backend.MasterSource.RETRY_S = original_retry
+
+
+def test_firmware_flash_runs_at_kiosk_startup_and_releases_the_ports():
+    """Автопрошивку выполняет бортовой экран; колёса подключаются после неё.
+
+    Запускается она всегда (скрипт сам решает, есть ли что прошивать), но с
+    ``always=True``: так платы получают код и после обычного git pull, а не
+    только по кнопке «Обновить с GitHub».
+    """
+    import time
+
+    from robot_control import firmware_flash
+    from robot_control import slam as slam_module
+
+    original_flash = firmware_flash.flash_if_pending
+    try:
+        calls = []
+        # Подменяем прошивку ДО создания замыкания: имя импортируется внутрь.
+        firmware_flash.flash_if_pending = lambda *a, **k: calls.append(
+            "flash" if k.get("always") else "flash?")
+        start = slam_module._start_firmware_flash()
+        assert callable(start)
+
+        class Source:
+            def resume_ports(self):
+                calls.append("resume")
+
+        start(Source())
+        for _ in range(100):
+            if "resume" in calls:
+                break
+            time.sleep(0.02)
+        assert calls == ["flash", "resume"]
+    finally:
+        firmware_flash.flash_if_pending = original_flash
+
+
 def test_master_telemetry_parses_flexible_drive_configuration():
     """Прошивка с командой m: тахометр, предел, нейтраль/размах серво-импульса."""
     backend = _load_backend()

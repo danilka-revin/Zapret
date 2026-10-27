@@ -26,10 +26,16 @@ def env_file_path():
 
 def settings_payload():
     from .lidar import read_env_file
+    from .master_port import serial_ports
     saved = read_env_file(env_file_path())
     settings = {m: saved.get(k, current_settings()[m]) for m, k in ENV_KEYS.items()}
     blocked = reserved_ports()
-    paths = sorted(set(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")
+    # Тот же список, что видит остальная программа: /dev/serial/by-id/… тоже
+    # годится — такие имена не меняются после переподключения USB. Раньше
+    # панель показывала только /dev/ttyUSB* и /dev/ttyACM*, и на машине, где
+    # кабели видны лишь как by-id, выбрать порт было не из чего.
+    paths = sorted(set(serial_ports()
+                       + glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")
                        + [os.path.realpath(p) for p in settings.values() if p]))
     # Show kernel port names, not a guessed board identity or preferred alias.
     settings = {m: os.path.realpath(p) if p else "" for m, p in settings.items()}
