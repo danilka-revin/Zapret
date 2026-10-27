@@ -77,6 +77,37 @@
 .rc-drive-warning { display: block; margin-top: 9px; color: #f4f4f6; }
 /* Настройка привода подтверждается телеметрией: режим, тахометр, предел. */
 .rc-drive-mode { display: block; margin-top: 9px; color: #a2949a; font-size: 10px; line-height: 1.5; }
+/* Манёвры: цель в метрах или градусах вместо «держать процент». */
+.rc-maneuver-panel { margin-top: 12px; padding-top: 11px; border-top: 1px solid #2a2428; display: grid; gap: 9px; }
+.rc-maneuver-top { display: grid; gap: 3px; }
+.rc-maneuver-top b { font-size: 13px; }
+.rc-maneuver-top small { color: #8b8b93; font-size: 10px; }
+.rc-maneuver-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.rc-maneuver-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center;
+  gap: 6px; padding: 7px 8px; border: 1px solid #2a2428; border-radius: 9px; background: #131316;
+}
+.rc-maneuver-row > b { font-size: 11px; font-weight: 800; color: #f4f4f6; }
+.rc-maneuver-row label { display: flex; align-items: center; gap: 3px; color: #a2949a; font-size: 10px; }
+.rc-maneuver-row input[type="number"] {
+  width: 56px; padding: 4px 5px; border: 1px solid #3a3035; border-radius: 7px;
+  background: #17171a; color: #f4f4f6; font: inherit; font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.rc-maneuver-row button {
+  padding: 6px 10px; border: 1px solid #3a3035; border-radius: 8px; background: #17171a;
+  color: #f4f4f6; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer;
+}
+.rc-maneuver-row button:disabled { opacity: .4; cursor: not-allowed; }
+.rc-maneuver-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.rc-maneuver-actions button.stop {
+  min-height: 38px; padding: 8px 12px; border: 1px solid #c0505a; border-radius: 9px;
+  background: #2a161c; color: #f4f4f6; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer;
+}
+.rc-maneuver-actions button:disabled { opacity: .4; cursor: not-allowed; }
+#rc-maneuver-status { color: #a2949a; font-size: 10px; line-height: 1.5; }
+#rc-maneuver-status[data-active="true"] { color: #f4f4f6; }
+@media (max-width: 640px) { .rc-maneuver-list { grid-template-columns: 1fr; } }
 .rc-steering-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .rc-steering-card { min-width: 0; padding: 13px; border: 1px solid #2a2428; border-radius: 12px; background: #17171a; }
 .rc-steering-card.error { border-color: #c0505a; }

@@ -96,6 +96,9 @@ CONTROL_ROUTES = {
     'pot_mode': ('/api/kiosk_pot_mode', {'POST'}, 'steering'),
     # Настройка привода тяги (серво-ШИМ: нейтраль/размах, тахометр, тормоз, стоп, предел).
     'drive_config': ('/api/kiosk_drive_config', {'POST'}, 'steering'),
+    # Манёвры тяги: «метр вперёд», «90° на месте» и их настройка.
+    'maneuver': ('/api/kiosk_maneuver', {'POST'}, 'steering'),
+    'maneuver_config': ('/api/kiosk_maneuver_config', {'POST'}, 'steering'),
     'drive': ('/api/kiosk_drive', {'POST'}, 'drive'),
     'estop': ('/api/estop', {'POST'}, 'drive'),
     'estop/release': ('/api/estop/release', {'POST'}, 'drive'),

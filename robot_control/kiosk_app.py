@@ -78,6 +78,8 @@ from robot_control.slam import (
     dispatch_steering_calibration,
     dispatch_pot_mode,
     dispatch_drive_config,
+    dispatch_maneuver,
+    dispatch_maneuver_config,
     engage_estop,
     release_estop,
     note_pin_result,
@@ -901,6 +903,34 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
         navigation.cancel("Настройка привода — маршрут остановлен.")
         result, status = dispatch_drive_config(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
+    @app.post("/api/kiosk_maneuver")
+    def api_kiosk_maneuver():
+        """Манёвр-пресет тяги: «метр вперёд», «развернуться на 90°» (start/stop).
+
+        Правила те же, что у ручной тяги: заголовок команды обязателен, PIN
+        проверяется сессией руления. Маршрут отменяется — манёвр и автономная
+        езда одновременно несовместимы.
+        """
+        if state is None:
+            return jsonify({"ok": False, "reason": "serial_unavailable"}), 503
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        body = request.get_json(silent=True) or {}
+        if isinstance(body, dict) and body.get("action") == "start":
+            navigation.cancel("Манёвр — автономный маршрут остановлен.")
+        result, status = dispatch_maneuver(state.source, body)
+        return jsonify(result), status
+
+    @app.post("/api/kiosk_maneuver_config")
+    def api_kiosk_maneuver_config():
+        """Настройка пресетов манёвров: метры, градусы, рабочий процент, шасси."""
+        if state is None:
+            return jsonify({"ok": False, "reason": "serial_unavailable"}), 503
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        result, status = dispatch_maneuver_config(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
     @app.post("/api/kiosk_calibrate")

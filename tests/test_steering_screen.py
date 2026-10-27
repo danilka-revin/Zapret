@@ -52,6 +52,31 @@ def drive_config(**overrides):
     return config
 
 
+def maneuver_config(**overrides):
+    """Пресеты манёвров в ответе сервера: цель в метрах/градусах и процент."""
+    presets = {
+        "forward": {"title": "Вперёд", "kind": "distance", "distanceM": 1.0,
+                    "percent": 12, "toleranceM": 0.05},
+        "backward": {"title": "Назад", "kind": "distance", "distanceM": 0.5,
+                     "percent": 10, "toleranceM": 0.05},
+        "left": {"title": "Боком влево", "kind": "distance", "distanceM": 0.5,
+                 "percent": 10, "toleranceM": 0.05},
+        "right": {"title": "Боком вправо", "kind": "distance", "distanceM": 0.5,
+                  "percent": 10, "toleranceM": 0.05},
+        "spin_left": {"title": "Разворот влево", "kind": "angle", "angleDeg": 90.0,
+                      "percent": 10, "toleranceDeg": 3.0},
+        "spin_right": {"title": "Разворот вправо", "kind": "angle", "angleDeg": 90.0,
+                       "percent": 10, "toleranceDeg": 3.0},
+    }
+    for name, values in overrides.pop("presets", {}).items():
+        presets[name] = dict(presets[name], **values)
+    config = {"supported": True, "presets": presets,
+              "limits": {"distanceM": [0.05, 20.0], "angleDeg": [5.0, 360.0],
+                         "percent": [1.0, 100.0]}}
+    config.update(overrides)
+    return config
+
+
 def per_module_state(**overrides):
     """Готовность одиночной тяги по колёсам (drive.perModule от сервера)."""
     state = {"canDrive": True, "reason": None, "percent": 0, "commandedPercent": 0,
@@ -62,7 +87,7 @@ def per_module_state(**overrides):
 
 
 def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_reason=None,
-            actions=None, drive=None, per_module=None, **extra):
+            actions=None, drive=None, per_module=None, maneuver=None, **extra):
     data = {
 
         "linkOk": True,
@@ -75,9 +100,12 @@ def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_re
                   "maxPercent": 20, "commandedPercent": 0, "active": False,
                   "individual": True, "commandedModules": {},
                   "perModule": per_module if per_module is not None else per_module_state(),
-                  "config": drive_config(), "alignmentToleranceDeg": 2.5},
+                  "config": drive_config(), "alignmentToleranceDeg": 2.5,
+                  "maneuver": maneuver or {"supported": True, "active": False,
+                                           "state": "idle", "mode": "odometry"}},
         "motors": motors if motors is not None else [motor(m) for m in MODULES],
         "masterMessages": [],
+        "maneuverConfig": maneuver_config(),
     }
     return {"ok": True, "data": data, "actions": actions or [], **extra}
 
@@ -539,3 +567,120 @@ def test_drive_setup_defaults_are_one_command(tmp_path):
                              tach=False, maxPercent=60, trimUs=1620, spanUs=300)
     report = run_screen(tmp_path, body)
     assert [item["action"] for item in report["driveCfgSent"]] == ["defaults"]
+
+
+# ------------------------------- манёвры ----------------------------------- #
+def test_maneuver_numbers_come_from_the_server(tmp_path):
+    """Числа пресетов — с сервера, а не зашиты в разметку."""
+    body = payload()
+    body["data"]["maneuverConfig"] = maneuver_config(
+        presets={"forward": {"distanceM": 2.5, "percent": 15},
+                 "spin_left": {"angleDeg": 180, "percent": 8}})
+    report = run_screen(tmp_path, body)
+    assert report["renderErrors"] == []
+    buttons = {item["id"]: item for item in report["maneuvers"]["buttons"]}
+    assert buttons["forward"]["target"] == "2.5"
+    assert buttons["forward"]["percent"] == "15"
+    assert buttons["spin_left"]["target"] == "180"
+    assert buttons["spin_left"]["percent"] == "8"
+
+
+def test_maneuver_saves_numbers_then_starts(tmp_path):
+    """«Ехать» сначала сохраняет числа пресета, потом просит старт — в этом порядке."""
+    report = run_screen(tmp_path, payload(actions=[
+        {"type": "maneuver", "id": "forward", "target": 1.5, "percent": 10}]))
+    sent = report["maneuversSent"]
+    assert [item["action"] for item in sent] == ["config", "start"], sent
+    assert sent[0]["name"] == "forward"
+    assert sent[0]["values"] == {"distanceM": 1.5, "percent": 10}
+    assert sent[1]["name"] == "forward"
+    assert report["renderErrors"] == []
+
+
+def test_maneuver_start_is_refused_before_numbers_are_saved(tmp_path):
+    """Если числа не сохранились, старт не запрашивается вовсе."""
+    report = run_screen(tmp_path, payload(
+        maneuverConfigRefuse="invalid_value",
+        actions=[{"type": "maneuver", "id": "spin_left", "target": 90}]))
+    assert [item["action"] for item in report["maneuversSent"]] == ["config"]
+    assert "числа" in report["maneuvers"]["status"].lower()
+
+
+def test_maneuver_buttons_need_ready_drive(tmp_path):
+    """Колёса не выровнены или нет PIN — кнопки манёвров серые."""
+    report = run_screen(tmp_path, payload(can_drive=False, drive_reason="steering_misaligned"))
+    assert all(item["disabled"] for item in report["maneuvers"]["buttons"])
+    assert "в одном направлении" in report["maneuvers"]["status"]
+
+    old = payload(motors=payload()["data"]["motors"])
+    for module in MODULES:
+        old["data"]["drive"]["perModule"][module]["canDrive"] = False
+    report = run_screen(tmp_path, old)
+    assert all(not item["disabled"] for item in report["maneuvers"]["buttons"])
+
+
+def test_running_maneuver_shows_progress_and_stop(tmp_path):
+    """Идущий манёвр: прогресс, чем меряем, и рабочая кнопка СТОП."""
+    body = payload(maneuver={"supported": True, "active": True, "state": "driving",
+                             "name": "forward", "title": "Вперёд", "kind": "distance",
+                             "mode": "odometry", "progress": 0.42,
+                             "value": 0.42, "target": 1.0, "percent": 12})
+    report = run_screen(tmp_path, body)
+    status = report["maneuvers"]["status"]
+    assert "42%" in status and "0.42 м из 1.00 м" in status and "по тахометру" in status
+    assert report["maneuvers"]["active"] == "true"
+    assert report["maneuvers"]["stopDisabled"] is False
+    buttons = {item["id"]: item for item in report["maneuvers"]["buttons"]}
+    assert buttons["forward"]["label"] == "Едем…"
+    assert all(item["disabled"] for item in report["maneuvers"]["buttons"])
+
+
+def test_maneuver_without_tachometer_says_it_goes_by_time(tmp_path):
+    body = payload(maneuver={"supported": True, "active": True, "state": "driving",
+                             "name": "spin_left", "title": "Разворот влево", "kind": "angle",
+                             "mode": "time", "progress": 0.5,
+                             "value": 45.0, "target": 90.0, "percent": 10})
+    report = run_screen(tmp_path, body)
+    assert "по времени" in report["maneuvers"]["status"]
+    assert "45°" in report["maneuvers"]["status"]
+
+
+def test_maneuver_stop_button_sends_stop(tmp_path):
+    body = payload(maneuver={"supported": True, "active": True, "state": "driving",
+                             "name": "forward", "title": "Вперёд", "kind": "distance",
+                             "mode": "odometry", "progress": 0.1,
+                             "value": 0.1, "target": 1.0},
+                   actions=[{"type": "maneuver-stop"}])
+    report = run_screen(tmp_path, body)
+    assert report["maneuversSent"] == [{"url": "api/kiosk_maneuver", "action": "stop",
+                                        "name": None}]
+
+
+def test_finished_maneuver_reports_the_result(tmp_path):
+    body = payload(maneuver={"supported": True, "active": False, "state": "done",
+                             "name": "forward", "title": "Вперёд", "kind": "distance",
+                             "mode": "odometry", "progress": 1.0,
+                             "value": 1.02, "target": 1.0,
+                             "message": "Готово: 1.02 из 1.00."})
+    report = run_screen(tmp_path, body)
+    assert "1.02" in report["maneuvers"]["status"]
+    assert report["maneuvers"]["stopDisabled"] is True
+
+
+def test_maneuver_controls_exist_in_the_onboard_page():
+    """Разметка борта: строки пресетов и СТОП манёвра на месте (не только в JS)."""
+    page = (ROOT / "slam_gui" / "robot.html").read_text(encoding="utf-8")
+    assert 'id="drive-maneuvers"' in page
+    for name in ("forward", "backward", "left", "right", "spin_left", "spin_right"):
+        assert f'id="maneuver-{name}"' in page
+        assert f'id="maneuver-target-{name}"' in page
+        assert f'id="maneuver-percent-{name}"' in page
+    assert 'id="maneuver-stop"' in page and 'id="maneuver-status"' in page
+
+
+def test_maneuver_controls_exist_in_the_web_remote():
+    """Веб-пульт рисует те же строки пресетов из конфига сервера."""
+    script = (ROOT / "slam_gui" / "steering.js").read_text(encoding="utf-8")
+    assert "data-maneuver-start" in script and "data-maneuver-target" in script
+    assert "rc-maneuver-stop" in script and "api/kiosk_maneuver" in script
+    assert "api/kiosk_maneuver_config" in script

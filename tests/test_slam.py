@@ -603,6 +603,65 @@ def test_master_source_reports_each_module_and_empty_for_silent_ones():
     assert all(m["online"] is False for m in stale["motors"])
 
 
+def _source_with_runner(backend):
+    """Источник с настоящим раннером манёвров, но без портов."""
+    src = _bare_master_source(backend)
+    core = backend._load_maneuvers()
+    src.maneuver_core = core
+    src.maneuvers = core.ManeuverRunner(brake=src._brake_all)
+    return src
+
+
+def test_maneuvers_need_a_runner_and_fresh_wheels():
+    """Без ядра манёвров функция честно «не поддерживается», а не падает."""
+    backend = _load_backend()
+    bare = _bare_master_source(backend)
+    assert bare.maneuver_status()["supported"] is False
+    assert bare.start_maneuver("forward") == {"ok": False,
+                                              "reason": "control_not_supported"}
+
+    src = _source_with_runner(backend)
+    assert src.maneuver_status()["supported"] is True
+    src.serial_ready.clear()
+    assert src.start_maneuver("forward") == {"ok": False, "reason": "serial_unavailable"}
+    src.serial_ready.set()
+    # Ни одного кадра — колёс нет: манёвр не запускается «вслепую».
+    refused = src.start_maneuver("forward")
+    assert refused["ok"] is False and refused["reason"] == "module_offline"
+    assert src.maneuver_status()["active"] is False
+
+
+def test_manual_drive_and_stop_cancel_the_maneuver():
+    """Ручная тяга и СТОП отменяют манёвр: оператор всегда главнее пресета."""
+    import time as _time
+
+    backend = _load_backend()
+    src = _source_with_runner(backend)
+    assert src.maneuvers.start("forward", _time.monotonic(), limit_percent=20)["ok"] is True
+    assert src.maneuver_status()["active"] is True
+    assert src.stop_maneuver()["ok"] is True
+    assert src.maneuver_status()["state"] == "cancelled"
+
+    assert src.maneuvers.start("spin_left", _time.monotonic(), limit_percent=20)["ok"] is True
+    src.drive(0)                                   # ручной СТОП
+    assert src.maneuver_status()["state"] == "cancelled"
+
+
+def test_maneuver_presets_are_editable_and_validated():
+    backend = _load_backend()
+    src = _source_with_runner(backend)
+    config = src.maneuver_config()
+    assert config["supported"] is True
+    assert config["presets"]["forward"]["distanceM"] == 1.0
+    assert "distanceM" in config["limits"]
+    assert src.set_maneuver_config("forward", {"distanceM": 2.5})["ok"] is True
+    assert src.maneuver_config()["presets"]["forward"]["distanceM"] == 2.5
+    assert src.set_maneuver_config("forward", {"distanceM": 0}) == {
+        "ok": False, "reason": "invalid_value"}
+    assert src.set_maneuver_config("телепорт", {"distanceM": 1}) == {
+        "ok": False, "reason": "invalid_maneuver"}
+
+
 def test_pot_mode_requires_all_boards_and_idle_telemetry():
     backend = _load_backend()
     src = _bare_master_source(backend)
