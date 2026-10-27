@@ -2841,8 +2841,66 @@
     const motors = Array.isArray((d || {}).motors) ? d.motors : [];
     const busy = !!drive.active || Number(drive.commandedPercent || 0) !== 0 ||
       motors.some((m) => m && (m.moving || m.calibrating || m.cycling || Number(m.drivePercent || 0) !== 0));
-    const ready = !!cfg.supported && !cfg.mixed;
+    // Раньше здесь было «&& !cfg.mixed», и получался тупик: платы разошлись
+    // (например, у двух колёс тахометр выключен), экран блокировал «Применить»
+    // И требовал «выберите общий режим и примените». Теперь различие — только
+    // повод сказать об этом: команда m уходит на все четыре платы и выравнивает
+    // их, поэтому кнопка должна быть доступна.
+    const ready = !!cfg.supported;
     return { enabled: !!authorized && ready && !busy && !driveCfgPending, busy: busy, ready: ready };
+  }
+
+  /**
+   * Что показать в полях панели.
+   *
+   * Если платы настроены одинаково — общие значения. Если разошлись, «общего»
+   * просто нет (сервер отдаёт null), и показывать заводские 1500/500 нельзя:
+   * человек видит одно, а на платах другое. Берём первую плату, которая что-то
+   * сообщила, — и в статусе честно сказано, что настройка различается.
+   */
+  function driveConfigShown(config) {
+    const cfg = config || {};
+    const perModule = cfg.perModule || {};
+    const first = Object.keys(perModule)
+      .map((module) => perModule[module] || {})
+      .find((item) => item.trimUs != null || item.pulsesPerRev != null ||
+        item.maxPercent != null) || {};
+    const pick = (key, fallback) => (cfg[key] != null ? cfg[key]
+      : (first[key] != null ? first[key] : fallback));
+    return {
+      tach: pick('tach', true),
+      brake: pick('brake', true),
+      stopInput: pick('stopInput', true),
+      maxPercent: pick('maxPercent', 20),
+      trimUs: pick('trimUs', 1500),
+      spanUs: pick('spanUs', 500),
+      pulsesPerRev: pick('pulsesPerRev', null),
+      dirReverse: pick('dirReverse', false),
+    };
+  }
+
+  /** Коротко: чем именно разошлись платы («trim 1500/1620, тахометр вкл/выкл»). */
+  function driveConfigDifference(config) {
+    const cfg = config || {};
+    const perModule = cfg.perModule || {};
+    const modules = Object.keys(perModule).sort();
+    const parts = [];
+    const describe = (values, format) => values
+      .map((value) => (value == null ? '—' : format(value))).join('/');
+    const trim = modules.map((m) => perModule[m].trimUs);
+    if (new Set(trim).size > 1) parts.push('нейтраль ' + describe(trim, (v) => v));
+    const span = modules.map((m) => perModule[m].spanUs);
+    if (new Set(span).size > 1) parts.push('размах ' + describe(span, (v) => '±' + v));
+    const tach = modules.map((m) => perModule[m].tach);
+    if (new Set(tach).size > 1) {
+      parts.push('тахометр ' + tach.map((v) => (v === false ? 'нет' : 'есть')).join('/'));
+    }
+    const limit = modules.map((m) => perModule[m].maxPercent);
+    if (new Set(limit).size > 1) parts.push('предел ' + describe(limit, (v) => v + '%'));
+    const ppr = modules.map((m) => perModule[m].pulsesPerRev);
+    if (new Set(ppr).size > 1) parts.push('импульсов на оборот ' + describe(ppr, (v) => v));
+    if (!parts.length) parts.push('порядок обновления плат');
+    return parts.slice(0, 2).join(', ');
   }
 
   function setDriveCfgOutput(id, value) {
@@ -2892,13 +2950,14 @@
     const active = document.activeElement && document.activeElement.id;
     const editing = DRIVE_CONFIG_FIELDS.indexOf(String(active || '')) >= 0;
     if (!editing) {
-      setDriveCfgOutput('drive-cfg-tach', config.tach === false ? 'off' : 'on');
-      setDriveCfgOutput('drive-cfg-brake', config.brake === false ? 'off' : 'on');
-      setDriveCfgOutput('drive-cfg-stop', config.stopInput === false ? 'off' : 'on');
-      const limit = Math.max(1, Math.min(100, Number(config.maxPercent) || 20));
-      const trim = Math.max(SERVO_MIN_US, Math.min(SERVO_MAX_US, Number(config.trimUs) || 1500));
-      const span = Math.max(SERVO_SPAN_MIN_US, Math.min(500, Number(config.spanUs) || 500));
-      const ppr = Math.max(1, Math.min(TACH_PPR_MAX, Number(config.pulsesPerRev) || 1));
+      const shownCfg = driveConfigShown(config);
+      setDriveCfgOutput('drive-cfg-tach', shownCfg.tach === false ? 'off' : 'on');
+      setDriveCfgOutput('drive-cfg-brake', shownCfg.brake === false ? 'off' : 'on');
+      setDriveCfgOutput('drive-cfg-stop', shownCfg.stopInput === false ? 'off' : 'on');
+      const limit = Math.max(1, Math.min(100, Number(shownCfg.maxPercent) || 20));
+      const trim = Math.max(SERVO_MIN_US, Math.min(SERVO_MAX_US, Number(shownCfg.trimUs) || 1500));
+      const span = Math.max(SERVO_SPAN_MIN_US, Math.min(500, Number(shownCfg.spanUs) || 500));
+      const ppr = Math.max(1, Math.min(TACH_PPR_MAX, Number(shownCfg.pulsesPerRev) || 1));
       setDriveCfgOutput('drive-cfg-limit', String(limit));
       setDriveCfgOutput('drive-cfg-trim', String(trim));
       setDriveCfgOutput('drive-cfg-span', String(span));
@@ -2927,7 +2986,7 @@
     // Подбор импульсов доступен и под тягой: только так и можно увидеть, что
     // колесо крутится «не с той» скоростью, и сразу это исправить. Прошивка без
     // ppr в телеметрии толку не даст — тогда поле честно выключено.
-    const pprSupported = Number(config.pulsesPerRev) > 0;
+    const pprSupported = driveConfigShown(config).pulsesPerRev != null;
     const fit = $('drive-cfg-ppr-fit');
     if (fit) fit.disabled = !authorized || !pprSupported || !!driveCfgDesired;
     if ($('drive-cfg-ppr')) $('drive-cfg-ppr').disabled = !authorized || !pprSupported;
@@ -2955,7 +3014,8 @@
         : 'Нет телеметрии плат: настройка недоступна. Проверьте USB-порты колёс '
           + 'ниже («USB-порты колёс · ручное назначение») и питание плат.';
     } else if (config.mixed) {
-      text = 'Настройка плат различается — выберите общий режим и примените.';
+      text = 'Платы настроены по-разному (' + driveConfigDifference(config) +
+        ') — нажмите «Применить»: общее значение уйдёт на все четыре.';
     } else if (!authorized) {
       text = 'Настройка привода требует разблокированного управления.';
     } else if (state.busy) {
