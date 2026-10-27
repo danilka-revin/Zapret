@@ -6,7 +6,7 @@
 // USB Serial: I²C в прошивке вырезан, здесь его заглушек больше нет.
 // Скетч компилируется внутри своего namespace (см. sim.cpp), а функции
 // digitalWrite/Serial там подменяются привязанными к своей плате.
-// Время общее: тик Timer1 — 50 мкс, прерывания всех плат вызываются по тику,
+// Время общее: тик шагового таймера — 50 мкс, прерывания всех плат идут по тику,
 // loop() каждой платы — между тиками.
 #pragma once
 
@@ -68,10 +68,10 @@
 typedef uint8_t byte;
 typedef bool boolean;
 
-// Регистры Timer1: прошивка их только настраивает, ход задаёт симуляция.
-inline uint8_t TCCR1A = 0, TCCR1B = 0, TIMSK1 = 0;
-inline uint16_t OCR1A = 0, TCNT1 = 0;
-constexpr int WGM12 = 3, CS11 = 1, OCIE1A = 1;
+// Регистры Timer2 (шаги руля): прошивка их только настраивает, ход задаёт
+// симуляция. Timer1/3/4/5 заняты библиотекой Servo, поэтому здесь Timer2.
+inline uint8_t TCCR2A = 0, TCCR2B = 0, TIMSK2 = 0, OCR2A = 0, TCNT2 = 0;
+constexpr int WGM21 = 1, CS21 = 1, OCIE2A = 1;
 
 namespace sim {
 

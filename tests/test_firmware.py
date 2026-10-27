@@ -85,8 +85,32 @@ def test_pins_levels_and_speeds_match_the_tested_sketch():
     assert "digitalWrite(DIR, LOW)" in reference and _const(core, "STEP_DIR_PLUS_LEVEL") == "LOW"
     assert "digitalWrite(ENA, HIGH)" in reference and _const(core, "STEP_ENABLE_LEVEL") == "HIGH"
     assert "pinMode(OPTO_PIN, INPUT_PULLUP)" in reference and "pinMode(OPTO_PIN, INPUT_PULLUP)" in core
-    # Шаги — Timer1: USB и печать не сбивают ход мотора.
-    assert "setupStepTimer" in core and "ISR(TIMER1_COMPA_vect)" in core
+    # Шаги — отдельный таймер (Timer2): USB и печать не сбивают ход мотора.
+    assert "setupStepTimer" in core and "ISR(TIMER2_COMPA_vect)" in core
+
+
+def test_step_timer_does_not_fight_the_servo_library():
+    """Шаги не на Timer1/3/4/5: на Mega библиотека Servo занимает их целиком.
+
+    Servo (avr/Servo.cpp) для Mega объявляет обработчики Timer5, Timer1, Timer3
+    и Timer4 всегда, даже если подключена одна серва. Свой ``ISR(TIMER1_COMPA)``
+    рядом с ней — это «multiple definition of `__vector_17`» и отказ линковки,
+    который видит оператор в Arduino IDE. Поэтому шаги идут на Timer2: он
+    8-битный, 16 МГц / 8 / 100 = 20 кГц — те же 50 мкс.
+    """
+    text = _text(WHEEL)
+    assert "ISR(TIMER2_COMPA_vect)" in text
+    assert "TCCR2B = (1 << CS21)" in text and "OCR2A = 99" in text
+    assert "TIMSK2 |= (1 << OCIE2A)" in text
+    for vector in ("TIMER1_COMPA_vect", "TIMER3_COMPA_vect",
+                   "TIMER4_COMPA_vect", "TIMER5_COMPA_vect"):
+        assert "ISR(%s)" % vector not in text, vector
+    # Timer2 в Arduino делится только с tone() и analogWrite на D9/D10 —
+    # ни того, ни другого в коде нет (скорость — серво-импульс на D3).
+    # Проверяем именно код: в комментариях эти имена упоминаются по делу.
+    code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
+    assert "analogWrite(" not in code
+    assert "tone(" not in code
 
 
 def test_firmware_has_no_usb_role_discovery():
