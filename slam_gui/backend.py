@@ -89,10 +89,13 @@ MAX_DRIVE_PERCENT = 20       # заводской предел; плата мо�
 #: по умолчанию — поднимать его можно только осознанно, на вывешенных колёсах.
 DRIVE_ABS_MAX_PERCENT = 100
 DRIVE_ANGLE_ALIGNMENT_DEG = 2.5
-#: Выход на регулятор скорости: ШИМ (процент = скважность) или 0–5 В
-#: (analogWrite + фильтр/ЦАП). Совпадает с drive_mode в прошивке.
-DRIVE_OUTPUT_MODES = ("pwm", "volt")
-DRIVE_MV_FULL = 5000
+#: Выход на регулятор скорости — «серво»-ШИМ 50 Гц: импульс 1000…2000 мкс, как
+#: у сервопривода постоянного вращения. 1500 мкс — нейтраль (стоим), ±размах —
+#: полный ход. Числа совпадают с SERVO_* в firmware/motor_wheel.
+SERVO_MIN_US = 1000
+SERVO_MAX_US = 2000
+SERVO_CENTER_US = 1500
+SERVO_SPAN_MAX_US = 500
 
 # Предел абсолютной команды поворота «w <модуль> <угол>». Одно число на весь
 # стек: столько же в прошивке (STEER_LIMIT_DEG в firmware/motor_wheel),
@@ -259,9 +262,10 @@ class NoSource:
                           "maxPercent": MAX_DRIVE_PERCENT, "commandedPercent": 0,
                           "commandedModules": {}, "individual": False, "perModule": {},
                           "active": False, "reportedPercent": {},
-                          "config": {"supported": False, "outputMode": None, "tach": None,
-                                     "maxPercent": None, "minMv": None, "maxMv": None,
-                                     "outputMv": None, "brake": None, "dirReverse": None}},
+                          "config": {"supported": False, "tach": None, "maxPercent": None,
+                                     "trimUs": None, "spanUs": None, "pulseUs": None,
+                                     "brake": None, "stopInput": None,
+                                     "dirReverse": None}},
                 "linkOk": False}
 
 
@@ -303,20 +307,21 @@ def parse_master_line(line, module=None):
         firmware = int(fields["fw"]) if "fw" in fields else None
         calib_error = int(fields["err"]) if "err" in fields else None
         home = fields.get("home")
-        # Гибкая настройка тяги (прошивка с командой m): режим выхода, тахометр,
-        # предел, мёртвая зона и фактическое напряжение выхода.
-        drive_mode = {"0": "pwm", "1": "volt"}.get(fields.get("dm")) if "dm" in fields else None
+        # Настройка тяги (прошивка с командой m): тахометр, предел, нейтраль и
+        # размах серво-импульса, фактический импульс на выходе скорости.
+        # dm/vmin/vmax (аналог 0–5 В) больше не приходят: выход один — серво-ШИМ.
         tach = {"0": False, "1": True}.get(fields.get("tach")) if "tach" in fields else None
         drive_max = int(fields["dmax"]) if "dmax" in fields else None
         try:
-            drive_min_mv = int(fields["vmin"]) if "vmin" in fields else None
-            drive_max_mv = int(fields["vmax"]) if "vmax" in fields else None
-            drive_output_mv = int(fields["out"]) if "out" in fields else None
+            drive_trim_us = int(fields["trim"]) if "trim" in fields else None
+            drive_span_us = int(fields["span"]) if "span" in fields else None
+            drive_pulse_us = int(fields["us"]) if "us" in fields else None
         except ValueError:
             return None
         brake = {"0": False, "1": True}.get(fields.get("brk")) if "brk" in fields else None
+        stop_input = {"0": False, "1": True}.get(fields.get("stp")) if "stp" in fields else None
         dir_reverse = {"0": False, "1": True}.get(fields.get("dir")) if "dir" in fields else None
-        for key, value in (("dm", drive_mode), ("tach", tach), ("brk", brake), ("dir", dir_reverse)):
+        for key, value in (("tach", tach), ("brk", brake), ("dir", dir_reverse), ("stp", stop_input)):
             if key in fields and value is None:
                 return None
         # Обороты и тягу проверяем по тому же пределу, что разрешила плата:
@@ -328,10 +333,12 @@ def parse_master_line(line, module=None):
                 (calib_error is not None and not 0 <= calib_error <= 15) or
                 (home is not None and home not in HOME_SOURCES) or
                 (drive_max is not None and not 1 <= drive_max <= DRIVE_ABS_MAX_PERCENT) or
-                (drive_min_mv is not None and not 0 <= drive_min_mv <= DRIVE_MV_FULL) or
-                (drive_max_mv is not None and not 1 <= drive_max_mv <= DRIVE_MV_FULL) or
-                (drive_min_mv is not None and drive_max_mv is not None and drive_min_mv > drive_max_mv) or
-                (drive_output_mv is not None and not 0 <= drive_output_mv <= DRIVE_MV_FULL)):
+                (drive_trim_us is not None and not SERVO_MIN_US <= drive_trim_us <= SERVO_MAX_US) or
+                (drive_span_us is not None and not 1 <= drive_span_us <= SERVO_SPAN_MAX_US) or
+                (drive_trim_us is not None and drive_span_us is not None and
+                 (drive_trim_us - drive_span_us < SERVO_MIN_US or
+                  drive_trim_us + drive_span_us > SERVO_MAX_US)) or
+                (drive_pulse_us is not None and not SERVO_MIN_US <= drive_pulse_us <= SERVO_MAX_US)):
             return None
         zeroed = fields.get("cal") == "1"
         if home is None:
@@ -358,14 +365,15 @@ def parse_master_line(line, module=None):
             # Поле появилось в прошивке v2 после руля; старые кадры его не содержат.
             "pot": fields.get("pot") == "1",
             "potMode": fields.get("pm") == "1" if fields.get("pm") in {"0", "1"} else None,
-            # Настройка тяги: None у прошивки без команды m (до гибкого привода).
-            "driveMode": drive_mode,
+            # Настройка тяги: None у прошивки без команды m (до гибкого привода)
+            # и у прошивки v5 с аналогом 0–5 В: у неё нет trim/span/us.
             "tach": tach,
             "driveMaxPercent": drive_max,
-            "driveMinMv": drive_min_mv,
-            "driveMaxMv": drive_max_mv,
-            "driveOutputMv": drive_output_mv,
+            "driveTrimUs": drive_trim_us,
+            "driveSpanUs": drive_span_us,
+            "drivePulseUs": drive_pulse_us,
             "brake": brake,
+            "stopInput": stop_input,
             "dirReverse": dir_reverse,
         }
     except (KeyError, ValueError):
@@ -729,8 +737,7 @@ class MasterSource:
                 return None
             return first
 
-        supported = bool(values) and all(frame.get("driveMode") is not None for frame in values)
-        output_mode = common("driveMode")
+        supported = bool(values) and all(frame.get("driveTrimUs") is not None for frame in values)
         tach = common("tach")
         max_percent = common("driveMaxPercent")
         # Даже если платы не сошлись в пределе, осторожная из них задаёт общий:
@@ -738,35 +745,37 @@ class MasterSource:
         limits = [frame.get("driveMaxPercent") for frame in values
                   if frame.get("driveMaxPercent") is not None]
         limit_percent = min(limits) if len(limits) == len(MODULE_TITLES) else None
-        min_mv = common("driveMinMv")
-        max_mv = common("driveMaxMv")
-        output_mv = common("driveOutputMv")
+        trim_us = common("driveTrimUs")
+        span_us = common("driveSpanUs")
+        pulse_us = common("drivePulseUs")
         partial = {
             "supported": supported,
             "confirmed": supported and all(frame.get(field) is not None
                                            for frame in values
-                                           for field in ("driveMaxPercent", "tach", "driveMode")),
-            "outputMode": output_mode,
+                                           for field in ("driveMaxPercent", "tach", "driveTrimUs")),
+            # Выход один — «серво»-ШИМ 50 Гц; поле оставлено, чтобы экран и
+            # сторонние клиенты не гадали, что за режим у плат.
+            "outputMode": "servo" if supported else None,
             "tach": tach,
             "maxPercent": max_percent,
             "limitPercent": limit_percent,
-            "minMv": min_mv,
-            "maxMv": max_mv,
-            "outputMv": output_mv,
+            "trimUs": trim_us,
+            "spanUs": span_us,
+            "pulseUs": pulse_us,
             "brake": common("brake"),
+            "stopInput": common("stopInput"),
             "dirReverse": common("dirReverse"),
             "perModule": {module: {
-                "outputMode": frame.get("driveMode"),
                 "tach": frame.get("tach"),
                 "maxPercent": frame.get("driveMaxPercent"),
-                "minMv": frame.get("driveMinMv"),
-                "maxMv": frame.get("driveMaxMv"),
-                "outputMv": frame.get("driveOutputMv"),
+                "trimUs": frame.get("driveTrimUs"),
+                "spanUs": frame.get("driveSpanUs"),
+                "pulseUs": frame.get("drivePulseUs"),
                 "dirReverse": frame.get("dirReverse"),
             } for module, frame in fresh.items()},
         }
         partial["mixed"] = supported and (
-            output_mode is None or tach is None or max_percent is None)
+            tach is None or max_percent is None or trim_us is None)
         return partial
 
     def drive_limit_percent(self, now=None):
@@ -844,7 +853,7 @@ class MasterSource:
                 why_dir = "serial_unavailable"
             elif frame is None:
                 why_dir = "module_offline"
-            elif frame.get("driveMode") is None:
+            elif frame.get("driveTrimUs") is None:
                 why_dir = "firmware_update_required"
             elif (commanded != 0 or commanded_modules.get(module, 0) or
                   frame.get("calib") or frame.get("cycle") or frame.get("moving") or
@@ -855,7 +864,7 @@ class MasterSource:
                 "reason": why or None,
                 "percent": motors.get(module),
                 "commandedPercent": commanded_modules.get(module, 0),
-                "outputMv": frame.get("driveOutputMv") if frame else None,
+                "pulseUs": frame.get("drivePulseUs") if frame else None,
                 "rpm": frame.get("rpm") if frame else None,
                 "tach": frame.get("tach") if frame else None,
                 # Сторона вращения этого колеса (m dir 0|1 в прошивке):
@@ -877,8 +886,8 @@ class MasterSource:
             "perModule": per_module,
             "active": any(value not in (None, 0) for value in motors.values()),
             "reportedPercent": motors,
-            "reportedOutputMv": {module: frame.get("driveOutputMv")
-                                 for module, frame in fresh_frames.items()},
+            "reportedPulseUs": {module: frame.get("drivePulseUs")
+                                for module, frame in fresh_frames.items()},
             "config": config,
             "alignmentToleranceDeg": DRIVE_ANGLE_ALIGNMENT_DEG,
         }
@@ -984,8 +993,8 @@ class MasterSource:
         return self.drive(0, now)
 
     #: Что можно менять командой m. Каждое действие — один токен настройки.
-    DRIVE_CONFIG_ACTIONS = ("output", "tach", "brake", "limit", "voltage", "defaults",
-                            "direction")
+    DRIVE_CONFIG_ACTIONS = ("tach", "brake", "stop", "limit", "trim", "span",
+                            "defaults", "direction")
 
     def set_drive_config(self, action, value=None, module=None, now=None):
         """Настройка привода тяги на всех четырёх платах (команда m).
@@ -1010,7 +1019,7 @@ class MasterSource:
         if any(mid not in frames or now - frames[mid][1] >= self.STALE_S for mid in MODULE_TITLES):
             return {"ok": False, "reason": "module_offline"}
         values = [frames[mid][0] for mid in MODULE_TITLES]
-        if any(f.get("driveMode") is None for f in values):
+        if any(f.get("driveTrimUs") is None for f in values):
             return {"ok": False, "reason": "firmware_update_required"}
         if drive_active or any(f.get("moving") or f.get("calib") or f.get("cycle") or
                                f.get("drivePercent") for f in values):
@@ -1052,7 +1061,7 @@ class MasterSource:
         if entry is None or now - entry[1] >= self.STALE_S:
             return {"ok": False, "reason": "module_offline"}
         frame = entry[0]
-        if frame.get("driveMode") is None:
+        if frame.get("driveTrimUs") is None:
             return {"ok": False, "reason": "firmware_update_required"}
         if (drive_active or frame.get("moving") or frame.get("calib") or
                 frame.get("cycle") or frame.get("drivePercent")):
@@ -1068,11 +1077,7 @@ class MasterSource:
 
     def _drive_config_commands(self, action, value, values):
         """Действие экрана → команды прошивке или отказ с причиной."""
-        if action == "output":
-            if value not in DRIVE_OUTPUT_MODES:
-                return {"ok": False, "reason": "invalid_value"}
-            return [b"m volt\n" if value == "volt" else b"m pwm\n"]
-        if action in ("tach", "brake"):
+        if action in ("tach", "brake", "stop"):
             if value not in ("on", "off"):
                 return {"ok": False, "reason": "invalid_value"}
             return [("m %s %d\n" % (action, 1 if value == "on" else 0)).encode("ascii")]
@@ -1084,17 +1089,21 @@ class MasterSource:
             if not 1 <= limit <= DRIVE_ABS_MAX_PERCENT:
                 return {"ok": False, "reason": "invalid_value"}
             return [("m max %d\n" % limit).encode("ascii")]
-        if action == "voltage":
-            if not isinstance(value, dict) or set(value) != {"minMv", "maxMv"}:
-                return {"ok": False, "reason": "invalid_value"}
+        if action in ("trim", "span"):
+            # Нейтраль и размах «серво»-импульса. Здесь проверяется только
+            # разумный диапазон одного числа: сочетание «нейтраль ± размах»
+            # проверяет сама плата, у которой свежая настройка (у сервера
+            # телеметрия отстаёт на кадр, и жёсткая сверка отвергала бы
+            # правильную последовательность «span, затем trim»).
             try:
-                min_mv, max_mv = int(value["minMv"]), int(value["maxMv"])
+                pulse = int(value)
             except (TypeError, ValueError):
                 return {"ok": False, "reason": "invalid_value"}
-            if not (0 <= min_mv <= max_mv <= DRIVE_MV_FULL) or max_mv < 1:
+            if action == "trim" and not SERVO_MIN_US <= pulse <= SERVO_MAX_US:
                 return {"ok": False, "reason": "invalid_value"}
-            return [("m vmin %d\n" % min_mv).encode("ascii"),
-                    ("m vmax %d\n" % max_mv).encode("ascii")]
+            if action == "span" and not 1 <= pulse <= SERVO_SPAN_MAX_US:
+                return {"ok": False, "reason": "invalid_value"}
+            return [("m %s %d\n" % (action, pulse)).encode("ascii")]
         if action == "defaults":
             return [b"m reset\n"]
         return {"ok": False, "reason": "invalid_action"}
@@ -1452,13 +1461,12 @@ class MasterSource:
                                "firmware": frame.get("firmware"),
                                "pot": frame.get("pot", False),
                                "potMode": frame.get("potMode"),
-                               # Гибкая настройка тяги своей платы: экран не
-                               # выдаёт «0 об/мин» за измерение, если тахометра
-                               # нет, и показывает напряжение выхода.
+                               # Настройка тяги своей платы: экран не выдаёт
+                               # «0 об/мин» за измерение, если тахометра нет, и
+                               # показывает фактический импульс серво-ШИМ.
                                "tach": frame.get("tach"),
-                               "driveMode": frame.get("driveMode"),
                                "driveMaxPercent": frame.get("driveMaxPercent"),
-                               "driveOutputMv": frame.get("driveOutputMv"),
+                               "drivePulseUs": frame.get("drivePulseUs"),
                                "online": True, "fault": None,
                                "moving": frame["moving"], "calibrating": frame["calib"],
                                "cycling": frame.get("cycle", False)})
@@ -1466,8 +1474,8 @@ class MasterSource:
                 motors.append({"id": mid, "title": MODULE_TITLES[mid], "angle": None,
                                "targetAngle": None, "rpm": None, "temp": None,
                                "drivePercent": None, "homed": None, "online": False, "fault": None,
-                               "pot": None, "tach": None, "driveMode": None,
-                               "driveMaxPercent": None, "driveOutputMv": None,
+                               "pot": None, "tach": None, "driveMaxPercent": None,
+                               "drivePulseUs": None,
                                "moving": False, "calibrating": False})
         out = NoSource().read()              # АКБ и маршрут пока не передаются
         out["motors"] = motors

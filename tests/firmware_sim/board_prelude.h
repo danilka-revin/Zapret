@@ -8,7 +8,19 @@ inline int digitalRead(uint8_t pin) { return sim_board.digital_read(pin); }
 inline int analogRead(uint8_t pin) { return sim_board.analog_read(pin); }
 inline void analogReference(uint8_t) {}
 inline void analogWrite(uint8_t pin, int value) { sim_board.analog[pin] = value; }
-inline uint8_t digitalPinToInterrupt(uint8_t pin) { return pin == 2 ? 4 : 0xFF; }
+// На Mega внешние прерывания: D2 (INT4), D3 (INT5), D18 (INT3), D19 (INT2),
+// D20 (INT1), D21 (INT0). Тахометр переехал на D19 — прерывание есть и там.
+inline uint8_t digitalPinToInterrupt(uint8_t pin) {
+  switch (pin) {
+    case 2: return 4;
+    case 3: return 5;
+    case 18: return 3;
+    case 19: return 2;
+    case 20: return 1;
+    case 21: return 0;
+    default: return 0xFF;
+  }
+}
 inline void attachInterrupt(uint8_t, void (*fn)(), int) { sim_board.tach_fn = fn; }
 inline void detachInterrupt(uint8_t) { sim_board.tach_fn = nullptr; }
 static sim::SimSerial& Serial = sim_board.serial;

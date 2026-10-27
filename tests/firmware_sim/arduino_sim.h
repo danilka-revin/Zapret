@@ -120,6 +120,15 @@ struct Board {
   void (*isr_fn)() = nullptr;
   void (*tach_fn)() = nullptr;
 
+  // «Серво»-ШИМ на D3 (библиотека Servo, заглушка stubs/Servo.h): импульс в мкс.
+  // Прошивка больше не пишет на D3 через analogWrite, поэтому board.analog[3]
+  // остаётся нулём, а реальный выход виден здесь.
+  bool servo_attached = false;
+  uint8_t servo_pin = 0xFF;
+  int16_t servo_min_us = 1000;
+  int16_t servo_max_us = 2000;
+  uint16_t servo_us = 0;
+
   // Модель руля: phys — где колесо на самом деле, в шагах от «прямо».
   long phys = 0;
   long phys_min = 0, phys_max = 0;

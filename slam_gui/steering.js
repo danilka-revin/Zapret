@@ -131,7 +131,7 @@
             <button type="button" id="rc-drive-stop" class="stop" disabled>СТОП</button>
           </div>
           <small id="rc-drive-mode" class="rc-drive-mode">Привод: —</small>
-          <small class="rc-drive-warning">Предел и способ управления (0–5 В или ШИМ), тахометр и тормоз настраиваются на экране «Руление и тяга» (вкладка /controls): настройка живёт в EEPROM платы. Программный стоп и watchdog (650 мс), не аварийный выключатель. Перед запуском вывесьте колёса и установите аппаратную аварийную кнопку в силовую цепь.</small>
+          <small class="rc-drive-warning">Нейтраль и размах серво-ШИМ, тахометр, тормозная линия и линия STOP настраиваются на экране «Руление и тяга» (вкладка /controls): настройка живёт в EEPROM платы. Программный стоп и watchdog (650 мс), не аварийный выключатель. Перед запуском вывесьте колёса и установите аппаратную аварийную кнопку в силовую цепь.</small>
         </section>
       </section>`;
     const header = document.querySelector('.top-status, .head-actions');
@@ -545,15 +545,19 @@
     if (stop) stop.addEventListener('click', () => { void stopDrive(); });
   }
 
-  /** Напряжение выхода для процента тяги — только в режиме 0–5 В. */
-  function driveVoltageFor(percent, config) {
+  /**
+   * Импульс (мкс) для процента тяги: выход один — серво-ШИМ 50 Гц.
+   * 1500 мкс — нейтраль; дальше нейтраль сдвигается настройкой (trim), а
+   * размах (span) задаёт, насколько импульс уходит от неё при полном пределе.
+   */
+  function drivePulseFor(percent, config) {
     const cfg = config || {};
-    if (cfg.outputMode !== 'volt') return null;
-    const min = Number(cfg.minMv) || 0;
-    const max = Number.isFinite(Number(cfg.maxMv)) ? Number(cfg.maxMv) : 5000;
+    if (!cfg.supported) return null;
+    const trim = Number(cfg.trimUs) || 1500;
+    const span = Number(cfg.spanUs) || 500;
     const limit = Math.max(1, Number(cfg.maxPercent) || 20);
     const value = Math.max(0, Math.min(limit, Math.abs(Number(percent) || 0)));
-    return Math.round(min + (max - min) * value / limit);
+    return Math.round(trim + span * value / limit);
   }
 
   function renderDrive() {
@@ -571,11 +575,14 @@
     const modeEl = $('rc-drive-mode');
     if (modeEl) {
       modeEl.textContent = config.supported
-        ? 'Привод: ' + (config.outputMode === 'volt' ? '0–5 В' : config.outputMode === 'pwm' ? 'ШИМ' : 'режимы плат различаются') +
+        ? 'Привод: серво-ШИМ 50 Гц' +
+          (config.mixed ? ' (настройка плат различается)' : '') +
+          ' · нейтраль ' + (config.trimUs || 1500) + ' мкс' +
+          ' · размах ±' + (config.spanUs || 500) + ' мкс' +
           ' · тахометр ' + (config.tach ? 'есть' : 'нет') +
           ' · тормоз ' + (config.brake ? 'есть' : 'нет') +
-          ' · предел ' + max + '%' +
-          (config.outputMode === 'volt' ? ' · ' + (config.minMv || 0) + '–' + (config.maxMv || 5000) + ' мВ' : '')
+          ' · стоп ' + (config.stopInput === false ? 'нет' : 'есть') +
+          ' · предел ' + max + '%'
         : 'Привод: настройка недоступна (прошивка без команды m или нет связи).';
     }
     const supported = !!(snapshot && snapshot.steeringControl && snapshot.steeringControl.available);
@@ -590,13 +597,13 @@
     else if (!authorized) statusEl.textContent = 'Нужен PIN для движения.';
     else if (reason) statusEl.textContent = reason;
     else if (drive.active) {
-      const voltage = driveVoltageFor(slider.value, config);
+      const pulse = drivePulseFor(slider.value, config);
       statusEl.textContent = 'Движение включено · ' + slider.value + '%' +
-        (voltage != null ? ' ≈ ' + voltage + ' мВ' : '') + ' · отпустите кнопку для торможения.';
+        (pulse != null ? ' ≈ ' + pulse + ' мкс' : '') + ' · отпустите кнопку для торможения.';
     }
     else {
-      const voltage = driveVoltageFor(slider.value, config);
-      statusEl.textContent = 'Готово · ' + (voltage != null ? slider.value + '% ≈ ' + voltage + ' мВ · ' : '') +
+      const pulse = drivePulseFor(slider.value, config);
+      statusEl.textContent = 'Готово · ' + (pulse != null ? slider.value + '% ≈ ' + pulse + ' мкс · ' : '') +
         'все модули на связи и колёса выровнены.';
     }
     statusEl.dataset.ready = String(!!drive.canDrive && authorizedForDrive);

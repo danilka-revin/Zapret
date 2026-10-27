@@ -688,49 +688,55 @@
             <span id="drive-status" role="status">Нужен ноль всех колёс (калибровка)</span>
           </div>
 
-          <!-- Настройка привода: у разных контроллеров вход скорости — аналог
-               0–5 В или ШИМ, тахометр SC и тормозной вход могут отсутствовать.
-               Настройка живёт в EEPROM платы и подтверждается телеметрией. -->
+          <!-- Настройка привода: выход скорости — «серво»-ШИМ 50 Гц на D3, у
+               разных драйверов своя нейтраль и размах; тахометр (D19), тормоз
+               (D5) и вход STOP (D2) могут отсутствовать. Настройка живёт в
+               EEPROM платы и подтверждается телеметрией @TLM. -->
           <details id="drive-setup" class="drive-setup">
-            <summary>Настройка привода · 0–5 В или ШИМ, тахометр</summary>
+            <summary>Настройка привода · серво-ШИМ, нейтраль, тахометр</summary>
             <p class="drive-setup-hint">
-              Плата D3 → вход скорости регулятора. <b>0–5 В</b> (заводской) — тот же analogWrite
-              через RC-фильтр или внешний ЦАП: 255/255 = 5 В, <i>vmin</i> — мёртвая зона
-              регулятора, <i>vmax</i> — полная шкала. <b>ШИМ</b> — процент и есть скважность
-              (t 8 → 20/255) для контроллеров, которые сами сглаживают вход.
-              Тахометр SC (D2) можно не подключать: тогда обороты честно «нет датчика», а не ноль.
+              Плата D3 → вход скорости регулятора: <b>«серво»-ШИМ 50 Гц</b>, импульс
+              1000…2000 мкс, как у сервопривода постоянного вращения (1500 мкс — стоим).
+              <i>Нейтраль</i> — где именно у этого драйвера «стоим» (часто не ровно 1500),
+              <i>размах</i> — сколько микросекунд до полного предела; края 1000 и 2000 мкс
+              прошивка не переступает. Аналогового выхода 0–5 В больше нет.
+              Тахометр BLDC — отдельным проводом на <b>D19</b>: можно не подключать, тогда
+              обороты честно «нет датчика», а не ноль. Вход <b>STOP</b> драйвера — на D2.
               Менять можно только при выключенной тяге; настройка сохраняется в EEPROM платы и
-              переживает перезапуск по USB. Подтверждение — в телеметрии @TLM (dm/tach/dmax).
+              переживает перезапуск по USB. Подтверждение — в телеметрии @TLM (tach/dmax/trim/span/us).
               <b>Сторону вращения</b> здесь не меняют: колёса стоят зеркально, поэтому «вперёд»
               задаётся у каждого колеса отдельно — кнопка «⇄» в его карточке (<i>m dir 0|1</i>).
             </p>
             <div class="drive-setup-grid">
               <label>Выход на регулятор
-                <select id="drive-cfg-output" aria-label="Выход на регулятор скорости">
-                  <option value="volt">0–5 В (analogWrite)</option>
-                  <option value="pwm">ШИМ (скважность)</option>
-                </select>
+                <output class="drive-setup-fixed">серво-ШИМ 50 Гц · D3</output>
               </label>
-              <label>Тахометр SC (D2)
+              <label>Нейтраль (trim) <b><output id="drive-cfg-trim-value">1500</output> мкс</b>
+                <input id="drive-cfg-trim" type="range" min="1000" max="2000" step="5" value="1500" aria-label="Нейтраль серво-импульса, микросекунды">
+              </label>
+              <label>Размах (span) <b>±<output id="drive-cfg-span-value">500</output> мкс</b>
+                <input id="drive-cfg-span" type="range" min="50" max="500" step="10" value="500" aria-label="Размах серво-импульса от нейтрали, микросекунды">
+              </label>
+              <label>Тахометр SC (D19)
                 <select id="drive-cfg-tach" aria-label="Тахометр подключён">
                   <option value="on">подключён</option>
                   <option value="off">не подключён</option>
                 </select>
               </label>
-              <label>Тормозной вход BRAKE
+              <label>Тормозной вход BRAKE (D5)
                 <select id="drive-cfg-brake" aria-label="Тормозной вход подключён">
+                  <option value="on">подключён</option>
+                  <option value="off">не подключён</option>
+                </select>
+              </label>
+              <label>Вход STOP (D2)
+                <select id="drive-cfg-stop" aria-label="Вход STOP драйвера подключён">
                   <option value="on">подключён</option>
                   <option value="off">не подключён</option>
                 </select>
               </label>
               <label>Предел тяги <b><output id="drive-cfg-limit-value">20</output>%</b>
                 <input id="drive-cfg-limit" type="range" min="1" max="100" step="1" value="20" aria-label="Предел тяги, процент">
-              </label>
-              <label>Мёртвая зона vmin <b><output id="drive-cfg-vmin-value">0</output> мВ</b>
-                <input id="drive-cfg-vmin" type="range" min="0" max="5000" step="50" value="0" aria-label="Минимальное напряжение, милливольты">
-              </label>
-              <label>Полная шкала vmax <b><output id="drive-cfg-vmax-value">5000</output> мВ</b>
-                <input id="drive-cfg-vmax" type="range" min="50" max="5000" step="50" value="5000" aria-label="Максимальное напряжение, милливольты">
               </label>
             </div>
             <div class="drive-setup-actions">
