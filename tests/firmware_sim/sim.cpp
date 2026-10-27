@@ -75,19 +75,19 @@ static void bind_boards() {
   board_fl.name = "FL";
   board_fl.setup_fn = wheel_fl::setup;
   board_fl.loop_fn = wheel_fl::loop;
-  board_fl.isr_fn = wheel_fl::TIMER1_COMPA_vect_handler;
+  board_fl.isr_fn = wheel_fl::TIMER2_COMPA_vect_handler;
   board_fr.name = "FR";
   board_fr.setup_fn = wheel_fr::setup;
   board_fr.loop_fn = wheel_fr::loop;
-  board_fr.isr_fn = wheel_fr::TIMER1_COMPA_vect_handler;
+  board_fr.isr_fn = wheel_fr::TIMER2_COMPA_vect_handler;
   board_rl.name = "RL";
   board_rl.setup_fn = wheel_rl::setup;
   board_rl.loop_fn = wheel_rl::loop;
-  board_rl.isr_fn = wheel_rl::TIMER1_COMPA_vect_handler;
+  board_rl.isr_fn = wheel_rl::TIMER2_COMPA_vect_handler;
   board_rr.name = "RR";
   board_rr.setup_fn = wheel_rr::setup;
   board_rr.loop_fn = wheel_rr::loop;
-  board_rr.isr_fn = wheel_rr::TIMER1_COMPA_vect_handler;
+  board_rr.isr_fn = wheel_rr::TIMER2_COMPA_vect_handler;
 }
 
 static void boot(std::vector<sim::Board*> list) {
