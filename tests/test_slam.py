@@ -784,6 +784,93 @@ def test_individual_drive_guards():
     assert full.drive_module("FL", 8, now=100.2)["reason"] == "command_queue_full"
 
 
+def test_module_direction_is_per_wheel_and_guarded():
+    """Сторона вращения — настройка одного колеса, а не всех четырёх.
+
+    Колёса стоят зеркально, поэтому «вперёд» у левого и правого борта — разные
+    DIR. Сервер должен слать «m FL dir 1» только на порт этого колеса, не
+    трогать остальные и не менять направление на ходу.
+    """
+    backend = _load_backend()
+    src = _bare_master_source(backend)
+    src.drive_modules = {}
+    for module in ("FL", "FR", "RL", "RR"):
+        src.feed(_drive_frame(module), now=100.0)
+
+    assert src.set_drive_config("direction", "reverse", "FL", now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m FL dir 1\n"
+    assert src.set_drive_config("direction", "normal", "FL", now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m FL dir 0\n"
+    answer = src.set_drive_config("direction", True, "FR", now=100.2)
+    assert answer["ok"] is True and answer["reverse"] is True and answer["module"] == "FR"
+    assert src.commands.get_nowait() == b"m FR dir 1\n"
+
+    # Некорректные значения и имена отклоняются, а не «примерно применяются».
+    assert src.set_drive_config("direction", "maybe", "FL", now=100.2)["reason"] == "invalid_value"
+    assert src.set_drive_config("direction", "reverse", None, now=100.2)["reason"] == "invalid_module"
+    assert src.set_drive_config("direction", "reverse", "XX", now=100.2)["reason"] == "invalid_module"
+    assert src.commands.empty()
+
+    # Направление меняют у стоящего колеса: реверс DIR под тягой — рывок.
+    assert src.drive_module("FL", 8, now=100.2)["ok"] is True
+    src.commands.get_nowait()
+    assert src.set_drive_config("direction", "reverse", "FL", now=100.2)["reason"] == "module_busy"
+    # ... а соседнее колесо, которое стоит, — можно: у него своя плата.
+    assert src.set_drive_config("direction", "reverse", "FR", now=100.2)["ok"] is True
+    src.commands.get_nowait()
+    assert src.drive_module("FL", 0, now=100.2)["ok"] is True
+    src.commands.get_nowait()
+
+    # Нет свежей телеметрии этого колеса — понятный отказ.
+    assert src.set_drive_config("direction", "reverse", "RL", now=103.5)["reason"] == "module_offline"
+    src.serial_ready.clear()
+    assert src.set_drive_config("direction", "reverse", "FL", now=100.2)["reason"] == "serial_unavailable"
+    src.serial_ready.set()
+
+    # Старая прошивка (без команды m) направление не умеет.
+    legacy = _bare_master_source(backend)
+    legacy.drive_modules = {}
+    for module in ("FL", "FR", "RL", "RR"):
+        legacy.feed("@TLM mod=%s deg=0 tgt=0 moving=0 cal=1 rpm=0 fw=4" % module, now=100.0)
+    assert legacy.set_drive_config("direction", "reverse", "FL",
+                                   now=100.2)["reason"] == "firmware_update_required"
+
+    # Очередь занята — отказ, а не потерянная настройка.
+    full = _bare_master_source(backend, maxsize=1)
+    full.drive_modules = {}
+    for module in ("FL", "FR", "RL", "RR"):
+        full.feed(_drive_frame(module), now=100.0)
+    full.commands.put_nowait(b"w 1\n")
+    assert full.set_drive_config("direction", "reverse", "FL",
+                                 now=100.2)["reason"] == "command_queue_full"
+
+
+def test_drive_status_reports_direction_of_each_wheel():
+    """Экран рисует «обычное/зеркальное» по телеметрии, а не по своей памяти."""
+    backend = _load_backend()
+    src = _bare_master_source(backend)
+    src.drive_modules = {}
+    for module in ("FL", "FR", "RL", "RR"):
+        src.feed(_drive_frame(module, dr=1 if module in ("FL", "RL") else 0), now=100.0)
+
+    status = src.drive_status(now=100.2)
+    assert status["perModule"]["FL"]["dirReverse"] is True
+    assert status["perModule"]["FR"]["dirReverse"] is False
+    assert all(item["canSetDirection"] for item in status["perModule"].values())
+    assert status["config"]["perModule"]["RL"]["dirReverse"] is True
+
+    # Пока колесо едет, его кнопка направления объясняет, почему нельзя.
+    assert src.drive_module("FR", 8, now=100.2)["ok"] is True
+    item = src.drive_status(now=100.2)["perModule"]["FR"]
+    assert item["canSetDirection"] is False and item["directionReason"] == "module_busy"
+    assert src.drive(0, now=100.2)["ok"] is True
+
+    # Колёса не сошлись в направлении — это норма (зеркальная установка),
+    # поэтому общая настройка не должна считаться «различается» из-за dir.
+    assert src.set_drive_config("direction", "normal", "FL", now=100.2)["ok"] is True
+    src.commands.get_nowait()
+
+
 def test_journal_names_the_wheel_that_was_driven():
     """В журнале видно колесо: FL вперёд и FR назад — две разные записи, не «0»."""
     from robot_control import eventlog
@@ -944,8 +1031,8 @@ def test_dispatch_drive_config_maps_reasons_to_http_codes():
             self.result = result
             self.calls = []
 
-        def set_drive_config(self, action, value=None):
-            self.calls.append((action, value))
+        def set_drive_config(self, action, value=None, module=None):
+            self.calls.append((action, value, module))
             return self.result
 
     for reason, code in (("module_offline", 503), ("serial_unavailable", 503),
@@ -959,7 +1046,25 @@ def test_dispatch_drive_config_maps_reasons_to_http_codes():
     source = Source({"ok": True, "queued": True})
     result, status = slam.dispatch_drive_config(source, {"action": "limit", "value": 30})
     assert result["ok"] is True and status == 200
-    assert source.calls == [("limit", 30)]
+    assert source.calls == [("limit", 30, None)]
+
+    # Сторона вращения одного колеса: имя уходит в источник вместе с действием.
+    source = Source({"ok": True, "queued": True})
+    result, status = slam.dispatch_drive_config(
+        source, {"action": "direction", "module": "fl", "value": "reverse"})
+    assert result["ok"] is True and status == 200
+    assert source.calls == [("direction", "reverse", "FL")]
+
+    for body in ({"action": "direction", "module": "FX", "value": "reverse"},
+                 {"action": "direction", "module": 4, "value": "reverse"}):
+        result, status = slam.dispatch_drive_config(Source({}), body)
+        assert status == 400 and result["reason"] == "invalid_module", body
+    # Имя колеса имеет смысл только для адресной настройки.
+    result, status = slam.dispatch_drive_config(Source({}), {"action": "limit", "module": "FL", "value": 30})
+    assert status == 400 and result["reason"] == "payload"
+    result, status = slam.dispatch_drive_config(Source({"ok": False, "reason": "invalid_module"}),
+                                               {"action": "direction", "module": "FL", "value": "reverse"})
+    assert status == 400 and result["reason"] == "invalid_module"
 
     result, status = slam.dispatch_drive_config(Source({}), {"action": "limit", "oops": 1})
     assert status == 400 and result["reason"] == "payload"

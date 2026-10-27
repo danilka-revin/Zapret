@@ -36,6 +36,7 @@
   const moduleDrive = Object.create(null);          // модуль → направление (-1/0/1)
   const moduleDrivePending = Object.create(null);   // модуль → процент в очереди
   const moduleDriveNote = Object.create(null);      // модуль → {text, until}: отказ платы
+  const moduleDirPending = Object.create(null);     // модуль → ждём ответа на m dir
   let moduleDriveTimer = null;
   let moduleDriveSending = false;
   let moduleDriveFlush = Promise.resolve();
@@ -2747,6 +2748,24 @@
     pin_required: 'PIN истёк; плата остановится по watchdog.'
   };
 
+  /* Сторона вращения колеса (m dir 0|1). Колёса стоят зеркально: у левого и
+   * правого борта «вперёд» — противоположные DIR, поэтому сторону задают
+   * каждому колесу отдельно, а не всем сразу. */
+  const DRIVE_DIR_REASON_TEXT = {
+    invalid_module: 'Неизвестное колесо.',
+    invalid_value: 'Плата не поняла сторону вращения.',
+    module_busy: 'Сначала остановите это колесо: на ходу направление не меняется.',
+    module_offline: 'Нет свежей телеметрии этого колеса.',
+    serial_unavailable: 'Нет связи с USB-платами.',
+    firmware_update_required: 'Прошивка платы не умеет менять направление — обновите её.',
+    command_queue_full: 'Очередь команд занята — повторите.',
+    pin_required: 'PIN истёк — разблокируйте управление.',
+    estop: 'Включён E-STOP: настройка заблокирована.',
+    control_not_supported: 'Настройка доступна только в режиме master.',
+    payload: 'Сервер не понял запрос.',
+    command_failed: 'Плата не приняла настройку.'
+  };
+
   /* ============ Настройка привода тяги (ШИМ / 0–5 В, тахометр) ============
    * Раньше способ управления мотором был зашит в прошивку: колесо с аналоговым
    * входом 0–5 В или снятым тахометром приходилось перепрошивать. Теперь это
@@ -3276,6 +3295,24 @@
     const card = stateEl && stateEl.closest ? stateEl.closest('.steer-drive') : null;
     if (card) card.dataset.active = String(!!holding || (percent != null && percent !== 0));
 
+    // Сторона вращения: «обычное» — «вперёд» это штатный DIR платы,
+    // «зеркальное» — наоборот. Показываем то, что подтвердила телеметрия.
+    const dirReverse = state && state.dirReverse !== undefined ? state.dirReverse : null;
+    const dirStateEl = $('drive-module-dir-state-' + id);
+    if (dirStateEl) {
+      dirStateEl.textContent = dirReverse === true ? 'зеркальное'
+        : (dirReverse === false ? 'обычное' : '—');
+      dirStateEl.dataset.reverse = String(dirReverse === true);
+    }
+    const dirButton = $('drive-module-dir-' + id);
+    if (dirButton) {
+      const dirReady = support && steeringAuthorized && !!info.drive.available &&
+        !!state && !!state.canSetDirection && !moduleDirPending[id];
+      dirButton.disabled = !dirReady;
+      dirButton.setAttribute('aria-pressed', String(dirReverse === true));
+      dirButton.textContent = dirReverse === true ? '⇄ вернуть' : '⇄ зеркалить';
+    }
+
     // Отказ платы (если он был только что) важнее текущего состояния.
     const note = moduleDriveNote[id];
     if (note && note.until <= Date.now()) delete moduleDriveNote[id];
@@ -3296,6 +3333,40 @@
       if (tach === false) parts.push('rpm нет');
       else if (rpm != null) parts.push(Math.round(rpm) + ' об/мин');
       outputEl.textContent = parts.length ? parts.join(' · ') : '—';
+    }
+  }
+
+  /* Сменить сторону вращения одного колеса: «m FL dir 1» уходит только на его
+   * плату. Пока колесо едет, прошивка откажет — экран честно скажет, почему. */
+  async function setModuleDirection(id) {
+    const state = driveModulesInfo(lastData || {}).perModule[id] || null;
+    if (!state || !state.canSetDirection || moduleDirPending[id]) return;
+    const reverse = state.dirReverse !== true;
+    moduleDirPending[id] = true;
+    noteModuleDrive(id, reverse ? 'направление: зеркальное · отправляю…'
+      : 'направление: обычное · отправляю…');
+    try {
+      const response = await fetch('api/kiosk_drive_config', {
+        method: 'POST', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
+        body: JSON.stringify({ action: 'direction', module: id,
+          value: reverse ? 'reverse' : 'normal' })
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.ok) {
+        const reason = body.reason || (response.status === 401 ? 'pin_required' : 'command_failed');
+        if (response.status === 401 || reason === 'pin_required') steeringAuthorized = false;
+        noteModuleDrive(id, DRIVE_DIR_REASON_TEXT[reason] || ('Отказ платы: ' + reason));
+        return;
+      }
+      noteModuleDrive(id, reverse
+        ? 'Направление зеркальное: «вперёд» теперь против прежнего.'
+        : 'Направление обычное: «вперёд» — штатный DIR платы.');
+    } catch (error) {
+      noteModuleDrive(id, 'Связь потеряна: направление не отправлено.');
+    } finally {
+      moduleDirPending[id] = false;
+      renderDriveControls(lastData || {});
     }
   }
 
@@ -3349,6 +3420,8 @@
       bindHold('drive-module-forward-' + id, 1);
       const stopButton = $('drive-module-stop-' + id);
       if (stopButton) stopButton.addEventListener('click', () => stopModuleDrive(id));
+      const dirButton = $('drive-module-dir-' + id);
+      if (dirButton) dirButton.addEventListener('click', () => { void setModuleDirection(id); });
     });
 
     // Настройка привода: ползунки показывают значение сразу, платы получают

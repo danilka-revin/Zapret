@@ -54,7 +54,8 @@ def drive_config(**overrides):
 def per_module_state(**overrides):
     """Готовность одиночной тяги по колёсам (drive.perModule от сервера)."""
     state = {"canDrive": True, "reason": None, "percent": 0, "commandedPercent": 0,
-             "outputMv": 0, "rpm": 0.0, "tach": True}
+             "outputMv": 0, "rpm": 0.0, "tach": True,
+             "dirReverse": False, "canSetDirection": True, "directionReason": None}
     state.update(overrides)
     return {module: dict(state) for module in MODULES}
 
@@ -194,6 +195,65 @@ def test_wheel_drive_shows_reported_output_and_honest_rpm(tmp_path):
     assert "1500 мВ" in cards["FL"]["output"]
     assert "rpm нет" in cards["FL"]["output"]
     assert cards["FL"]["state"].startswith("вперёд")
+
+
+def test_each_wheel_card_shows_its_own_direction(tmp_path):
+    """Сторона вращения — по телеметрии: «обычное» / «зеркальное» у каждого колеса."""
+    per_module = per_module_state()
+    per_module["FL"] = dict(per_module["FL"], dirReverse=True)
+    per_module["RR"] = dict(per_module["RR"], dirReverse=False)
+    report = run_screen(tmp_path, payload(per_module=per_module))
+    cards = {item["id"]: item for item in report["wheelDrive"]}
+    assert cards["FL"]["dirState"] == "зеркальное"
+    assert cards["FL"]["dirPressed"] == "true"
+    assert cards["RR"]["dirState"] == "обычное"
+    assert cards["RR"]["dirPressed"] == "false"
+    assert all(not item["dirDisabled"] for item in cards.values())
+    # Кнопка называет то, что сделает: у зеркального — «вернуть».
+    assert cards["FL"]["dirLabel"] == "⇄ вернуть"
+    assert cards["RR"]["dirLabel"] == "⇄ зеркалить"
+
+
+def test_wheel_direction_toggle_sends_only_that_wheel(tmp_path):
+    """«⇄» в карточке FR: одна адресная команда, без тяги и без остальных колёс."""
+    report = run_screen(tmp_path, payload(actions=[{"type": "wheel-dir", "id": "FR"}]))
+    assert report["renderErrors"] == [], report["renderErrors"]
+    assert report["drives"] == [], "направление не должно включать тягу"
+    assert report["driveCfgSent"] == [
+        {"action": "direction", "value": "reverse", "module": "FR", "header": "steering"}]
+    # Платы подтвердили — карточка показывает то, что прислала телеметрия,
+    # а не то, что оператор попросил.
+    cards = {item["id"]: item for item in report["wheelDrive"]}
+    assert cards["FL"]["dirState"] == "обычное"
+
+
+def test_wheel_direction_can_be_returned_to_normal(tmp_path):
+    per_module = per_module_state()
+    per_module["RL"] = dict(per_module["RL"], dirReverse=True)
+    report = run_screen(tmp_path, payload(per_module=per_module,
+                                          actions=[{"type": "wheel-dir", "id": "RL"}]))
+    assert report["driveCfgSent"] == [
+        {"action": "direction", "value": "normal", "module": "RL", "header": "steering"}]
+
+
+def test_wheel_direction_is_blocked_while_that_wheel_is_not_ready(tmp_path):
+    """На ходу сторону не меняют: кнопка серая и ничего не отправляет."""
+    per_module = per_module_state()
+    per_module["FR"] = dict(per_module["FR"], canSetDirection=False, directionReason="module_busy")
+    report = run_screen(tmp_path, payload(per_module=per_module,
+                                          actions=[{"type": "wheel-dir", "id": "FR"}]))
+    cards = {item["id"]: item for item in report["wheelDrive"]}
+    assert cards["FR"]["dirDisabled"] is True
+    assert cards["FL"]["dirDisabled"] is False
+    assert report["driveCfgSent"] == []
+
+
+def test_wheel_direction_refusal_is_shown_in_the_card(tmp_path):
+    """Отказ платы виден там, где нажали, а не «тихо ничего»."""
+    report = run_screen(tmp_path, payload(driveCfgRefuse="module_busy",
+                                          actions=[{"type": "wheel-dir", "id": "FL"}]))
+    cards = {item["id"]: item for item in report["wheelDrive"]}
+    assert cards["FL"]["state"] == "Сначала остановите это колесо: на ходу направление не меняется."
 
 
 def test_all_presets_are_rendered_in_order(tmp_path):

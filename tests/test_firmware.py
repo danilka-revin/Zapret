@@ -324,6 +324,11 @@ def test_server_routes_commands_by_module(simulator):
     assert backend.MasterSource._command_module(b"t FL 8\n") == "FL"
     assert backend.MasterSource._command_module(b"t rr -3\n") == "RR"
     assert backend.MasterSource._command_module(b"t ALL 8\n") is None
+    # Сторона вращения адресуется так же: имя уходит, на плату летит «m dir 1».
+    assert backend.MasterSource._command_module(b"m FL dir 1\n") == "FL"
+    assert backend.MasterSource._command_module(b"m rr dir 0\n") == "RR"
+    assert backend.MasterSource._command_module(b"m dir 1\n") is None
+    assert backend.MasterSource._command_module(b"m ALL dir 1\n") is None
     assert backend.MasterSource._command_module(b"k\n") is None
     assert backend.MasterSource._command_module(b"b\n") is None
     assert not hasattr(backend.MasterSource, '_line_module')

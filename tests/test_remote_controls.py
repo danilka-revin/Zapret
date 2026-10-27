@@ -54,8 +54,8 @@ class Motors:
         self.calls.append(('drive', module, percent))
         return {'ok': True, 'queued': True, 'module': module, 'percent': round(percent)}
 
-    def set_drive_config(self, action, value=None):
-        self.calls.append(('drive_config', action, value))
+    def set_drive_config(self, action, value=None, module=None):
+        self.calls.append(('drive_config', action, value, module))
         return {'ok': True, 'queued': True}
 
 
@@ -113,9 +113,13 @@ def test_controls_page_reuses_full_motor_ui(client, operator):
     ('calibrate', {'module': 'ALL'}, 'steering', ('calibrate', 'ALL')),
     ('pot_mode', {'action': 'on'}, 'steering', ('pot_mode', 'on')),
     ('drive_config', {'action': 'tach', 'value': 'off'}, 'steering',
-     ('drive_config', 'tach', 'off')),
+     ('drive_config', 'tach', 'off', None)),
     ('drive_config', {'action': 'voltage', 'value': {'minMv': 500, 'maxMv': 4500}}, 'steering',
-     ('drive_config', 'voltage', {'minMv': 500, 'maxMv': 4500})),
+     ('drive_config', 'voltage', {'minMv': 500, 'maxMv': 4500}, None)),
+    # Сторона вращения — настройка одного колеса: имя доезжает до бортового
+    # сервера, иначе реверс получили бы все четыре платы сразу.
+    ('drive_config', {'action': 'direction', 'module': 'FR', 'value': 'reverse'}, 'steering',
+     ('drive_config', 'direction', 'reverse', 'FR')),
     ('drive', {'percent': -8}, 'drive', ('drive', -8)),
     ('drive', {'percent': 0}, 'drive', ('drive', 0)),
     # Тяга одного колеса идёт тем же маршрутом и тем же заголовком команды.

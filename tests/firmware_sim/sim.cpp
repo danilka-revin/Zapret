@@ -1200,6 +1200,67 @@ static void scenario_drive_one_wheel() {
   CHECK(has(board_fl, "неизвестный модуль FX"), "неизвестное имя колеса объяснено");
 }
 
+// Направление вращения — настройка ОДНОГО колеса: «m FL dir 1» меняет местами
+// «вперёд» и «назад» на этом колесе. Колёса стоят зеркально, поэтому одному
+// борту реверс нужен, а другому нет; настройка живёт в EEPROM своей платы.
+static void scenario_drive_direction() {
+  calibrate_all();
+  // Своё имя принимается, чужое — молча пропускается (как «t FL 8» на FR).
+  board_fl.serial.send("m FL dir 1");
+  board_fr.serial.send("m FL dir 1");
+  sim::run_for_ms(2);
+  CHECK(wheel_fl::drive_dir_reverse, "«m FL dir 1» на FL включает реверс");
+  CHECK(!wheel_fr::drive_dir_reverse, "чужое имя «m FL dir 1» на FR ничего не меняет");
+
+  // Реверс — про железо: «вперёд» у зеркального колеса даёт обратный DIR.
+  board_fl.serial.send("t 6");
+  board_fr.serial.send("t 6");
+  sim::run_for_ms(2);
+  CHECK(wheel_fl::drive_active && wheel_fr::drive_active, "оба колеса едут вперёд");
+  CHECK(board_fl.level[4] != board_fr.level[4],
+        "у зеркального FL обратный DIR: FL=%d FR=%d", board_fl.level[4], board_fr.level[4]);
+  CHECK(board_fr.level[4] == wheel_fr::BLDC_DIR_FORWARD_LEVEL, "у FR штатный DIR");
+  // Менять сторону на ходу нельзя: реверс DIR под тягой — рывок.
+  board_fl.serial.send("m dir 0");
+  sim::run_for_ms(2);
+  CHECK(wheel_fl::drive_dir_reverse, "на ходу направление не переключается");
+  CHECK(has(board_fl, "сначала b"), "и оператору сказано, почему");
+  board_fl.serial.send("b");
+  board_fr.serial.send("b");
+  sim::run_for_ms(2);
+
+  // После остановки «назад» на зеркальном колесе — это штатный DIR.
+  board_fl.serial.send("t -6");
+  sim::run_for_ms(2);
+  CHECK(wheel_fl::drive_active && board_fl.analog[3] > 0, "FL едет назад");
+  CHECK(board_fl.level[4] == wheel_fl::BLDC_DIR_FORWARD_LEVEL,
+        "«назад» на зеркальном FL — это штатный DIR: %d", board_fl.level[4]);
+  board_fl.serial.send("b");
+  sim::run_for_ms(2);
+
+  // Известный токен настройки не путается с именем колеса, неизвестное — нет.
+  board_fl.serial.send("m FX 1");
+  board_fl.serial.send("m max 8");
+  sim::run_for_ms(2);
+  CHECK(has(board_fl, "неизвестный модуль FX"), "«m FX 1» — подсказка, а не имя колеса");
+  CHECK(wheel_fl::drive_max_percent == 8, "«m max 8» — по-прежнему настройка: %u",
+        (unsigned)wheel_fl::drive_max_percent);
+
+  // Реверс FL переживает перезапуск платы, а FR остаётся штатным.
+  wheel_fl::setup();
+  wheel_fr::setup();
+  sim::run_for_ms(5);
+  CHECK(wheel_fl::drive_dir_reverse && wheel_fl::drive_max_percent == 8,
+        "реверс из EEPROM: dir=%d max=%u", wheel_fl::drive_dir_reverse,
+        (unsigned)wheel_fl::drive_max_percent);
+  CHECK(!wheel_fr::drive_dir_reverse, "у FR реверс не появился сам");
+
+  // Заводские значения возвращают штатное направление.
+  board_fl.serial.send("m reset");
+  sim::run_for_ms(2);
+  CHECK(!wheel_fl::drive_dir_reverse, "«m reset» — обычное направление");
+}
+
 struct Scenario {
   const char* name;
   void (*fn)();
@@ -1242,6 +1303,7 @@ static const Scenario SCENARIOS[] = {
     {"pot_slope_survives_reboot", scenario_pot_slope_survives_reboot},
     {"drive_config", scenario_drive_config},
     {"drive_one_wheel", scenario_drive_one_wheel},
+    {"drive_direction", scenario_drive_direction},
 };
 
 static int run_one(const Scenario& scenario) {

@@ -1222,12 +1222,17 @@ def test_drive_config_api(kiosk_app, kiosk_client):
     class Source:
         supports_drive = True
 
-        def set_drive_config(self, action, value=None):
+        def __init__(self):
+            self.calls = []
+
+        def set_drive_config(self, action, value=None, module=None):
+            self.calls.append((action, value, module))
             if action == 'invalid_value':
                 return {"ok": False, "reason": "invalid_value"}
             return {"ok": True, "queued": True, "action": action}
 
-    kiosk_app.extensions['rc_slam'].source = Source()
+    source = Source()
+    kiosk_app.extensions['rc_slam'].source = source
     headers = {'X-Robot-Control': 'steering'}
     assert kiosk_client.post('/api/kiosk_drive_config',
                              json={'action': 'output', 'value': 'volt'}).status_code == 400
@@ -1245,3 +1250,15 @@ def test_drive_config_api(kiosk_app, kiosk_client):
                                 json={'action': 'invalid_value'}, headers=headers)
     assert refused.status_code == 400
     assert refused.get_json()['reason'] == 'invalid_value'
+
+    # Сторона вращения одного колеса идёт тем же путём и с именем колеса.
+    assert kiosk_client.post('/api/kiosk_drive_config',
+                             json={'action': 'direction', 'module': 'fl', 'value': 'reverse'},
+                             headers=headers).status_code == 200
+    assert source.calls[-1] == ('direction', 'reverse', 'FL')
+    assert kiosk_client.post('/api/kiosk_drive_config',
+                             json={'action': 'direction', 'module': 'FX', 'value': 'reverse'},
+                             headers=headers).status_code == 400
+    assert kiosk_client.post('/api/kiosk_drive_config',
+                             json={'action': 'limit', 'module': 'FL', 'value': 30},
+                             headers=headers).status_code == 400

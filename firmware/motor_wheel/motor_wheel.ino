@@ -1748,7 +1748,7 @@ uint8_t classifyModuleToken(const char* token) {
 void printHelp() {
   note(PSTR("команды: k, q, c [°], c c, d [°] [f/b], h, s, g, z, p, ?"));
   note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: t [FL] %%, b (своё колесо)"));
-  note(PSTR("двигатель: m [pwm|volt|tach 0|1|brake 0|1|max %|vmin мВ|vmax мВ]"));
+  note(PSTR("двигатель: m [FL] [pwm|volt|tach 0|1|brake 0|1|dir 0|1|max %|vmin мВ|vmax мВ]"));
 }
 
 // Телеметрия не содержит роли колеса: порт назначает оператор в программе.
@@ -1778,6 +1778,17 @@ void appendTelemetry() {
       drive_dir_reverse ? 1 : 0, (unsigned)driveOutputMv(), (unsigned long)millis());
   if (n <= 0 || n >= (int)sizeof(line)) return;
   txAppend(line, (uint16_t)n);
+}
+
+// Токены настройки двигателя: «m dir 1» — это настройка, а не имя колеса,
+// поэтому такое слово нельзя принять за «m FX 8».
+bool driveConfigTokenKnown(const char* token) {
+  static const char* const known[] = {"pwm", "volt", "tach", "brake", "dir",
+                                      "max", "vmin", "vmax", "reset"};
+  for (uint8_t i = 0; i < sizeof(known) / sizeof(known[0]); ++i) {
+    if (strcasecmp_P(token, known[i]) == 0) return true;
+  }
+  return false;
 }
 
 // Общая точка входа USB: «w [FL] …» разбирается на имя колеса и команду ядра,
@@ -1820,6 +1831,40 @@ void handleWheelCommand(char* line) {
       return;
     }
     // «t», «t 8» — прежняя команда на это колесо.
+    handleModuleCommand(line);
+    return;
+  }
+  // Настройка двигателя одного колеса: «m FL dir 1» — как «t FL 8», только для
+  // команды m. Своё имя снимается, чужое молча пропускается: сервер шлёт имя,
+  // чтобы команда ушла на нужный USB, а плата видит привычное «m dir 1».
+  if (strcasecmp_P(command, PSTR("m")) == 0) {
+    char* arg1 = strtok_r(nullptr, " \t", &save);
+    const uint8_t kind = classifyModuleToken(arg1);
+    if (kind == MOD_OTHER) return;
+    if (kind == MOD_MINE || kind == MOD_ALL) {
+      char* arg2 = strtok_r(nullptr, " \t", &save);
+      char* arg3 = strtok_r(nullptr, " \t", &save);
+      char* extra = strtok_r(nullptr, " \t", &save);
+      if (!arg2 || extra) {
+        note(PSTR("Шаблон: m [FL] [pwm|volt|tach 0|1|brake 0|1|dir 0|1|max %|vmin мВ|vmax мВ]"));
+        return;
+      }
+      char local[32];
+      if (arg3) {
+        snprintf_P(local, sizeof(local), PSTR("m %s %s"), arg2, arg3);
+      } else {
+        snprintf_P(local, sizeof(local), PSTR("m %s"), arg2);
+      }
+      handleModuleCommand(local);
+      return;
+    }
+    // «m FX 8» — не имя колеса и не настройка: подсказываем имена колёс.
+    if (kind == MOD_UNKNOWN && arg1 != nullptr && isalpha((unsigned char)arg1[0]) &&
+        strtok_r(nullptr, " \t", &save) && !driveConfigTokenKnown(arg1)) {
+      note(PSTR("неизвестный модуль %s (есть FL, FR, RL, RR, ALL)"), arg1);
+      return;
+    }
+    // «m», «m dir 1», «m pwm» — прежняя команда на это колесо.
     handleModuleCommand(line);
     return;
   }
