@@ -436,8 +436,8 @@ function findPreset(id) {
       await flush(3);
     } else if (action.type === 'drivecfg') {
       const fields = {
-        output: 'drive-cfg-output', tach: 'drive-cfg-tach', brake: 'drive-cfg-brake',
-        limit: 'drive-cfg-limit', vmin: 'drive-cfg-vmin', vmax: 'drive-cfg-vmax',
+        tach: 'drive-cfg-tach', brake: 'drive-cfg-brake', stop: 'drive-cfg-stop',
+        limit: 'drive-cfg-limit', trim: 'drive-cfg-trim', span: 'drive-cfg-span',
       };
       Object.keys(fields).forEach((key) => {
         if (action[key] === undefined) return;
@@ -496,12 +496,12 @@ function findPreset(id) {
       dirDisabled: !!byId('drive-module-dir-' + id).disabled,
     })),
     driveCfg: {
-      output: byId('drive-cfg-output').value,
       tach: byId('drive-cfg-tach').value,
       brake: byId('drive-cfg-brake').value,
+      stop: byId('drive-cfg-stop').value,
       limit: byId('drive-cfg-limit').value,
-      vmin: byId('drive-cfg-vmin').value,
-      vmax: byId('drive-cfg-vmax').value,
+      trim: byId('drive-cfg-trim').value,
+      span: byId('drive-cfg-span').value,
       applyDisabled: !!byId('drive-cfg-apply').disabled,
       resetDisabled: !!byId('drive-cfg-reset').disabled,
       status: byId('drive-cfg-status').textContent,

@@ -1235,14 +1235,15 @@ def test_drive_config_api(kiosk_app, kiosk_client):
     kiosk_app.extensions['rc_slam'].source = source
     headers = {'X-Robot-Control': 'steering'}
     assert kiosk_client.post('/api/kiosk_drive_config',
-                             json={'action': 'output', 'value': 'volt'}).status_code == 400
-    for body in ({}, {'action': []}, {'action': 'output', 'value': 'volt', 'extra': 1}):
+                             json={'action': 'trim', 'value': 1500}).status_code == 400
+    for body in ({}, {'action': []}, {'action': 'trim', 'value': 1500, 'extra': 1}):
         assert kiosk_client.post('/api/kiosk_drive_config', json=body, headers=headers).status_code == 400
-    for body in ({'action': 'output', 'value': 'volt'},
+    for body in ({'action': 'trim', 'value': 1500},
+                 {'action': 'span', 'value': 400},
                  {'action': 'tach', 'value': 'off'},
                  {'action': 'brake', 'value': 'off'},
+                 {'action': 'stop', 'value': 'off'},
                  {'action': 'limit', 'value': 30},
-                 {'action': 'voltage', 'value': {'minMv': 500, 'maxMv': 4500}},
                  {'action': 'defaults'}):
         assert kiosk_client.post('/api/kiosk_drive_config', json=body,
                                  headers=headers).status_code == 200, body

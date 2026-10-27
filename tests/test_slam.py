@@ -629,39 +629,45 @@ def test_pot_mode_requires_all_boards_and_idle_telemetry():
 
 
 # --------------------------- гибкая настройка тяги --------------------------- #
-def _drive_frame(module, *, dm=0, tach=1, dmax=20, vmin=0, vmax=5000, out=0,
+def _drive_frame(module, *, tach=1, dmax=20, trim=1500, span=500, us=1500, stp=1,
                  brk=1, dr=0, deg=0.0, drive=0):
     return ("@TLM mod=%s deg=%.2f tgt=0.00 moving=0 cal=1 cycle=0 calib=0 rpm=0.0 "
-            "drive=%d fw=4 pot=1 pm=1 dm=%d tach=%d dmax=%d vmin=%d vmax=%d brk=%d dir=%d out=%d"
-            % (module, deg, drive, dm, tach, dmax, vmin, vmax, brk, dr, out))
+            "drive=%d fw=6 pot=1 pm=1 tach=%d dmax=%d trim=%d span=%d brk=%d stp=%d dir=%d us=%d"
+            % (module, deg, drive, tach, dmax, trim, span, brk, stp, dr, us))
 
 
 def test_master_telemetry_parses_flexible_drive_configuration():
-    """Прошивка с командой m: режим выхода, тахометр, предел, мВ, фактический выход."""
+    """Прошивка с командой m: тахометр, предел, нейтраль/размах серво-импульса."""
     backend = _load_backend()
     frame = backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=8 fw=4 dm=1 tach=0 "
-        "dmax=40 vmin=500 vmax=4500 brk=0 dir=1 out=1620 t=1")
-    assert frame["driveMode"] == "volt" and frame["tach"] is False
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=8 fw=6 tach=0 "
+        "dmax=40 trim=1620 span=300 brk=0 stp=1 dir=1 us=1770 t=1")
+    assert frame["tach"] is False
     assert frame["driveMaxPercent"] == 40
-    assert (frame["driveMinMv"], frame["driveMaxMv"]) == (500, 4500)
-    assert frame["driveOutputMv"] == 1620
-    assert frame["brake"] is False and frame["dirReverse"] is True
+    assert (frame["driveTrimUs"], frame["driveSpanUs"]) == (1620, 300)
+    assert frame["drivePulseUs"] == 1770
+    assert frame["brake"] is False and frame["stopInput"] is True
+    assert frame["dirReverse"] is True
 
     # Прошивка без команды m: поля отсутствуют, а не выдуманы нулями.
     legacy = backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=0 fw=4")
-    assert legacy["driveMode"] is None and legacy["tach"] is None
-    assert legacy["driveMaxPercent"] is None
+    assert legacy["tach"] is None and legacy["driveTrimUs"] is None
+    assert legacy["driveMaxPercent"] is None and legacy["drivePulseUs"] is None
 
     # Мусор и противоречия не превращаются в «настройку по умолчанию».
-    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dm=9") is None
-    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dm=1 tach=7") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 tach=7") is None
     assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dm=1 vmin=4000 vmax=100") is None
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 trim=900 span=100") is None
     assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dm=1 dmax=101") is None
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 trim=1620 span=480") is None  # 2100 мкс
+    assert backend.parse_master_line(
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 trim=1500 span=600") is None  # шире стандарта
+    assert backend.parse_master_line(
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 us=2500") is None
+    assert backend.parse_master_line(
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dmax=101") is None
     # Тяга не может превышать собственный предел платы.
-    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=30 dm=1 dmax=20") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=30 dmax=20") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=30 dmax=50") is not None
 
 
@@ -692,11 +698,13 @@ def test_drive_config_is_mixed_when_the_plates_disagree():
     src = _bare_master_source(backend)
     for module in ("FL", "FR", "RL"):
         src.feed(_drive_frame(module), now=100.0)
-    src.feed(_drive_frame("RR", dm=1, dmax=40), now=100.0)
+    src.feed(_drive_frame("RR", dmax=40, trim=1520, span=300), now=100.0)
     config = src.drive_config(now=100.2)
     assert config["supported"] is True and config["mixed"] is True
-    assert config["outputMode"] is None and config["maxPercent"] is None
-    assert config["perModule"]["RR"]["outputMode"] == "volt"
+    assert config["maxPercent"] is None and config["trimUs"] is None
+    assert config["perModule"]["RR"]["trimUs"] == 1520
+    assert config["perModule"]["RR"]["spanUs"] == 300
+    assert config["outputMode"] == "servo"
     # Смешанный режим — не повод разрешить тягу: общий предел неизвестен.
     assert src.drive_limit_percent(now=100.2) == backend.MAX_DRIVE_PERCENT
 
@@ -976,28 +984,30 @@ def test_set_drive_config_commands_and_guards():
     for module in ("FL", "FR", "RL", "RR"):
         src.feed(_drive_frame(module), now=100.0)
 
-    assert src.set_drive_config("output", "volt", now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m volt\n"
-    assert src.set_drive_config("output", "pwm", now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m pwm\n"
     assert src.set_drive_config("tach", "off", now=100.2)["ok"] is True
     assert src.commands.get_nowait() == b"m tach 0\n"
     assert src.set_drive_config("tach", "on", now=100.2)["ok"] is True
     assert src.commands.get_nowait() == b"m tach 1\n"
     assert src.set_drive_config("brake", "off", now=100.2)["ok"] is True
     assert src.commands.get_nowait() == b"m brake 0\n"
+    assert src.set_drive_config("stop", "off", now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m stop 0\n"
+    assert src.set_drive_config("stop", "on", now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m stop 1\n"
     assert src.set_drive_config("limit", 45, now=100.2)["ok"] is True
     assert src.commands.get_nowait() == b"m max 45\n"
-    assert src.set_drive_config("voltage", {"minMv": 500, "maxMv": 4500}, now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m vmin 500\n"
-    assert src.commands.get_nowait() == b"m vmax 4500\n"
+    # Нейтраль и размах «серво»-импульса: края 1000…2000 мкс не переступаем.
+    assert src.set_drive_config("span", 300, now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m span 300\n"
+    assert src.set_drive_config("trim", 1620, now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m trim 1620\n"
     assert src.set_drive_config("defaults", now=100.2)["ok"] is True
     assert src.commands.get_nowait() == b"m reset\n"
 
     # Недопустимые значения не уходят на платы.
-    for action, value in (("output", "analog"), ("tach", "yes"), ("limit", 0),
-                          ("limit", 101), ("limit", "abc"), ("voltage", {"minMv": 4000, "maxMv": 100}),
-                          ("voltage", {"minMv": 0}), ("voltage", {"minMv": 0, "maxMv": 6000}),
+    for action, value in (("stop", "yes"), ("tach", "yes"), ("limit", 0),
+                          ("limit", 101), ("limit", "abc"), ("trim", 900), ("trim", 2100),
+                          ("span", 0), ("span", 600), ("span", "abc"),
                           ("unknown", None)):
         result = src.set_drive_config(action, value, now=100.2)
         expected = "invalid_action" if action == "unknown" else "invalid_value"
@@ -1008,7 +1018,7 @@ def test_set_drive_config_commands_and_guards():
     src.drive_percent = 8
     assert src.set_drive_config("limit", 30, now=100.2)["reason"] == "module_busy"
     src.drive_percent = 0
-    src.feed(_drive_frame("FR", dm=0, deg=4.0), now=100.0)
+    src.feed(_drive_frame("FR", deg=4.0), now=100.0)
     src.frames["FR"] = (dict(src.frames["FR"][0], moving=True), 100.0)
     assert src.set_drive_config("limit", 30, now=100.2)["reason"] == "module_busy"
 

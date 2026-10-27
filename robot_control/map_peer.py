@@ -94,7 +94,7 @@ CONTROL_ROUTES = {
     'zero': ('/api/kiosk_zero', {'POST'}, 'steering'),
     'calibrate': ('/api/kiosk_calibrate', {'POST'}, 'steering'),
     'pot_mode': ('/api/kiosk_pot_mode', {'POST'}, 'steering'),
-    # Настройка привода тяги (ШИМ / 0–5 В, тахометр, тормоз, предел).
+    # Настройка привода тяги (серво-ШИМ: нейтраль/размах, тахометр, тормоз, стоп, предел).
     'drive_config': ('/api/kiosk_drive_config', {'POST'}, 'steering'),
     'drive': ('/api/kiosk_drive', {'POST'}, 'drive'),
     'estop': ('/api/estop', {'POST'}, 'drive'),

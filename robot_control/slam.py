@@ -460,7 +460,7 @@ def _drive_limit(source) -> int:
 
 
 def dispatch_drive_config(source, body):
-    """Настройка привода тяги: выход ШИМ/0–5 В, тахометр, тормоз, предел, мВ.
+    """Настройка привода тяги: серво-ШИМ (нейтраль/размах), тахометр, тормоз, стоп, предел.
 
     Отдельное действие ``direction`` — про одно колесо: у зеркально
     поставленных колёс «вперёд» физически разный, и оператор говорит плате,
@@ -1361,7 +1361,7 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
 
     @bp.post("/api/kiosk_drive_config")
     def api_kiosk_drive_config():
-        """Настройка привода тяги: выход (ШИМ / 0–5 В), тахометр, тормоз, предел."""
+        """Настройка привода тяги: серво-ШИМ (нейтраль/размах), тахометр, тормоз, стоп, предел."""
         if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
         if not steering_access_valid():

@@ -114,8 +114,12 @@ def test_controls_page_reuses_full_motor_ui(client, operator):
     ('pot_mode', {'action': 'on'}, 'steering', ('pot_mode', 'on')),
     ('drive_config', {'action': 'tach', 'value': 'off'}, 'steering',
      ('drive_config', 'tach', 'off', None)),
-    ('drive_config', {'action': 'voltage', 'value': {'minMv': 500, 'maxMv': 4500}}, 'steering',
-     ('drive_config', 'voltage', {'minMv': 500, 'maxMv': 4500}, None)),
+    ('drive_config', {'action': 'trim', 'value': 1620}, 'steering',
+     ('drive_config', 'trim', 1620, None)),
+    ('drive_config', {'action': 'span', 'value': 300}, 'steering',
+     ('drive_config', 'span', 300, None)),
+    ('drive_config', {'action': 'stop', 'value': 'off'}, 'steering',
+     ('drive_config', 'stop', 'off', None)),
     # Сторона вращения — настройка одного колеса: имя доезжает до бортового
     # сервера, иначе реверс получили бы все четыре платы сразу.
     ('drive_config', {'action': 'direction', 'module': 'FR', 'value': 'reverse'}, 'steering',

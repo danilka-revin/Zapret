@@ -113,6 +113,15 @@ static bool has(const sim::Board& board, const char* text) {
   return board.serial.output.find(text) != std::string::npos;
 }
 
+// Выход на регулятор — «серво»-ШИМ 50 Гц: нейтраль 1500 мкс, размах ±500 мкс на
+// полный предел. t 8 при пределе 20 % = 1500 + 500·8/20 = 1700 мкс.
+static const uint16_t DRIVE_US_NEUTRAL = 1500;
+static const uint16_t DRIVE_US_8 = 1700;
+
+// Стоит ли колесо (нейтраль) или едет.
+static bool servo_idle(const sim::Board& board) { return board.servo_us == DRIVE_US_NEUTRAL; }
+
+
 static long count(const sim::Board& board, const char* text) {
   long n = 0;
   size_t pos = 0;
@@ -183,7 +192,12 @@ static void scenario_boot() {
   CHECK(has(board_fr, "--- КОЛЕСО FR:"), "приветствие колеса: %s", board_fr.serial.output.c_str());
   CHECK(has(board_fr, "потенциометр A0: 512"), "потенциометр A0 прочитан: %s",
         board_fr.serial.output.c_str());
-  CHECK(board_fr.level[5] == HIGH && board_fr.analog[3] == 0, "BLDC: тормоз включён, PWM 0");
+  CHECK(board_fr.level[5] == HIGH, "BLDC: тормоз включён после старта");
+  CHECK(board_fr.level[2] == HIGH, "BLDC: вход STOP взведён (HIGH) после старта");
+  CHECK(board_fr.servo_attached && board_fr.servo_pin == 3,
+        "D3 отдан библиотеке Servo, а не analogWrite");
+  CHECK(board_fr.servo_us == DRIVE_US_NEUTRAL, "до первой команды — нейтраль %u мкс",
+        (unsigned)board_fr.servo_us);
 }
 
 static void scenario_calib_left() {
@@ -579,20 +593,17 @@ static void scenario_zero_manual() {
   CHECK(board_fr.phys == 700 - 667, "phys=%ld", board_fr.phys);
 }
 
-// Заводской выход — 0–5 В: t 8 при пределе 20 % = 8/20 полной шкалы = 2000 мВ,
-// то есть 102/255 скважности (после RC-фильтра это 2 В на входе регулятора).
-static const int DRIVE_DUTY_8 = 102;
-
 static void scenario_drive() {
   boot({&board_fr});
   board_fr.serial.send("t 8");
   sim::run_for_ms(5);
-  CHECK(board_fr.analog[3] == 0 && board_fr.level[5] == HIGH, "без нуля тяга запрещена");
+  CHECK(servo_idle(board_fr) && board_fr.level[5] == HIGH, "без нуля тяга запрещена");
   board_fr.serial.send("z");
   board_fr.serial.send("t 8");
   sim::run_for_ms(5);
-  CHECK(board_fr.analog[3] == DRIVE_DUTY_8 && board_fr.level[5] == LOW,
-        "t 8 → 102/255 (2 В), тормоз снят");
+  CHECK(board_fr.servo_us == DRIVE_US_8 && board_fr.level[5] == LOW,
+        "t 8 → 1700 мкс, тормоз снят: %u", (unsigned)board_fr.servo_us);
+  CHECK(board_fr.level[2] == LOW, "на время тяги STOP отпущен (LOW)");
   board_fr.serial.send("d 5 f");
   sim::run_for_ms(20);
   CHECK(board_fr.phys == 0 && has(board_fr, "руль заблокирован: включена тяга"), "при тяге руль не крутится");
@@ -600,24 +611,25 @@ static void scenario_drive() {
     board_fr.serial.send("t 8");
     sim::run_for_ms(200);
   }
-  CHECK(FR::drive_active && board_fr.analog[3] == DRIVE_DUTY_8,
+  CHECK(FR::drive_active && board_fr.servo_us == DRIVE_US_8,
         "heartbeat каждые 200 мс держит тягу");
   sim::run_for_ms(700);
-  CHECK(!FR::drive_active && board_fr.analog[3] == 0 && board_fr.level[5] == HIGH,
-        "watchdog 650 мс: PWM 0, тормоз");
+  CHECK(!FR::drive_active && servo_idle(board_fr) && board_fr.level[5] == HIGH &&
+            board_fr.level[2] == HIGH,
+        "watchdog 650 мс: нейтраль, тормоз, STOP взведён");
   CHECK(has(board_fr, "нет команды дольше 650 мс"), "сообщение watchdog");
   board_fr.serial.send("t 8");
   board_fr.serial.send("t -8");
   sim::run_for_ms(5);
-  CHECK(board_fr.analog[3] == 0 && board_fr.level[5] == HIGH, "реверс без остановки — тормоз");
+  CHECK(servo_idle(board_fr) && board_fr.level[5] == HIGH, "реверс без остановки — тормоз");
   board_fr.serial.send("t 25");
   sim::run_for_ms(5);
-  CHECK(board_fr.analog[3] == 0, "t 25 — за пределом, тормоз");
+  CHECK(servo_idle(board_fr), "t 25 — за пределом, тормоз");
   board_fr.serial.send("t 8");
   sim::run_for_ms(5);
   board_fr.serial.send("s");
   sim::run_for_ms(5);
-  CHECK(board_fr.analog[3] == 0 && board_fr.level[5] == HIGH, "s выключает и тягу");
+  CHECK(servo_idle(board_fr) && board_fr.level[5] == HIGH, "s выключает и тягу");
 }
 
 static void scenario_serial_garbage() {
@@ -705,7 +717,7 @@ static void scenario_system_calibrate_all() {
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=5"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=6"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -765,31 +777,34 @@ static void send_drive_heartbeat(int percent, int times) {
   }
 }
 
-static bool all_pwm(int value) {
-  return board_fl.analog[3] == value && board_fr.analog[3] == value && board_rl.analog[3] == value &&
-         board_rr.analog[3] == value;
+// Одинаковый импульс на всех четырёх платах.
+static bool all_servo(uint16_t us) {
+  return board_fl.servo_us == us && board_fr.servo_us == us && board_rl.servo_us == us &&
+         board_rr.servo_us == us;
 }
 
 static void scenario_system_drive() {
   calibrate_all();
   send_drive_heartbeat(8, 3);
-  CHECK(all_pwm(DRIVE_DUTY_8), "t 8 на все четыре порта: %d %d %d %d", board_fl.analog[3],
-        board_fr.analog[3], board_rl.analog[3], board_rr.analog[3]);
+  CHECK(all_servo(DRIVE_US_8), "t 8 на все четыре порта: %u %u %u %u",
+        (unsigned)board_fl.servo_us, (unsigned)board_fr.servo_us,
+        (unsigned)board_rl.servo_us, (unsigned)board_rr.servo_us);
   for (sim::Board* board : all_boards()) board->serial.send("b");
   sim::run_for_ms(10);
-  CHECK(all_pwm(0) && board_fl.level[5] == HIGH && board_rr.level[5] == HIGH, "b — тормоз у всех");
+  CHECK(all_servo(DRIVE_US_NEUTRAL) && board_fl.level[5] == HIGH && board_rr.level[5] == HIGH,
+        "b — нейтраль и тормоз у всех");
   // Плата без нуля тягу не берёт: у каждой платы свой fail-safe.
   wheel_rl::zero_set = false;
   send_drive_heartbeat(8, 2);
-  CHECK(board_rl.analog[3] == 0 && board_fl.analog[3] == DRIVE_DUTY_8 &&
-            board_fr.analog[3] == DRIVE_DUTY_8,
-        "RL без нуля не едет, остальные едут: %d %d %d", board_rl.analog[3], board_fl.analog[3],
-        board_fr.analog[3]);
+  CHECK(servo_idle(board_rl) && board_fl.servo_us == DRIVE_US_8 &&
+            board_fr.servo_us == DRIVE_US_8,
+        "RL без нуля не едет, остальные едут: %u %u %u", (unsigned)board_rl.servo_us,
+        (unsigned)board_fl.servo_us, (unsigned)board_fr.servo_us);
   wheel_rl::zero_set = true;
   send_drive_heartbeat(8, 1);
-  CHECK(all_pwm(DRIVE_DUTY_8), "нули вернули — тяга снова у всех");
+  CHECK(all_servo(DRIVE_US_8), "нули вернули — тяга снова у всех");
   sim::run_for_ms(800);
-  CHECK(all_pwm(0), "без heartbeat все останавливаются по watchdog");
+  CHECK(all_servo(DRIVE_US_NEUTRAL), "без heartbeat все стоят: нейтраль по watchdog");
   CHECK(has(board_fl, "нет команды дольше 650 мс"), "watchdog объяснён в журнале FL");
 }
 
@@ -818,7 +833,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v5"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v6"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -1036,40 +1051,56 @@ static int run_pty(const char* link_base) {
   }
 }
 
-// Настройка тяги (команда m): режим выхода, тахометр, тормоз, реверс, предел,
-// мёртвая зона в милливольтах и сохранение в EEPROM. Раньше всё это было
-// зашито в исходник: колесо с аналоговым входом 0–5 В или без тахометра
-// приходилось перепрошивать, а сервер открывает порт с DTR — плата стартует
-// заново при каждом запуске экрана.
+// Настройка тяги (команда m): нейтраль и размах серво-импульса, тахометр,
+// тормоз, стоп, реверс, предел и сохранение в EEPROM. Выход на регулятор один —
+// «серво»-ШИМ 50 Гц на D3; аналога 0–5 В больше нет.
 static void scenario_drive_config() {
   boot({&board_fr});
   board_fr.serial.send("z");
   sim::run_for_ms(2);
   CHECK(board_fr.tach_fn != nullptr, "по умолчанию тахометр включён");
-  CHECK(FR::drive_mode == FR::DRIVE_OUT_VOLTAGE, "по умолчанию 0–5 В");
+  CHECK(FR::drive_trim_us == DRIVE_US_NEUTRAL && FR::drive_span_us == 500,
+        "заводская нейтраль %u мкс и размах ±%u", (unsigned)FR::drive_trim_us,
+        (unsigned)FR::drive_span_us);
 
-  // ШИМ остаётся доступен: процент — это скважность (t 10 → 26/255).
-  board_fr.serial.send("m pwm");
+  // Нейтраль t 10 при пределе 20 % и размахе 500 = 1500 + 250 = 1750 мкс.
   board_fr.serial.send("t 10");
   sim::run_for_ms(2);
-  CHECK(FR::drive_mode == FR::DRIVE_OUT_PWM, "m pwm — режим ШИМ");
-  CHECK(board_fr.analog[3] == 26, "t 10 в режиме ШИМ: %d/255", board_fr.analog[3]);
+  CHECK(board_fr.servo_us == 1750, "t 10 → 1750 мкс: %u", (unsigned)board_fr.servo_us);
+  board_fr.serial.send("b");
+  sim::run_for_ms(2);
+  CHECK(board_fr.servo_us == DRIVE_US_NEUTRAL, "стоп — снова нейтраль");
+
+  // Размах: тот же процент — меньше хода (1500 + 500·10/20 = 1750 было).
+  board_fr.serial.send("m span 300");
+  sim::run_for_ms(2);
+  board_fr.serial.send("t 10");
+  sim::run_for_ms(2);
+  CHECK(board_fr.servo_us == 1650, "m span 300: t 10 → 1650 мкс: %u",
+        (unsigned)board_fr.servo_us);
   board_fr.serial.send("b");
   sim::run_for_ms(2);
 
-  board_fr.serial.send("m volt");
-  board_fr.serial.send("m vmin 500");
-  board_fr.serial.send("m vmax 4500");
+  // Нейтраль уезжает у конкретного драйвера («стоим» — не ровно 1500 мкс).
+  board_fr.serial.send("m trim 1620");
   sim::run_for_ms(2);
-  CHECK(FR::drive_mode == FR::DRIVE_OUT_VOLTAGE, "m volt — режим 0–5 В");
   board_fr.serial.send("t 10");
   sim::run_for_ms(2);
-  // 500 + (4500 − 500)·10/20 = 2500 мВ → 128/255 скважности.
-  CHECK(board_fr.analog[3] == 128, "t 10 в режиме 0–5 В: %d/255", board_fr.analog[3]);
-  CHECK(std::labs((long)FR::driveOutputMv() - 2500L) <= 20,
-        "выход %u мВ, ожидалось 2500", (unsigned)FR::driveOutputMv());
+  CHECK(board_fr.servo_us == 1770, "m trim 1620: t 10 → 1770 мкс: %u",
+        (unsigned)board_fr.servo_us);
   board_fr.serial.send("b");
   sim::run_for_ms(2);
+  CHECK(board_fr.servo_us == 1620, "нейтраль после m trim — 1620 мкс");
+
+  // За края 1000…2000 мкс импульс не выводим: сервопривод ушёл бы в упор.
+  board_fr.serial.send("m span 600");     // шире стандарта
+  board_fr.serial.send("m span 480");     // 1620 + 480 > 2000
+  board_fr.serial.send("m trim 500");     // вне 1000…2000
+  sim::run_for_ms(2);
+  CHECK(FR::drive_span_us == 300 && FR::drive_trim_us == 1620,
+        "недопустимые m span / m trim отклонены: span=%u trim=%u",
+        (unsigned)FR::drive_span_us, (unsigned)FR::drive_trim_us);
+  CHECK(has(board_fr, "выходит за"), "отказ объяснён оператору");
 
   // Тахометр не подключён: прерывание снимается, телеметрия говорит tach=0.
   board_fr.serial.send("m tach 0");
@@ -1087,14 +1118,34 @@ static void scenario_drive_config() {
   CHECK(board_fr.level[5] == LOW, "без тормоза BRAKE неактивен");
   board_fr.serial.send("t 5");
   sim::run_for_ms(2);
-  CHECK(FR::drive_active && board_fr.analog[3] > 0 && board_fr.level[5] == LOW,
-        "едем без тормозного входа: %d", board_fr.analog[3]);
+  CHECK(FR::drive_active && board_fr.servo_us > DRIVE_US_NEUTRAL && board_fr.level[5] == LOW,
+        "едем без тормозного входа: %u мкс", (unsigned)board_fr.servo_us);
   board_fr.serial.send("b");
   sim::run_for_ms(2);
-  CHECK(board_fr.analog[3] == 0 && board_fr.level[5] == LOW, "стоп без тормоза — выход 0");
+  CHECK(board_fr.servo_us == FR::drive_trim_us && board_fr.level[5] == LOW,
+        "стоп без тормоза — нейтраль %u мкс", (unsigned)board_fr.servo_us);
   board_fr.serial.send("m brake 1");
   sim::run_for_ms(2);
   CHECK(board_fr.level[5] == HIGH, "тормоз снова включён");
+
+  // Вход STOP: пока стоим — HIGH, на время тяги отпускается, без настройки не тянется.
+  CHECK(board_fr.level[2] == HIGH, "в покое STOP взведён");
+  board_fr.serial.send("t 5");
+  sim::run_for_ms(2);
+  CHECK(board_fr.level[2] == LOW, "на время тяги STOP отпущен");
+  board_fr.serial.send("b");
+  sim::run_for_ms(2);
+  CHECK(board_fr.level[2] == HIGH, "после стопа STOP снова взведён");
+  board_fr.serial.send("m stop 0");
+  sim::run_for_ms(2);
+  CHECK(board_fr.level[2] == LOW, "m stop 0 — вывод STOP не тянется в «стоп»");
+  board_fr.serial.send("t 5");
+  board_fr.serial.send("b");
+  sim::run_for_ms(2);
+  CHECK(board_fr.level[2] == LOW, "без входа STOP вывод остаётся разрешающим");
+  board_fr.serial.send("m stop 1");
+  sim::run_for_ms(2);
+  CHECK(board_fr.level[2] == HIGH, "m stop 1 — STOP снова управляется");
 
   // Реверс: DIR перевёрнут относительно штатного «вперёд».
   board_fr.serial.send("m dir 1");
@@ -1109,47 +1160,51 @@ static void scenario_drive_config() {
   sim::run_for_ms(2);
   board_fr.serial.send("t 8");
   sim::run_for_ms(2);
-  CHECK(!FR::drive_active && board_fr.analog[3] == 0, "t выше предела не выполняется");
+  CHECK(!FR::drive_active && board_fr.servo_us == FR::drive_trim_us,
+        "t выше предела не выполняется");
   board_fr.serial.send("t 6");
   sim::run_for_ms(2);
-  CHECK(FR::drive_active && board_fr.analog[3] > 0, "t по пределу едет");
+  CHECK(FR::drive_active && board_fr.servo_us > DRIVE_US_NEUTRAL,
+        "t по пределу едет: %u мкс", (unsigned)board_fr.servo_us);
   board_fr.serial.send("b");
   sim::run_for_ms(2);
 
   // Некорректные значения отклоняются, а не «примерно применяются».
   board_fr.serial.send("m max 0");
-  board_fr.serial.send("m vmin 5000");
+  board_fr.serial.send("m trim 900");
   sim::run_for_ms(2);
-  CHECK(FR::drive_max_percent == 6 && FR::drive_min_mv == 500,
-        "некорректные m max / m vmin отклонены: max=%u vmin=%u",
-        (unsigned)FR::drive_max_percent, (unsigned)FR::drive_min_mv);
+  CHECK(FR::drive_max_percent == 6 && FR::drive_trim_us == 1620,
+        "некорректные m max / m trim отклонены: max=%u trim=%u",
+        (unsigned)FR::drive_max_percent, (unsigned)FR::drive_trim_us);
 
   // Настройка переживает перезапуск платы: сервер открывает порт с DTR.
-  FR::drive_mode = FR::DRIVE_OUT_PWM;
+  board_fr.serial.send("m tach 0");
+  sim::run_for_ms(2);
   FR::drive_tach_enabled = false;
   FR::drive_brake_enabled = true;
+  FR::drive_stop_enabled = false;
   FR::drive_dir_reverse = false;
   FR::drive_max_percent = FR::DRIVE_MAX_PERCENT;
-  FR::drive_min_mv = 0;
-  FR::drive_max_mv = FR::DRIVE_MV_FULL;
+  FR::drive_trim_us = FR::SERVO_CENTER_US;
+  FR::drive_span_us = FR::SERVO_SPAN_DEFAULT_US;
   board_fr.serial.output.clear();
   FR::setup();
   sim::run_for_ms(5);
-  CHECK(FR::drive_mode == FR::DRIVE_OUT_VOLTAGE && FR::drive_max_percent == 6 &&
-            FR::drive_min_mv == 500 && FR::drive_max_mv == 4500 && FR::drive_dir_reverse &&
-            FR::drive_brake_enabled,
-        "настройка из EEPROM: mode=%u max=%u %u-%u dir=%d tach=%d brake=%d",
-        (unsigned)FR::drive_mode, (unsigned)FR::drive_max_percent,
-        (unsigned)FR::drive_min_mv, (unsigned)FR::drive_max_mv, FR::drive_dir_reverse,
+  CHECK(FR::drive_max_percent == 6 && FR::drive_trim_us == 1620 &&
+            FR::drive_span_us == 300 && FR::drive_dir_reverse && FR::drive_brake_enabled &&
+            !FR::drive_tach_enabled,
+        "настройка из EEPROM: max=%u trim=%u span=%u dir=%d tach=%d brake=%d",
+        (unsigned)FR::drive_max_percent, (unsigned)FR::drive_trim_us,
+        (unsigned)FR::drive_span_us, FR::drive_dir_reverse,
         FR::drive_tach_enabled, FR::drive_brake_enabled);
 
-  // Заводские значения: аналоговый выход, тахометр и тормоз, предел 20 %.
-  board_fr.serial.send("m brake 1");
+  // Заводские значения: нейтраль 1500, размах ±500, тахометр и тормоз, предел 20 %.
   board_fr.serial.send("m reset");
   sim::run_for_ms(2);
-  CHECK(FR::drive_mode == FR::DRIVE_OUT_VOLTAGE && FR::drive_max_percent == FR::DRIVE_MAX_PERCENT &&
-            FR::drive_min_mv == 0 && FR::drive_max_mv == FR::DRIVE_MV_FULL &&
-            !FR::drive_dir_reverse && FR::drive_brake_enabled,
+  CHECK(FR::drive_max_percent == FR::DRIVE_MAX_PERCENT &&
+            FR::drive_trim_us == FR::SERVO_CENTER_US &&
+            FR::drive_span_us == FR::SERVO_SPAN_DEFAULT_US &&
+            !FR::drive_dir_reverse && FR::drive_brake_enabled && FR::drive_tach_enabled,
         "m reset — заводские значения");
 }
 
@@ -1160,11 +1215,11 @@ static void scenario_drive_one_wheel() {
   calibrate_all();
   board_fl.serial.send("t FL 8");
   sim::run_for_ms(2);
-  CHECK(wheel_fl::drive_active && board_fl.analog[3] == DRIVE_DUTY_8,
-        "своё имя во «t FL 8» не мешает тяге: %d", board_fl.analog[3]);
-  CHECK(!wheel_fr::drive_active && board_fr.analog[3] == 0,
-        "чужое имя «t FL 8» на FR ничего не включает: %d", board_fr.analog[3]);
-  CHECK(!wheel_rr::drive_active && board_rr.analog[3] == 0, "и на RR тоже");
+  CHECK(wheel_fl::drive_active && board_fl.servo_us == DRIVE_US_8,
+        "своё имя во «t FL 8» не мешает тяге: %u мкс", (unsigned)board_fl.servo_us);
+  CHECK(!wheel_fr::drive_active && servo_idle(board_fr),
+        "чужое имя «t FL 8» на FR ничего не включает: %u мкс", (unsigned)board_fr.servo_us);
+  CHECK(!wheel_rr::drive_active && servo_idle(board_rr), "и на RR тоже");
 
   // Heartbeat идёт только на FL: остальные стоят, а через 650 мс FL встаёт сам.
   for (int i = 0; i < 3; ++i) {
@@ -1173,7 +1228,7 @@ static void scenario_drive_one_wheel() {
   }
   CHECK(wheel_fl::drive_active, "heartbeat «t FL 8» держит только FL");
   sim::run_for_ms(700);
-  CHECK(!wheel_fl::drive_active && board_fl.analog[3] == 0, "без heartbeat FL встал по watchdog");
+  CHECK(!wheel_fl::drive_active && servo_idle(board_fl), "без heartbeat FL встал по watchdog");
 
   // Разные колёса едут в разные стороны — так и делается разворот на месте.
   board_fl.serial.send("t FL 6");
@@ -1183,14 +1238,14 @@ static void scenario_drive_one_wheel() {
         "FL и FR едут одновременно");
   CHECK(board_fl.level[4] != board_fr.level[4], "направления разные: FL=%d FR=%d",
         board_fl.level[4], board_fr.level[4]);
-  CHECK(board_rl.analog[3] == 0 && board_rr.analog[3] == 0, "RL и RR стоят");
+  CHECK(servo_idle(board_rl) && servo_idle(board_rr), "RL и RR стоят");
   board_fl.serial.send("t FL 0");
   sim::run_for_ms(2);
-  CHECK(!wheel_fl::drive_active && board_fl.analog[3] == 0, "«t FL 0» — стоп только FL");
+  CHECK(!wheel_fl::drive_active && servo_idle(board_fl), "«t FL 0» — стоп только FL");
   CHECK(wheel_fr::drive_active, "FR продолжает ехать");
   for (sim::Board* board : all_boards()) board->serial.send("b");
   sim::run_for_ms(2);
-  CHECK(!wheel_fr::drive_active && board_fr.analog[3] == 0, "b — тормоз всем");
+  CHECK(!wheel_fr::drive_active && servo_idle(board_fr), "b — тормоз всем");
 
   // Имя без числа и чужое неизвестное имя честно объяснены оператору.
   board_fl.serial.send("t FL");
@@ -1232,7 +1287,8 @@ static void scenario_drive_direction() {
   // После остановки «назад» на зеркальном колесе — это штатный DIR.
   board_fl.serial.send("t -6");
   sim::run_for_ms(2);
-  CHECK(wheel_fl::drive_active && board_fl.analog[3] > 0, "FL едет назад");
+  CHECK(wheel_fl::drive_active && board_fl.servo_us != DRIVE_US_NEUTRAL, "FL едет назад: %u мкс",
+        (unsigned)board_fl.servo_us);
   CHECK(board_fl.level[4] == wheel_fl::BLDC_DIR_FORWARD_LEVEL,
         "«назад» на зеркальном FL — это штатный DIR: %d", board_fl.level[4]);
   board_fl.serial.send("b");

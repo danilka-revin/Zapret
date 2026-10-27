@@ -2766,15 +2766,18 @@
     command_failed: 'Плата не приняла настройку.'
   };
 
-  /* ============ Настройка привода тяги (ШИМ / 0–5 В, тахометр) ============
-   * Раньше способ управления мотором был зашит в прошивку: колесо с аналоговым
-   * входом 0–5 В или снятым тахометром приходилось перепрошивать. Теперь это
-   * настройка платы (команда m), и экран показывает то, что подтвердила
-   * телеметрия @TLM: dm=, tach=, dmax=, vmin=, vmax=, out=.
+  /* ============== Настройка привода тяги (серво-ШИМ, тахометр) ==============
+   * Выход на регулятор скорости один: «серво»-ШИМ 50 Гц, импульс 1000…2000 мкс,
+   * как у сервопривода постоянного вращения (1500 мкс — нейтраль). Аналог 0–5 В
+   * убран в прошивке, поэтому на экране больше нет выбора «ШИМ / 0–5 В» и
+   * милливольтов — зато есть нейтраль (trim) и размах (span): у конкретного
+   * драйвера «стоим» — не ровно 1500 мкс, и вылечить «ползучесть» можно здесь.
+   * Экран показывает то, что подтвердила телеметрия @TLM: tach=, dmax=, trim=,
+   * span=, us=, brk=, stp=.
    */
   const DRIVE_CONFIG_REASON_TEXT = {
     invalid_action: 'Неизвестное действие настройки привода.',
-    invalid_value: 'Недопустимое значение: проверьте предел и милливольты.',
+    invalid_value: 'Недопустимое значение: проверьте предел, нейтраль и размах.',
     firmware_update_required: 'Прошивка плат не умеет настройку привода — обновите все четыре.',
     module_offline: 'Нужна свежая телеметрия всех четырёх плат.',
     module_busy: 'Сначала остановите тягу и дождитесь, пока колёса встанут.',
@@ -2786,31 +2789,35 @@
     request_header_required: 'Запрос без заголовка команды.',
     command_failed: 'Платы не приняли настройку.'
   };
-  const DRIVE_CONFIG_FIELDS = ['drive-cfg-output', 'drive-cfg-tach', 'drive-cfg-brake',
-    'drive-cfg-limit', 'drive-cfg-vmin', 'drive-cfg-vmax'];
-  // Заводские значения прошивки: аналоговый выход 0–5 В, тахометр и тормоз.
-  const DRIVE_CONFIG_DEFAULTS = { output: 'volt', tach: 'on', brake: 'on', limit: 20, minMv: 0, maxMv: 5000 };
+  const DRIVE_CONFIG_FIELDS = ['drive-cfg-tach', 'drive-cfg-brake', 'drive-cfg-stop',
+    'drive-cfg-limit', 'drive-cfg-trim', 'drive-cfg-span'];
+  // Заводские значения прошивки: нейтраль 1500 мкс, размах ±500, тахометр,
+  // тормоз и вход STOP подключены, предел 20 %.
+  const DRIVE_CONFIG_DEFAULTS = { tach: 'on', brake: 'on', stop: 'on', limit: 20,
+    trim: 1500, span: 500 };
+  // Края импульса в прошивке (SERVO_MIN_US…SERVO_MAX_US): за них не выходим.
+  const SERVO_MIN_US = 1000;
+  const SERVO_MAX_US = 2000;
   let driveCfgPending = false;
   let driveCfgQueue = Promise.resolve();
   let driveCfgDesired = null;      // ожидаемое подтверждение плат
   let driveCfgMessage = '';
   let driveCfgMessageUntil = 0;
 
-  /** Напряжение выхода для процента тяги — только в режиме 0–5 В. */
-  function driveVoltageFor(percent, config) {
+  /** Импульс (мкс) для процента тяги — по подтверждённым платами нейтрали и размаху. */
+  function drivePulseFor(percent, config) {
     const cfg = config || {};
-    if (cfg.outputMode !== 'volt') return null;
-    const min = Number(cfg.minMv) || 0;
-    const max = Number.isFinite(Number(cfg.maxMv)) ? Number(cfg.maxMv) : 5000;
+    if (cfg.outputMode !== 'servo') return null;
+    const trim = Number.isFinite(Number(cfg.trimUs)) ? Number(cfg.trimUs) : 1500;
+    const span = Number.isFinite(Number(cfg.spanUs)) ? Number(cfg.spanUs) : 500;
     const limit = Math.max(1, Number(cfg.maxPercent) || 20);
     const value = Math.max(0, Math.min(limit, Math.abs(Number(percent) || 0)));
-    const mv = min + (max - min) * value / limit;
-    return Math.round(mv);
+    return Math.round(trim + span * value / limit);
   }
 
   function driveConfigSignature(cfg) {
     const c = cfg || {};
-    return [c.outputMode, c.tach, c.brake, c.maxPercent, c.minMv, c.maxMv].join('|');
+    return [c.outputMode, c.tach, c.brake, c.stopInput, c.maxPercent, c.trimUs, c.spanUs].join('|');
   }
 
   function driveConfigEnabled(d, cfg, authorized) {
@@ -2828,35 +2835,36 @@
   }
 
   function renderDriveConfigPanel(d, authorized) {
-    const output = $('drive-cfg-output');
-    if (!output) return;
+    const tach = $('drive-cfg-tach');
+    if (!tach) return;
     const config = ((d || {}).drive || {}).config || {};
     const state = driveConfigEnabled(d, config, authorized);
     // Пока оператор ведёт ползунок, значения из телеметрии его не перебивают.
     const active = document.activeElement && document.activeElement.id;
     const editing = DRIVE_CONFIG_FIELDS.indexOf(String(active || '')) >= 0;
     if (!editing) {
-      setDriveCfgOutput('drive-cfg-output', config.outputMode || 'volt');
       setDriveCfgOutput('drive-cfg-tach', config.tach === false ? 'off' : 'on');
       setDriveCfgOutput('drive-cfg-brake', config.brake === false ? 'off' : 'on');
+      setDriveCfgOutput('drive-cfg-stop', config.stopInput === false ? 'off' : 'on');
       const limit = Math.max(1, Math.min(100, Number(config.maxPercent) || 20));
-      const minMv = Math.max(0, Math.min(5000, Number(config.minMv) || 0));
-      const maxMv = Math.max(1, Math.min(5000, Number.isFinite(Number(config.maxMv)) ? Number(config.maxMv) : 5000));
+      const trim = Math.max(SERVO_MIN_US, Math.min(SERVO_MAX_US, Number(config.trimUs) || 1500));
+      const span = Math.max(1, Math.min(500, Number(config.spanUs) || 500));
       setDriveCfgOutput('drive-cfg-limit', String(limit));
-      setDriveCfgOutput('drive-cfg-vmin', String(minMv));
-      setDriveCfgOutput('drive-cfg-vmax', String(maxMv));
+      setDriveCfgOutput('drive-cfg-trim', String(trim));
+      setDriveCfgOutput('drive-cfg-span', String(span));
       setText($('drive-cfg-limit-value'), String(limit));
-      setText($('drive-cfg-vmin-value'), String(minMv));
-      setText($('drive-cfg-vmax-value'), String(maxMv));
+      setText($('drive-cfg-trim-value'), String(trim));
+      setText($('drive-cfg-span-value'), String(span));
     }
-    // Предел у ползунка vmin не должен уехать выше vmax и наоборот.
-    const vminEl = $('drive-cfg-vmin');
-    const vmaxEl = $('drive-cfg-vmax');
-    if (vminEl && vmaxEl) {
-      const max = Math.max(0, Number(vmaxEl.value) || 0);
-      const min = Math.max(0, Number(vminEl.value) || 0);
-      vminEl.max = String(Math.min(5000, Math.max(0, max)));
-      vmaxEl.min = String(Math.min(5000, Math.max(50, min)));
+    // Нейтраль и размах не должны выводить импульс за 1000…2000 мкс.
+    const trimEl = $('drive-cfg-trim');
+    const spanEl = $('drive-cfg-span');
+    if (trimEl && spanEl) {
+      const trim = Math.max(SERVO_MIN_US, Number(trimEl.value) || 1500);
+      const span = Math.max(1, Number(spanEl.value) || 500);
+      trimEl.min = String(SERVO_MIN_US + span);
+      trimEl.max = String(SERVO_MAX_US - span);
+      spanEl.max = String(Math.max(1, Math.min(500, Math.min(trim - SERVO_MIN_US, SERVO_MAX_US - trim))));
     }
     if (driveCfgDesired && config.supported && driveConfigSignature(config) === driveCfgDesired.signature) {
       driveCfgDesired = null;
@@ -2886,13 +2894,13 @@
     } else if (state.busy) {
       text = 'Сначала остановите тягу и дождитесь остановки колёс.';
     } else {
-      text = 'Подтверждено: ' + (config.outputMode === 'volt' ? '0–5 В' : 'ШИМ') +
+      text = 'Подтверждено: серво-ШИМ 50 Гц · нейтраль ' + (config.trimUs || 1500) +
+        ' мкс · размах ±' + (config.spanUs || 500) + ' мкс' +
         ' · тахометр ' + (config.tach ? 'есть' : 'нет') +
         ' · тормоз ' + (config.brake ? 'есть' : 'нет') +
+        ' · стоп ' + (config.stopInput === false ? 'нет' : 'есть') +
         ' · предел ' + (config.maxPercent || 20) + '%' +
-        (config.outputMode === 'volt'
-          ? ' · ' + (config.minMv || 0) + '–' + (config.maxMv || 5000) + ' мВ, выход ' + (config.outputMv || 0) + ' мВ'
-          : ' · выход ' + (config.outputMv || 0) + ' мВ');
+        ' · импульс ' + (config.pulseUs || 0) + ' мкс';
     }
     const status = $('drive-cfg-status');
     if (status) status.textContent = text;
@@ -2933,19 +2941,19 @@
   }
 
   function driveConfigFormValues() {
-    const output = $('drive-cfg-output');
     const tach = $('drive-cfg-tach');
     const brake = $('drive-cfg-brake');
+    const stop = $('drive-cfg-stop');
     const limitEl = $('drive-cfg-limit');
-    const vminEl = $('drive-cfg-vmin');
-    const vmaxEl = $('drive-cfg-vmax');
+    const trimEl = $('drive-cfg-trim');
+    const spanEl = $('drive-cfg-span');
     return {
-      output: output ? String(output.value || 'volt') : 'volt',
       tach: tach ? String(tach.value || 'on') : 'on',
       brake: brake ? String(brake.value || 'on') : 'on',
+      stop: stop ? String(stop.value || 'on') : 'on',
       limit: Math.max(1, Math.min(100, Number(limitEl && limitEl.value) || 20)),
-      minMv: Math.max(0, Math.min(5000, Number(vminEl && vminEl.value) || 0)),
-      maxMv: Math.max(1, Math.min(5000, Number(vmaxEl && vmaxEl.value) || 5000))
+      trim: Math.max(SERVO_MIN_US, Math.min(SERVO_MAX_US, Number(trimEl && trimEl.value) || 1500)),
+      span: Math.max(1, Math.min(500, Number(spanEl && spanEl.value) || 500))
     };
   }
 
@@ -2961,8 +2969,8 @@
     // нельзя менять на ходу, даже если браузер дал click.
     if (!driveConfigReadyToSend()) return;
     const values = driveConfigFormValues();
-    if (values.minMv > values.maxMv) {
-      driveCfgMessage = 'Мёртвая зона не может быть больше полной шкалы.';
+    if (values.trim - values.span < SERVO_MIN_US || values.trim + values.span > SERVO_MAX_US) {
+      driveCfgMessage = 'Нейтраль ± размах выходят за 1000…2000 мкс: сервопривод уйдёт в упор.';
       driveCfgMessageUntil = Date.now() + 8000;
       renderDriveConfigPanel(lastData || {}, steeringAuthorized);
       return;
@@ -2971,18 +2979,21 @@
     driveCfgMessageUntil = Date.now() + 8000;
     renderDriveConfigPanel(lastData || {}, steeringAuthorized);
     const steps = [
-      { action: 'output', value: values.output },
+      // Сначала нейтраль и размах, потом остальное: прошивка проверяет края
+      // каждой команды, и «span 400» при нейтрали 1500 пройдёт, а наоборот — нет.
+      { action: 'span', value: values.span },
+      { action: 'trim', value: values.trim },
       { action: 'tach', value: values.tach },
       { action: 'brake', value: values.brake },
-      { action: 'limit', value: values.limit },
-      { action: 'voltage', value: { minMv: values.minMv, maxMv: values.maxMv } }
+      { action: 'stop', value: values.stop },
+      { action: 'limit', value: values.limit }
     ];
     for (const step of steps) {
       if (!(await queueDriveConfig(step))) return;
     }
     driveCfgDesired = {
-      signature: [values.output, values.tach === 'on', values.brake === 'on',
-        values.limit, values.minMv, values.maxMv].join('|'),
+      signature: ['servo', values.tach === 'on', values.brake === 'on',
+        values.stop === 'on', values.limit, values.trim, values.span].join('|'),
       deadline: Date.now() + 8000
     };
     driveCfgMessage = 'Команда отправлена · ждём подтверждения телеметрии…';
@@ -2997,8 +3008,9 @@
     renderDriveConfigPanel(lastData || {}, steeringAuthorized);
     if (!(await queueDriveConfig({ action: 'defaults' }))) return;
     driveCfgDesired = {
-      signature: [DRIVE_CONFIG_DEFAULTS.output, true, true,
-        DRIVE_CONFIG_DEFAULTS.limit, DRIVE_CONFIG_DEFAULTS.minMv, DRIVE_CONFIG_DEFAULTS.maxMv].join('|'),
+      signature: ['servo', true, true, true,
+        DRIVE_CONFIG_DEFAULTS.limit, DRIVE_CONFIG_DEFAULTS.trim,
+        DRIVE_CONFIG_DEFAULTS.span].join('|'),
       deadline: Date.now() + 8000
     };
     driveCfgMessage = 'Заводские отправлены · ждём подтверждения плат…';
@@ -3029,14 +3041,14 @@
     if (forward) forward.disabled = !enabled || !drive.canDrive;
     if (stop) stop.disabled = !enabled;
     const reason = drive.reason && DRIVE_REASON_TEXT[drive.reason];
-    const mode = config.outputMode === 'volt' ? '0–5 В' : (config.outputMode === 'pwm' ? 'ШИМ' : '');
-    const voltage = driveVoltageFor(speed.value, config);
+    const mode = config.outputMode === 'servo' ? 'серво-ШИМ 50 Гц' : '';
+    const pulse = drivePulseFor(speed.value, config);
     if (!supported && String((d.steeringControl || {}).source || '') === 'master-peer') status.textContent = 'Тяга — только на бортовом экране (порт 8090).';
     else if (!supported) status.textContent = 'Тяга доступна при RC_SLAM_SOURCE=master.';
     else if (!steeringAuthorized) status.textContent = 'Управление временно недоступно.';
     else if (reason) status.textContent = reason;
-    else if (drive.active) status.textContent = 'Движение включено · ' + speed.value + '%' + (voltage != null ? ' ≈ ' + voltage + ' мВ' : '') + ' · отпустите кнопку для торможения.';
-    else if (voltage != null) status.textContent = 'Готово · ' + mode + ' · ' + speed.value + '% ≈ ' + voltage + ' мВ · колёса выровнены.';
+    else if (drive.active) status.textContent = 'Движение включено · ' + speed.value + '%' + (pulse != null ? ' ≈ ' + pulse + ' мкс' : '') + ' · отпустите кнопку для торможения.';
+    else if (pulse != null) status.textContent = 'Готово · ' + mode + ' · ' + speed.value + '% ≈ ' + pulse + ' мкс · колёса выровнены.';
     else status.textContent = 'Готово · ' + (mode ? mode + ' · ' : '') + 'модули на связи, колёса выровнены.';
     status.dataset.ready = String(!!drive.canDrive && enabled);
     // Тяга каждого колеса: своя готовность и свои кнопки в карточке.
@@ -3285,7 +3297,7 @@
     const canDrive = enabled && !!state.canDrive;
     const holding = moduleDrive[id] || 0;
     const percent = motor && motor.drivePercent != null ? Number(motor.drivePercent) : null;
-    const outputMv = motor && motor.driveOutputMv != null ? Number(motor.driveOutputMv) : null;
+    const pulseUs = motor && motor.drivePulseUs != null ? Number(motor.drivePulseUs) : null;
     const tach = motor ? motor.tach : null;
     const rpm = motor && motor.rpm != null ? Number(motor.rpm) : null;
     if (slider) slider.disabled = !canDrive;
@@ -3329,7 +3341,7 @@
     if (stateEl) stateEl.textContent = text;
     if (outputEl) {
       const parts = [];
-      if (outputMv != null) parts.push(outputMv + ' мВ');
+      if (pulseUs != null) parts.push(pulseUs + ' мкс');
       if (tach === false) parts.push('rpm нет');
       else if (rpm != null) parts.push(Math.round(rpm) + ' об/мин');
       outputEl.textContent = parts.length ? parts.join(' · ') : '—';
@@ -3431,8 +3443,8 @@
     const cfgReset = $('drive-cfg-reset');
     if (cfgReset) cfgReset.addEventListener('click', () => { void resetDriveConfig(); });
     [['drive-cfg-limit', 'drive-cfg-limit-value', ''],
-      ['drive-cfg-vmin', 'drive-cfg-vmin-value', ' мВ'],
-      ['drive-cfg-vmax', 'drive-cfg-vmax-value', ' мВ']].forEach(([id, out, suffix]) => {
+      ['drive-cfg-trim', 'drive-cfg-trim-value', ' мкс'],
+      ['drive-cfg-span', 'drive-cfg-span-value', ' мкс']].forEach(([id, out, suffix]) => {
       const slider = $(id);
       if (!slider) return;
       slider.addEventListener('input', () => setText($(out), String(slider.value) + suffix));

@@ -35,16 +35,17 @@ def motor(module, *, angle=0.0, target=None, online=True, homed=True, moving=Fal
         "angle": angle, "targetAngle": angle if target is None else target,
         "moving": moving, "calibrating": False,
         "cycling": False, "opto": False, "calibError": 0, "drivePercent": 0, "rpm": 0.0,
-        "firmware": 3, "pot": True,
+        "firmware": 6, "pot": True,
     }
 
 
 def drive_config(**overrides):
-    """Гибкая настройка привода в ответе сервера (поля dm/tach/dmax/vmin/vmax/out)."""
+    """Настройка привода в ответе сервера: серво-ШИМ, нейтраль, размах, STOP."""
     config = {
         "supported": True, "confirmed": True, "mixed": False,
-        "outputMode": "pwm", "tach": True, "brake": True,
-        "maxPercent": 20, "minMv": 0, "maxMv": 5000, "outputMv": 0,
+        "outputMode": "servo", "tach": True, "brake": True, "stopInput": True,
+        "maxPercent": 20, "limitPercent": 20,
+        "trimUs": 1500, "spanUs": 500, "pulseUs": 0,
         "dirReverse": False, "perModule": {},
     }
     config.update(overrides)
@@ -54,7 +55,7 @@ def drive_config(**overrides):
 def per_module_state(**overrides):
     """Готовность одиночной тяги по колёсам (drive.perModule от сервера)."""
     state = {"canDrive": True, "reason": None, "percent": 0, "commandedPercent": 0,
-             "outputMv": 0, "rpm": 0.0, "tach": True,
+             "pulseUs": 1500, "rpm": 0.0, "tach": True,
              "dirReverse": False, "canSetDirection": True, "directionReason": None}
     state.update(overrides)
     return {module: dict(state) for module in MODULES}
@@ -188,11 +189,11 @@ def test_wheel_drive_refusal_stops_the_heartbeat_and_is_shown(tmp_path):
 def test_wheel_drive_shows_reported_output_and_honest_rpm(tmp_path):
     """В карточке видно, что реально уходит на мотор; без тахометра — «rpm нет»."""
     motors = [motor(m) for m in MODULES]
-    motors[0] = dict(motors[0], drivePercent=6, driveOutputMv=1500, tach=False, rpm=0.0)
+    motors[0] = dict(motors[0], drivePercent=6, drivePulseUs=1650, tach=False, rpm=0.0)
     report = run_screen(tmp_path, payload(motors=motors, actions=[
         {"type": "wheel-drive", "id": "FL", "direction": 1}]))
     cards = {item["id"]: item for item in report["wheelDrive"]}
-    assert "1500 мВ" in cards["FL"]["output"]
+    assert "1650 мкс" in cards["FL"]["output"]
     assert "rpm нет" in cards["FL"]["output"]
     assert cards["FL"]["state"].startswith("вперёд")
 
@@ -459,18 +460,19 @@ def with_drive_config(body, **overrides):
 
 
 def test_drive_panel_shows_the_confirmed_drive_setup(tmp_path):
-    """Веб-пульт и борт видят то же, что подтвердили платы: 0–5 В, без тахометра."""
+    """Веб-пульт и борт видят то же, что подтвердили платы: серво-ШИМ, без тахометра."""
     body = with_drive_config(
-        payload(), outputMode="volt", tach=False, brake=False, maxPercent=60,
-        minMv=500, maxMv=4500, outputMv=2500)
+        payload(), tach=False, brake=False, stopInput=False, maxPercent=60,
+        trimUs=1620, spanUs=300, pulseUs=1770)
     body["data"]["drive"]["maxPercent"] = 60
-    body["data"]["motors"] = [dict(motor(m), tach=False, driveMode="volt") for m in MODULES]
+    body["data"]["motors"] = [dict(motor(m), tach=False, drivePulseUs=1770) for m in MODULES]
     report = run_screen(tmp_path, body)
     cfg = report["driveCfg"]
-    assert cfg["output"] == "volt" and cfg["tach"] == "off" and cfg["brake"] == "off"
-    assert cfg["limit"] == "60" and cfg["vmin"] == "500" and cfg["vmax"] == "4500"
+    assert cfg["tach"] == "off" and cfg["brake"] == "off" and cfg["stop"] == "off"
+    assert cfg["limit"] == "60" and cfg["trim"] == "1620" and cfg["span"] == "300"
     assert cfg["applyDisabled"] is False
-    assert "0–5 В" in cfg["status"] and "тахометр нет" in cfg["status"]
+    assert "серво-ШИМ" in cfg["status"] and "нейтраль 1620 мкс" in cfg["status"]
+    assert "тахометр нет" in cfg["status"] and "стоп нет" in cfg["status"]
     # Ползунок тяги идёт за платой, а не за зашитыми 20 %.
     assert report["driveSpeedMax"] == "60"
     # Без тахометра оборотов нет — карточка пишет «нет», а не 0.
@@ -480,14 +482,16 @@ def test_drive_panel_shows_the_confirmed_drive_setup(tmp_path):
 def test_drive_setup_is_sent_as_individual_commands(tmp_path):
     """Настройка уходит по одной команде: шесть подряд в порт — это очередь."""
     report = run_screen(tmp_path, with_drive_config(
-        payload(actions=[{"type": "drivecfg", "output": "volt", "tach": "off",
-                          "brake": "on", "limit": 35, "vmin": 500, "vmax": 4500}])))
+        payload(actions=[{"type": "drivecfg", "trim": 1620, "span": 300, "tach": "off",
+                          "brake": "on", "stop": "off", "limit": 35}])))
     sent = report["driveCfgSent"]
-    assert [item["action"] for item in sent] == ["output", "tach", "brake", "limit", "voltage"]
-    assert sent[0]["value"] == "volt"
-    assert sent[1]["value"] == "off"
-    assert sent[3]["value"] == 35
-    assert sent[4]["value"] == {"minMv": 500, "maxMv": 4500}
+    # Нейтраль и размах — первыми: прошивка проверяет края каждой команды.
+    assert [item["action"] for item in sent] == ["span", "trim", "tach", "brake", "stop", "limit"]
+    assert sent[0]["value"] == 300
+    assert sent[1]["value"] == 1620
+    assert sent[2]["value"] == "off"
+    assert sent[4]["value"] == "off"
+    assert sent[5]["value"] == 35
     assert all(item["header"] == "steering" for item in sent)
     assert report["renderErrors"] == []
 
@@ -506,8 +510,9 @@ def test_drive_setup_is_blocked_while_the_traction_is_active(tmp_path):
 def test_drive_setup_is_honest_about_old_firmware(tmp_path):
     body = payload(actions=[{"type": "drivecfg", "limit": 40}])
     body["data"]["drive"]["config"] = {"supported": False, "outputMode": None, "tach": None,
-                                       "maxPercent": None, "minMv": None, "maxMv": None,
-                                       "outputMv": None, "brake": None, "dirReverse": None}
+                                       "maxPercent": None, "trimUs": None, "spanUs": None,
+                                       "pulseUs": None, "brake": None, "stopInput": None,
+                                       "dirReverse": None}
     report = run_screen(tmp_path, body)
     assert report["driveCfgSent"] == []
     assert report["driveCfg"]["applyDisabled"] is True
@@ -521,15 +526,16 @@ def test_drive_setup_refusal_is_explained(tmp_path):
     assert "остановите тягу" in report["driveCfg"]["status"].lower()
 
 
-def test_drive_setup_rejects_dead_zone_above_full_scale(tmp_path):
+def test_drive_setup_rejects_a_pulse_outside_the_servo_range(tmp_path):
+    """Нейтраль 2000 плюс размах 500 — это 2500 мкс: сервопривод ушёл бы в упор."""
     report = run_screen(tmp_path, with_drive_config(
-        payload(actions=[{"type": "drivecfg", "vmin": 4000, "vmax": 1000}])))
+        payload(actions=[{"type": "drivecfg", "trim": 2000, "span": 500}])))
     assert report["driveCfgSent"] == []
-    assert "больше полной шкалы" in report["driveCfg"]["status"]
+    assert "1000…2000 мкс" in report["driveCfg"]["status"]
 
 
 def test_drive_setup_defaults_are_one_command(tmp_path):
     body = with_drive_config(payload(actions=[{"type": "drivecfg-reset"}]),
-                             outputMode="volt", tach=False, maxPercent=60, minMv=500, maxMv=4500)
+                             tach=False, maxPercent=60, trimUs=1620, spanUs=300)
     report = run_screen(tmp_path, body)
     assert [item["action"] for item in report["driveCfgSent"]] == ["defaults"]

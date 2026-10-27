@@ -1664,9 +1664,10 @@ body.swipe-open .kiosk {
 .traction-actions button:disabled { opacity: .38; cursor: not-allowed; }
 .traction-warning { grid-column: 1 / -1; line-height: 1.45; }
 
-/* Настройка привода: выход ШИМ или 0–5 В, тахометр, тормоз, предел и мВ.
-   Раньше способ управления мотором был зашит в прошивку — теперь это
-   настройка платы, и экран показывает подтверждённые телеметрией значения. */
+/* Настройка привода: серво-ШИМ (нейтраль и размах), тахометр, тормоз,
+   линия STOP и предел. Раньше способ управления мотором был зашит в прошивку —
+   теперь это настройка платы, и экран показывает подтверждённые телеметрией
+   значения. */
 .drive-setup {
   grid-column: 1 / -1;
   border: 1px solid var(--line-2);
@@ -1680,6 +1681,7 @@ body.swipe-open .kiosk {
 .drive-setup > summary { cursor: pointer; color: var(--text); font-size: 13px; font-weight: 800; }
 .drive-setup-hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .drive-setup-hint b { color: var(--text); }
+.drive-setup-fixed { display: block; padding: 7px 10px; border: 1px dashed var(--line-2); border-radius: 8px; color: var(--text); font-size: 12px; font-weight: 800; }
 .drive-setup-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; }
 .drive-setup-grid label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .drive-setup-grid select {
