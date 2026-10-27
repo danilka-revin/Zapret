@@ -101,6 +101,8 @@ def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_re
                   "individual": True, "commandedModules": {},
                   "perModule": per_module if per_module is not None else per_module_state(),
                   "config": drive_config(), "alignmentToleranceDeg": 2.5,
+                  # Колёса стоят ровно: справка для подписи, тягу не запирает.
+                  "aligned": True, "spreadDeg": 0.0,
                   "maneuver": maneuver or {"supported": True, "active": False,
                                            "state": "idle", "mode": "odometry"}},
         "motors": motors if motors is not None else [motor(m) for m in MODULES],
@@ -384,10 +386,33 @@ def test_drive_is_hold_to_move_and_release_to_stop(tmp_path):
 
 def test_drive_refusal_is_shown_to_the_operator(tmp_path):
     report = run_screen(tmp_path, payload(
-        can_drive=False, drive_reason="steering_misaligned",
+        can_drive=False, drive_reason="module_offline",
         actions=[{"type": "drive", "direction": 1}]))
     assert report["drives"] == []
-    assert "в одном направлении" in report["driveStatus"]
+    assert "телеметрии" in report["driveStatus"]
+
+
+def test_drive_works_at_any_steering_angle(tmp_path):
+    """Колёса под углом 12,5° — тяга разрешена, но экран честно пишет про угол.
+
+    Поворотные модули ездят на любом угле: 0° — прямо, 45° — краб, 90° — боком.
+    Блокировка «сначала выровняйте колёса» снята, осталась только подпись.
+    """
+    body = payload(actions=[{"type": "drive", "direction": 1}])
+    body["data"]["drive"].update(aligned=False, spreadDeg=12.5)
+    report = run_screen(tmp_path, body)
+    assert [item["percent"] for item in report["drives"]][0] == 8
+    assert report["driveStatus"].startswith("Готово") or "Движение включено" in report["driveStatus"]
+    # Кнопки не серые: ехать можно, предупреждение — словами.
+    assert report["driveSpeedMax"] == "20"
+    assert all(not item["stopDisabled"] for item in report["wheelDrive"])
+    assert "под углом" in report["driveStatus"] and "12,5" in report["driveStatus"]
+
+
+def test_straight_wheels_are_reported_as_aligned(tmp_path):
+    report = run_screen(tmp_path, payload())
+    assert "колёса выровнены" in report["driveStatus"]
+    assert "под углом" not in report["driveStatus"]
 
 
 def test_presets_are_blocked_while_the_robot_is_moving(tmp_path):
@@ -705,10 +730,18 @@ def test_maneuver_start_is_refused_before_numbers_are_saved(tmp_path):
 
 
 def test_maneuver_buttons_need_ready_drive(tmp_path):
-    """Колёса не выровнены или нет PIN — кнопки манёвров серые."""
-    report = run_screen(tmp_path, payload(can_drive=False, drive_reason="steering_misaligned"))
+    """Нет связи с платами — кнопки манёвров серые.
+
+    Углы колёс манёвры больше не блокируют: старт на любом угле разрешён.
+    """
+    report = run_screen(tmp_path, payload(can_drive=False, drive_reason="module_offline"))
     assert all(item["disabled"] for item in report["maneuvers"]["buttons"])
-    assert "в одном направлении" in report["maneuvers"]["status"]
+    assert "телеметрии" in report["maneuvers"]["status"]
+
+    angled = payload()
+    angled["data"]["drive"].update(aligned=False, spreadDeg=45.0)
+    report = run_screen(tmp_path, angled)
+    assert all(not item["disabled"] for item in report["maneuvers"]["buttons"])
 
     old = payload(motors=payload()["data"]["motors"])
     for module in MODULES:
@@ -853,3 +886,11 @@ def test_flash_block_exists_in_the_onboard_page():
     # висит на экране пустой, пока прошивка не началась.
     css = (ROOT / "slam_gui" / "robot.css").read_text(encoding="utf-8")
     assert ".drive-flash-track[hidden]" in css
+
+
+def test_web_remote_also_drives_at_any_angle():
+    """Веб-пульт и борт говорят одно и то же: угол колёс тягу не запирает."""
+    console = (ROOT / "slam_gui" / "steering.js").read_text(encoding="utf-8")
+    assert "spreadDeg" in console and "поедет под этим углом" in console
+    # Блокировка кнопок движения смотрит только на готовность привода, не на углы.
+    assert "button.disabled = !authorizedForDrive || !drive.canDrive;" in console

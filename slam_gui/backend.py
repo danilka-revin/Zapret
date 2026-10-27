@@ -88,6 +88,9 @@ MAX_DRIVE_PERCENT = 20       # заводской предел; плата мо�
 #: если плата разрешила себе больше. Заводской предел 20 % остаётся настройкой
 #: по умолчанию — поднимать его можно только осознанно, на вывешенных колёсах.
 DRIVE_ABS_MAX_PERCENT = 100
+#: Разброс углов, при котором экран называет колёса ровными. Тягу он больше не
+#: блокирует: ездить можно на любом угле (0° — прямо, 45° — краб, 90° — боком),
+#: число осталось только для подсказки «колёса стоят ровно / под углом».
 DRIVE_ANGLE_ALIGNMENT_DEG = 2.5
 #: Выход на регулятор скорости — «серво»-ШИМ 50 Гц: импульс 1000…2000 мкс, как
 #: у сервопривода постоянного вращения. 1500 мкс — нейтраль (стоим), ±размах —
@@ -892,8 +895,12 @@ class MasterSource:
     def drive_status(self, now=None):
         """Готовность тяги: общей (все колёса) и каждого колеса по отдельности.
 
-        Общая тяга требует выровненных колёс; одиночная — только своего колеса:
-        разворот на месте и проверка одного мотора как раз едут вразнобой.
+        Общая тяга не смотрит на углы: колёса — поворотные модули, и ехать можно
+        на любом угле (0° — прямо, 45° — краб, 90° — чистый боковой ход).
+        Проверяется только то, без чего мотор нельзя включать: связь с платами,
+        заданный ноль, остановленный руль и прошивка с командой тяги. Разброс
+        углов отдаётся отдельными полями ``aligned``/``spreadDeg`` — для
+        подсказки на экране, а не для запрета.
         """
         now = time.time() if now is None else now
         with self.lock:
@@ -922,10 +929,14 @@ class MasterSource:
         elif any(frame.get("moving") or frame.get("calib") or frame.get("cycle")
                  for frame in fresh_frames.values()):
             reason = "module_busy"
-        else:
+
+        # Разброс углов — только справка. Раньше он запирал общую тягу
+        # («steering_misaligned»), и поехать вбок или по диагонали было нельзя,
+        # хотя прошивка это спокойно позволяет: руль уже стоит.
+        spread = None
+        if len(fresh_frames) == len(MODULE_TITLES):
             angles = [float(frame["deg"]) for frame in fresh_frames.values()]
-            if max(angles) - min(angles) > DRIVE_ANGLE_ALIGNMENT_DEG:
-                reason = "steering_misaligned"
+            spread = round(max(angles) - min(angles), 1)
 
         # По колесу: своё «можно/нельзя» и понятная причина. Общая ошибка
         # (рассинхрон углов, чужое колесо не на связи) одиночную тягу этого
@@ -990,7 +1001,11 @@ class MasterSource:
                                 for module, frame in fresh_frames.items()},
             "config": config,
             "maneuver": self.maneuver_status(now),
+            # Справка для экрана: колёса стоят ровно (0°) или под углом.
+            # Тягу это не ограничивает — см. drive_status().
             "alignmentToleranceDeg": DRIVE_ANGLE_ALIGNMENT_DEG,
+            "aligned": None if spread is None else spread <= DRIVE_ANGLE_ALIGNMENT_DEG,
+            "spreadDeg": spread,
         }
 
     def drive(self, percent, now=None):

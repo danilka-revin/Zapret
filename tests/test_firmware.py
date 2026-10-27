@@ -323,7 +323,10 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
             continue
         source.feed(line, now=100.0, module=module)
     status = source.drive_status(now=100.2)
-    assert status["reason"] == "steering_misaligned"   # FR стоит на 12.5°
+    # FR стоит на 12.5° — но общая тяга на любом угле разрешена, разброс идёт
+    # справкой для экрана. Так едут крабом и боком.
+    assert status["canDrive"] is True and status["reason"] is None
+    assert status["aligned"] is False and status["spreadDeg"] == 12.5
     motors = {motor["id"]: motor for motor in source.read(now=100.2)["motors"]}
     assert all(motor["homed"] and motor["online"] for motor in motors.values())
     assert motors["FR"]["homeSource"] == "opto"

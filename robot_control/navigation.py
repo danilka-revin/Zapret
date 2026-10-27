@@ -659,7 +659,9 @@ class NavigationService:
         drive_usable = bool(drive_status.get("canDrive"))
         if allow_alignment and drive_reason in {"module_busy", "steering_misaligned"}:
             # Во время законной остановки/перекладки руля привод временно
-            # сообщает «занят» или «углы не совпадают» — мост ждёт, не едет.
+            # сообщает «занят» (или, на старом сервере, «углы не совпадают») —
+            # мост ждёт, не едет. Угол колёс сам по себе движению не мешает:
+            # ехать можно на любом, включая краб и боковой ход.
             drive_usable = bool(drive_status.get("available"))
         commanded = drive_status.get("commandedPercent")
         reported_active = bool(drive_status.get("active"))
