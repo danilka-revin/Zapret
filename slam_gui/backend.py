@@ -557,7 +557,7 @@ class MasterSource:
         except Exception:                     # noqa: BLE001 — битые байты не команда
             return None
         parts = text.split()
-        if len(parts) >= 2 and parts[0].lower() in ("w", "t"):
+        if len(parts) >= 2 and parts[0].lower() in ("w", "t", "m"):
             token = parts[1].upper()
             if token in MODULE_TITLES:
                 return token
@@ -762,6 +762,7 @@ class MasterSource:
                 "minMv": frame.get("driveMinMv"),
                 "maxMv": frame.get("driveMaxMv"),
                 "outputMv": frame.get("driveOutputMv"),
+                "dirReverse": frame.get("dirReverse"),
             } for module, frame in fresh.items()},
         }
         partial["mixed"] = supported and (
@@ -835,6 +836,20 @@ class MasterSource:
                 why = "not_homed"
             elif frame.get("calib") or frame.get("cycle") or frame.get("moving"):
                 why = "module_busy"
+            # Сторону вращения меняют только у стоящего колеса: реверс DIR под
+            # тягой — рывок. Мёртвый ноль и чужие колёса здесь не мешают —
+            # настройка живёт в EEPROM именно этой платы.
+            why_dir = ""
+            if not self.serial_ready.is_set():
+                why_dir = "serial_unavailable"
+            elif frame is None:
+                why_dir = "module_offline"
+            elif frame.get("driveMode") is None:
+                why_dir = "firmware_update_required"
+            elif (commanded != 0 or commanded_modules.get(module, 0) or
+                  frame.get("calib") or frame.get("cycle") or frame.get("moving") or
+                  frame.get("drivePercent")):
+                why_dir = "module_busy"
             per_module[module] = {
                 "canDrive": not why,
                 "reason": why or None,
@@ -843,6 +858,11 @@ class MasterSource:
                 "outputMv": frame.get("driveOutputMv") if frame else None,
                 "rpm": frame.get("rpm") if frame else None,
                 "tach": frame.get("tach") if frame else None,
+                # Сторона вращения этого колеса (m dir 0|1 в прошивке):
+                # «вперёд» на зеркальном колесе — обратный DIR.
+                "dirReverse": frame.get("dirReverse") if frame else None,
+                "canSetDirection": not why_dir,
+                "directionReason": why_dir or None,
             }
 
         config = self.drive_config(now)
@@ -964,9 +984,10 @@ class MasterSource:
         return self.drive(0, now)
 
     #: Что можно менять командой m. Каждое действие — один токен настройки.
-    DRIVE_CONFIG_ACTIONS = ("output", "tach", "brake", "limit", "voltage", "defaults")
+    DRIVE_CONFIG_ACTIONS = ("output", "tach", "brake", "limit", "voltage", "defaults",
+                            "direction")
 
-    def set_drive_config(self, action, value=None, now=None):
+    def set_drive_config(self, action, value=None, module=None, now=None):
         """Настройка привода тяги на всех четырёх платах (команда m).
 
         Смена режима выхода или предела под работающим мотором — это рывок,
@@ -978,6 +999,10 @@ class MasterSource:
             return {"ok": False, "reason": "invalid_action"}
         if not self.serial_ready.is_set():
             return {"ok": False, "reason": "serial_unavailable"}
+        if action == "direction":
+            # Направление — свойство конкретного колеса, поэтому и команда
+            # адресная: «m FL dir 1». Остальные колёса не трогаются вовсе.
+            return self._set_module_direction(value, module, now)
         now = time.time() if now is None else now
         with self.lock:
             frames = dict(self.frames)
@@ -1000,6 +1025,46 @@ class MasterSource:
                 return {"ok": False, "reason": "command_queue_full"}
         return {"ok": True, "queued": True, "action": action,
                 "commands": [c.decode("ascii").strip() for c in commands]}
+
+    def _set_module_direction(self, value, module, now=None):
+        """Сторона вращения одного колеса: ``m FL dir 0|1`` только на его порт.
+
+        Физически колёса стоят зеркально, поэтому «вперёд» у левого и правого
+        борта — противоположные DIR. Здесь оператор говорит плате, что считать
+        «вперёд»; логика тяги не меняется, меняется только уровень DIR, и
+        выбор живёт в EEPROM платы.
+        """
+        module = str(module or "").upper()
+        if module not in MODULE_TITLES:
+            return {"ok": False, "reason": "invalid_module"}
+        if isinstance(value, bool):
+            reverse = value
+        elif isinstance(value, str):
+            reverse = {"reverse": True, "normal": False}.get(value.lower())
+            if reverse is None:
+                return {"ok": False, "reason": "invalid_value"}
+        else:
+            return {"ok": False, "reason": "invalid_value"}
+        now = time.time() if now is None else now
+        with self.lock:
+            entry = self.frames.get(module)
+            drive_active = self._module_drive_active(module)
+        if entry is None or now - entry[1] >= self.STALE_S:
+            return {"ok": False, "reason": "module_offline"}
+        frame = entry[0]
+        if frame.get("driveMode") is None:
+            return {"ok": False, "reason": "firmware_update_required"}
+        if (drive_active or frame.get("moving") or frame.get("calib") or
+                frame.get("cycle") or frame.get("drivePercent")):
+            return {"ok": False, "reason": "module_busy"}
+        command = ("m %s dir %d\n" % (module, 1 if reverse else 0)).encode("ascii")
+        try:
+            self.commands.put_nowait(command)
+        except queue.Full:
+            return {"ok": False, "reason": "command_queue_full"}
+        return {"ok": True, "queued": True, "action": "direction", "module": module,
+                "reverse": reverse,
+                "commands": [command.decode("ascii").strip()]}
 
     def _drive_config_commands(self, action, value, values):
         """Действие экрана → команды прошивке или отказ с причиной."""

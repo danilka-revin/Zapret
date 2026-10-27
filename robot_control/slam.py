@@ -460,29 +460,47 @@ def _drive_limit(source) -> int:
 
 
 def dispatch_drive_config(source, body):
-    """Настройка привода тяги: выход ШИМ/0–5 В, тахометр, тормоз, предел, мВ."""
+    """Настройка привода тяги: выход ШИМ/0–5 В, тахометр, тормоз, предел, мВ.
+
+    Отдельное действие ``direction`` — про одно колесо: у зеркально
+    поставленных колёс «вперёд» физически разный, и оператор говорит плате,
+    что считать «вперёд» (``{"action": "direction", "module": "FL",
+    "value": "reverse"}``). В журнале видно, какое именно колесо меняли.
+    """
     action = body.get("action") if isinstance(body, dict) else None
+    module = body.get("module") if isinstance(body, dict) else None
+    where = action or "?"
+    if isinstance(module, str) and module:
+        where = "%s %s" % (where, module.upper())
     result, status = _drive_config(source, body)
     if not result.get("ok"):
-        note_command_rejected("настройка привода (%s)" % (action or "?"),
+        note_command_rejected("настройка привода (%s)" % where,
                               str(result.get("reason", "")))
     else:
-        eventlog.record("ok", "настройка привода тяги: %s" % (action or ""), source="тяга")
+        eventlog.record("ok", "настройка привода тяги: %s" % where, source="тяга")
     return result, status
 
 
 def _drive_config(source, body):
     if estop_latch.latched() is not None:
         return {"ok": False, "reason": "estop"}, 409
-    if not isinstance(body, dict) or set(body) - {"action", "value"}:
+    if not isinstance(body, dict) or set(body) - {"action", "value", "module"}:
         return {"ok": False, "reason": "payload"}, 400
     action = body.get("action")
     if not isinstance(action, str):
         return {"ok": False, "reason": "payload"}, 400
+    module = body.get("module")
+    if module is not None:
+        # Имя колеса осмысленно только для настройки одного колеса.
+        if action != "direction":
+            return {"ok": False, "reason": "payload"}, 400
+        if not isinstance(module, str) or module.upper() not in {"FL", "FR", "RL", "RR"}:
+            return {"ok": False, "reason": "invalid_module"}, 400
+        module = module.upper()
     command = getattr(source, "set_drive_config", None)
     if not callable(command):
         return {"ok": False, "reason": "control_not_supported"}, 409
-    result = command(action, body.get("value"))
+    result = command(action, body.get("value"), module)
     if result.get("ok"):
         return result, 200
     reason = result.get("reason", "command_failed")
@@ -491,7 +509,7 @@ def _drive_config(source, body):
         status = 503
     elif reason == "command_queue_full":
         status = 429
-    elif reason in {"payload", "invalid_action", "invalid_value"}:
+    elif reason in {"payload", "invalid_action", "invalid_value", "invalid_module"}:
         status = 400
     return dict(result, ok=False, reason=reason), status
 

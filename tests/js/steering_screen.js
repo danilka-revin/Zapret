@@ -245,6 +245,7 @@ global.fetch = async (url, init) => {
     driveCfgSent.push({
       action: body.action,
       value: body.value === undefined ? null : body.value,
+      module: body.module === undefined ? null : body.module,
       header: (init.headers || {})['X-Robot-Control'] || null,
     });
     if (payload.driveCfgRefuse) return jsonResponse({ ok: false, reason: payload.driveCfgRefuse }, 409);
@@ -423,6 +424,10 @@ function findPreset(id) {
         global.dispatchEvent({ type: 'pointerup' });
         await flush(action.rounds || 3);
       }
+    } else if (action.type === 'wheel-dir') {
+      // Кнопка «⇄» в карточке колеса: меняет местами «вперёд» и «назад».
+      byId('drive-module-dir-' + String(action.id || 'FL')).fire('click');
+      await flush(action.rounds || 4);
     } else if (action.type === 'wheel-stop') {
       byId('drive-module-stop-' + String(action.id || 'FL')).fire('click');
       await flush(3);
@@ -485,6 +490,10 @@ function findPreset(id) {
       backDisabled: !!byId('drive-module-back-' + id).disabled,
       forwardDisabled: !!byId('drive-module-forward-' + id).disabled,
       stopDisabled: !!byId('drive-module-stop-' + id).disabled,
+      dirState: byId('drive-module-dir-state-' + id).textContent,
+      dirLabel: byId('drive-module-dir-' + id).textContent,
+      dirPressed: byId('drive-module-dir-' + id).getAttribute('aria-pressed'),
+      dirDisabled: !!byId('drive-module-dir-' + id).disabled,
     })),
     driveCfg: {
       output: byId('drive-cfg-output').value,
