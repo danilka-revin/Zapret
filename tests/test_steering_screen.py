@@ -631,6 +631,35 @@ def test_drive_ppr_control_is_off_for_firmware_without_it(tmp_path):
     assert "нет в прошивке" in quiet["driveCfg"]["status"]
 
 
+def test_mixed_drive_setup_can_still_be_applied(tmp_path):
+    """Платы разошлись — это не запрет: «Применить» выравнивает все четыре.
+
+    Раньше «смешанная» настройка блокировала кнопку и одновременно требовала
+    «выберите общий режим и примените»: сделать это было невозможно.
+    """
+    per_module = {"FL": {"tach": True, "maxPercent": 20, "trimUs": 1620,
+                         "spanUs": 300, "pulsesPerRev": 60},
+                  "FR": {"tach": False, "maxPercent": 20, "trimUs": 1500,
+                         "spanUs": 500, "pulsesPerRev": 60}}
+
+    def body(actions=None):
+        return with_drive_config(payload(actions=actions or []), mixed=True, tach=None,
+                                 maxPercent=None, trimUs=None, spanUs=None,
+                                 pulsesPerRev=None, perModule=per_module)
+
+    quiet = run_screen(tmp_path, body())
+    cfg = quiet["driveCfg"]
+    assert cfg["applyDisabled"] is False, "«смешанная» настройка не должна блокировать"
+    # Поля показывают настройку реальной платы, а не заводские 1500/500.
+    assert cfg["trim"] == "1620" and cfg["span"] == "300" and cfg["ppr"] == "60"
+    assert cfg["tach"] == "on"
+    assert "по-разному" in cfg["status"] and "Применить" in cfg["status"]
+
+    report = run_screen(tmp_path, body([{"type": "drivecfg", "limit": 20}]))
+    assert report["driveCfgSent"], "настройка должна уходить на платы"
+    assert report["renderErrors"] == []
+
+
 def test_drive_setup_defaults_are_one_command(tmp_path):
     body = with_drive_config(payload(actions=[{"type": "drivecfg-reset"}]),
                              tach=False, maxPercent=60, trimUs=1620, spanUs=300)
