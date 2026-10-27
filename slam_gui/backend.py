@@ -96,6 +96,10 @@ SERVO_MIN_US = 1000
 SERVO_MAX_US = 2000
 SERVO_CENTER_US = 1500
 SERVO_SPAN_MAX_US = 500
+#: Сколько импульсов тахометра бывает на оборот колеса — предел команды m ppr.
+#: Драйверы дают и 1, и 60 импульсов: без этой настройки «об/мин» врали ровно
+#: во столько раз (колесо делает оборот в секунду, а экран показывает 3600).
+TACH_PPR_MAX = 200
 
 # Предел абсолютной команды поворота «w <модуль> <угол>». Одно число на весь
 # стек: столько же в прошивке (STEER_LIMIT_DEG в firmware/motor_wheel),
@@ -321,6 +325,12 @@ def parse_master_line(line, module=None):
         brake = {"0": False, "1": True}.get(fields.get("brk")) if "brk" in fields else None
         stop_input = {"0": False, "1": True}.get(fields.get("stp")) if "stp" in fields else None
         dir_reverse = {"0": False, "1": True}.get(fields.get("dir")) if "dir" in fields else None
+        # Импульсов тахометра на оборот колеса: драйверы дают и 1, и 60 —
+        # отсюда «об/мин» и путь манёвров. Поле появилось вместе с командой m ppr.
+        try:
+            tach_ppr = int(fields["ppr"]) if "ppr" in fields else None
+        except ValueError:
+            return None
         for key, value in (("tach", tach), ("brk", brake), ("dir", dir_reverse), ("stp", stop_input)):
             if key in fields and value is None:
                 return None
@@ -338,7 +348,8 @@ def parse_master_line(line, module=None):
                 (drive_trim_us is not None and drive_span_us is not None and
                  (drive_trim_us - drive_span_us < SERVO_MIN_US or
                   drive_trim_us + drive_span_us > SERVO_MAX_US)) or
-                (drive_pulse_us is not None and not SERVO_MIN_US <= drive_pulse_us <= SERVO_MAX_US)):
+                (drive_pulse_us is not None and not SERVO_MIN_US <= drive_pulse_us <= SERVO_MAX_US) or
+                (tach_ppr is not None and not 1 <= tach_ppr <= TACH_PPR_MAX)):
             return None
         zeroed = fields.get("cal") == "1"
         if home is None:
@@ -375,6 +386,7 @@ def parse_master_line(line, module=None):
             "brake": brake,
             "stopInput": stop_input,
             "dirReverse": dir_reverse,
+            "tachPpr": tach_ppr,
         }
     except (KeyError, ValueError):
         return None
@@ -775,6 +787,9 @@ class MasterSource:
         limit_percent = min(limits) if len(limits) == len(MODULE_TITLES) else None
         trim_us = common("driveTrimUs")
         span_us = common("driveSpanUs")
+        # Импульсов тахометра на оборот: от этого зависят «об/мин» и путь
+        # манёвров, поэтому экран показывает и правит именно это число.
+        tach_ppr = common("tachPpr")
         pulse_us = common("drivePulseUs")
         partial = {
             "supported": supported,
@@ -790,6 +805,7 @@ class MasterSource:
             "trimUs": trim_us,
             "spanUs": span_us,
             "pulseUs": pulse_us,
+            "pulsesPerRev": tach_ppr,
             "brake": common("brake"),
             "stopInput": common("stopInput"),
             "dirReverse": common("dirReverse"),
@@ -799,6 +815,7 @@ class MasterSource:
                 "trimUs": frame.get("driveTrimUs"),
                 "spanUs": frame.get("driveSpanUs"),
                 "pulseUs": frame.get("drivePulseUs"),
+                "pulsesPerRev": frame.get("tachPpr"),
                 "dirReverse": frame.get("dirReverse"),
             } for module, frame in fresh.items()},
         }
@@ -1023,7 +1040,7 @@ class MasterSource:
         return self.drive(0, now)
 
     #: Что можно менять командой m. Каждое действие — один токен настройки.
-    DRIVE_CONFIG_ACTIONS = ("tach", "brake", "stop", "limit", "trim", "span",
+    DRIVE_CONFIG_ACTIONS = ("tach", "ppr", "brake", "stop", "limit", "trim", "span",
                             "defaults", "direction")
 
     def set_drive_config(self, action, value=None, module=None, now=None):
@@ -1051,8 +1068,11 @@ class MasterSource:
         values = [frames[mid][0] for mid in MODULE_TITLES]
         if any(f.get("driveTrimUs") is None for f in values):
             return {"ok": False, "reason": "firmware_update_required"}
-        if drive_active or any(f.get("moving") or f.get("calib") or f.get("cycle") or
-                               f.get("drivePercent") for f in values):
+        # Импульсы на оборот не влияют на выходной импульс — их разрешено менять
+        # под тягой: подбирать их и надо на крутящемся колесе.
+        busy = drive_active or any(f.get("moving") or f.get("calib") or f.get("cycle") or
+                                   f.get("drivePercent") for f in values)
+        if busy and action != "ppr":
             return {"ok": False, "reason": "module_busy"}
         commands = self._drive_config_commands(action, value, values)
         if isinstance(commands, dict):
@@ -1111,6 +1131,16 @@ class MasterSource:
             if value not in ("on", "off"):
                 return {"ok": False, "reason": "invalid_value"}
             return [("m %s %d\n" % (action, 1 if value == "on" else 0)).encode("ascii")]
+        if action == "ppr":
+            # Импульсов тахометра на оборот колеса. Одно число на все четыре
+            # платы: колёса одной модели, и «об/мин» должны совпадать.
+            try:
+                ppr = int(value)
+            except (TypeError, ValueError):
+                return {"ok": False, "reason": "invalid_value"}
+            if not 1 <= ppr <= TACH_PPR_MAX:
+                return {"ok": False, "reason": "invalid_value"}
+            return [("m ppr %d\n" % ppr).encode("ascii")]
         if action == "limit":
             try:
                 limit = int(value)

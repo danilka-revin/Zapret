@@ -43,7 +43,10 @@
 #ifndef MODULE_ID
 #define MODULE_ID "FL"
 #endif
-#define TX_BUFFER_SIZE 512
+// Буфер ответов в USB. 512 байт не хватало: «p» печатает состояние, настройку
+// привода (две строки) и имя колеса — с новым полем (ppr) последняя строка
+// переставала влезать и терялась. 640 — с запасом на одну строку.
+#define TX_BUFFER_SIZE 640
 
 // =========================== STEERING CORE BEGIN ===========================
 // Этот блок — руль и датчики, он не зависит от способа связи с сервером.
@@ -148,7 +151,12 @@ const uint16_t EEPROM_POT_SLOPE_SLOT = 3;   // 4 байта, float, little-endia
 const uint8_t EEPROM_POT_MAGIC = 0x51;      // «q» — наклон измерен
 
 // ---- тяга BLDC ----
-const uint8_t TACH_PULSES_PER_REV = 1;         // импульсов SC на оборот колеса
+// Импульсов SC на оборот колеса. Заводское 1 — так подписан вход «SC» у
+// контроллера, но реальные драйверы дают и 6, и 60 импульсов на оборот: тогда
+// «об/мин» и путь манёвров завышались ровно в это число раз. Поэтому значение
+// не константа, а настройка (m ppr) в EEPROM: экран подбирает её по факту.
+const uint8_t TACH_PPR_DEFAULT = 1;
+const uint8_t TACH_PPR_MAX = 200;
 const uint16_t RPM_SAMPLE_PERIOD_MS = 500;
 const int8_t DRIVE_MAX_PERCENT = 20;           // заводской предел; меняется командой m max
 const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → выход 0 и тормоз
@@ -276,6 +284,7 @@ uint8_t drive_max_percent = (uint8_t)DRIVE_MAX_PERCENT;
 uint16_t drive_trim_us = SERVO_CENTER_US;      // нейтраль этого драйвера
 uint16_t drive_span_us = SERVO_SPAN_DEFAULT_US; // ± от нейтрали на полный предел
 uint16_t drive_us = SERVO_CENTER_US;           // фактический импульс на D3, мкс
+uint8_t drive_tach_ppr = TACH_PPR_DEFAULT;     // импульсов тахометра на оборот
 Servo drive_servo;                             // 50 Гц на D3, как сервопривод
 
 char tx_buf[TX_BUFFER_SIZE];
@@ -1228,7 +1237,7 @@ void driveConfigSave() {
   bytes[3] = (uint8_t)(drive_trim_us >> 8);
   bytes[4] = (uint8_t)(drive_span_us & 0xFF);
   bytes[5] = (uint8_t)(drive_span_us >> 8);
-  bytes[6] = 0;                        // резерв: старые ячейки читаются как 0
+  bytes[6] = drive_tach_ppr;           // 0 в старой прошивке = заводское 1
   bytes[7] = driveConfigChecksum(bytes, 7);
   for (uint8_t i = 0; i < sizeof(bytes); ++i) {
     eeprom_update_byte((uint8_t*)(uintptr_t)(EEPROM_DRIVE_CONFIG_SLOT + i), bytes[i]);
@@ -1260,6 +1269,8 @@ void driveConfigLoad() {
   drive_max_percent = bytes[1];
   drive_trim_us = trim_us;
   drive_span_us = span_us;
+  // Ячейка 6 раньше была резервной (0) — такие настройки читаются как 1.
+  drive_tach_ppr = (bytes[6] >= 1 && bytes[6] <= TACH_PPR_MAX) ? bytes[6] : TACH_PPR_DEFAULT;
 }
 
 // Заводские значения: нейтраль 1500 мкс, размах ±500 мкс, тахометр, тормоз и
@@ -1272,6 +1283,7 @@ void driveConfigDefaults() {
   drive_max_percent = (uint8_t)DRIVE_MAX_PERCENT;
   drive_trim_us = SERVO_CENTER_US;
   drive_span_us = SERVO_SPAN_DEFAULT_US;
+  drive_tach_ppr = TACH_PPR_DEFAULT;
 }
 
 // Тахометр может быть не подключён: тогда прерывание не включаем вовсе, а не
@@ -1331,21 +1343,25 @@ void printDriveConfig() {
   // лишняя строка выбивает из буфера USB последнюю заметку.
   note(PSTR("Двигатель: серво-ШИМ 50 Гц · нейтраль %u · размах ±%u мкс · %u мкс"),
        (unsigned)drive_trim_us, (unsigned)drive_span_us, (unsigned)drive_us);
-  note(PSTR("Тахометр %s · тормоз %s · стоп %s · реверс %s · предел %u%%"),
-       drive_tach_enabled ? "есть" : "нет", drive_brake_enabled ? "есть" : "нет",
+  note(PSTR("Тах %s %u имп/об · тормоз %s · стоп %s · реверс %s · предел %u%%"),
+       drive_tach_enabled ? "есть" : "нет", (unsigned)drive_tach_ppr,
+       drive_brake_enabled ? "есть" : "нет",
        drive_stop_enabled ? "есть" : "нет", drive_dir_reverse ? "да" : "нет",
        (unsigned)drive_max_percent);
 }
 
-// Команды настройки тяги. Менять настройку на ходу нельзя: смена нейтрали,
-// размаха или предела под работающим мотором — это рывок, а не настройка.
+// Команды настройки тяги. Менять нейтраль, размах и предел на ходу нельзя:
+// под работающим мотором это рывок, а не настройка. Импульсы на оборот — можно:
+// они не трогают выходной импульс, только арифметику оборотов, и подбирать их
+// надо именно тогда, когда колесо крутится.
 void handleDriveConfigCommand(char* arg1, char* arg2, char* extra) {
   if (!arg1) {
     printDriveConfig();
     return;
   }
   const bool busy = drive_percent != 0 || drive_active;
-  if (busy && strcasecmp_P(arg1, PSTR("reset")) != 0) {
+  const bool liveOk = strcasecmp_P(arg1, PSTR("ppr")) == 0;
+  if (busy && !liveOk && strcasecmp_P(arg1, PSTR("reset")) != 0) {
     note(PSTR("Настройка двигателя: сначала b (тормоз)"));
     return;
   }
@@ -1357,6 +1373,22 @@ void handleDriveConfigCommand(char* arg1, char* arg2, char* extra) {
     }
     drive_tach_enabled = arg2[0] == '1';
     driveTachApply();
+  } else if (strcasecmp_P(arg1, PSTR("ppr")) == 0) {
+    // Сколько импульсов тахометра приходится на один оборот колеса. Если
+    // экран показывает 3600 об/мин, а колесо делает один оборот в секунду
+    // (60 об/мин), значит импульсов 60 — вот это число сюда и идёт.
+    long value = 0;
+    if (!arg2 || extra || !parseLongToken(arg2, &value) ||
+        value < 1 || value > TACH_PPR_MAX) {
+      note(PSTR("Шаблон: m ppr 1…%u (импульсов на оборот)"), (unsigned)TACH_PPR_MAX);
+      return;
+    }
+    drive_tach_ppr = (uint8_t)value;
+    noInterrupts();                 // счётчик обнуляем вместе с прежними отсчётами
+    tach_edges = 0;
+    interrupts();
+    last_rpm_edges = 0;
+    rpm_x10 = 0;
   } else if (strcasecmp_P(arg1, PSTR("brake")) == 0) {
     if (!arg2 || extra || (strcmp(arg2, "0") && strcmp(arg2, "1"))) {
       note(PSTR("Шаблон: m brake 0|1"));
@@ -1394,11 +1426,21 @@ void handleDriveConfigCommand(char* arg1, char* arg2, char* extra) {
            (unsigned)SERVO_MIN_US, (unsigned)SERVO_MAX_US);
       return;
     }
-    if ((long)value - (long)drive_span_us < (long)SERVO_MIN_US ||
-        (long)value + (long)drive_span_us > (long)SERVO_MAX_US) {
-      note(PSTR("Нейтраль %ld мкс с размахом ±%u выходит за %u…%u — сначала m span"),
-           value, (unsigned)drive_span_us, (unsigned)SERVO_MIN_US, (unsigned)SERVO_MAX_US);
+    // Нейтраль сдвигают чаще всего — и почти всегда при размахе «на всю шкалу».
+    // Вместо отказа («сначала m span») подрезаем размах сами и говорим об этом:
+    // оператор двигает нейтраль, а не решает задачу про края импульса.
+    const long room_low = value - (long)SERVO_MIN_US;
+    const long room_high = (long)SERVO_MAX_US - value;
+    const long room = room_low < room_high ? room_low : room_high;
+    if (room < 1) {
+      note(PSTR("Нейтраль %ld мкс — вне %u…%u"), value,
+           (unsigned)SERVO_MIN_US, (unsigned)SERVO_MAX_US);
       return;
+    }
+    if ((long)drive_span_us > room) {
+      note(PSTR("Нейтраль %ld: размах уменьшен с ±%u до ±%ld мкс — импульс в %u…%u"),
+           value, (unsigned)drive_span_us, room, (unsigned)SERVO_MIN_US, (unsigned)SERVO_MAX_US);
+      drive_span_us = (uint16_t)room;
     }
     drive_trim_us = (uint16_t)value;
   } else if (strcasecmp_P(arg1, PSTR("span")) == 0) {
@@ -1420,7 +1462,7 @@ void handleDriveConfigCommand(char* arg1, char* arg2, char* extra) {
     driveConfigDefaults();
     driveTachApply();
   } else {
-    note(PSTR("Шаблон: m [tach 0|1|brake 0|1|stop 0|1|dir 0|1|max 1…100|trim мкс|span мкс|reset]"));
+    note(PSTR("Шаблон: m [tach 0|1|ppr 1…200|brake 0|1|stop 0|1|dir 0|1|max 1…100|trim мкс|span мкс|reset]"));
     return;
   }
   driveConfigSave();
@@ -1501,14 +1543,14 @@ void updateRpm() {
   const uint32_t delta = edges - last_rpm_edges;
   last_rpm_edges = edges;
   last_rpm_ms = now;
-  if (!drive_tach_enabled || TACH_PULSES_PER_REV == 0) {
+  if (!drive_tach_enabled || drive_tach_ppr == 0) {
     // Тахометр не подключён: «0 об/мин» означало бы измеренный ноль, поэтому
     // обороты не считаем, а экран показывает «нет датчика» (поле tach=).
     rpm_x10 = 0;
     return;
   }
   rpm_x10 = (uint32_t)(((uint64_t)delta * 600000ULL) /
-                       ((uint64_t)elapsed * TACH_PULSES_PER_REV));
+                       ((uint64_t)elapsed * (uint64_t)drive_tach_ppr));
 }
 
 // ---------------------------------------------------------------------------
@@ -1801,7 +1843,7 @@ uint8_t classifyModuleToken(const char* token) {
 void printHelp() {
   note(PSTR("команды: k, q, c [°], c c, d [°] [f/b], h, s, g, z, p, ?"));
   note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: t [FL] %%, b (своё колесо)"));
-  note(PSTR("двигатель: m [FL] [tach 0|1|brake 0|1|stop 0|1|dir 0|1|max %|trim мкс|span мкс]"));
+  note(PSTR("двигатель: m [FL] [tach 0|1|ppr имп/об|brake 0|1|stop 0|1|dir 0|1|max %|trim мкс|span мкс]"));
 }
 
 // Телеметрия не содержит роли колеса: порт назначает оператор в программе.
@@ -1820,7 +1862,7 @@ void appendTelemetry() {
   // (фактический импульс на D3): экран показывает, каким импульсом управляется
   // мотор, и не выдаёт «0 об/мин» за измерение, если тахометра нет.
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u rpm=%s drive=%d fw=%u pot=%d pm=%d tach=%d dmax=%u trim=%u span=%u brk=%d stp=%d dir=%d us=%u t=%lu\r\n"),
+      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u rpm=%s drive=%d fw=%u pot=%d pm=%d tach=%d dmax=%u trim=%u span=%u brk=%d stp=%d dir=%d us=%u ppr=%u t=%lu\r\n"),
       deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
       (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
       home, (unsigned)((status >> 8) & 0x0F), rpm, (int)drive_percent, (unsigned)FIRMWARE_PROTOCOL,
@@ -1829,7 +1871,8 @@ void appendTelemetry() {
       drive_tach_enabled ? 1 : 0, (unsigned)drive_max_percent,
       (unsigned)drive_trim_us, (unsigned)drive_span_us,
       drive_brake_enabled ? 1 : 0, drive_stop_enabled ? 1 : 0,
-      drive_dir_reverse ? 1 : 0, (unsigned)drive_us, (unsigned long)millis());
+      drive_dir_reverse ? 1 : 0, (unsigned)drive_us, (unsigned)drive_tach_ppr,
+      (unsigned long)millis());
   if (n <= 0 || n >= (int)sizeof(line)) return;
   txAppend(line, (uint16_t)n);
 }
@@ -1837,7 +1880,7 @@ void appendTelemetry() {
 // Токены настройки двигателя: «m dir 1» — это настройка, а не имя колеса,
 // поэтому такое слово нельзя принять за «m FX 8».
 bool driveConfigTokenKnown(const char* token) {
-  static const char* const known[] = {"tach", "brake", "stop", "dir",
+  static const char* const known[] = {"tach", "ppr", "brake", "stop", "dir",
                                       "max", "trim", "span", "reset"};
   for (uint8_t i = 0; i < sizeof(known) / sizeof(known[0]); ++i) {
     if (strcasecmp_P(token, known[i]) == 0) return true;

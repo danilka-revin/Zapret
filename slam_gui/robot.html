@@ -702,6 +702,12 @@
               прошивка не переступает. Аналогового выхода 0–5 В больше нет.
               Тахометр BLDC — отдельным проводом на <b>D19</b>: можно не подключать, тогда
               обороты честно «нет датчика», а не ноль. Вход <b>STOP</b> драйвера — на D2.
+              <b>Обороты врут в N раз?</b> Значит у драйвера не один импульс на оборот:
+              посчитайте, сколько колесо делает на самом деле (один оборот в секунду — это
+              60 об/мин), впишите это число в «по факту» и нажмите «Подобрать импульсы» —
+              прошивка получит готовое значение, и «об/мин» станут настоящими.
+              От этого же числа зависит путь манёвров («метр вперёд»), поэтому подбирать
+              его надо до первой точной езды.
               Менять можно только при выключенной тяге; настройка сохраняется в EEPROM платы и
               переживает перезапуск по USB. Подтверждение — в телеметрии @TLM (tach/dmax/trim/span/us).
               <b>Сторону вращения</b> здесь не меняют: колёса стоят зеркально, поэтому «вперёд»
@@ -712,11 +718,21 @@
                 <output class="drive-setup-fixed">серво-ШИМ 50 Гц · D3</output>
               </label>
               <label>Нейтраль (trim) <b><output id="drive-cfg-trim-value">1500</output> мкс</b>
-                <input id="drive-cfg-trim" type="range" min="1000" max="2000" step="5" value="1500" aria-label="Нейтраль серво-импульса, микросекунды">
+                <input id="drive-cfg-trim" type="range" min="1050" max="1950" step="5" value="1500" aria-label="Нейтраль серво-импульса, микросекунды">
               </label>
               <label>Размах (span) <b>±<output id="drive-cfg-span-value">500</output> мкс</b>
                 <input id="drive-cfg-span" type="range" min="50" max="500" step="10" value="500" aria-label="Размах серво-импульса от нейтрали, микросекунды">
               </label>
+              <label>Импульсов тахометра на оборот
+                <input id="drive-cfg-ppr" type="number" min="1" max="200" step="1" value="1" aria-label="Импульсов тахометра на оборот колеса">
+              </label>
+              <label>Колесо делает, об/мин (по факту)
+                <input id="drive-cfg-rpm-fact" type="number" min="1" max="6000" step="1" value="60" aria-label="Фактические обороты колеса в минуту">
+              </label>
+              <div class="drive-setup-fit">
+                <button id="drive-cfg-ppr-fit" type="button" disabled>Подобрать импульсы по факту</button>
+                <span id="drive-cfg-rpm-now">сейчас: —</span>
+              </div>
               <label>Тахометр SC (D19)
                 <select id="drive-cfg-tach" aria-label="Тахометр подключён">
                   <option value="on">подключён</option>

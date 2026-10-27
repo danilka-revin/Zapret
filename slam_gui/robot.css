@@ -1689,6 +1689,20 @@ body.swipe-open .kiosk {
   background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px;
 }
 .drive-setup-grid input[type="range"] { width: 100%; accent-color: var(--accent); }
+.drive-setup-grid input[type="number"] {
+  width: 100%; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line-2);
+  background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+/* Подбор импульсов на оборот: кнопка «по факту» и текущие об/мин рядом. */
+.drive-setup-fit { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.drive-setup-fit button {
+  padding: 7px 10px; border-radius: 10px; border: 1px solid var(--line-2);
+  background: var(--bg-2); color: var(--text); font: inherit; font-size: 12px;
+  font-weight: 800; cursor: pointer;
+}
+.drive-setup-fit button:disabled { opacity: .45; cursor: not-allowed; }
+#drive-cfg-rpm-now { color: var(--muted); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .drive-setup-grid b { color: var(--text); font-variant-numeric: tabular-nums; }
 .drive-setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .drive-setup-actions button {

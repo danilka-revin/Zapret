@@ -2790,19 +2790,32 @@
     command_failed: 'Платы не приняли настройку.'
   };
   const DRIVE_CONFIG_FIELDS = ['drive-cfg-tach', 'drive-cfg-brake', 'drive-cfg-stop',
-    'drive-cfg-limit', 'drive-cfg-trim', 'drive-cfg-span'];
+    'drive-cfg-limit', 'drive-cfg-trim', 'drive-cfg-span', 'drive-cfg-ppr'];
   // Заводские значения прошивки: нейтраль 1500 мкс, размах ±500, тахометр,
-  // тормоз и вход STOP подключены, предел 20 %.
+  // тормоз и вход STOP подключены, предел 20 %, один импульс на оборот.
   const DRIVE_CONFIG_DEFAULTS = { tach: 'on', brake: 'on', stop: 'on', limit: 20,
-    trim: 1500, span: 500 };
+    trim: 1500, span: 500, ppr: 1 };
   // Края импульса в прошивке (SERVO_MIN_US…SERVO_MAX_US): за них не выходим.
   const SERVO_MIN_US = 1000;
   const SERVO_MAX_US = 2000;
+  // Минимальный размах: 50 мкс — это уже различимый ход, но ползунок не должен
+  // упираться в 1 мкс, иначе нейтраль нельзя сдвинуть почти никуда.
+  const SERVO_SPAN_MIN_US = 50;
+  const TACH_PPR_MAX = 200;
   let driveCfgPending = false;
   let driveCfgQueue = Promise.resolve();
   let driveCfgDesired = null;      // ожидаемое подтверждение плат
   let driveCfgMessage = '';
   let driveCfgMessageUntil = 0;
+  // Отдельная, не затираемая отправкой пометка «размах подрезан»: иначе она
+  // исчезает в тот же миг, когда настройка ушла на платы.
+  let driveCfgSpanNote = '';
+  let driveCfgSpanNoteUntil = 0;
+  // Показанные платами обороты и «какое число импульсов на оборот мы ждём от
+  // плат». Пока платы не подтвердили его, телеметрия поле не переписывает —
+  // иначе только что подобранное значение исчезало бы на следующем кадре.
+  let driveCfgRpmShown = null;
+  let driveCfgPprWanted = null;
 
   /** Импульс (мкс) для процента тяги — по подтверждённым платами нейтрали и размаху. */
   function drivePulseFor(percent, config) {
@@ -2817,7 +2830,8 @@
 
   function driveConfigSignature(cfg) {
     const c = cfg || {};
-    return [c.outputMode, c.tach, c.brake, c.stopInput, c.maxPercent, c.trimUs, c.spanUs].join('|');
+    return [c.outputMode, c.tach, c.brake, c.stopInput, c.maxPercent, c.trimUs,
+      c.spanUs, c.pulsesPerRev].join('|');
   }
 
   function driveConfigEnabled(d, cfg, authorized) {
@@ -2834,6 +2848,39 @@
     if (el) el.value = value;
   }
 
+  /**
+   * Размах подрезается под нейтраль, а не наоборот.
+   *
+   * Раньше ползунок нейтрали получал min = 1000 + размах и max = 2000 − размах:
+   * при заводском размахе ±500 это ровно 1500…1500, то есть нейтраль нельзя
+   * было сдвинуть вообще («настройки невозможно поменять»). Теперь нейтраль
+   * ходит по всей шкале, а размах ужимается сам — импульс обязан остаться в
+   * 1000…2000 мкс, но решает это не запрет, а автоматика с объяснением.
+   */
+  function fitDriveSpan() {
+    const trimEl = $('drive-cfg-trim');
+    const spanEl = $('drive-cfg-span');
+    if (!trimEl || !spanEl) return null;
+    const trim = Math.max(SERVO_MIN_US + SERVO_SPAN_MIN_US,
+      Math.min(SERVO_MAX_US - SERVO_SPAN_MIN_US, Number(trimEl.value) || 1500));
+    const room = Math.min(trim - SERVO_MIN_US, SERVO_MAX_US - trim, 500);
+    const spanMax = Math.max(SERVO_SPAN_MIN_US, Math.floor(room / 10) * 10);
+    let span = Number(spanEl.value) || 500;
+    spanEl.max = String(spanMax);
+    if (span > spanMax) {
+      span = spanMax;
+      spanEl.value = String(span);
+      driveCfgSpanNote = 'Размах уменьшен до ±' + span + ' мкс, чтобы импульс остался в '
+        + SERVO_MIN_US + '…' + SERVO_MAX_US + ' мкс.';
+      driveCfgSpanNoteUntil = Date.now() + 30000;
+    }
+    spanEl.min = String(Math.min(SERVO_SPAN_MIN_US, spanMax));
+    setText($('drive-cfg-span-value'), String(span));
+    setText($('drive-cfg-trim-value'), String(trim));
+    trimEl.value = String(trim);
+    return {trim, span};
+  }
+
   function renderDriveConfigPanel(d, authorized) {
     const tach = $('drive-cfg-tach');
     if (!tach) return;
@@ -2848,24 +2895,40 @@
       setDriveCfgOutput('drive-cfg-stop', config.stopInput === false ? 'off' : 'on');
       const limit = Math.max(1, Math.min(100, Number(config.maxPercent) || 20));
       const trim = Math.max(SERVO_MIN_US, Math.min(SERVO_MAX_US, Number(config.trimUs) || 1500));
-      const span = Math.max(1, Math.min(500, Number(config.spanUs) || 500));
+      const span = Math.max(SERVO_SPAN_MIN_US, Math.min(500, Number(config.spanUs) || 500));
+      const ppr = Math.max(1, Math.min(TACH_PPR_MAX, Number(config.pulsesPerRev) || 1));
       setDriveCfgOutput('drive-cfg-limit', String(limit));
       setDriveCfgOutput('drive-cfg-trim', String(trim));
       setDriveCfgOutput('drive-cfg-span', String(span));
+      if (driveCfgPprWanted !== null && ppr === driveCfgPprWanted) {
+        driveCfgPprWanted = null;          // платы подтвердили — поле снова живое
+      }
+      if ($('drive-cfg-ppr') && driveCfgPprWanted === null) {
+        $('drive-cfg-ppr').value = String(ppr);
+      }
       setText($('drive-cfg-limit-value'), String(limit));
       setText($('drive-cfg-trim-value'), String(trim));
       setText($('drive-cfg-span-value'), String(span));
     }
-    // Нейтраль и размах не должны выводить импульс за 1000…2000 мкс.
-    const trimEl = $('drive-cfg-trim');
-    const spanEl = $('drive-cfg-span');
-    if (trimEl && spanEl) {
-      const trim = Math.max(SERVO_MIN_US, Number(trimEl.value) || 1500);
-      const span = Math.max(1, Number(spanEl.value) || 500);
-      trimEl.min = String(SERVO_MIN_US + span);
-      trimEl.max = String(SERVO_MAX_US - span);
-      spanEl.max = String(Math.max(1, Math.min(500, Math.min(trim - SERVO_MIN_US, SERVO_MAX_US - trim))));
+    fitDriveSpan();
+    // «Сейчас» — то, что платы прислали в телеметрии: по нему видно, насколько
+    // врут обороты, и какое число вписывать в «по факту».
+    const rpmNow = $('drive-cfg-rpm-now');
+    const rpms = ((d || {}).motors || [])
+      .map((motor) => Number(motor && motor.rpm))
+      .filter((value) => Number.isFinite(value));
+    const shown = rpms.length ? rpms.reduce((a, b) => a + b, 0) / rpms.length : null;
+    if (rpmNow) {
+      rpmNow.textContent = shown == null ? 'сейчас: —' : 'сейчас: ' + Math.round(shown) + ' об/мин';
     }
+    driveCfgRpmShown = shown;
+    // Подбор импульсов доступен и под тягой: только так и можно увидеть, что
+    // колесо крутится «не с той» скоростью, и сразу это исправить. Прошивка без
+    // ppr в телеметрии толку не даст — тогда поле честно выключено.
+    const pprSupported = Number(config.pulsesPerRev) > 0;
+    const fit = $('drive-cfg-ppr-fit');
+    if (fit) fit.disabled = !authorized || !pprSupported || !!driveCfgDesired;
+    if ($('drive-cfg-ppr')) $('drive-cfg-ppr').disabled = !authorized || !pprSupported;
     if (driveCfgDesired && config.supported && driveConfigSignature(config) === driveCfgDesired.signature) {
       driveCfgDesired = null;
       driveCfgMessage = 'Платы подтвердили настройку привода.';
@@ -2900,7 +2963,11 @@
         ' · тормоз ' + (config.brake ? 'есть' : 'нет') +
         ' · стоп ' + (config.stopInput === false ? 'нет' : 'есть') +
         ' · предел ' + (config.maxPercent || 20) + '%' +
+        ' · импульсов на оборот ' + (config.pulsesPerRev || '— нет в прошивке') +
         ' · импульс ' + (config.pulseUs || 0) + ' мкс';
+    }
+    if (driveCfgSpanNote && Date.now() < driveCfgSpanNoteUntil) {
+      text += ' · ' + driveCfgSpanNote;
     }
     const status = $('drive-cfg-status');
     if (status) status.textContent = text;
@@ -2933,7 +3000,7 @@
     }
   }
 
-  /** Настройки уходят по одной: шесть команд подряд в один порт — это очередь. */
+  /** Настройки уходят по одной: пачка команд подряд в один порт — это очередь. */
   function queueDriveConfig(payload) {
     const run = () => sendDriveConfig(payload);
     driveCfgQueue = driveCfgQueue.then(run, run);
@@ -2947,13 +3014,15 @@
     const limitEl = $('drive-cfg-limit');
     const trimEl = $('drive-cfg-trim');
     const spanEl = $('drive-cfg-span');
+    const pprEl = $('drive-cfg-ppr');
     return {
       tach: tach ? String(tach.value || 'on') : 'on',
       brake: brake ? String(brake.value || 'on') : 'on',
       stop: stop ? String(stop.value || 'on') : 'on',
       limit: Math.max(1, Math.min(100, Number(limitEl && limitEl.value) || 20)),
       trim: Math.max(SERVO_MIN_US, Math.min(SERVO_MAX_US, Number(trimEl && trimEl.value) || 1500)),
-      span: Math.max(1, Math.min(500, Number(spanEl && spanEl.value) || 500))
+      span: Math.max(1, Math.min(500, Number(spanEl && spanEl.value) || 500)),
+      ppr: Math.max(1, Math.min(TACH_PPR_MAX, Number(pprEl && pprEl.value) || 1))
     };
   }
 
@@ -2968,6 +3037,8 @@
     // Кнопка могла остаться нажатой со старым снимком: не отправляем то, что
     // нельзя менять на ходу, даже если браузер дал click.
     if (!driveConfigReadyToSend()) return;
+    const config = ((lastData || {}).drive || {}).config || {};
+    const pprSupported = Number(config.pulsesPerRev) > 0;
     const values = driveConfigFormValues();
     if (values.trim - values.span < SERVO_MIN_US || values.trim + values.span > SERVO_MAX_US) {
       driveCfgMessage = 'Нейтраль ± размах выходят за 1000…2000 мкс: сервопривод уйдёт в упор.';
@@ -2983,6 +3054,10 @@
       // каждой команды, и «span 400» при нейтрали 1500 пройдёт, а наоборот — нет.
       { action: 'span', value: values.span },
       { action: 'trim', value: values.trim },
+      // Импульсов на оборот — до предела: от него считаются «об/мин» и путь
+      // манёвров, и он не связан с краями серво-импульса. Старой прошивке
+      // (без ppr в телеметрии) эту команду не шлём: она её не знает.
+      ...(pprSupported ? [{ action: 'ppr', value: values.ppr }] : []),
       { action: 'tach', value: values.tach },
       { action: 'brake', value: values.brake },
       { action: 'stop', value: values.stop },
@@ -2993,7 +3068,8 @@
     }
     driveCfgDesired = {
       signature: ['servo', values.tach === 'on', values.brake === 'on',
-        values.stop === 'on', values.limit, values.trim, values.span].join('|'),
+        values.stop === 'on', values.limit, values.trim, values.span,
+        values.ppr].join('|'),
       deadline: Date.now() + 8000
     };
     driveCfgMessage = 'Команда отправлена · ждём подтверждения телеметрии…';
@@ -3003,6 +3079,7 @@
 
   async function resetDriveConfig() {
     if (!driveConfigReadyToSend()) return;
+    driveCfgPprWanted = null;
     driveCfgMessage = 'Отправка заводских значений…';
     driveCfgMessageUntil = Date.now() + 8000;
     renderDriveConfigPanel(lastData || {}, steeringAuthorized);
@@ -3010,7 +3087,7 @@
     driveCfgDesired = {
       signature: ['servo', true, true, true,
         DRIVE_CONFIG_DEFAULTS.limit, DRIVE_CONFIG_DEFAULTS.trim,
-        DRIVE_CONFIG_DEFAULTS.span].join('|'),
+        DRIVE_CONFIG_DEFAULTS.span, DRIVE_CONFIG_DEFAULTS.ppr].join('|'),
       deadline: Date.now() + 8000
     };
     driveCfgMessage = 'Заводские отправлены · ждём подтверждения плат…';
@@ -3644,8 +3721,64 @@
       ['drive-cfg-span', 'drive-cfg-span-value', ' мкс']].forEach(([id, out, suffix]) => {
       const slider = $(id);
       if (!slider) return;
-      slider.addEventListener('input', () => setText($(out), String(slider.value) + suffix));
+      slider.addEventListener('input', () => {
+        setText($(out), String(slider.value) + suffix);
+        // Нейтраль двигает размах за собой: размах — следствие, а не запрет.
+        if (id !== 'drive-cfg-limit') fitDriveSpan();
+      });
     });
+    // Ручной ввод импульсов на оборот: пока человек его правит, телеметрия поле
+    // не переписывает — иначе набранное число исчезает на следующем кадре.
+    const pprInput = $('drive-cfg-ppr');
+    if (pprInput) {
+      const noteEdit = () => { driveCfgPprWanted = Number(pprInput.value) || null; };
+      pprInput.addEventListener('input', noteEdit);
+      pprInput.addEventListener('change', noteEdit);
+    }
+    // «Подобрать импульсы по факту»: оператор видит, сколько колесо делает на
+    // самом деле, и одно нажатие пересчитывает импульсов-на-оборот так, чтобы
+    // телеметрия совпала с реальностью. Формула: ppr_нов = ppr_стар ×
+    // показанные_об/мин ÷ фактические_об/мин.
+    const pprFit = $('drive-cfg-ppr-fit');
+    if (pprFit) {
+      pprFit.addEventListener('click', () => {
+        const pprEl = $('drive-cfg-ppr');
+        const factEl = $('drive-cfg-rpm-fact');
+        const nowEl = $('drive-cfg-rpm-now');
+        const shown = Number(driveCfgRpmShown) || 0;
+        const fact = Number(factEl && factEl.value) || 0;
+        if (!pprEl) return;
+        if (!(shown > 0)) {
+          driveCfgMessage = 'Оборотов в телеметрии нет: раскрутите колесо и повторите.';
+          driveCfgMessageUntil = Date.now() + 6000;
+          renderDriveConfigPanel(lastData || {}, steeringAuthorized);
+          return;
+        }
+        if (!(fact > 0)) {
+          driveCfgMessage = 'Впишите, сколько колесо делает об/мин на самом деле.';
+          driveCfgMessageUntil = Date.now() + 6000;
+          renderDriveConfigPanel(lastData || {}, steeringAuthorized);
+          return;
+        }
+        const ppr = Number(pprEl.value) || 1;
+        const fitted = Math.max(1, Math.min(TACH_PPR_MAX, Math.round(ppr * shown / fact)));
+        pprEl.value = String(fitted);
+        driveCfgPprWanted = fitted;
+        // Отправляем только импульсы на оборот: это одна команда, и она не
+        // трогает ни нейтраль, ни размах — значит, работает и на ходу.
+        const note = 'Импульсов на оборот: ' + ppr + ' → ' + fitted + ' (было '
+          + Math.round(shown) + ' об/мин, по факту ' + Math.round(fact) + ')';
+        void queueDriveConfig({ action: 'ppr', value: fitted }).then((ok) => {
+          if (!ok) {                       // причину отказа уже объяснил sendDriveConfig
+            renderDriveConfigPanel(lastData || {}, steeringAuthorized);
+            return;
+          }
+          driveCfgMessage = note + ' · отправлено платам.';
+          driveCfgMessageUntil = Date.now() + 12000;
+          renderDriveConfigPanel(lastData || {}, steeringAuthorized);
+        });
+      });
+    }
     const releaseAll = () => { releaseDrive(); releaseModuleDrive(); };
     window.addEventListener('pointerup', releaseAll);
     window.addEventListener('pointercancel', releaseAll);

@@ -1067,6 +1067,17 @@ static void scenario_drive_config() {
   board_fr.serial.send("t 10");
   sim::run_for_ms(2);
   CHECK(board_fr.servo_us == 1750, "t 10 → 1750 мкс: %u", (unsigned)board_fr.servo_us);
+  // Под тягой нейтраль и размах менять нельзя — это рывок; импульсы на оборот
+  // можно и нужно: колесо как раз крутится, и по нему видно, врут ли об/мин.
+  board_fr.serial.send("m trim 1600");
+  sim::run_for_ms(2);
+  CHECK(FR::drive_trim_us == DRIVE_US_NEUTRAL, "m trim под тягой отклонён: %u",
+        (unsigned)FR::drive_trim_us);
+  CHECK(has(board_fr, "сначала b (тормоз)"), "отказ объяснён");
+  board_fr.serial.send("m ppr 60");
+  sim::run_for_ms(2);
+  CHECK(FR::drive_tach_ppr == 60, "m ppr под тягой принят: %u",
+        (unsigned)FR::drive_tach_ppr);
   board_fr.serial.send("b");
   sim::run_for_ms(2);
   CHECK(board_fr.servo_us == DRIVE_US_NEUTRAL, "стоп — снова нейтраль");
@@ -1101,6 +1112,20 @@ static void scenario_drive_config() {
         "недопустимые m span / m trim отклонены: span=%u trim=%u",
         (unsigned)FR::drive_span_us, (unsigned)FR::drive_trim_us);
   CHECK(has(board_fr, "выходит за"), "отказ объяснён оператору");
+
+  // Нейтраль важнее размаха: сдвиг нейтрали подрезает размах сам, а не
+  // отказывает «сначала m span». 1500 при размахе 500 — это края 1000 и 2000,
+  // поэтому нейтраль 1620 требует размаха не больше 380.
+  board_fr.serial.send("m reset");        // нейтраль 1500, размах ±500
+  sim::run_for_ms(2);
+  board_fr.serial.send("m trim 1620");    // 1620 + 500 > 2000 — размах ужмётся
+  sim::run_for_ms(2);
+  CHECK(FR::drive_trim_us == 1620 && FR::drive_span_us == 380,
+        "m trim сам подрезал размах: trim=%u span=%u",
+        (unsigned)FR::drive_trim_us, (unsigned)FR::drive_span_us);
+  CHECK(has(board_fr, "размах уменьшен"), "подрезка размаха объяснена оператору");
+  board_fr.serial.send("m span 300");
+  sim::run_for_ms(2);
 
   // Тахометр не подключён: прерывание снимается, телеметрия говорит tach=0.
   board_fr.serial.send("m tach 0");
@@ -1322,6 +1347,54 @@ struct Scenario {
   void (*fn)();
 };
 
+// Обороты по тахометру: импульсов на оборот — настройка, а не константа.
+// Драйвер AOVO отдаёт не 1 импульс на оборот: при заводском ppr=1 экран
+// показывал 3600 об/мин вместо 60 (колесо делало оборот в секунду).
+static void scenario_tach_ppr() {
+  boot({&board_fr});
+  board_fr.serial.send("z");
+  sim::run_for_ms(2);
+  CHECK(FR::drive_tach_ppr == 1, "заводское ppr = 1: %u", (unsigned)FR::drive_tach_ppr);
+
+  // Импульсы тахометра приходят прерыванием: в симуляции их «прокручивает»
+  // тот же обработчик, что зовёт железо.
+  auto spin = [](int edges) {
+    for (int i = 0; i < edges; ++i) {
+      if (board_fr.tach_fn) board_fr.tach_fn();
+    }
+  };
+
+  board_fr.serial.send("m ppr 60");
+  sim::run_for_ms(300);                       // телеметрия выходит раз в 250 мс
+  CHECK(FR::drive_tach_ppr == 60, "m ppr 60 принят: %u", (unsigned)FR::drive_tach_ppr);
+  CHECK(has(board_fr, "ppr=60"), "ppr в телеметрии: %s", board_fr.serial.output.c_str());
+  // Колесо делает оборот в секунду: 60 импульсов за 0,5…1 с окна — это
+  // 60…120 об/мин, а не 3600/6000, как было при «1 импульс на оборот».
+  sim::run_for_ms(300);
+  spin(60);                                   // 60 импульсов = 1 оборот
+  sim::run_for_ms(520);                       // одно окно измерения (500 мс)
+  CHECK(FR::rpm_x10 >= 500 && FR::rpm_x10 <= 1300,
+        "60 имп/об — это десятки об/мин, а не тысячи: rpm_x10=%lu",
+        (unsigned long)FR::rpm_x10);
+
+  // Тот же сигнал при ppr=1 — те же 60 «оборотов» за полсекунды, то есть
+  // заведомо завышенные тысячи: именно это и лечит настройка.
+  board_fr.serial.send("m ppr 1");
+  sim::run_for_ms(300);
+  spin(60);
+  sim::run_for_ms(520);
+  CHECK(FR::rpm_x10 > 20000, "без поправки тот же сигнал даёт тысячи: rpm_x10=%lu",
+        (unsigned long)FR::rpm_x10);
+
+  board_fr.serial.send("m ppr 0");
+  sim::run_for_ms(2);
+  CHECK(FR::drive_tach_ppr == 1, "ppr 0 отклонён: %u", (unsigned)FR::drive_tach_ppr);
+  board_fr.serial.send("m ppr 5000");
+  sim::run_for_ms(2);
+  CHECK(FR::drive_tach_ppr == 1, "ppr 5000 отклонён: %u", (unsigned)FR::drive_tach_ppr);
+  CHECK(!has(board_fr, "ppr=0 "), "недопустимый ppr не попал в телеметрию");
+}
+
 static const Scenario SCENARIOS[] = {
     {"boot", scenario_boot},
     {"identity", scenario_identity},
@@ -1360,6 +1433,7 @@ static const Scenario SCENARIOS[] = {
     {"drive_config", scenario_drive_config},
     {"drive_one_wheel", scenario_drive_one_wheel},
     {"drive_direction", scenario_drive_direction},
+    {"tach_ppr", scenario_tach_ppr},
 };
 
 static int run_one(const Scenario& scenario) {

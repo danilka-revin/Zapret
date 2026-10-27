@@ -689,10 +689,10 @@ def test_pot_mode_requires_all_boards_and_idle_telemetry():
 
 # --------------------------- гибкая настройка тяги --------------------------- #
 def _drive_frame(module, *, tach=1, dmax=20, trim=1500, span=500, us=1500, stp=1,
-                 brk=1, dr=0, deg=0.0, drive=0):
-    return ("@TLM mod=%s deg=%.2f tgt=0.00 moving=0 cal=1 cycle=0 calib=0 rpm=0.0 "
-            "drive=%d fw=6 pot=1 pm=1 tach=%d dmax=%d trim=%d span=%d brk=%d stp=%d dir=%d us=%d"
-            % (module, deg, drive, tach, dmax, trim, span, brk, stp, dr, us))
+                 brk=1, dr=0, deg=0.0, drive=0, ppr=1, rpm=0.0):
+    return ("@TLM mod=%s deg=%.2f tgt=0.00 moving=0 cal=1 cycle=0 calib=0 rpm=%.1f "
+            "drive=%d fw=6 pot=1 pm=1 tach=%d dmax=%d trim=%d span=%d ppr=%d brk=%d stp=%d dir=%d us=%d"
+            % (module, deg, rpm, drive, tach, dmax, trim, span, ppr, brk, stp, dr, us))
 
 
 def test_master_telemetry_parses_flexible_drive_configuration():
@@ -707,6 +707,18 @@ def test_master_telemetry_parses_flexible_drive_configuration():
     assert frame["drivePulseUs"] == 1770
     assert frame["brake"] is False and frame["stopInput"] is True
     assert frame["dirReverse"] is True
+    # Импульсов тахометра на оборот: без него «об/мин» врут ровно в ppr раз.
+    assert frame["tachPpr"] is None
+    with_ppr = backend.parse_master_line(
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=7 tach=1 "
+        "dmax=40 trim=1500 span=500 ppr=60 brk=1 stp=1 dir=0 us=1500 t=1")
+    assert with_ppr["tachPpr"] == 60 and with_ppr["rpm"] == 60.0
+    assert backend.parse_master_line(
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=0") is None
+    assert backend.parse_master_line(
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=201") is None
+    assert backend.parse_master_line(
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=abc") is None
 
     # Прошивка без команды m: поля отсутствуют, а не выдуманы нулями.
     legacy = backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=0 fw=4")
@@ -757,12 +769,17 @@ def test_drive_config_is_mixed_when_the_plates_disagree():
     src = _bare_master_source(backend)
     for module in ("FL", "FR", "RL"):
         src.feed(_drive_frame(module), now=100.0)
-    src.feed(_drive_frame("RR", dmax=40, trim=1520, span=300), now=100.0)
+    src.feed(_drive_frame("RR", dmax=40, trim=1520, span=300, ppr=60), now=100.0)
     config = src.drive_config(now=100.2)
     assert config["supported"] is True and config["mixed"] is True
     assert config["maxPercent"] is None and config["trimUs"] is None
     assert config["perModule"]["RR"]["trimUs"] == 1520
     assert config["perModule"]["RR"]["spanUs"] == 300
+    # Импульсы на оборот — свойство конкретной платы, поэтому в perModule оно
+    # есть всегда, а общее значение пустое, когда платы разошлись.
+    assert config["perModule"]["RR"]["pulsesPerRev"] == 60
+    assert config["perModule"]["FL"]["pulsesPerRev"] == 1
+    assert config["pulsesPerRev"] is None
     assert config["outputMode"] == "servo"
     # Смешанный режим — не повод разрешить тягу: общий предел неизвестен.
     assert src.drive_limit_percent(now=100.2) == backend.MAX_DRIVE_PERCENT
@@ -1060,6 +1077,9 @@ def test_set_drive_config_commands_and_guards():
     assert src.commands.get_nowait() == b"m span 300\n"
     assert src.set_drive_config("trim", 1620, now=100.2)["ok"] is True
     assert src.commands.get_nowait() == b"m trim 1620\n"
+    # Импульсов на оборот — отдельная настройка: у драйверов бывает и 1, и 60.
+    assert src.set_drive_config("ppr", 60, now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m ppr 60\n"
     assert src.set_drive_config("defaults", now=100.2)["ok"] is True
     assert src.commands.get_nowait() == b"m reset\n"
 
@@ -1067,6 +1087,7 @@ def test_set_drive_config_commands_and_guards():
     for action, value in (("stop", "yes"), ("tach", "yes"), ("limit", 0),
                           ("limit", 101), ("limit", "abc"), ("trim", 900), ("trim", 2100),
                           ("span", 0), ("span", 600), ("span", "abc"),
+                          ("ppr", 0), ("ppr", 201), ("ppr", "abc"), ("ppr", None),
                           ("unknown", None)):
         result = src.set_drive_config(action, value, now=100.2)
         expected = "invalid_action" if action == "unknown" else "invalid_value"
@@ -1076,6 +1097,10 @@ def test_set_drive_config_commands_and_guards():
     # Настройка — только при выключенной тяге и стоящих колёсах.
     src.drive_percent = 8
     assert src.set_drive_config("limit", 30, now=100.2)["reason"] == "module_busy"
+    # Импульсы на оборот — исключение: они не меняют выходной импульс, а
+    # подбирать их надо именно на крутящемся колесе.
+    assert src.set_drive_config("ppr", 60, now=100.2)["ok"] is True
+    assert src.commands.get_nowait() == b"m ppr 60\n"
     src.drive_percent = 0
     src.feed(_drive_frame("FR", deg=4.0), now=100.0)
     src.frames["FR"] = (dict(src.frames["FR"][0], moving=True), 100.0)

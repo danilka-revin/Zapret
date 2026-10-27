@@ -457,6 +457,7 @@ function findPreset(id) {
       const fields = {
         tach: 'drive-cfg-tach', brake: 'drive-cfg-brake', stop: 'drive-cfg-stop',
         limit: 'drive-cfg-limit', trim: 'drive-cfg-trim', span: 'drive-cfg-span',
+        ppr: 'drive-cfg-ppr',
       };
       Object.keys(fields).forEach((key) => {
         if (action[key] === undefined) return;
@@ -484,6 +485,18 @@ function findPreset(id) {
     } else if (action.type === 'maneuver-stop') {
       byId('maneuver-stop').fire('click');
       await flush(action.rounds || 6);
+    } else if (action.type === 'drivecfg-fit') {
+      // «Подобрать импульсы по факту»: вписываем реальные об/мин и жмём кнопку.
+      if (action.fact !== undefined) {
+        const factEl = byId('drive-cfg-rpm-fact');
+        factEl.value = String(action.fact);
+        factEl.fire('input');
+      }
+      byId('drive-cfg-ppr-fit').fire('click');
+      await flush(action.rounds || 3);
+    } else if (action.type === 'drivecfg-apply') {
+      byId('drive-cfg-apply').fire('click');
+      await flush(action.rounds || 8);
     } else if (action.type === 'drivecfg-reset') {
       byId('drive-cfg-reset').fire('click');
       await flush(action.rounds || 6);
@@ -538,6 +551,9 @@ function findPreset(id) {
       limit: byId('drive-cfg-limit').value,
       trim: byId('drive-cfg-trim').value,
       span: byId('drive-cfg-span').value,
+      ppr: byId('drive-cfg-ppr').value,
+      rpmNow: byId('drive-cfg-rpm-now').textContent,
+      fitDisabled: !!byId('drive-cfg-ppr-fit').disabled,
       applyDisabled: !!byId('drive-cfg-apply').disabled,
       resetDisabled: !!byId('drive-cfg-reset').disabled,
       status: byId('drive-cfg-status').textContent,
