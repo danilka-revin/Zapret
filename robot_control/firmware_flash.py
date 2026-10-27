@@ -10,9 +10,17 @@
    Порты берутся из настроек: ``RC_WHEEL_FL_PORT … RC_WHEEL_RR_PORT`` в ``.env``,
    то есть ровно те, что выбраны на бортовом экране.
 3. Скрипт собирает ``motor_wheel_<КОЛЕСО>.ino`` с вписанным именем колеса и
-   прошивает плату через ``arduino-cli``. Уже прошитые платы он не трогает:
-   результат помнится по хешу скетча, поэтому после обновления прошивка идёт
-   один раз, а обычные перезапуски ничего не прошивают.
+   прошивает плату через ``arduino-cli``. «Актуальная версия» проверяется по
+   самой плате: она сообщает ``fw=`` в каждой строке ``@TLM``, и скрипт сверяет
+   это с ``FIRMWARE_PROTOCOL`` из скетча (``scripts/firmware_probe.py``). Плата с
+   другой прошивкой перепрошивается, даже если локальная отметка говорит
+   «уже прошито» — её могли заменить или прошить старой копией с рабочего стола.
+   Отметка по хешу скетча (``var/firmware-flashed``) только избавляет от лишнего
+   стирания платы, когда всё и так совпало.
+
+Если ``arduino-cli`` нет, скрипт пробует поставить его сам
+(``scripts/install_arduino_cli.sh``, без sudo); не вышло — платы прошиваются
+вручную копиями ``motor_wheel_*.ino`` с рабочего стола, об этом пишется в журнал.
 
 Копии прошивок на рабочем столе (``scripts/sync_firmware_desktop.sh``) остаются
 на месте: их можно открыть в Arduino IDE и прошить вручную, если ``arduino-cli``
@@ -24,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -35,6 +44,10 @@ log = logging.getLogger(__name__)
 FLASH_TIMEOUT_S = 300
 
 PENDING_NAME = "firmware-pending.json"
+
+#: Версия прошивки из скетча (``FIRMWARE_PROTOCOL``) — та, которая должна стоять
+#: на платах. Платы сообщают её же полем ``fw=`` в ``@TLM``.
+PROTOCOL_RE = re.compile(r"FIRMWARE_PROTOCOL\s*=\s*(\d+)")
 
 #: Коды возврата scripts/flash_firmware.sh (см. его шапку).
 EXIT_TOOL_MISSING = 2
@@ -51,6 +64,22 @@ def _root(root: Path | str | None) -> Path:
 
 def pending_path(root: Path | str | None = None) -> Path:
     return _root(root) / "var" / PENDING_NAME
+
+
+def expected_protocol(root: Path | str | None = None) -> int | None:
+    """Версия прошивки, которая лежит в коде (``FIRMWARE_PROTOCOL`` в скетче)."""
+    sketch = _root(root) / "firmware" / "motor_wheel" / "motor_wheel.ino"
+    try:
+        text = sketch.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = PROTOCOL_RE.search(text)
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:                        # pragma: no cover
+        return None
 
 
 def mark_pending(reason: str = "", sha: str = "", root: Path | str | None = None) -> Path:
@@ -141,4 +170,30 @@ def flash_if_pending(root: Path | str | None = None,
     else:
         log.warning("автопрошивка плат: не все платы прошились (код %s)",
                     result.returncode)
+    report["summary"] = summarize(report)
     return report
+
+
+def summarize(report: dict) -> str:
+    """Одна фраза для журнала экрана: что вышло с прошивкой плат."""
+    if not report:
+        return ""
+    code = report.get("code")
+    output = str(report.get("output") or "")
+    if code == 0:
+        # «итог: прошито 4, уже было актуально 0, ошибок 0…» — самая полезная строка.
+        for line in reversed(output.splitlines()):
+            if "итог:" in line:
+                return "платы: " + line.split("итог:", 1)[1].strip()
+        if "прошивать нечего" in output:
+            return "платы уже на актуальной прошивке"
+        return "платы прошиты"
+    if code == EXIT_TOOL_MISSING:
+        return ("платы не прошиты: нет arduino-cli — прошейте motor_wheel_*.ino "
+                "с рабочего стола в Arduino IDE")
+    if code == EXIT_NO_PORTS:
+        return ("платы не прошиты: не выбраны USB-порты колёс "
+                "(«Тяга и руление» → «USB-порты колёс»)")
+    if code is None:
+        return "платы не прошиты: " + (report.get("output") or "ошибка запуска")[:160]
+    return "не все платы прошились — подробности в журнале прошивки"

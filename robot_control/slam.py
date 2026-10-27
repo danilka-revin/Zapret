@@ -945,7 +945,7 @@ def _start_firmware_flash():
     (RC_WHEEL_*_PORT) — из того же места, что и подключение колёс.
     """
     try:
-        from .firmware_flash import flash_if_pending
+        from .firmware_flash import flash_if_pending, summarize
     except ImportError:                       # pragma: no cover — старые сборки
         return None
 
@@ -953,13 +953,23 @@ def _start_firmware_flash():
         import threading
 
         def work():
+            report = None
             try:
-                flash_if_pending(always=True)
+                report = flash_if_pending(always=True)
             finally:
                 try:
                     source.resume_ports()
                 except Exception:             # noqa: BLE001 — колёса важнее отчёта
                     log.exception("автопрошивка: не удалось вернуть подключение колёс")
+                # Итог прошивки — в журнал экрана: иначе оператор не знает, что
+                # платы действительно получили новую версию.
+                text = summarize(report) if report else ""
+                if text:
+                    try:
+                        note_master_status("ok" if report.get("ok") else "warn",
+                                           "автопрошивка: " + text)
+                    except Exception:         # noqa: BLE001 — журнал не критичен
+                        log.exception("автопрошивка: не удалось записать итог в журнал")
 
         threading.Thread(target=work, daemon=True, name="firmware-flash").start()
 

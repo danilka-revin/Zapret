@@ -760,6 +760,40 @@ def test_firmware_flash_runs_at_kiosk_startup_and_releases_the_ports():
         firmware_flash.flash_if_pending = original_flash
 
 
+def test_firmware_flash_result_goes_to_the_screen_journal():
+    """Итог прошивки виден на экране, а не только в консоли службы."""
+    import time
+
+    from robot_control import firmware_flash
+    from robot_control import slam as slam_module
+
+    original_flash = firmware_flash.flash_if_pending
+    original_note = slam_module.note_master_status
+    notes = []
+    try:
+        firmware_flash.flash_if_pending = lambda *a, **k: {
+            "ok": True, "code": 0,
+            "output": "[firmware] итог: прошито 4, уже было актуально 0, ошибок 0, "
+                      "без порта 0, нет устройства 0.",
+        }
+        slam_module.note_master_status = lambda level, text: notes.append((level, text))
+
+        class Source:
+            def resume_ports(self):
+                pass
+
+        slam_module._start_firmware_flash()(Source())
+        for _ in range(100):
+            if notes:
+                break
+            time.sleep(0.02)
+        assert notes and notes[0][0] == "ok"
+        assert "автопрошивка" in notes[0][1] and "прошито 4" in notes[0][1]
+    finally:
+        firmware_flash.flash_if_pending = original_flash
+        slam_module.note_master_status = original_note
+
+
 def test_master_telemetry_parses_flexible_drive_configuration():
     """Прошивка с командой m: тахометр, предел, нейтраль/размах серво-импульса."""
     backend = _load_backend()
