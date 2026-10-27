@@ -10,7 +10,10 @@
    Порты берутся из настроек: ``RC_WHEEL_FL_PORT … RC_WHEEL_RR_PORT`` в ``.env``,
    то есть ровно те, что выбраны на бортовом экране.
 3. Скрипт собирает ``motor_wheel_<КОЛЕСО>.ino`` с вписанным именем колеса и
-   прошивает плату через ``arduino-cli``. «Актуальная версия» проверяется по
+   прошивает плату. ``arduino-cli`` не обязателен: если его нет (в России
+   downloads.arduino.cc недоступен), сборка идёт обычным ``avr-gcc`` из пакета
+   ``gcc-avr`` + ``avr-libc``, а заливка — ``avrdude``; ядро ArduinoCore-avr и
+   библиотека Servo качаются с GitHub (``scripts/avr_upload.py``). «Актуальная версия» проверяется по
    самой плате: она сообщает ``fw=`` в каждой строке ``@TLM``, и скрипт сверяет
    это с ``FIRMWARE_PROTOCOL`` из скетча (``scripts/firmware_probe.py``). Плата с
    другой прошивкой перепрошивается, даже если локальная отметка говорит
@@ -18,9 +21,11 @@
    Отметка по хешу скетча (``var/firmware-flashed``) только избавляет от лишнего
    стирания платы, когда всё и так совпало.
 
-Если ``arduino-cli`` нет, скрипт пробует поставить его сам
-(``scripts/install_arduino_cli.sh``, без sudo); не вышло — платы прошиваются
-вручную копиями ``motor_wheel_*.ino`` с рабочего стола, об этом пишется в журнал.
+Если ``arduino-cli`` нет, скрипт сначала пробует поставить его сам с GitHub
+(``scripts/install_arduino_cli.sh``, без sudo), затем переключается на
+``avr_upload.py`` (``RC_FIRMWARE_BACKEND=auto|cli|avr``); не вышло ни то ни
+другое — платы прошиваются вручную копиями ``motor_wheel_*.ino`` с рабочего
+стола, об этом пишется в журнал.
 
 Копии прошивок на рабочем столе (``scripts/sync_firmware_desktop.sh``) остаются
 на месте: их можно открыть в Arduino IDE и прошить вручную, если ``arduino-cli``
@@ -34,6 +39,7 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -44,6 +50,12 @@ log = logging.getLogger(__name__)
 FLASH_TIMEOUT_S = 300
 
 PENDING_NAME = "firmware-pending.json"
+STATE_NAME = "firmware-flash-state.json"
+
+#: Один запуск прошивки на процесс: второй щелчок по кнопке не должен
+#: открывать те же USB-порты параллельно.
+_run_lock = threading.Lock()
+_run_thread: threading.Thread | None = None
 
 #: Версия прошивки из скетча (``FIRMWARE_PROTOCOL``) — та, которая должна стоять
 #: на платах. Платы сообщают её же полем ``fw=`` в ``@TLM``.
@@ -162,7 +174,8 @@ def flash_if_pending(root: Path | str | None = None,
     if result.returncode == 0:
         log.info("автопрошивка плат: готово")
     elif result.returncode == EXIT_TOOL_MISSING:
-        log.warning("автопрошивка плат: arduino-cli не установлен — прошейте "
+        log.warning("автопрошивка плат: нет ни arduino-cli, ни avr-gcc/avrdude — "
+                    "поставьте gcc-avr avr-libc avrdude или прошейте "
                     "motor_wheel_*.ino с рабочего стола вручную")
     elif result.returncode == EXIT_NO_PORTS:
         log.warning("автопрошивка плат: не выбраны порты колёс — настройка портов "
@@ -189,11 +202,186 @@ def summarize(report: dict) -> str:
             return "платы уже на актуальной прошивке"
         return "платы прошиты"
     if code == EXIT_TOOL_MISSING:
-        return ("платы не прошиты: нет arduino-cli — прошейте motor_wheel_*.ino "
-                "с рабочего стола в Arduino IDE")
+        return ("платы не прошиты: нет инструментов — sudo apt install gcc-avr "
+                "avr-libc avrdude (arduino-cli не нужен)")
     if code == EXIT_NO_PORTS:
         return ("платы не прошиты: не выбраны USB-порты колёс "
                 "(«Тяга и руление» → «USB-порты колёс»)")
     if code is None:
         return "платы не прошиты: " + (report.get("output") or "ошибка запуска")[:160]
     return "не все платы прошились — подробности в журнале прошивки"
+
+
+# ---------------------------------------------------------------------------
+# Кнопка «Прошить модули» на бортовом экране: прошивка по запросу, с прогрессом.
+# ---------------------------------------------------------------------------
+
+
+def state_path(root: Path | str | None = None) -> Path:
+    return _root(root) / "var" / STATE_NAME
+
+
+def flash_state(root: Path | str | None = None) -> dict:
+    """Что сейчас с прошивкой: ``{"status": idle|busy|done|error, ...}``."""
+    path = state_path(root)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = None
+    out = {"status": "idle", "phase": "", "pct": 0, "lines": [], "error": "",
+           "summary": "", "started": None, "done": None, "reason": "", "backend": ""}
+    if isinstance(data, dict):
+        out.update({key: data.get(key, out[key]) for key in out})
+    if out["status"] == "busy" and not running():
+        # Процесс перезапустили посреди прошивки (потока нет вовсе) — не врём
+        # «идёт»: файл состояния остался от прошлого запуска.
+        out["status"] = "error"
+        out["error"] = out["error"] or "прошивка прервана перезапуском программы"
+    return out
+
+
+def _write_state(root: Path | str | None, **patch) -> dict:
+    path = state_path(root)
+    data = flash_state(root)
+    data.update(patch)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+    return data
+
+
+def running() -> bool:
+    """Идёт ли прошивка прямо сейчас."""
+    return _run_thread is not None and _run_thread.is_alive()
+
+
+def start_flash(source=None, root: Path | str | None = None,
+                reason: str = "кнопка «Прошить модули»",
+                extra_args: tuple[str, ...] = ()) -> dict:
+    """Запустить прошивку в фоне (для кнопки на экране).
+
+    ``source`` — источник данных (``MasterSource``): у него на время прошивки
+    освобождаются USB-порты и берётся остановка тяги, если она доступна.
+    """
+    global _run_thread
+    with _run_lock:
+        if running():
+            return dict(flash_state(root), started=False)
+        thread = threading.Thread(target=_flash_worker,
+                                  args=(source, root, reason, extra_args),
+                                  daemon=True, name="firmware-flash")
+        # Поток запоминаем до записи «busy»: иначе экран успел бы прочитать
+        # файл, не увидеть потока и решить, что прошивка прервана.
+        _run_thread = thread
+        _write_state(root, status="busy", phase="Готовлюсь: останавливаю колёса…",
+                     pct=2, lines=[], error="", summary="", reason=reason,
+                     started=time.time(), done=None)
+        thread.start()
+        return dict(flash_state(root), started=True)
+
+
+def _flash_worker(source, root, reason, extra_args) -> None:
+    project = _root(root)
+    script = project / "scripts" / "flash_firmware.sh"
+    lines: list[str] = []
+
+    def step(phase: str, pct: int) -> None:
+        _write_state(root, status="busy", phase=phase, pct=pct, lines=lines[-60:])
+
+    def resume() -> None:
+        if source is None:
+            return
+        for name in ("resume_ports",):
+            callback = getattr(source, name, None)
+            if callable(callback):
+                try:
+                    callback()
+                except Exception:            # noqa: BLE001 — колёса важнее отчёта
+                    log.exception("прошивка: не удалось вернуть подключение колёс")
+
+    try:
+        # Тяга должна быть выключена: прошивка перезагружает плату.
+        for name in ("stop_drive", "stop_maneuver"):
+            callback = getattr(source, name, None)
+            if callable(callback):
+                try:
+                    callback()
+                except Exception:            # noqa: BLE001
+                    log.exception("прошивка: не удалось вызвать %s", name)
+        suspend = getattr(source, "suspend_ports", None)
+        if callable(suspend):
+            step("Освобождаю USB-порты колёс…", 6)
+            try:
+                suspend()
+            except Exception:                # noqa: BLE001
+                log.exception("прошивка: не удалось освободить порты")
+        if not script.is_file():
+            raise RuntimeError("нет scripts/flash_firmware.sh")
+        command = ["bash", str(script), "--reason", reason, *extra_args]
+        step("Собираю и прошиваю платы…", 15)
+        process = subprocess.Popen(command, cwd=str(project), stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, bufsize=1)
+        assert process.stdout is not None
+        for line in process.stdout:
+            text = line.rstrip("\n")
+            if not text.strip():
+                continue
+            lines.append(text)
+            # Прогресс по строкам: 4 платы — примерно по 20 % на каждую.
+            pct = min(90, 15 + 15 * sum(1 for item in lines if "прошиваю" in item))
+            if "прошито" in text:
+                pct = min(92, pct + 8)
+            _write_state(root, status="busy", phase=_phase_from(text), pct=pct,
+                         lines=lines[-60:])
+        code = process.wait()
+        summary = _summary_from(lines, code)
+        _write_state(root, status="done" if code == 0 else "error", phase=summary or "Готово",
+                     pct=100, lines=lines[-60:], summary=summary, backend=_backend_from(lines),
+                     error="" if code == 0 else (summary or "платы не прошились"),
+                     done=time.time())
+        log.info("прошивка по кнопке: %s", summary or code)
+    except Exception as exc:                 # noqa: BLE001 — экран должен знать причину
+        log.exception("прошивка по кнопке не удалась")
+        _write_state(root, status="error", phase="Прошивка не удалась", pct=0,
+                     lines=lines[-60:], error=str(exc)[:300], done=time.time())
+    finally:
+        resume()
+
+
+def _phase_from(line: str) -> str:
+    """Строка скрипта → короткая фаза для экрана."""
+    text = line.replace("[firmware]", "").strip()
+    lowered = text.lower()
+    if "прошиваю" in lowered:
+        return text
+    if "прошито" in lowered or "загружено" in lowered:
+        return text
+    if "собира" in lowered or "скачиваю" in lowered or "ставлю" in lowered:
+        return text
+    if "нет порт" in lowered or "не выбран" in lowered:
+        return "Порты колёс не выбраны в настройках"
+    return "Прошиваю платы…"
+
+
+def _backend_from(lines: list[str]) -> str:
+    for line in lines:
+        if "без arduino-cli" in line:
+            return "avr"
+        if "arduino-cli" in line and "прошиваю" in line:
+            return "cli"
+    return ""
+
+
+def _summary_from(lines: list[str], code: int) -> str:
+    for line in reversed(lines):
+        if "итог:" in line:
+            return "платы: " + line.split("итог:", 1)[1].strip()
+    for line in reversed(lines):
+        text = line.replace("[firmware]", "").strip()
+        if any(word in text.lower() for word in ("не удалось", "нечем", "нет порт", "не прошит")):
+            return text
+    return "" if code == 0 else "платы не прошились (код %s)" % code

@@ -7,9 +7,10 @@
 # ${RC_ARDUINO_CLI_DIR:-$HOME/.local/bin}, конфигурация и ядра — в
 # ${ARDUINO_DIRECTORIES_DATA:-$HOME/.arduino15}, как у обычной установки.
 #
-# Нужен интернет (downloads.arduino.cc). Нет сети — скрипт честно падает с
-# понятным сообщением, а прошивка остаётся возможной вручную: копии
-# motor_wheel_*.ino лежат на рабочем столе для Arduino IDE.
+# Качаем сначала с **GitHub** (в России он работает, а downloads.arduino.cc
+# часто недоступен), и только потом с сайта Arduino. Если не вышло ни там, ни
+# там — прошивать всё равно можно: scripts/avr_upload.py собирает прошивку
+# обычным avr-gcc и заливает avrdude (sudo apt install gcc-avr avr-libc avrdude).
 #
 # Флаги: --check (только проверить, ничего не ставить),
 #        --dir КАТАЛОГ (куда положить бинарник),
@@ -69,7 +70,6 @@ case "$(uname -m)" in
   i386|i686)     ARCH=32bit ;;
   *) warn "неизвестная архитектура $(uname -m) — поставьте arduino-cli вручную"; exit 1 ;;
 esac
-URL="${RC_ARDUINO_CLI_URL:-https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Linux_${ARCH}.tar.gz}"
 TMP="$(mktemp -d)" || { warn "нет временного каталога"; exit 1; }
 trap 'rm -rf "$TMP"' EXIT
 
@@ -85,11 +85,38 @@ download() {
   fi
 }
 
+# Откуда брать архив: свой адрес, GitHub (основной путь в РФ), сайт Arduino.
+cli_urls() {
+  if [[ -n "${RC_ARDUINO_CLI_URL:-}" ]]; then
+    printf '%s\n' "$RC_ARDUINO_CLI_URL"
+    return
+  fi
+  local tag=""
+  tag="$(curl -fsSL --max-time 15 https://api.github.com/repos/arduino/arduino-cli/releases/latest 2>/dev/null \
+        | grep -o '"tag_name": *"[^"]*"' | head -n 1 | cut -d'"' -f4 || true)"
+  if [[ -z "$tag" ]] && command -v wget >/dev/null 2>&1; then
+    tag="$(wget -q -T 15 -O - https://api.github.com/repos/arduino/arduino-cli/releases/latest 2>/dev/null \
+          | grep -o '"tag_name": *"[^"]*"' | head -n 1 | cut -d'"' -f4 || true)"
+  fi
+  if [[ -n "$tag" ]]; then
+    printf '%s\n' "https://github.com/arduino/arduino-cli/releases/download/${tag}/arduino-cli_${tag#v}_Linux_${ARCH}.tar.gz"
+  fi
+  printf '%s\n' "https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Linux_${ARCH}.tar.gz"
+}
+
 if ! CLI="$(find_cli)"; then
-  say "скачиваю arduino-cli ($ARCH): $URL"
-  if ! download "$URL" "$TMP/arduino-cli.tar.gz"; then
-    warn "не удалось скачать arduino-cli (нет интернета?)."
-    warn "без него платы прошиваются вручную: motor_wheel_*.ino с рабочего стола."
+  got=""
+  while IFS= read -r url; do
+    [[ -n "$url" ]] || continue
+    say "скачиваю arduino-cli ($ARCH): $url"
+    if download "$url" "$TMP/arduino-cli.tar.gz"; then got="$url"; break; fi
+    say "этот адрес не ответил — пробую следующий"
+  done < <(cli_urls)
+  if [[ -z "$got" ]]; then
+    warn "не удалось скачать arduino-cli ни с GitHub, ни с сайта Arduino."
+    warn "ничего страшного: прошивка работает и без него —"
+    warn "  python3 scripts/avr_upload.py --install   (gcc-avr, avr-libc, avrdude)"
+    warn "  или вручную: motor_wheel_*.ino с рабочего стола в Arduino IDE."
     exit 1
   fi
   if ! tar -xzf "$TMP/arduino-cli.tar.gz" -C "$TMP"; then

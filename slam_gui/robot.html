@@ -756,6 +756,29 @@
                 <input id="drive-cfg-limit" type="range" min="1" max="100" step="1" value="20" aria-label="Предел тяги, процент">
               </label>
             </div>
+            <!-- Прошивка плат: одна кнопка. Прошивка собирается из этого же
+                 репозитория и заливается в порты из настроек — arduino-cli не
+                 обязателен (avr-gcc + avrdude, ядро AVR качается с GitHub). -->
+            <div class="drive-flash" id="drive-flash-box">
+              <div class="drive-flash-head">
+                <b>Прошивка плат колёс</b>
+                <span id="drive-flash-version">на платах: —</span>
+              </div>
+              <p class="drive-flash-hint">Собирает прошивку из репозитория и заливает её в
+                каждое колесо по порту из настроек. Колёса на время встанут: тяга выключается,
+                USB освобождается, затем платы подключаются заново. Нужны <code>avr-gcc</code>
+                и <code>avrdude</code> (или <code>arduino-cli</code>) — без них экран скажет,
+                что поставить одной командой.</p>
+              <div class="drive-flash-actions">
+                <button id="drive-flash-start" type="button" class="primary">Прошить модули</button>
+                <span id="drive-flash-status" role="status">проверка состояния…</span>
+              </div>
+              <div class="drive-flash-track" hidden id="drive-flash-track-wrap">
+                <div class="drive-flash-bar"><i id="drive-flash-progress"></i></div>
+                <span id="drive-flash-percent">0%</span>
+              </div>
+              <pre id="drive-flash-log" class="drive-flash-log" hidden></pre>
+            </div>
             <div class="drive-setup-actions">
               <button id="drive-cfg-apply" type="button" disabled>Применить ко всем колёсам</button>
               <button id="drive-cfg-reset" type="button" class="quiet" disabled>Заводские</button>

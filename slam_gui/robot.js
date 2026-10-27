@@ -2941,6 +2941,101 @@
     return {trim, span};
   }
 
+  /* ---------------------------------------------------- прошивка плат
+   * Одна кнопка на бортовом экране: сервер собирает прошивку из репозитория и
+   * заливает её в платы по портам из настроек. arduino-cli не обязателен —
+   * сборка идёт обычным avr-gcc, заливка avrdude. Прошивка занимает 30–60 с,
+   * поэтому состояние опрашивается, а не ждётся в одном запросе.
+   */
+  let flashPolling = null;
+
+  function renderFlashState(state) {
+    const status = $('drive-flash-status');
+    const button = $('drive-flash-start');
+    const wrap = $('drive-flash-track-wrap');
+    const bar = $('drive-flash-progress');
+    const percent = $('drive-flash-percent');
+    const log = $('drive-flash-log');
+    const data = state || {};
+    const busy = data.status === 'busy';
+    if (button) {
+      button.disabled = busy || !steeringAuthorized;
+      button.textContent = busy ? 'Прошиваю…' : 'Прошить модули';
+    }
+    if (wrap) wrap.hidden = !busy && !(Number(data.pct) > 0);
+    if (bar) bar.style.width = Math.max(0, Math.min(100, Number(data.pct) || 0)) + '%';
+    if (percent) percent.textContent = String(Math.max(0, Math.min(100, Number(data.pct) || 0))) + '%';
+    if (log) {
+      const lines = Array.isArray(data.lines) ? data.lines : [];
+      log.hidden = lines.length === 0;
+      log.textContent = lines.join('\n');
+      log.scrollTop = log.scrollHeight;
+    }
+    if (!status) return;
+    if (busy) {
+      status.textContent = data.phase || 'Прошиваю платы…';
+    } else if (data.status === 'done') {
+      status.textContent = 'Готово · ' + (data.summary || 'платы прошиты');
+    } else if (data.status === 'error') {
+      status.textContent = 'Не прошилось · ' + (data.error || data.summary || 'см. журнал');
+    } else {
+      status.textContent = 'Прошивка не запущена';
+    }
+  }
+
+  async function pollFlashState() {
+    try {
+      const response = await fetch('api/kiosk_firmware_flash', {cache: 'no-store'});
+      const body = await response.json().catch(() => ({}));
+      renderFlashState(body && body.ok === false ? {} : body);
+      return body || {};
+    } catch (error) {
+      renderFlashState({status: 'error', error: 'связь потеряна'});
+      return {status: 'error'};
+    }
+  }
+
+  function watchFlash() {
+    if (flashPolling) return;
+    flashPolling = window.setInterval(async () => {
+      const state = await pollFlashState();
+      if (state.status !== 'busy') {
+        window.clearInterval(flashPolling);
+        flashPolling = null;
+      }
+    }, 1500);
+  }
+
+  async function startFlash() {
+    const button = $('drive-flash-start');
+    if (!button || button.disabled) return;
+    const active = !!((lastData || {}).drive || {}).active ||
+      Number(((lastData || {}).drive || {}).commandedPercent || 0) !== 0;
+    const question = active
+      ? 'Тяга включена. Остановить движение и прошить платы? Колёса на минуту перестанут отвечать.'
+      : 'Прошить платы колёс? Колёса на минуту перестанут отвечать.';
+    if (typeof window.confirm === 'function' && !window.confirm(question)) return;
+    button.disabled = true;
+    renderFlashState({status: 'busy', phase: 'Запускаю прошивку…', pct: 1});
+    try {
+      const response = await fetch('api/kiosk_firmware_flash', {
+        method: 'POST', cache: 'no-store',
+        headers: {'Content-Type': 'application/json', 'X-Robot-Control': 'firmware-flash'},
+        body: JSON.stringify({})
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body.ok === false) {
+        renderFlashState({status: 'error',
+          error: body.error || 'сервер не принял команду прошивки'});
+        return;
+      }
+      renderFlashState(body);
+      watchFlash();
+    } catch (error) {
+      renderFlashState({status: 'error', error: 'связь потеряна: прошивка не запущена'});
+    }
+  }
+
   function renderDriveConfigPanel(d, authorized) {
     const tach = $('drive-cfg-tach');
     if (!tach) return;
@@ -2974,6 +3069,16 @@
     fitDriveSpan();
     // «Сейчас» — то, что платы прислали в телеметрии: по нему видно, насколько
     // врут обороты, и какое число вписывать в «по факту».
+    // Какая прошивка на платах сейчас — чтобы было видно, надо ли прошивать.
+    const flashVersion = $('drive-flash-version');
+    if (flashVersion) {
+      const versions = ((d || {}).motors || [])
+        .map((motor) => (motor && motor.firmware != null ? String(motor.firmware) : null))
+        .filter((value) => value !== null);
+      flashVersion.textContent = versions.length
+        ? 'на платах: fw ' + Array.from(new Set(versions)).join('/')
+        : 'на платах: нет связи';
+    }
     const rpmNow = $('drive-cfg-rpm-now');
     const rpms = ((d || {}).motors || [])
       .map((motor) => Number(motor && motor.rpm))
@@ -3773,6 +3878,12 @@
     if (cfgApply) cfgApply.addEventListener('click', () => { void applyDriveConfig(); });
     const cfgReset = $('drive-cfg-reset');
     if (cfgReset) cfgReset.addEventListener('click', () => { void resetDriveConfig(); });
+    // Прошивка плат колёс одной кнопкой (бортовой экран).
+    const flashStart = $('drive-flash-start');
+    if (flashStart) {
+      flashStart.addEventListener('click', () => { void startFlash(); });
+      void pollFlashState();
+    }
     // Манёвры: «Ехать» в строке и общий СТОП манёвра.
     MANEUVER_ORDER.forEach((id) => {
       const button = $('maneuver-' + id);
