@@ -1281,72 +1281,11 @@ def test_maneuver_api(kiosk_app, kiosk_client):
                              json={'name': 'forward', 'values': {'distanceM': 1.5}}).status_code == 400
 
 
-def test_firmware_flash_button_api_starts_the_flash(kiosk_app, kiosk_client, monkeypatch):
-    """Кнопка «Прошить модули»: состояние читается, запуск — только с заголовком."""
-    from robot_control import firmware_flash
+def test_there_is_no_flash_button_any_more(kiosk_client):
+    """Кнопки прошивки нет: прошивку заливают вручную, из Arduino IDE.
 
-    calls = []
-
-    class Source:
-        name = "master"
-
-        def suspend_ports(self):
-            calls.append("suspend_ports")
-
-    kiosk_app.extensions["rc_slam"].source = Source()
-    monkeypatch.setattr(firmware_flash, "flash_state",
-                        lambda root=None: {"status": "idle", "pct": 0, "lines": [],
-                                           "phase": "", "error": "", "summary": ""})
-    monkeypatch.setattr(firmware_flash, "start_flash",
-                        lambda source=None, reason="", **kwargs: (
-                            calls.append("start_flash") or
-                            {"started": True, "status": "busy", "pct": 2, "lines": [],
-                             "phase": "Готовлюсь", "error": "", "summary": ""}))
-
-    state = kiosk_client.get("/api/kiosk_firmware_flash")
-    assert state.status_code == 200
-    assert state.get_json()["ok"] is True and state.get_json()["status"] == "idle"
-
-    # Без заголовка — отказ: прошивку нельзя запустить случайным POST из браузера.
-    assert kiosk_client.post("/api/kiosk_firmware_flash", json={}).status_code == 400
-    # Лишние поля тоже отказ: у кнопки нет параметров.
-    assert kiosk_client.post("/api/kiosk_firmware_flash", json={"port": "/dev/ttyUSB0"},
-                             headers={"X-Robot-Control": "firmware-flash"}).status_code == 400
-
-    started = kiosk_client.post("/api/kiosk_firmware_flash", json={},
-                                headers={"X-Robot-Control": "firmware-flash"})
-    assert started.status_code == 202
-    body = started.get_json()
-    assert body["ok"] is True and body["started"] is True and body["status"] == "busy"
-    assert calls == ["start_flash"]
-
-
-def test_firmware_flash_is_refused_when_the_board_is_not_master(kiosk_app, kiosk_client):
-    """Прошивать порты может только бортовой процесс: пульт получает отказ."""
-    class Remote:
-        name = "peer"
-
-    kiosk_app.extensions["rc_slam"].source = Remote()
-    response = kiosk_client.post("/api/kiosk_firmware_flash", json={},
-                                 headers={"X-Robot-Control": "firmware-flash"})
-    assert response.status_code == 409
-    assert "master" in response.get_json()["error"]
-
-
-def test_second_flash_click_reports_that_it_is_already_running(kiosk_app, kiosk_client,
-                                                               monkeypatch):
-    from robot_control import firmware_flash
-
-    class Source:
-        name = "master"
-
-    kiosk_app.extensions["rc_slam"].source = Source()
-    monkeypatch.setattr(firmware_flash, "start_flash",
-                        lambda source=None, reason="", **kwargs: {
-                            "started": False, "status": "busy", "pct": 40,
-                            "lines": [], "phase": "Прошиваю", "error": "", "summary": ""})
-    response = kiosk_client.post("/api/kiosk_firmware_flash", json={},
-                                 headers={"X-Robot-Control": "firmware-flash"})
-    assert response.status_code == 200
-    body = response.get_json()
-    assert body["ok"] is True and body["started"] is False and body["pct"] == 40
+    Ни состояния, ни запуска — оба маршрута отвечают 404, а не «идёт прошивка».
+    """
+    assert kiosk_client.get("/api/kiosk_firmware_flash").status_code == 404
+    assert kiosk_client.post("/api/kiosk_firmware_flash", json={},
+                             headers={"X-Robot-Control": "firmware-flash"}).status_code == 404

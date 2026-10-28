@@ -8,14 +8,8 @@ inline int digitalRead(uint8_t pin) { return sim_board.digital_read(pin); }
 inline int analogRead(uint8_t pin) { return sim_board.analog_read(pin); }
 inline void analogReference(uint8_t) {}
 inline void analogWrite(uint8_t pin, int value) { sim_board.analog[pin] = value; }
-// OCR3C — скважность ШИМ на D3. На железе это регистр таймера, общий на всю
-// плату; в симуляции четыре колеса живут в одном процессе, поэтому запись идёт
-// в свою Board, иначе все четыре делили бы одно значение.
-struct PwmDutyRegister {
-  void operator=(int value) { sim_board.set_duty((uint8_t)(value < 0 ? 0 : (value > 255 ? 255 : value))); }
-  operator int() const { return sim_board.duty; }
-};
-static PwmDutyRegister OCR3C;
+// Серво-импульс на D3 (библиотека Servo, заглушка stubs/Servo.h). На железе
+// вывод у каждой платы свой, поэтому и здесь запись идёт в свою Board.
 // На Mega внешние прерывания: D2 (INT4), D3 (INT5), D18 (INT3), D19 (INT2),
 // D20 (INT1), D21 (INT0). Тахометр переехал на D19 — прерывание есть и там.
 inline uint8_t digitalPinToInterrupt(uint8_t pin) {

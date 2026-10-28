@@ -1,7 +1,7 @@
-"""Прошивка плат колёс — только по кнопке «Прошить модули».
+"""Прошивка плат колёс — только вручную, утилитой из терминала.
 
-Ни старт экрана, ни «Обновить с GitHub» платы не прошивают: заявки нет, все
-пути прошивки начинаются с человека. Скрипт ``scripts/flash_firmware.sh`` берёт
+В программе прошивки нет вовсе: ни автопрошивки при старте, ни кнопки на экране.
+Скрипт ``scripts/flash_firmware.sh`` берёт
 порты из настроек (``RC_WHEEL_*_PORT``), собирает прошивку из
 ``firmware/motor_wheel/motor_wheel.ino`` и сверяет ``fw=`` с
 ``FIRMWARE_PROTOCOL`` из скетча. Файлы прошивок остаются на рабочем столе.
@@ -11,15 +11,28 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
 
 import pytest
 
-from robot_control import firmware_flash
-
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def expected_protocol(root: Path | None = None) -> int | None:
+    """FIRMWARE_PROTOCOL из скетча колеса — эталон «актуальной версии».
+
+    В программе прошивки плат больше нет (экран не прошивает ничего), но скрипт
+    `scripts/flash_firmware.sh` и опрос плат по @TLM сверяются именно с этим
+    числом, поэтому тест читает его прямо из скетча.
+    """
+    path = Path(root or ROOT) / "firmware" / "motor_wheel" / "motor_wheel.ino"
+    if not path.is_file():
+        return None
+    match = re.search(r"FIRMWARE_PROTOCOL\s*=\s*(\d+)", path.read_text(encoding="utf-8"))
+    return int(match.group(1)) if match else None
 SCRIPTS = ROOT / "scripts"
 
 FAKE_ARDUINO_CLI = """#!/usr/bin/env bash
@@ -228,26 +241,11 @@ def test_flashing_goes_through_avr_gcc_when_arduino_cli_is_missing(flashing_host
 def test_expected_protocol_comes_from_the_sketch():
     """«Актуальная версия» — это FIRMWARE_PROTOCOL из скетча, а не догадка."""
     sketch = (ROOT / "firmware" / "motor_wheel" / "motor_wheel.ino").read_text(encoding="utf-8")
-    expected = firmware_flash.expected_protocol()
+    expected = expected_protocol()
     assert isinstance(expected, int) and expected > 0
     assert "FIRMWARE_PROTOCOL = %d" % expected in sketch
     # Нет скетча — нет и версии: скрипт тогда сверяет только хеш.
-    assert firmware_flash.expected_protocol(ROOT / "nope") is None
-
-
-def test_summary_explains_every_outcome():
-    assert "прошито 2" in firmware_flash.summarize(
-        {"code": 0, "output": "[firmware] итог: прошито 2, уже было актуально 2, "
-                              "ошибок 0, без порта 0, нет устройства 0."})
-    assert "актуальной" in firmware_flash.summarize(
-        {"code": 0, "output": "[firmware] прошивать нечего: все назначенные платы уже "
-                              "на прошивке fw=6."})
-    # Код 2 — «нечем прошивать»: подсказка про apt, а не про закрытый сайт Arduino.
-    assert "gcc-avr" in firmware_flash.summarize({"code": 2})
-    assert "порты" in firmware_flash.summarize({"code": 3})
-    assert "не все" in firmware_flash.summarize({"code": 1})
-    assert firmware_flash.summarize({}) == ""
-    assert "ошибка" in firmware_flash.summarize({"code": None, "output": "ошибка запуска"})
+    assert expected_protocol(ROOT / "nope") is None
 
 
 # ------------------------------------------------- проверка по самой плате --- #
@@ -261,7 +259,7 @@ def test_board_with_old_firmware_is_reflashed_even_if_marked_current(flashing_ho
     заново — даже если локальная отметка говорит «актуально».
     """
     flashing_host.assign("RC_WHEEL_FL_PORT=%s" % flashing_host.port("port-fl"))
-    expected = firmware_flash.expected_protocol()
+    expected = expected_protocol()
     assert run_flash().returncode == 0                     # первая прошивка
     assert len(flashes(flashing_host)) == 1
 
@@ -285,7 +283,7 @@ def test_board_with_old_firmware_is_reflashed_even_if_marked_current(flashing_ho
 def test_after_flashing_the_board_is_asked_which_version_it_runs(flashing_host, monkeypatch):
     """Без подтверждения от платы «загружено» остаётся только обещанием."""
     flashing_host.assign("RC_WHEEL_FL_PORT=%s" % flashing_host.port("port-fl"))
-    expected = firmware_flash.expected_protocol()
+    expected = expected_protocol()
     flashing_host.board_says("FL=%d FR=- RL=- RR=-" % expected)
     result = run_flash()
     assert result.returncode == 0, result.stdout + result.stderr
@@ -296,7 +294,7 @@ def test_after_flashing_the_board_is_asked_which_version_it_runs(flashing_host, 
 def test_board_that_answers_with_the_wrong_version_after_flash_is_reported(flashing_host,
                                                                          monkeypatch):
     flashing_host.assign("RC_WHEEL_FL_PORT=%s" % flashing_host.port("port-fl"))
-    expected = firmware_flash.expected_protocol()
+    expected = expected_protocol()
     # Загрузка «прошла», но плата продолжает отвечать старой версией.
     flashing_host.board_says("FL=%d FR=- RL=- RR=-" % (expected - 1))
     result = run_flash()
@@ -323,7 +321,7 @@ def test_without_an_answer_the_local_mark_is_used(flashing_host, monkeypatch):
 
 def test_verification_can_be_switched_off(flashing_host, monkeypatch):
     flashing_host.assign("RC_WHEEL_FL_PORT=%s" % flashing_host.port("port-fl"))
-    expected = firmware_flash.expected_protocol()
+    expected = expected_protocol()
     assert run_flash().returncode == 0
     flashing_host.board_says("FL=%d FR=- RL=- RR=-" % (expected - 1))
     result = run_flash("--no-verify")
@@ -422,9 +420,9 @@ def _load_probe():
 
 def test_probe_parses_the_firmware_field():
     probe = _load_probe()
-    line = ("@TLM mod=FL deg=0.00 tgt=0.00 moving=0 cal=1 rpm=0.0 drive=0 fw=7 "
-            "pot=1 pm=1 tach=1 dmax=20 trim=1500 span=500 ppr=60 t=1234")
-    assert probe.parse_firmware(line) == 7
+    line = ("@TLM mod=FL deg=0.00 tgt=0.00 moving=0 cal=1 rpm=0.0 drive=0 fw=8 "
+            "pot=1 pm=1 tach=1 dmax=100 us=1500 ppr=90 kmh=50 t=1234")
+    assert probe.parse_firmware(line) == 8
     # Строка журнала прошивки или обрывок — не телеметрия.
     assert probe.parse_firmware("# FL: готов") is None
     assert probe.parse_firmware("@TLM deg=0 fw=") is None
@@ -519,130 +517,3 @@ def test_desktop_copies_are_still_made():
     assert "motor_wheel_${module}.ino" in sync
     flash = (SCRIPTS / "flash_firmware.sh").read_text(encoding="utf-8")
     assert "firmware/motor_wheel/motor_wheel.ino" in flash
-
-
-# ------------------------------------- кнопка «Прошить модули» на экране --- #
-# Прошивка по кнопке идёт в фоне: экран не должен замирать на минуту, а порты
-# колёс нужно освободить — их держит тот же процесс, что показывает экран.
-
-
-def _flash_project(tmp_path: Path, body: str) -> Path:
-    """Свой «проект» с одним скриптом прошивки: настоящий скрипт не запускаем."""
-    project = tmp_path / "project"
-    (project / "scripts").mkdir(parents=True)
-    (project / "var").mkdir(parents=True)
-    script = project / "scripts" / "flash_firmware.sh"
-    script.write_text(body, encoding="utf-8")
-    script.chmod(0o755)
-    return project
-
-
-def _wait_flash(root: Path, timeout: float = 10.0) -> dict:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        state = firmware_flash.flash_state(root)
-        if state["status"] != "busy":
-            return state
-        time.sleep(0.05)
-    raise AssertionError("прошивка не закончилась за %.1f с" % timeout)
-
-
-def test_flash_state_is_idle_without_a_run(tmp_path):
-    state = firmware_flash.flash_state(tmp_path)
-    assert state["status"] == "idle"
-    assert state["pct"] == 0 and state["lines"] == []
-    assert firmware_flash.running() is False
-
-
-def test_button_flash_reports_progress_then_done(tmp_path):
-    project = _flash_project(tmp_path,
-                             "#!/usr/bin/env bash\n"
-                             "echo '[firmware] прошиваю FL → /dev/ttyUSB0…'\n"
-                             "echo '[firmware] колесо FL: прошито (/dev/ttyUSB0)'\n"
-                             "echo '[firmware] итог: прошито 1, уже было актуально 3, "
-                             "ошибок 0, без порта 0, нет устройства 0.'\n")
-    started = firmware_flash.start_flash(None, root=project)
-    assert started["started"] is True and started["status"] == "busy"
-    state = _wait_flash(project)
-    assert state["status"] == "done"
-    assert state["pct"] == 100
-    assert "прошито 1" in state["summary"]
-    assert any("прошито" in line for line in state["lines"])
-
-
-def test_button_flash_explains_a_failure(tmp_path):
-    project = _flash_project(tmp_path,
-                             "#!/usr/bin/env bash\n"
-                             "echo '[firmware] колесо FL: прошивка не удалась (/dev/ttyUSB0)' >&2\n"
-                             "exit 1\n")
-    firmware_flash.start_flash(None, root=project)
-    state = _wait_flash(project)
-    assert state["status"] == "error"
-    assert state["error"]
-    assert any("не удалась" in line for line in state["lines"])
-
-
-def test_second_click_does_not_open_the_same_ports_twice(tmp_path, monkeypatch):
-    """Пока идёт прошивка, повторный запуск возвращает started=False."""
-    class Busy:
-        @staticmethod
-        def is_alive():
-            return True
-
-    monkeypatch.setattr(firmware_flash, "_run_thread", Busy())
-    result = firmware_flash.start_flash(None, root=tmp_path)
-    assert result["started"] is False
-    assert firmware_flash.running() is True
-
-
-def test_flash_frees_the_wheel_ports_and_gives_them_back(tmp_path):
-    """Перед прошивкой порты освобождаются, после — возвращаются колёсам."""
-    project = _flash_project(tmp_path, "#!/usr/bin/env bash\nexit 0\n")
-    calls = []
-
-    class Source:
-        name = "master"
-
-        def stop_drive(self):
-            calls.append("stop_drive")
-
-        def stop_maneuver(self):
-            calls.append("stop_maneuver")
-
-        def suspend_ports(self):
-            calls.append("suspend_ports")
-
-        def resume_ports(self):
-            calls.append("resume_ports")
-
-    firmware_flash.start_flash(Source(), root=project)
-    state = _wait_flash(project)
-    assert state["status"] == "done"
-    assert calls == ["stop_drive", "stop_maneuver", "suspend_ports", "resume_ports"]
-
-
-def test_ports_are_given_back_even_when_flashing_fails(tmp_path):
-    project = _flash_project(tmp_path, "#!/usr/bin/env bash\nexit 7\n")
-    calls = []
-
-    class Source:
-        def suspend_ports(self):
-            calls.append("suspend_ports")
-
-        def resume_ports(self):
-            calls.append("resume_ports")
-
-    firmware_flash.start_flash(Source(), root=project)
-    assert _wait_flash(project)["status"] == "error"
-    assert calls == ["suspend_ports", "resume_ports"]
-
-
-def test_interrupted_flash_is_not_reported_as_running(tmp_path, monkeypatch):
-    """Программу перезапустили посреди прошивки — экран не должен врать «идёт»."""
-    path = firmware_flash.state_path(tmp_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"status": "busy", "pct": 40}), encoding="utf-8")
-    monkeypatch.setattr(firmware_flash, "_run_thread", None)
-    state = firmware_flash.flash_state(tmp_path)
-    assert state["status"] == "error"
-    assert "перезапуск" in state["error"]

@@ -83,10 +83,11 @@ MODULE_TITLES = {
     "RL": "задний левый", "RR": "задний правый",
 }
 WHEEL_R_M = 0.127            # радиус колеса Xiaomi M365 Pro, м
-#: Предел тяги в процентах — константа прошивки, а не настройка. 100 % — полная
-#: скважность ШИМ и полный ход драйвера ZS-Z11H (≈18 км/ч на четырёх колёсах);
-#: плата присылает предел в @TLM полем ``dmax=``. Значение совпадает с
-#: DRIVE_MAX_PERCENT в firmware/motor_wheel.
+#: Предел тяги в процентах — константа прошивки, а не настройка. 100 % — верхний
+#: ход «серво»-импульса (2000 мкс) драйвера ZS-Z11H; плата присылает предел в
+#: @TLM полем ``dmax=``. Значение совпадает с DRIVE_MAX_PERCENT в
+#: firmware/motor_wheel. Скорость при этом режет не процент, а регулятор
+#: прошивки по тахометру — потолок 5 км/ч (см. DRIVE_MAX_KMH_X10).
 MAX_DRIVE_PERCENT = 100
 #: Жёсткий потолок сервера: выше него тягу не пропустит ни экран, ни API, даже
 #: если плата разрешила себе больше. Больше 100 % тяги не бывает.
@@ -95,13 +96,20 @@ DRIVE_ABS_MAX_PERCENT = 100
 #: блокирует: ездить можно на любом угле (0° — прямо, 45° — краб, 90° — боком),
 #: число осталось только для подсказки «колёса стоят ровно / под углом».
 DRIVE_ANGLE_ALIGNMENT_DEG = 2.5
-#: Драйвер колеса — RioRand ZS-Z11H с датчиками Холла. Тяга задаётся скважностью
-#: ШИМ на входе «P» (0 % — мотор не тянет, 100 % — полный ход); датчик «SC» даёт
-#: 90 изменений состояния за оборот колеса, то есть RPM = 60 / (90 × время между
-#: переходами). Оба числа — свойства драйвера, а не настройки: экран их только
-#: показывает, менять нечего.
+#: Драйвер колеса — RioRand ZS-Z11H с датчиками Холла. Тяга задаётся
+#: «серво»-импульсом 50 Гц на входе «P»: 1500 мкс — мотор не тянет, 2000 мкс —
+#: верхний ход прошивки (5 км/ч); датчик «SC» даёт 90 изменений состояния за
+#: оборот колеса, то есть RPM = 60 / (90 × время между переходами). Оба числа —
+#: свойства драйвера, а не настройки: экран их только показывает.
 DRIVE_TACH_PPR = 90
-DRIVE_DUTY_MAX = 255
+#: Границы «серво»-импульса на входе «P» драйвера, мкс. 1500 — нейтраль
+#: (мотор не тянет), 2000 — верхний ход прошивки; всё, что вне диапазона, —
+#: испорченный кадр телеметрии, а не значение.
+DRIVE_PULSE_MIN_US = 1000
+DRIVE_PULSE_MAX_US = 2000
+#: Потолок скорости прошивки в десятых долях км/ч: 5 км/ч. Ни сервер, ни экран
+#: выше не поднимают: это тот же предел, что держит регулятор в прошивке.
+DRIVE_MAX_KMH_X10 = 50
 #: Сколько импульсов тахометра бывает на оборот колеса — предел команды m ppr.
 #: Драйверы дают и 1, и 60 импульсов: без этой настройки «об/мин» врали ровно
 #: во столько раз (колесо делает оборот в секунду, а экран показывает 3600).
@@ -314,14 +322,16 @@ def parse_master_line(line, module=None):
         calib_error = int(fields["err"]) if "err" in fields else None
         home = fields.get("home")
         # Тяга: tach=1 — тахометр SC включён, dmax= — предел прошивки в процентах,
-        # duty= — фактическая скважность ШИМ на входе «P» (0…255), ppr= — сколько
-        # переходов SC приходится на оборот колеса. Всё это свойства драйвера
-        # ZS-Z11H: настраивать тут нечего, экран только показывает.
+        # us= — фактический «серво»-импульс на входе «P» в мкс (1500…2000),
+        # ppr= — сколько переходов SC приходится на оборот колеса, kmh= — потолок
+        # скорости прошивки в десятых (50 — это 5 км/ч). Всё это свойства
+        # драйвера ZS-Z11H: настраивать тут нечего, экран только показывает.
         tach = {"0": False, "1": True}.get(fields.get("tach")) if "tach" in fields else None
         try:
             drive_max = int(fields["dmax"]) if "dmax" in fields else None
-            drive_duty = int(fields["duty"]) if "duty" in fields else None
+            drive_pulse = int(fields["us"]) if "us" in fields else None
             tach_ppr = int(fields["ppr"]) if "ppr" in fields else None
+            drive_kmh = int(fields["kmh"]) if "kmh" in fields else None
         except ValueError:
             return None
         for key, value in (("tach", tach),):
@@ -336,8 +346,10 @@ def parse_master_line(line, module=None):
                 (calib_error is not None and not 0 <= calib_error <= 15) or
                 (home is not None and home not in HOME_SOURCES) or
                 (drive_max is not None and not 1 <= drive_max <= DRIVE_ABS_MAX_PERCENT) or
-                (drive_duty is not None and not 0 <= drive_duty <= DRIVE_DUTY_MAX) or
-                (tach_ppr is not None and not 1 <= tach_ppr <= TACH_PPR_MAX)):
+                (drive_pulse is not None and
+                 not DRIVE_PULSE_MIN_US <= drive_pulse <= DRIVE_PULSE_MAX_US) or
+                (tach_ppr is not None and not 1 <= tach_ppr <= TACH_PPR_MAX) or
+                (drive_kmh is not None and not 1 <= drive_kmh <= DRIVE_MAX_KMH_X10 * 10)):
             return None
         zeroed = fields.get("cal") == "1"
         if home is None:
@@ -367,7 +379,8 @@ def parse_master_line(line, module=None):
             # Тяга (ZS-Z11H): None у старой прошивки без этих полей.
             "tach": tach,
             "driveMaxPercent": drive_max,
-            "driveDuty": drive_duty,
+            "drivePulseUs": drive_pulse,
+            "driveMaxKmhX10": drive_kmh,
             "tachPpr": tach_ppr,
         }
     except (KeyError, ValueError):
@@ -509,9 +522,9 @@ class MasterSource:
         self._serial = None
         self._spawning = set()
         self._cooldown = {}              # порт → время следующей попытки открыть
-        #: Пока True, порты не открываются. Ставится только на время ручной
-        #: прошивки (кнопка «Прошить модули»): avrdude не может открыть порт,
-        #: который читает программа. Автоматически никто не прошивает.
+        #: Пока True, порты не открываются. Нужно только для ручной прошивки
+        #: утилитой (`scripts/flash_firmware.sh`): avrdude не может открыть порт,
+        #: который читает программа. Сама программа не прошивает ничего.
         self._hold_ports = False
         threading.Thread(target=self._reader, daemon=True).start()
 
@@ -532,10 +545,10 @@ class MasterSource:
     def suspend_ports(self, wait_s=2.0):
         """Освободить USB-порты под прошивку: закрыть их и не открывать заново.
 
-        Прошивка (avrdude/arduino-cli) не может открыть порт, который читает
-        программа, поэтому перед кнопкой «Прошить модули» порты отпускаются, а
-        после — снова подключаются (``resume_ports``). Движение к этому моменту
-        уже остановлено: тягу снимает вызывающий.
+        Прошивка (avrdude/arduino-cli), запущенная вручную, не может открыть порт,
+        который читает программа, поэтому на её время порты отпускаются, а после —
+        снова подключаются (``resume_ports``). Движение к этому моменту уже
+        остановлено: тягу снимает вызывающий.
         """
         import time as _time
 
@@ -810,6 +823,28 @@ class MasterSource:
         limit = min(limits) if limits else self.MAX_DRIVE_PERCENT
         return max(1, min(int(limit), DRIVE_ABS_MAX_PERCENT))
 
+    def drive_max_kmh(self, now=None):
+        """Потолок скорости, км/ч: минимум из присланных платами, не выше сервера.
+
+        Прошивка держит 5 км/ч регулятором по тахометру и сообщает свой потолок
+        полем ``kmh=`` (в десятых долях). Сервер берёт самую осторожную из
+        четырёх плат и никогда не обещает экрану больше своего предела: старые
+        прошивки без поля ``kmh=`` получают константу сервера.
+        """
+        now = time.time() if now is None else now
+        with self.lock:
+            frames = dict(self.frames)
+        caps = []
+        for module in MODULE_TITLES:
+            entry = frames.get(module)
+            if entry is None or now - entry[1] >= self.STALE_S:
+                continue
+            value = entry[0].get("driveMaxKmhX10")
+            if isinstance(value, int) and value > 0:
+                caps.append(value)
+        cap = min(caps) if caps else DRIVE_MAX_KMH_X10
+        return max(1, min(int(cap), DRIVE_MAX_KMH_X10)) / 10.0
+
     def drive_status(self, now=None):
         """Готовность тяги: общей (все колёса) и каждого колеса по отдельности.
 
@@ -879,8 +914,8 @@ class MasterSource:
                 "reason": why or None,
                 "percent": motors.get(module),
                 "commandedPercent": commanded_modules.get(module, 0),
-                # Скважность ШИМ на входе «P» этого драйвера и обороты по «SC».
-                "duty": frame.get("driveDuty") if frame else None,
+                # «Серво»-импульс на входе «P» этого драйвера и обороты по «SC».
+                "pulseUs": frame.get("drivePulseUs") if frame else None,
                 "rpm": frame.get("rpm") if frame else None,
                 "tach": frame.get("tach") if frame else None,
             }
@@ -890,14 +925,17 @@ class MasterSource:
             "canDrive": not reason,
             "reason": reason or None,
             "maxPercent": self.drive_limit_percent(now),
+            # Км/ч — второй, независимый предел: его держит регулятор прошивки,
+            # экран только показывает потолок рядом со шкалой процентов.
+            "maxKmh": self.drive_max_kmh(now),
             "commandedPercent": commanded,
             "commandedModules": commanded_modules,
             "individual": bool(getattr(self, "supports_individual_drive", False)),
             "perModule": per_module,
             "active": any(value not in (None, 0) for value in motors.values()),
             "reportedPercent": motors,
-            "reportedDuty": {module: frame.get("driveDuty")
-                             for module, frame in fresh_frames.items()},
+            "reportedPulse": {module: frame.get("drivePulseUs")
+                              for module, frame in fresh_frames.items()},
             "maneuver": self.maneuver_status(now),
             # Справка для экрана: колёса стоят ровно (0°) или под углом.
             # Тягу это не ограничивает — см. drive_status().
@@ -1471,11 +1509,11 @@ class MasterSource:
                                "pot": frame.get("pot", False),
                                "potMode": frame.get("potMode"),
                                # Тяга своей платы: тахометр «SC» включён всегда,
-                               # скважность ШИМ — фактическая, предел — из
+                               # серво-импульс — фактический, предел — из
                                # прошивки. Настраивать здесь нечего.
                                "tach": frame.get("tach"),
                                "driveMaxPercent": frame.get("driveMaxPercent"),
-                               "driveDuty": frame.get("driveDuty"),
+                               "drivePulseUs": frame.get("drivePulseUs"),
                                "online": True, "fault": None,
                                "moving": frame["moving"], "calibrating": frame["calib"],
                                "cycling": frame.get("cycle", False)})
@@ -1484,7 +1522,7 @@ class MasterSource:
                                "targetAngle": None, "rpm": None, "temp": None,
                                "drivePercent": None, "homed": None, "online": False, "fault": None,
                                "pot": None, "tach": None, "driveMaxPercent": None,
-                               "driveDuty": None,
+                               "drivePulseUs": None,
                                "moving": False, "calibrating": False})
         out = NoSource().read()              # АКБ и маршрут пока не передаются
         out["motors"] = motors

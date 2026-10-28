@@ -101,9 +101,6 @@ CONTROL_ROUTES = {
     'estop': ('/api/estop', {'POST'}, 'drive'),
     'estop/release': ('/api/estop/release', {'POST'}, 'drive'),
     'wheels/settings': ('/api/wheels/settings', {'GET', 'POST'}, 'wheel-settings'),
-    # Прошивка плат колёс кнопкой с бортового экрана: состояние и запуск.
-    # arduino-cli не нужен — сборка avr-gcc, заливка avrdude (см. avr_upload.py).
-    'firmware_flash': ('/api/kiosk_firmware_flash', {'GET', 'POST'}, 'firmware-flash'),
 }
 
 

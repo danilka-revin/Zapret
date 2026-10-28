@@ -113,19 +113,18 @@ static bool has(const sim::Board& board, const char* text) {
   return board.serial.output.find(text) != std::string::npos;
 }
 
-// Выход на драйвер RioRand ZS-Z11H — ШИМ на входе «P»: скважность 0…255, где
-// 0 — мотор не тянет, 255 — полный ход. Процент тяги переводится в скважность
-// линейно до предела прошивки (FR::DRIVE_MAX_PERCENT, сейчас 100 %):
-// t 8 → (8·255 + 50) / 100 = 20, t 100 → 255.
-static int drive_duty_for(int percent) {
-  if (percent <= 0) return 0;
-  return (percent * 255 + 50) / 100;
+// Выход на драйвер RioRand ZS-Z11H — «серво»-импульс 50 Гц на входе «P»:
+// 1500 мкс — мотор не тянет, 2000 мкс — верхний ход прошивки (5 км/ч).
+// t 8 → 1500 + 8·500/100 = 1540 мкс, t 100 → 2000 мкс.
+static int drive_pulse_for(int percent) {
+  if (percent <= 0) return 1500;
+  return 1500 + (percent * 500 + 50) / 100;
 }
-static const int DRIVE_DUTY_8 = (8 * 255 + 50) / 100;
-static const int DRIVE_DUTY_10 = (10 * 255 + 50) / 100;
+static const int DRIVE_PULSE_8 = drive_pulse_for(8);
+static const int DRIVE_PULSE_10 = drive_pulse_for(10);
 
-// Стоит ли колесо (скважность 0) или едет.
-static bool drive_idle(const sim::Board& board) { return board.duty == 0; }
+// Стоит ли колесо (нейтраль 1500 мкс) или едет.
+static bool drive_idle(const sim::Board& board) { return board.servo_us <= 1501; }
 
 
 static long count(const sim::Board& board, const char* text) {
@@ -200,8 +199,8 @@ static void scenario_boot() {
         board_fr.serial.output.c_str());
   CHECK(board_fr.level[5] == HIGH, "BLDC: тормоз включён после старта");
   CHECK(board_fr.level[2] == LOW, "BLDC: драйвер выключен (STOP = 0) после старта");
-  CHECK(board_fr.duty == 0, "D3: скважность ШИМ 0 — мотор не тянет (%u)",
-        (unsigned)board_fr.duty);
+  CHECK(board_fr.servo_us == 1500, "D3: импульс 1500 мкс — мотор не тянет (%u)",
+        (unsigned)board_fr.servo_us);
 }
 
 static void scenario_calib_left() {
@@ -605,9 +604,9 @@ static void scenario_drive() {
   board_fr.serial.send("z");
   board_fr.serial.send("t 8");
   sim::run_for_ms(5);
-  CHECK(board_fr.duty == DRIVE_DUTY_8 && board_fr.level[5] == LOW,
-        "t 8 → скважность %d/255, тормоз снят: %u", DRIVE_DUTY_8,
-        (unsigned)board_fr.duty);
+  CHECK(board_fr.servo_us == DRIVE_PULSE_8 && board_fr.level[5] == LOW,
+        "t 8 → импульс %d мкс, тормоз снят: %u", DRIVE_PULSE_8,
+        (unsigned)board_fr.servo_us);
   CHECK(board_fr.level[2] == HIGH, "на время тяги драйвер разрешён (STOP = 1)");
   board_fr.serial.send("d 5 f");
   sim::run_for_ms(20);
@@ -616,12 +615,12 @@ static void scenario_drive() {
     board_fr.serial.send("t 8");
     sim::run_for_ms(200);
   }
-  CHECK(FR::drive_active && board_fr.duty == DRIVE_DUTY_8,
+  CHECK(FR::drive_active && board_fr.servo_us == DRIVE_PULSE_8,
         "heartbeat каждые 200 мс держит тягу");
   sim::run_for_ms(700);
   CHECK(!FR::drive_active && drive_idle(board_fr) && board_fr.level[5] == HIGH &&
             board_fr.level[2] == LOW,
-        "watchdog 650 мс: скважность 0, тормоз, драйвер выключен");
+        "watchdog 650 мс: нейтраль, тормоз, драйвер выключен");
   CHECK(has(board_fr, "нет команды дольше 650 мс"), "сообщение watchdog");
   board_fr.serial.send("t 8");
   board_fr.serial.send("t -8");
@@ -722,7 +721,7 @@ static void scenario_system_calibrate_all() {
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=7"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=8"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -782,34 +781,34 @@ static void send_drive_heartbeat(int percent, int times) {
   }
 }
 
-// Одинаковая скважность ШИМ на всех четырёх платах.
-static bool all_duty(int duty) {
-  return board_fl.duty == duty && board_fr.duty == duty && board_rl.duty == duty &&
-         board_rr.duty == duty;
+// Одинаковый импульс на входе «P» всех четырёх плат.
+static bool all_pulse(int us) {
+  return board_fl.servo_us == us && board_fr.servo_us == us && board_rl.servo_us == us &&
+         board_rr.servo_us == us;
 }
 
 static void scenario_system_drive() {
   calibrate_all();
   send_drive_heartbeat(8, 3);
-  CHECK(all_duty(DRIVE_DUTY_8), "t 8 на все четыре порта: %u %u %u %u",
-        (unsigned)board_fl.duty, (unsigned)board_fr.duty,
-        (unsigned)board_rl.duty, (unsigned)board_rr.duty);
+  CHECK(all_pulse(DRIVE_PULSE_8), "t 8 на все четыре порта: %u %u %u %u",
+        (unsigned)board_fl.servo_us, (unsigned)board_fr.servo_us,
+        (unsigned)board_rl.servo_us, (unsigned)board_rr.servo_us);
   for (sim::Board* board : all_boards()) board->serial.send("b");
   sim::run_for_ms(10);
-  CHECK(all_duty(0) && board_fl.level[5] == HIGH && board_rr.level[5] == HIGH,
-        "b — скважность 0 и тормоз у всех");
+  CHECK(all_pulse(1500) && board_fl.level[5] == HIGH && board_rr.level[5] == HIGH,
+        "b — импульс 1500 мкс и тормоз у всех");
   // Плата без нуля тягу не берёт: у каждой платы свой fail-safe.
   wheel_rl::zero_set = false;
   send_drive_heartbeat(8, 2);
-  CHECK(drive_idle(board_rl) && board_fl.duty == DRIVE_DUTY_8 &&
-            board_fr.duty == DRIVE_DUTY_8,
-        "RL без нуля не едет, остальные едут: %u %u %u", (unsigned)board_rl.duty,
-        (unsigned)board_fl.duty, (unsigned)board_fr.duty);
+  CHECK(drive_idle(board_rl) && board_fl.servo_us == DRIVE_PULSE_8 &&
+            board_fr.servo_us == DRIVE_PULSE_8,
+        "RL без нуля не едет, остальные едут: %u %u %u", (unsigned)board_rl.servo_us,
+        (unsigned)board_fl.servo_us, (unsigned)board_fr.servo_us);
   wheel_rl::zero_set = true;
   send_drive_heartbeat(8, 1);
-  CHECK(all_duty(DRIVE_DUTY_8), "нули вернули — тяга снова у всех");
+  CHECK(all_pulse(DRIVE_PULSE_8), "нули вернули — тяга снова у всех");
   sim::run_for_ms(800);
-  CHECK(all_duty(0), "без heartbeat все стоят: скважность 0 по watchdog");
+  CHECK(all_pulse(1500), "без heartbeat все стоят: нейтраль по watchdog");
   CHECK(has(board_fl, "нет команды дольше 650 мс"), "watchdog объяснён в журнале FL");
 }
 
@@ -838,7 +837,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v7"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v8"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -1057,7 +1056,7 @@ static int run_pty(const char* link_base) {
 }
 
 // Драйвер скорости — RioRand ZS-Z11H: вход «P» (ШИМ 0…100 %), DIR, BRAKE, STOP.
-// Настроек у тяги нет: проценты переводятся в скважность по константам
+// Настроек у тяги нет: проценты переводятся в серво-импульс по константам
 // прошивки, а команда «m» (прежняя настройка) больше не принимается.
 static void scenario_drive_hardware() {
   boot({&board_fr});
@@ -1071,30 +1070,40 @@ static void scenario_drive_hardware() {
         board_fr.serial.output.c_str());
   CHECK(has(board_fr, "ppr=90"), "в @TLM 90 переходов на оборот: %s",
         board_fr.serial.output.c_str());
-  CHECK(has(board_fr, "dmax=100"), "в @TLM предел тяги 100 %: %s",
+  CHECK(has(board_fr, "us=1500"), "в @TLM импульс покоя: %s",
         board_fr.serial.output.c_str());
-  CHECK((int)wheel_fr::DRIVE_MAX_PERCENT == 100, "предел прошивки — 100 %: %u",
+  CHECK(has(board_fr, "kmh=50"), "в @TLM потолок 5 км/ч: %s",
+        board_fr.serial.output.c_str());
+  CHECK((int)wheel_fr::DRIVE_MAX_PERCENT == 100, "предел тяги — 100 %: %u",
         (unsigned)wheel_fr::DRIVE_MAX_PERCENT);
+  CHECK((int)wheel_fr::DRIVE_MAX_KMH == 5, "потолок скорости — 5 км/ч: %u",
+        (unsigned)wheel_fr::DRIVE_MAX_KMH);
+  // 5 км/ч при колесе 216 мм — это 122,8 об/мин = 1228 в десятых.
+  CHECK(wheel_fr::DRIVE_MAX_RPM_X10 == 1228, "потолок в об/мин: %lu",
+        (unsigned long)wheel_fr::DRIVE_MAX_RPM_X10);
 
-  // t 10 при пределе 100 % — скважность (10·255 + 50)/100 = 26.
+  // Драйвер получает серво-импульс 50 Гц, а не скважность регистром.
+  CHECK(board_fr.servo_pin == 3, "импульс идёт на D3: %u", (unsigned)board_fr.servo_pin);
+
+  // t 10 — импульс 1500 + 50 = 1550 мкс.
   board_fr.serial.send("t 10");
   sim::run_for_ms(300);
-  CHECK(board_fr.duty == DRIVE_DUTY_10, "t 10 → скважность %d, а не %u",
-        DRIVE_DUTY_10, (unsigned)board_fr.duty);
-  char duty_frame[16];
-  snprintf(duty_frame, sizeof(duty_frame), "duty=%d", DRIVE_DUTY_10);
-  CHECK(has(board_fr, duty_frame), "скважность видна в @TLM: %s",
+  CHECK(board_fr.servo_us == DRIVE_PULSE_10, "t 10 → импульс %d, а не %u",
+        DRIVE_PULSE_10, (unsigned)board_fr.servo_us);
+  char pulse_frame[16];
+  snprintf(pulse_frame, sizeof(pulse_frame), "us=%d", DRIVE_PULSE_10);
+  CHECK(has(board_fr, pulse_frame), "импульс виден в @TLM: %s",
         board_fr.serial.output.c_str());
 
-  // Полный предел — полный ход: 255/255.
+  // Полный предел — верхний импульс прошивки.
   board_fr.serial.send("b");
   sim::run_for_ms(2);
   board_fr.serial.send("t 100");
   sim::run_for_ms(2);
-  CHECK(board_fr.duty == 255, "t 100 (предел) → полная скважность: %u",
-        (unsigned)board_fr.duty);
+  CHECK(board_fr.servo_us == 2000, "t 100 (предел) → 2000 мкс: %u",
+        (unsigned)board_fr.servo_us);
 
-  // Весь диапазон: процент тяги = процент скважности, 1 % … 100 %.
+  // Весь диапазон: процент тяги = процент хода импульса, 1 % … 100 %.
   {
     int previous = -1;
     for (int percent = 1; percent <= 100; ++percent) {
@@ -1102,24 +1111,24 @@ static void scenario_drive_hardware() {
       snprintf(command, sizeof(command), "t %d", percent);
       board_fr.serial.send(command);
       sim::run_for_ms(2);
-      const int expected = drive_duty_for(percent);
-      CHECK(board_fr.duty == expected, "t %d → скважность %d, а не %u",
-            percent, expected, (unsigned)board_fr.duty);
-      CHECK(board_fr.duty > previous, "скважность растёт с процентом: %d после %d",
-            (int)board_fr.duty, previous);
-      previous = board_fr.duty;
+      const int expected = drive_pulse_for(percent);
+      CHECK(board_fr.servo_us == expected, "t %d → импульс %d, а не %u",
+            percent, expected, (unsigned)board_fr.servo_us);
+      CHECK(board_fr.servo_us >= previous, "импульс не убывает с процентом: %d после %d",
+            (int)board_fr.servo_us, previous);
+      previous = board_fr.servo_us;
     }
-    CHECK(previous == 255, "100 % — это 255/255: %d", previous);
+    CHECK(previous == 2000, "100 % — это 2000 мкс: %d", previous);
   }
 
-  // Назад — та же скважность, только другой уровень DIR.
+  // Назад — тот же импульс, только другой уровень DIR.
   board_fr.serial.send("b");
   sim::run_for_ms(2);
   const uint8_t forward_dir = board_fr.level[4];
   board_fr.serial.send("t -50");
   sim::run_for_ms(2);
-  CHECK(board_fr.duty == drive_duty_for(50) && board_fr.level[4] != forward_dir,
-        "t -50: скважность как у +50 (%u), DIR перевёрнут", (unsigned)board_fr.duty);
+  CHECK(board_fr.servo_us == drive_pulse_for(50) && board_fr.level[4] != forward_dir,
+        "t -50: импульс как у +50 (%u), DIR перевёрнут", (unsigned)board_fr.servo_us);
   board_fr.serial.send("b");
   sim::run_for_ms(2);
 
@@ -1134,8 +1143,8 @@ static void scenario_drive_hardware() {
         "«m …» больше не настройка: %s", tail.c_str());
   board_fr.serial.send("t 10");
   sim::run_for_ms(2);
-  CHECK(board_fr.duty == DRIVE_DUTY_10, "после «m» тяга считается по-прежнему: %u",
-        (unsigned)board_fr.duty);
+  CHECK(board_fr.servo_us == DRIVE_PULSE_10, "после «m» тяга считается по-прежнему: %u",
+        (unsigned)board_fr.servo_us);
   board_fr.serial.send("b");
   sim::run_for_ms(2);
 
@@ -1148,8 +1157,107 @@ static void scenario_drive_hardware() {
         "на время тяги: STOP = 1 (разрешено), BRAKE = 0 (отпущен)");
   board_fr.serial.send("b");
   sim::run_for_ms(2);
-  CHECK(board_fr.level[2] == LOW && board_fr.level[5] == HIGH && board_fr.duty == 0,
-        "стоп: выходы выключены, тормоз взведён, скважность 0");
+  CHECK(board_fr.level[2] == LOW && board_fr.level[5] == HIGH && board_fr.servo_us == 1500,
+        "стоп: выходы выключены, тормоз взведён, импульс в нейтрали");
+}
+
+// Потолок 5 км/ч держится по тахометру: разогналось выше — импульс подрезается,
+// остыло — возвращается, но не выше заказанного.
+static void scenario_speed_governor() {
+  boot({&board_fr});
+  board_fr.serial.send("z");
+  sim::run_for_ms(2);
+  auto spin = [](int edges) {
+    for (int i = 0; i < edges; ++i) {
+      if (board_fr.tach_fn) board_fr.tach_fn();
+    }
+  };
+  // Heartbeat + обороты одного окна замера (520 мс > 500 мс). Команду шлём до
+  // окна, чтобы watchdog 650 мс не успел погасить тягу.
+  auto window = [&](int edges) {
+    board_fr.serial.send("t 100");
+    spin(edges);
+    sim::run_for_ms(520);
+  };
+
+  // Полный ход: 2000 мкс, пока колесо в пределах 5 км/ч.
+  board_fr.serial.send("t 100");
+  sim::run_for_ms(2);
+  CHECK(board_fr.servo_us == 2000, "полный ход начинается с 2000 мкс: %u",
+        (unsigned)board_fr.servo_us);
+
+  // Колесо раскрутилось сильнее потолка: 5 оборотов за окно 0,52 с ≈ 577 об/мин.
+  window(5 * 90);
+  CHECK(FR::rpm_x10 > wheel_fr::DRIVE_MAX_RPM_X10, "обороты выше потолка: %lu",
+        (unsigned long)FR::rpm_x10);
+  CHECK(board_fr.servo_us == 1980, "импульс подрезан на один шаг: %u",
+        (unsigned)board_fr.servo_us);
+
+  // Ещё окна с теми же оборотами — подрезается дальше, ровно на шаг за окно.
+  window(5 * 90);
+  CHECK(board_fr.servo_us == 1960, "следующее окно — ещё шаг: %u",
+        (unsigned)board_fr.servo_us);
+  for (int i = 0; i < 5; ++i) window(5 * 90);
+  CHECK(board_fr.servo_us < 1960 && board_fr.servo_us >= 1500,
+        "импульс уменьшается, пока не уложится: %u", (unsigned)board_fr.servo_us);
+
+  // Колесо замедлилось — прошивка возвращает импульс к заказанному, плавно.
+  const uint16_t slowed = board_fr.servo_us;
+  for (int i = 0; i < 6; ++i) window(0);
+  CHECK(board_fr.servo_us > slowed && board_fr.servo_us <= 2000,
+        "без оборотов импульс возвращается: %u после %u",
+        (unsigned)board_fr.servo_us, (unsigned)slowed);
+
+  // Стоп обнуляет и подрезку: следующая команда снова с полного импульса.
+  board_fr.serial.send("b");
+  sim::run_for_ms(2);
+  board_fr.serial.send("t 100");
+  sim::run_for_ms(2);
+  CHECK(board_fr.servo_us == 2000, "после стопа предел сброшен: %u",
+        (unsigned)board_fr.servo_us);
+  board_fr.serial.send("b");
+  sim::run_for_ms(2);
+}
+
+// Зеркальные колёса: FR и RR стоят на другой стороне, поэтому «вперёд» у них —
+// противоположный уровень DIR. Настраивать нечего: имя уже в прошивке.
+static void scenario_mirrored_wheels() {
+  boot(all_boards());
+  for (sim::Board* board : all_boards()) board->serial.send("z");
+  sim::run_for_ms(2);
+  CHECK(!wheel_fl::drive_mirrored && !wheel_rl::drive_mirrored,
+        "FL и RL — прямые колёса");
+  CHECK(wheel_fr::drive_mirrored && wheel_rr::drive_mirrored,
+        "FR и RR — зеркальные");
+
+  // «Вперёд» у левого и правого борта — разные уровни DIR, но едут они в одну
+  // сторону корпуса.
+  for (sim::Board* board : all_boards()) board->serial.send("t 20");
+  sim::run_for_ms(5);
+  CHECK(board_fl.level[4] != board_fr.level[4],
+        "«вперёд» FL и FR — разные уровни DIR: FL=%d FR=%d",
+        board_fl.level[4], board_fr.level[4]);
+  CHECK(board_rl.level[4] != board_rr.level[4],
+        "«вперёд» RL и RR — разные уровни DIR: RL=%d RR=%d",
+        board_rl.level[4], board_rr.level[4]);
+  CHECK(board_fl.level[4] == board_rl.level[4],
+        "левые колёса согласованы: FL=%d RL=%d", board_fl.level[4], board_rl.level[4]);
+  CHECK(board_fr.level[4] == board_rr.level[4],
+        "правые колёса согласованы: FR=%d RR=%d", board_fr.level[4], board_rr.level[4]);
+
+  // «Назад» у зеркального — ровно наоборот от своего «вперёд».
+  const uint8_t fr_forward = board_fr.level[4];
+  board_fr.serial.send("b");
+  sim::run_for_ms(2);
+  board_fr.serial.send("t -20");
+  sim::run_for_ms(5);
+  CHECK(board_fr.level[4] != fr_forward, "«назад» у FR переворачивает DIR: %d",
+        board_fr.level[4]);
+  CHECK(board_fr.servo_us == drive_pulse_for(20), "импульс тот же: %u",
+        (unsigned)board_fr.servo_us);
+
+  for (sim::Board* board : all_boards()) board->serial.send("b");
+  sim::run_for_ms(5);
 }
 
 // Тяга одного колеса: сервер шлёт «t FL 8» на каждый порт, а колесо берёт
@@ -1159,10 +1267,10 @@ static void scenario_drive_one_wheel() {
   calibrate_all();
   board_fl.serial.send("t FL 8");
   sim::run_for_ms(2);
-  CHECK(wheel_fl::drive_active && board_fl.duty == DRIVE_DUTY_8,
-        "своё имя во «t FL 8» не мешает тяге: %u", (unsigned)board_fl.duty);
+  CHECK(wheel_fl::drive_active && board_fl.servo_us == DRIVE_PULSE_8,
+        "своё имя во «t FL 8» не мешает тяге: %u", (unsigned)board_fl.servo_us);
   CHECK(!wheel_fr::drive_active && drive_idle(board_fr),
-        "чужое имя «t FL 8» на FR ничего не включает: %u", (unsigned)board_fr.duty);
+        "чужое имя «t FL 8» на FR ничего не включает: %u", (unsigned)board_fr.servo_us);
   CHECK(!wheel_rr::drive_active && drive_idle(board_rr), "и на RR тоже");
 
   // Heartbeat идёт только на FL: остальные стоят, а через 650 мс FL встаёт сам.
@@ -1180,7 +1288,10 @@ static void scenario_drive_one_wheel() {
   sim::run_for_ms(2);
   CHECK(wheel_fl::drive_active && wheel_fr::drive_active,
         "FL и FR едут одновременно");
-  CHECK(board_fl.level[4] != board_fr.level[4], "направления разные: FL=%d FR=%d",
+  // FR — зеркальное колесо: «назад» у него это тот же уровень DIR, что «вперёд»
+  // у FL, то есть физически колёса едут в одну сторону.
+  CHECK(board_fl.level[4] == board_fr.level[4],
+        "FL вперёд и FR назад — один уровень DIR: FL=%d FR=%d",
         board_fl.level[4], board_fr.level[4]);
   CHECK(drive_idle(board_rl) && drive_idle(board_rr), "RL и RR стоят");
   board_fl.serial.send("t FL 0");
@@ -1280,6 +1391,8 @@ static const Scenario SCENARIOS[] = {
     {"pot_slope_survives_reboot", scenario_pot_slope_survives_reboot},
     {"drive_hardware", scenario_drive_hardware},
     {"drive_one_wheel", scenario_drive_one_wheel},
+    {"speed_governor", scenario_speed_governor},
+    {"mirrored_wheels", scenario_mirrored_wheels},
     {"tach", scenario_tach},
 };
 
