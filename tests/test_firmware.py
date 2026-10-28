@@ -113,6 +113,51 @@ def test_step_timer_does_not_fight_the_servo_library():
     assert "tone(" not in code
 
 
+def test_drive_pwm_is_duty_cycle_up_to_full_drive():
+    """ШИМ на входе «P» — скважность, 0 % … 100 % полного хода драйвера.
+
+    Драйвер RioRand ZS-Z11H понимает на «P» обычный ШИМ: 50 Гц…20 кГц, а
+    скважность и есть тяга (0 % — свободный выбег, 100 % — полный ход).
+    Servo-импульса и «нейтрали» 1500 мкс здесь нет, поэтому и библиотеки
+    Servo в прошивке нет.
+    """
+    text = _text(WHEEL)
+    code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
+    # Предел тяги — 100 %: полный ход. Меньше — мотор снова не тянет тележку.
+    assert int(_const(text, "DRIVE_MAX_PERCENT")) == 100
+    # Частота ШИМ в паспортном диапазоне драйвера (50 Гц…20 кГц) и совпадает с
+    # настройкой Timer3: 16 МГц / 8 (CS31) / 256 (fast PWM 8 бит).
+    hz = int(_const(text, "DRIVE_PWM_HZ"))
+    assert 50 <= hz <= 20000, hz
+    assert round(16_000_000 / 8 / 256) == hz
+    assert "TCCR3A = (1 << COM3C1) | (1 << WGM31) | (1 << WGM30);" in code
+    assert "TCCR3B = (1 << WGM32) | (1 << CS31);" in code
+    assert "OCR3C = 0;" in code            # старт с нулевой скважности
+    assert "COM3C0" not in code            # неинвертирующий режим
+    # Выход ШИМ — D3 (OC3C), он же единственный выход на драйвер.
+    assert int(_const(text, "BLDC_SPEED_PIN")) == 3
+    # Формула: процент → скважность 0…255, ровно /100 (100 % = 255), с округлением.
+    assert "((uint32_t)percent * 255UL + 50UL) / 100UL" in code
+    for percent in range(1, 101):
+        duty = (percent * 255 + 50) // 100
+        assert 0 <= duty <= 255, percent
+        assert abs(duty - percent * 2.55) <= 0.51, percent   # половина шага 255/100
+    assert (100 * 255 + 50) // 100 == 255      # 100 % — полная скважность
+    assert (8 * 255 + 50) // 100 == 20         # 8 % — примерно 8 % скважности
+    # Библиотеки Servo нет: ни заголовка, ни вызовов, ни серво-импульсов.
+    assert "#include <Servo.h>" not in text
+    assert "Servo " not in code and ".writeMicroseconds(" not in code
+    assert "us=" not in text
+    # Уровни драйвера: STOP HIGH — выходы включены, LOW — выбег; BRAKE HIGH — тормоз.
+    assert _const(text, "BLDC_STOP_ENABLE_LEVEL") == "HIGH"
+    assert _const(text, "BLDC_STOP_DISABLE_LEVEL") == "LOW"
+    assert _const(text, "BLDC_BRAKE_ACTIVE_LEVEL") == "HIGH"
+    # Python-зеркало того же предела: сервер не обещает больше платы.
+    mirror = _text(ROOT / "slam_gui" / "backend.py")
+    assert re.search(r"^MAX_DRIVE_PERCENT = 100$", mirror, re.M)
+    assert re.search(r"^DRIVE_DUTY_MAX = 255$", mirror, re.M)
+
+
 def test_firmware_has_no_usb_role_discovery():
     text = _text(WHEEL)
     assert 'printIdentity' not in text

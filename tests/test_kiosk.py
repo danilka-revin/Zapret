@@ -340,7 +340,7 @@ def test_kiosk_drive_is_available_without_pin_and_accepts_only_bounded_percent(k
     assert response.get_json()["percent"] == -12
     assert source.commands == [-12.5]
 
-    for invalid in ({"percent": 35.1}, {"percent": True}, {"percent": 0, "direction": "forward"}, {}):
+    for invalid in ({"percent": 100.1}, {"percent": True}, {"percent": 0, "direction": "forward"}, {}):
         assert kiosk_client.post("/api/kiosk_drive", json=invalid, headers=header).status_code == 400
     assert source.commands == [-12.5]
 

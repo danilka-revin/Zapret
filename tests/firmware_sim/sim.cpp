@@ -115,14 +115,14 @@ static bool has(const sim::Board& board, const char* text) {
 
 // Выход на драйвер RioRand ZS-Z11H — ШИМ на входе «P»: скважность 0…255, где
 // 0 — мотор не тянет, 255 — полный ход. Процент тяги переводится в скважность
-// линейно до предела прошивки (FR::DRIVE_MAX_PERCENT, сейчас 35 %):
-// t 8 → 8·255/35 = 58.
+// линейно до предела прошивки (FR::DRIVE_MAX_PERCENT, сейчас 100 %):
+// t 8 → (8·255 + 50) / 100 = 20, t 100 → 255.
 static int drive_duty_for(int percent) {
   if (percent <= 0) return 0;
-  return percent * 255 / (int)wheel_fr::DRIVE_MAX_PERCENT;
+  return (percent * 255 + 50) / 100;
 }
-static const int DRIVE_DUTY_8 = 8 * 255 / 35;
-static const int DRIVE_DUTY_10 = 10 * 255 / 35;
+static const int DRIVE_DUTY_8 = (8 * 255 + 50) / 100;
+static const int DRIVE_DUTY_10 = (10 * 255 + 50) / 100;
 
 // Стоит ли колесо (скважность 0) или едет.
 static bool drive_idle(const sim::Board& board) { return board.duty == 0; }
@@ -627,9 +627,9 @@ static void scenario_drive() {
   board_fr.serial.send("t -8");
   sim::run_for_ms(5);
   CHECK(drive_idle(board_fr) && board_fr.level[5] == HIGH, "реверс без остановки — тормоз");
-  board_fr.serial.send("t 50");
+  board_fr.serial.send("t 101");
   sim::run_for_ms(5);
-  CHECK(drive_idle(board_fr), "t 50 — за пределом 35 %, тормоз");
+  CHECK(drive_idle(board_fr), "t 101 — больше 100 % не бывает, тормоз");
   board_fr.serial.send("t 8");
   sim::run_for_ms(5);
   board_fr.serial.send("s");
@@ -1071,24 +1071,55 @@ static void scenario_drive_hardware() {
         board_fr.serial.output.c_str());
   CHECK(has(board_fr, "ppr=90"), "в @TLM 90 переходов на оборот: %s",
         board_fr.serial.output.c_str());
-  CHECK(has(board_fr, "dmax=35"), "в @TLM предел тяги 35 %: %s",
+  CHECK(has(board_fr, "dmax=100"), "в @TLM предел тяги 100 %: %s",
         board_fr.serial.output.c_str());
+  CHECK((int)wheel_fr::DRIVE_MAX_PERCENT == 100, "предел прошивки — 100 %: %u",
+        (unsigned)wheel_fr::DRIVE_MAX_PERCENT);
 
-  // t 10 при пределе 35 % — скважность 10·255/35 = 72.
+  // t 10 при пределе 100 % — скважность (10·255 + 50)/100 = 26.
   board_fr.serial.send("t 10");
   sim::run_for_ms(300);
   CHECK(board_fr.duty == DRIVE_DUTY_10, "t 10 → скважность %d, а не %u",
         DRIVE_DUTY_10, (unsigned)board_fr.duty);
-  CHECK(has(board_fr, "duty=73") || has(board_fr, "duty=72"),
-        "скважность видна в @TLM: %s", board_fr.serial.output.c_str());
+  char duty_frame[16];
+  snprintf(duty_frame, sizeof(duty_frame), "duty=%d", DRIVE_DUTY_10);
+  CHECK(has(board_fr, duty_frame), "скважность видна в @TLM: %s",
+        board_fr.serial.output.c_str());
 
   // Полный предел — полный ход: 255/255.
   board_fr.serial.send("b");
   sim::run_for_ms(2);
-  board_fr.serial.send("t 35");
+  board_fr.serial.send("t 100");
   sim::run_for_ms(2);
-  CHECK(board_fr.duty == 255, "t 35 (предел) → полная скважность: %u",
+  CHECK(board_fr.duty == 255, "t 100 (предел) → полная скважность: %u",
         (unsigned)board_fr.duty);
+
+  // Весь диапазон: процент тяги = процент скважности, 1 % … 100 %.
+  {
+    int previous = -1;
+    for (int percent = 1; percent <= 100; ++percent) {
+      char command[12];
+      snprintf(command, sizeof(command), "t %d", percent);
+      board_fr.serial.send(command);
+      sim::run_for_ms(2);
+      const int expected = drive_duty_for(percent);
+      CHECK(board_fr.duty == expected, "t %d → скважность %d, а не %u",
+            percent, expected, (unsigned)board_fr.duty);
+      CHECK(board_fr.duty > previous, "скважность растёт с процентом: %d после %d",
+            (int)board_fr.duty, previous);
+      previous = board_fr.duty;
+    }
+    CHECK(previous == 255, "100 % — это 255/255: %d", previous);
+  }
+
+  // Назад — та же скважность, только другой уровень DIR.
+  board_fr.serial.send("b");
+  sim::run_for_ms(2);
+  const uint8_t forward_dir = board_fr.level[4];
+  board_fr.serial.send("t -50");
+  sim::run_for_ms(2);
+  CHECK(board_fr.duty == drive_duty_for(50) && board_fr.level[4] != forward_dir,
+        "t -50: скважность как у +50 (%u), DIR перевёрнут", (unsigned)board_fr.duty);
   board_fr.serial.send("b");
   sim::run_for_ms(2);
 

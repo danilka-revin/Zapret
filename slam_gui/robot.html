@@ -622,7 +622,7 @@
               <div class="steer-drive" data-drive-card="FL">
                 <div class="steer-readout"><span>Тяга <b id="drive-module-state-FL">—</b></span><span>Выход <b id="drive-module-output-FL">—</b></span></div>
                 <label class="steer-drive-speed">Тяга <b><output id="drive-module-value-FL">8</output>%</b>
-                  <input id="drive-module-FL" data-drive-module-slider="FL" type="range" min="1" max="20" step="1" value="8" aria-label="Тяга колеса переднее левое, процент" disabled />
+                  <input id="drive-module-FL" data-drive-module-slider="FL" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга колеса переднее левое, процент" disabled />
                 </label>
                 <div class="steer-actions steer-drive-actions"><button type="button" class="steer-drive-back" id="drive-module-back-FL" data-drive-module="FL" data-drive-direction="-1" disabled>◀ назад</button><button type="button" class="steer-drive-fwd" id="drive-module-forward-FL" data-drive-module="FL" data-drive-direction="1" disabled>вперёд ▶</button><button type="button" class="steer-drive-stop" id="drive-module-stop-FL" data-drive-module-stop="FL" disabled>СТОП</button></div>
               </div>
@@ -637,7 +637,7 @@
               <div class="steer-drive" data-drive-card="FR">
                 <div class="steer-readout"><span>Тяга <b id="drive-module-state-FR">—</b></span><span>Выход <b id="drive-module-output-FR">—</b></span></div>
                 <label class="steer-drive-speed">Тяга <b><output id="drive-module-value-FR">8</output>%</b>
-                  <input id="drive-module-FR" data-drive-module-slider="FR" type="range" min="1" max="20" step="1" value="8" aria-label="Тяга колеса переднее правое, процент" disabled />
+                  <input id="drive-module-FR" data-drive-module-slider="FR" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга колеса переднее правое, процент" disabled />
                 </label>
                 <div class="steer-actions steer-drive-actions"><button type="button" class="steer-drive-back" id="drive-module-back-FR" data-drive-module="FR" data-drive-direction="-1" disabled>◀ назад</button><button type="button" class="steer-drive-fwd" id="drive-module-forward-FR" data-drive-module="FR" data-drive-direction="1" disabled>вперёд ▶</button><button type="button" class="steer-drive-stop" id="drive-module-stop-FR" data-drive-module-stop="FR" disabled>СТОП</button></div>
               </div>
@@ -652,7 +652,7 @@
               <div class="steer-drive" data-drive-card="RL">
                 <div class="steer-readout"><span>Тяга <b id="drive-module-state-RL">—</b></span><span>Выход <b id="drive-module-output-RL">—</b></span></div>
                 <label class="steer-drive-speed">Тяга <b><output id="drive-module-value-RL">8</output>%</b>
-                  <input id="drive-module-RL" data-drive-module-slider="RL" type="range" min="1" max="20" step="1" value="8" aria-label="Тяга колеса заднее левое, процент" disabled />
+                  <input id="drive-module-RL" data-drive-module-slider="RL" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга колеса заднее левое, процент" disabled />
                 </label>
                 <div class="steer-actions steer-drive-actions"><button type="button" class="steer-drive-back" id="drive-module-back-RL" data-drive-module="RL" data-drive-direction="-1" disabled>◀ назад</button><button type="button" class="steer-drive-fwd" id="drive-module-forward-RL" data-drive-module="RL" data-drive-direction="1" disabled>вперёд ▶</button><button type="button" class="steer-drive-stop" id="drive-module-stop-RL" data-drive-module-stop="RL" disabled>СТОП</button></div>
               </div>
@@ -667,7 +667,7 @@
               <div class="steer-drive" data-drive-card="RR">
                 <div class="steer-readout"><span>Тяга <b id="drive-module-state-RR">—</b></span><span>Выход <b id="drive-module-output-RR">—</b></span></div>
                 <label class="steer-drive-speed">Тяга <b><output id="drive-module-value-RR">8</output>%</b>
-                  <input id="drive-module-RR" data-drive-module-slider="RR" type="range" min="1" max="20" step="1" value="8" aria-label="Тяга колеса заднее правое, процент" disabled />
+                  <input id="drive-module-RR" data-drive-module-slider="RR" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга колеса заднее правое, процент" disabled />
                 </label>
                 <div class="steer-actions steer-drive-actions"><button type="button" class="steer-drive-back" id="drive-module-back-RR" data-drive-module="RR" data-drive-direction="-1" disabled>◀ назад</button><button type="button" class="steer-drive-fwd" id="drive-module-forward-RR" data-drive-module="RR" data-drive-direction="1" disabled>вперёд ▶</button><button type="button" class="steer-drive-stop" id="drive-module-stop-RR" data-drive-module-stop="RR" disabled>СТОП</button></div>
               </div>
@@ -794,8 +794,8 @@
             <button id="drive-stop" class="traction-stop" type="button" disabled>СТОП</button>
           </div>
           <label class="traction-speed">Предел <b><output id="drive-speed-value">8</output>%</b>
-            <input id="drive-speed" type="range" min="1" max="20" value="8" disabled></label>
-          <small class="traction-warning">Тяга ограничена пределом привода (заводские 20%, меняется в настройке). Программный стоп и watchdog (650 мс) не заменяют физическую аварийную кнопку. Первые испытания — с вывешенными колёсами.</small>
+            <input id="drive-speed" type="range" min="1" max="100" value="8" disabled></label>
+          <small class="traction-warning">Предел тяги — 100 % (полный ход драйвера, ≈18 км/ч); настройки нет. 100 % — это полная скважность ШИМ, поэтому начинайте с единиц процентов. Программный стоп и watchdog (650 мс) не заменяют физическую аварийную кнопку. Первые испытания — с вывешенными колёсами.</small>
         </section>
       </section>
     </div>
