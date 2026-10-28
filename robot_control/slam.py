@@ -915,9 +915,9 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
                 assignments.pop(module)
         if not assignments:
             log.warning("Порты колёс не назначены: выберите их на бортовом экране → Тяга и руление")
-        # Прошивку никто не запускает сам: платы шьёт оператор кнопкой
-        # «Прошить модули» на бортовом экране. Обновление с GitHub больше не
-        # трогает USB колёс — оно только кладёт новый код на диск.
+        # Прошивки плат в программе нет вовсе: платы шьют вручную из Arduino IDE.
+        # Обновление с GitHub только кладёт новый код на диск и USB колёс не
+        # трогает.
         return mod.MasterSource(
             module_ports=assignments,
             on_message=note_master_message,

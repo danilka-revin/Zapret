@@ -35,7 +35,7 @@ def motor(module, *, angle=0.0, target=None, online=True, homed=True, moving=Fal
         "angle": angle, "targetAngle": angle if target is None else target,
         "moving": moving, "calibrating": False,
         "cycling": False, "opto": False, "calibError": 0, "drivePercent": 0, "rpm": 0.0,
-        "firmware": 7, "pot": True, "tach": True, "driveMaxPercent": 100, "driveDuty": 0,
+        "firmware": 8, "pot": True, "tach": True, "driveMaxPercent": 100, "drivePulseUs": 1500,
     }
 
 
@@ -84,10 +84,10 @@ def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_re
             "manualZero": True, "limitDeg": limit,
         },
         "drive": {"available": available, "canDrive": can_drive, "reason": drive_reason,
-                  "maxPercent": 100, "commandedPercent": 0, "active": False,
+                  "maxPercent": 100, "maxKmh": 5.0, "commandedPercent": 0, "active": False,
                   "individual": True, "commandedModules": {},
                   "perModule": per_module if per_module is not None else per_module_state(),
-                  "reportedDuty": {}, "alignmentToleranceDeg": 2.5,
+                  "reportedPulse": {}, "alignmentToleranceDeg": 2.5,
                   # Колёса стоят ровно: справка для подписи, тягу не запирает.
                   "aligned": True, "spreadDeg": 0.0,
                   "maneuver": maneuver or {"supported": True, "active": False,
@@ -204,13 +204,13 @@ def test_wheel_drive_refusal_stops_the_heartbeat_and_is_shown(tmp_path):
 
 
 def test_wheel_drive_shows_reported_output_and_honest_rpm(tmp_path):
-    """В карточке видна фактическая скважность ШИМ и обороты по «SC»."""
+    """В карточке виден фактический серво-импульс и обороты по «SC»."""
     motors = [motor(m) for m in MODULES]
-    motors[0] = dict(motors[0], drivePercent=6, driveDuty=44, tach=True, rpm=95.0)
+    motors[0] = dict(motors[0], drivePercent=6, drivePulseUs=1530, tach=True, rpm=95.0)
     report = run_screen(tmp_path, payload(motors=motors, actions=[
         {"type": "wheel-drive", "id": "FL", "direction": 1}]))
     cards = {item["id"]: item for item in report["wheelDrive"]}
-    assert "ШИМ 44/255" in cards["FL"]["output"]
+    assert "ШИМ 1530 мкс" in cards["FL"]["output"]
     assert "об/мин" in cards["FL"]["output"]
     assert cards["FL"]["state"].startswith("вперёд")
 
@@ -454,17 +454,20 @@ def test_drive_panel_has_no_settings_at_all(tmp_path):
     assert report["renderErrors"] == []
     # Предел тяги на экране — тот, что прислала плата (100 % из прошивки).
     assert report["driveSpeedMax"] == "100"
+    # Потолок скорости рядом со шкалой — из телеметрии (kmh=): проценты не
+    # обещают километров в час, скорость режет регулятор прошивки.
+    assert "не быстрее 5 км/ч" in report["driveStatus"], report["driveStatus"]
 
 
 def test_drive_screen_has_no_drive_config_controls():
-    """В самой странице нет полей настройки привода — только кнопка прошивки."""
+    """В самой странице нет ни настроек привода, ни кнопки прошивки плат."""
     html = (ROOT / "slam_gui" / "robot.html").read_text(encoding="utf-8")
     for gone in ("drive-cfg-trim", "drive-cfg-span", "drive-cfg-ppr", "drive-cfg-tach",
                  "drive-cfg-brake", "drive-cfg-stop", "drive-cfg-limit", "drive-cfg-apply",
-                 "drive-cfg-reset", "drive-setup-grid", "data-drive-module-dir"):
+                 "drive-cfg-reset", "drive-setup-grid", "data-drive-module-dir",
+                 # прошивки плат из программы больше нет: только Arduino IDE
+                 "drive-flash", "Прошить модули", "kiosk_firmware_flash"):
         assert gone not in html, gone
-    # Ручная прошивка осталась: одна кнопка.
-    assert 'id="drive-flash-start"' in html
 
 
 # ------------------------------- манёвры ----------------------------------- #
@@ -590,77 +593,6 @@ def test_maneuver_controls_exist_in_the_web_remote():
     assert "data-maneuver-start" in script and "data-maneuver-target" in script
     assert "rc-maneuver-stop" in script and "api/kiosk_maneuver" in script
     assert "api/kiosk_maneuver_config" in script
-
-
-# --- Прошивка плат одной кнопкой с бортового экрана -------------------------
-# arduino-cli в России не скачивается, поэтому прошивка идёт через avr-gcc +
-# avrdude на самом борту. Оператору нужна одна кнопка и понятный итог.
-
-
-def test_flash_button_starts_the_flash_and_shows_that_it_is_busy(tmp_path):
-    """Нажали «Прошить модули» — ушёл POST с защитным заголовком, кнопка занята."""
-    report = run_screen(tmp_path, payload(actions=[{"type": "flash"}]))
-    flash = report["flash"]
-    assert flash["sent"] == [{"header": "firmware-flash"}]
-    assert flash["buttonDisabled"] is True
-    assert flash["buttonText"] == "Прошиваю…"
-    assert "Собираю" in flash["status"]
-    assert flash["barWidth"] == "15%"
-
-
-def test_flash_polling_shows_the_final_result(tmp_path):
-    """Экран опрашивает состояние и заканчивает словами, а не вечной полоской."""
-    body = payload(actions=[{"type": "flash"}, {"type": "flash-poll", "rounds": 2}])
-    body["flashStates"] = [
-        {"status": "idle", "phase": "", "pct": 0, "lines": []},
-        {"status": "busy", "phase": "Заливаю FL…", "pct": 60,
-         "lines": ["FL: avrdude done"], "summary": ""},
-        {"status": "done", "phase": "", "pct": 100, "lines": ["FL: avrdude done"],
-         "summary": "FL fw 6, FR fw 6"},
-    ]
-    flash = run_screen(tmp_path, body)["flash"]
-    assert flash["status"].startswith("Готово ·")
-    assert "fw 6" in flash["status"]
-    assert flash["buttonDisabled"] is False
-    assert flash["buttonText"] == "Прошить модули"
-    assert flash["barWidth"] == "100%"
-    assert "avrdude done" in flash["log"] and flash["logHidden"] is False
-
-
-def test_flash_refusal_is_explained_to_the_operator(tmp_path):
-    """Порт занят другим процессом — экран говорит, что прошивка не запустилась."""
-    report = run_screen(tmp_path, payload(actions=[{"type": "flash"}],
-                                          flashRefuse="порты заняты ведущим"))
-    flash = report["flash"]
-    assert flash["sent"] == [{"header": "firmware-flash"}]
-    assert "не прошилось" in flash["status"].lower()
-    assert "порты заняты" in flash["status"]
-    assert flash["buttonDisabled"] is False
-
-
-def test_flash_button_shows_which_firmware_is_on_the_boards(tmp_path):
-    """Перед нажатием видно, какая прошивка на платах: иначе кнопка — вслепую."""
-    body = payload()
-    body["data"]["motors"][0]["firmware"] = 6
-    body["data"]["motors"][1]["firmware"] = 5
-    report = run_screen(tmp_path, body)
-    assert report["flash"]["version"] == "на платах: fw 6/5/7"
-    assert report["flash"]["buttonText"] == "Прошить модули"
-    assert report["flash"]["buttonDisabled"] is False
-
-
-def test_flash_block_exists_in_the_onboard_page():
-    """Разметка борта: версия, кнопка, полоска и журнал на месте."""
-    page = (ROOT / "slam_gui" / "robot.html").read_text(encoding="utf-8")
-    for element in ("drive-flash-version", "drive-flash-start", "drive-flash-status",
-                    "drive-flash-track-wrap", "drive-flash-progress",
-                    "drive-flash-percent", "drive-flash-log"):
-        assert f'id="{element}"' in page
-    assert "Прошить модули" in page
-    # Скрытое состояние должно побеждать display: flex — иначе полоска прогресса
-    # висит на экране пустой, пока прошивка не началась.
-    css = (ROOT / "slam_gui" / "robot.css").read_text(encoding="utf-8")
-    assert ".drive-flash-track[hidden]" in css
 
 
 def test_web_remote_also_drives_at_any_angle():

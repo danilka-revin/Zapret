@@ -703,23 +703,25 @@ def test_pot_mode_requires_all_boards_and_idle_telemetry():
 
 
 # --------------------------- гибкая настройка тяги --------------------------- #
-def _drive_frame(module, *, tach=1, dmax=100, duty=0, deg=0.0, drive=0, ppr=90, rpm=0.0):
-    """Строка @TLM прошивки v7: драйвер ZS-Z11H, настраивать нечего.
+def _drive_frame(module, *, tach=1, dmax=100, us=1500, deg=0.0, drive=0, ppr=90, rpm=0.0,
+                 kmh=50):
+    """Строка @TLM прошивки v8: драйвер ZS-Z11H, настраивать нечего.
 
-    duty — фактическая скважность ШИМ на входе «P» (0…255), ppr — сколько
-    переходов выхода «SC» приходится на оборот колеса (у драйвера 90).
+    us — фактический «серво»-импульс на входе «P» в мкс (1500 — нейтраль),
+    ppr — сколько переходов выхода «SC» приходится на оборот колеса (90),
+    kmh — потолок скорости прошивки в десятых (50 — это 5 км/ч).
     """
     return ("@TLM mod=%s deg=%.2f tgt=0.00 moving=0 cal=1 cycle=0 calib=0 rpm=%.1f "
-            "drive=%d fw=7 pot=1 pm=1 tach=%d dmax=%d duty=%d ppr=%d"
-            % (module, deg, rpm, drive, tach, dmax, duty, ppr))
+            "drive=%d fw=8 pot=1 pm=1 tach=%d dmax=%d us=%d ppr=%d kmh=%d"
+            % (module, deg, rpm, drive, tach, dmax, us, ppr, kmh))
 
 
 def test_wheel_ports_are_released_only_for_a_manual_flash():
     """Порты колёс отпускает только ручная прошивка, и только на время.
 
-    Автоматической прошивки больше нет: при старте источник сразу открывает
-    порты, а ``suspend_ports``/``resume_ports`` нужны кнопке «Прошить модули» —
-    avrdude не может открыть порт, который читает программа.
+    Автоматической прошивки нет: при старте источник сразу открывает порты, а
+    ``suspend_ports``/``resume_ports`` нужны ручной прошивке утилитой — avrdude
+    не может открыть порт, который читает программа.
     """
     import time
 
@@ -749,46 +751,56 @@ def test_wheel_ports_are_released_only_for_a_manual_flash():
         backend.MasterSource.RETRY_S = original_retry
 
 
-def test_nothing_starts_a_flash_by_itself():
-    """Ни старт экрана, ни обновление с GitHub платы не прошивают."""
-    from robot_control import firmware_flash
+def test_the_program_never_flashes_a_board():
+    """Прошивки модулей из программы нет вовсе: ни автопрошивки, ни кнопки.
+
+    Платы прошивают вручную, из Arduino IDE копиями motor_wheel_*.ino с рабочего
+    стола. Поэтому и модуля прошивки в программе больше нет, и в источнике
+    модулей нет никаких заявок «прошить после перезапуска».
+    """
+    import importlib
+
     from robot_control import slam as slam_module
 
     assert not hasattr(slam_module, "_start_firmware_flash")
-    for gone in ("mark_pending", "flash_if_pending", "pending", "clear_pending"):
-        assert not hasattr(firmware_flash, gone), gone
-    # Ручная кнопка остаётся: она запускает прошивку в фоне.
-    assert callable(firmware_flash.start_flash)
+    try:
+        importlib.import_module("robot_control.firmware_flash")
+    except ModuleNotFoundError:
+        pass
+    else:                                  # pragma: no cover — модуль обязан быть удалён
+        raise AssertionError("модуль прошивки плат вернулся в программу")
 
 
 def test_master_telemetry_parses_the_wheel_driver_fields():
-    """@TLM прошивки v7: тахометр, предел прошивки, скважность ШИМ и ppr.
+    """@TLM прошивки v8: тахометр, предел, серво-импульс, ppr и потолок км/ч.
 
-    Настроек тяги в протоколе больше нет: trim/span/brk/stp/dir/us не
-    приходят и не выдумываются нулями.
+    Настроек тяги в протоколе больше нет: trim/span/brk/stp/dir не приходят и
+    не выдумываются нулями.
     """
     backend = _load_backend()
     frame = backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=7 tach=1 "
-        "dmax=100 duty=20 ppr=90 t=1")
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=8 tach=1 "
+        "dmax=100 us=1540 ppr=90 kmh=50 t=1")
     assert frame["tach"] is True
     assert frame["driveMaxPercent"] == 100
-    assert frame["driveDuty"] == 20
+    assert frame["drivePulseUs"] == 1540
+    assert frame["driveMaxKmhX10"] == 50
     assert frame["tachPpr"] == 90 and frame["rpm"] == 60.0
     # Старые поля настройки в кадре ничего не значат и не ломают разбор.
-    for gone in ("brake", "stopInput", "driveTrimUs", "driveSpanUs",
-                 "drivePulseUs", "dirReverse"):
+    for gone in ("brake", "stopInput", "driveTrimUs", "driveSpanUs", "dirReverse"):
         assert gone not in frame, gone
 
     # Прошивка до драйвера ZS-Z11H: полей тяги нет, а не нули.
     legacy = backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=0 fw=4")
     assert legacy["tach"] is None and legacy["driveMaxPercent"] is None
-    assert legacy["driveDuty"] is None and legacy["tachPpr"] is None
+    assert legacy["drivePulseUs"] is None and legacy["tachPpr"] is None
 
     # Мусор и противоречия не превращаются в «значение по умолчанию».
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 tach=7") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dmax=101") is None
-    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 duty=256") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 us=900") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 us=2400") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 kmh=0") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=0") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=abc") is None
     # Тяга не может превышать собственный предел платы.
@@ -841,6 +853,38 @@ def test_drive_limit_follows_the_plates_and_server_ceiling():
     assert src.drive_limit_percent(now=100.2) == 10
     assert src.drive(30, now=100.3)["reason"] == "drive_limit"
     assert src.drive(30, now=100.3)["limit"] == 10
+
+
+def test_speed_ceiling_is_five_kmh_on_the_plate_and_on_the_server():
+    """Потолок скорости — 5 км/ч: его держит прошивка, сервер не обещает больше.
+
+    Проценты — раствор «серво»-импульса, поэтому скорость ограничивает не шкала,
+    а регулятор прошивки по тахометру. Плата сообщает свой потолок полем
+    ``kmh=`` (в десятых долях), сервер берёт самую осторожную из четырёх и не
+    поднимает выше своего предела — 5 км/ч.
+    """
+    backend = _load_backend()
+    assert backend.DRIVE_MAX_KMH_X10 == 50
+    src = _bare_master_source(backend)
+    for module in ("FL", "FR", "RL", "RR"):
+        src.feed(_drive_frame(module), now=100.0)
+    status = src.drive_status(now=100.2)
+    assert status["maxKmh"] == 5.0
+    assert status["maxPercent"] == 100, "шкала процентов — не потолок скорости"
+
+    # Плата осторожнее — сервер называет её потолок (4,5 км/ч).
+    src.feed(_drive_frame("RR", kmh=45), now=100.0)
+    assert src.drive_max_kmh(now=100.2) == 4.5
+
+    # Плата разрешила себе больше сервера — сервер всё равно 5 км/ч.
+    for module in ("FL", "FR", "RL", "RR"):
+        src.feed(_drive_frame(module, kmh=250), now=100.0)
+    assert src.drive_max_kmh(now=100.2) == 5.0
+
+    # Старые прошивки без km= полем: действует константа сервера.
+    src_new = _bare_master_source(backend)
+    src_new.feed("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 fw=3", now=100.0)
+    assert src_new.drive_max_kmh(now=100.2) == 5.0
 
 
 def test_individual_drive_targets_only_its_own_wheel():
@@ -938,10 +982,10 @@ def test_drive_has_no_settings_at_all():
     status = src.drive_status(now=100.2)
     assert "config" not in status
     item = status["perModule"]["FL"]
-    for gone in ("dirReverse", "canSetDirection", "directionReason", "pulseUs"):
+    for gone in ("dirReverse", "canSetDirection", "directionReason", "duty"):
         assert gone not in item, gone
-    # Вместо импульса серво-ШИМ экран показывает фактическую скважность.
-    assert item["duty"] == 0 and item["tach"] is True
+    # Экран показывает фактический серво-импульс на входе «P».
+    assert item["pulseUs"] == 1500 and item["tach"] is True
 
 
 def test_journal_names_the_wheel_that_was_driven():

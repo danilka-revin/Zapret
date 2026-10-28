@@ -1074,39 +1074,6 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         eventlog.record("ok", "Порты колёс сохранены. Для применения нужен перезапуск программы.", source="колёса")
         return jsonify(result)
 
-    # --------------------- Прошивка плат колёс (кнопка) --------------- #
-    # «Прошить модули» на бортовом экране: собирает прошивку из репозитория и
-    # заливает её в платы по портам из настроек. arduino-cli не обязателен:
-    # scripts/avr_upload.py собирает обычным avr-gcc и заливает avrdude.
-    # Прошивка идёт в фоне (30–60 с), экран опрашивает состояние.
-    @app.get("/api/kiosk_firmware_flash")
-    def api_kiosk_firmware_flash_state():
-        from .firmware_flash import flash_state
-        return jsonify(dict(ok=True, **flash_state()))
-
-    @app.post("/api/kiosk_firmware_flash")
-    def api_kiosk_firmware_flash_start():
-        from .firmware_flash import start_flash
-        if request.headers.get("X-Robot-Control") != "firmware-flash":
-            return jsonify(dict(ok=False, error="Требуется X-Robot-Control: firmware-flash")), 400
-        body = request.get_json(silent=True) or {}
-        # Тело — пустое: кнопка не передаёт параметров, лишние поля — ошибка.
-        if not isinstance(body, dict) or set(body):
-            return jsonify(dict(ok=False, error="payload")), 400
-        state = app.extensions.get("rc_slam")
-        source = getattr(state, "source", None)
-        if getattr(source, "name", None) != "master":
-            return jsonify(dict(ok=False,
-                                error="Прошивка доступна только в режиме master (бортовой экран)")), 409
-        result = start_flash(source, reason="кнопка «Прошить модули»")
-        if not result.get("started"):
-            eventlog.record("warn", "прошивка плат: уже идёт другой запуск", source="прошивка")
-            return jsonify(dict(ok=True, started=False, **{k: v for k, v in result.items()
-                                                           if k != "started"})), 200
-        eventlog.record("info", "прошивка плат: запущена с бортового экрана", source="прошивка")
-        return jsonify(dict(ok=True, started=True, **{k: v for k, v in result.items()
-                                                      if k != "started"})), 202
-
     # ------------------------ Настройки камер ------------------------- #
     # Отдельные порты передней и задней камер. На борту (8090) можно менять
     # без PIN и без перезапуска; пульт (8080) берёт скан по HTTP и только читает.

@@ -241,7 +241,7 @@ def test_update_syncs_wheel_firmware_to_desktop(tmp_path, monkeypatch):
     assert '#define MODULE_ID "FL"' in fl
     assert "motor_wheel_FR.ino" in [p.name for p in desktop.iterdir()]
     assert any("[firmware]" in line for line in state.get("output", []))
-    # Автопрошивки больше нет: заявка не создаётся, обновление только напоминает
-    # прошить платы кнопкой «Прошить модули».
+    # Прошивки плат в программе нет: заявка не создаётся, обновление только
+    # напоминает прошить платы вручную из Arduino IDE.
     assert not (clone / "var" / "firmware-pending.json").exists()
-    assert any("Прошить модули" in line for line in state.get("output", []))
+    assert any("Arduino IDE" in line for line in state.get("output", []))

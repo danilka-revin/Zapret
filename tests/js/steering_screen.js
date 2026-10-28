@@ -209,10 +209,6 @@ const netlog = [];
  * проверка «экран ничего не настраивает» опиралась на факты, а не на разметку. */
 const driveCfgSent = [];
 
-/* Прошивка плат колёс кнопкой: POST «Прошить модули» и опрос состояния. */
-const flashSent = [];
-let flashCurrent = null;
-
 /* Манёвры («метр вперёд», «90° на месте»): экран сначала сохраняет числа
  * пресета, потом просит старт — журнал показывает обе команды по порядку. */
 const maneuversSent = [];
@@ -277,24 +273,6 @@ global.fetch = async (url, init) => {
     drives.push({ percent: body.percent, module: body.module === undefined ? null : body.module });
     if (payload.driveRefuse) return jsonResponse({ ok: false, reason: payload.driveRefuse }, 409);
     return jsonResponse({ ok: true, percent: body.percent, maxPercent: 20 }, 200);
-  }
-  if (/kiosk_firmware_flash/.test(text)) {
-    // Прошивка плат: журнал запросов тот же, что и у остальных команд экрана.
-    if (init && init.method === 'POST') {
-      flashSent.push({header: (init.headers || {})['X-Robot-Control'] || null});
-      if (payload.flashRefuse) {
-        return jsonResponse({ ok: false, error: payload.flashRefuse }, 409);
-      }
-      flashCurrent = { status: 'busy', phase: 'Собираю и прошиваю платы…', pct: 15,
-                       lines: [] };
-      return jsonResponse(Object.assign({ ok: true, started: true }, flashCurrent), 202);
-    }
-    // Состояние прошивки: очередь ответов по опросам, иначе — текущее
-    // состояние, каким его оставил последний POST (как на настоящем сервере).
-    const queued = Array.isArray(payload.flashStates) && payload.flashStates.length
-      ? payload.flashStates.shift() : null;
-    return jsonResponse(Object.assign({ ok: true }, queued || flashCurrent
-      || payload.flashState || { status: 'idle', phase: '', pct: 0, lines: [] }));
   }
   if (/kiosk_state/.test(text)) return jsonResponse(nextState());
   if (/kiosk_logs/.test(text)) return jsonResponse(payload.logs || emptyJournal);
@@ -497,16 +475,6 @@ function findPreset(id) {
     } else if (action.type === 'maneuver-stop') {
       byId('maneuver-stop').fire('click');
       await flush(action.rounds || 6);
-    } else if (action.type === 'flash') {
-      // «Прошить модули»: кнопка на бортовом экране.
-      byId('drive-flash-start').fire('click');
-      await flush(action.rounds || 6);
-    } else if (action.type === 'flash-poll') {
-      // Экран опрашивает состояние прошивки по таймеру — крутим таймеры.
-      for (let i = 0; i < (action.rounds || 2); i += 1) {
-        for (const entry of intervals.slice()) await entry.cb();
-        await flush(2);
-      }
     }
   }
 
@@ -547,16 +515,6 @@ function findPreset(id) {
       forwardDisabled: !!byId('drive-module-forward-' + id).disabled,
       stopDisabled: !!byId('drive-module-stop-' + id).disabled,
     })),
-    flash: {
-      sent: flashSent,
-      status: byId('drive-flash-status').textContent,
-      buttonText: byId('drive-flash-start').textContent,
-      buttonDisabled: !!byId('drive-flash-start').disabled,
-      version: byId('drive-flash-version').textContent,
-      log: byId('drive-flash-log').textContent,
-      logHidden: !!byId('drive-flash-log').hidden,
-      barWidth: byId('drive-flash-progress').style.width,
-    },
     maneuvers: {
       buttons: ['forward', 'backward', 'left', 'right', 'spin_left', 'spin_right'].map((id) => ({
         id,

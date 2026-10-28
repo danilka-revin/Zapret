@@ -2751,121 +2751,14 @@
 
   /* ================ Тяга: драйвер ZS-Z11H, настроек нет ================
    * Драйвер колеса — RioRand ZS-Z11H с датчиками Холла. Тяга задаётся
-   * скважностью ШИМ на его входе «P»: 0 % — мотор не тянет, 100 % — полный ход.
-   * Обороты приходят с выхода «SC»: 90 переходов на оборот колеса. Оба числа —
-   * свойства драйвера, а не настройки: экран их только показывает (какая
-   * скважность и какие об/мин у колеса сейчас), менять нечего и нечем. Предел
-   * тяги задан прошивкой (100 % — полный ход, ≈18 км/ч), сторону вращения задают один раз,
-   * поменяв местами два силовых провода мотора.
+   * «серво»-импульсом 50 Гц на его входе «P»: 1500 мкс — мотор не тянет,
+   * 2000 мкс — верхний ход прошивки. Обороты приходят с выхода «SC»: 90
+   * переходов на оборот колеса. Всё это свойства драйвера, а не настройки:
+   * экран только показывает, какой импульс и какие об/мин у колеса сейчас.
+   * Потолок скорости — 5 км/ч, его держит прошивка по тахометру; зеркальные
+   * колёса (FR и RR) она узнаёт по имени колеса, сторон вращения настраивать
+   * не нужно.
    */
-
-  /* ---------------------------------------------------- прошивка плат
-   * Одна кнопка на бортовом экране: сервер собирает прошивку из репозитория и
-   * заливает её в платы по портам из настроек. arduino-cli не обязателен —
-   * сборка идёт обычным avr-gcc, заливка avrdude. Прошивка занимает 30–60 с,
-   * поэтому состояние опрашивается, а не ждётся в одном запросе.
-   */
-  let flashPolling = null;
-
-  function renderFlashState(state) {
-    const status = $('drive-flash-status');
-    const button = $('drive-flash-start');
-    const wrap = $('drive-flash-track-wrap');
-    const bar = $('drive-flash-progress');
-    const percent = $('drive-flash-percent');
-    const log = $('drive-flash-log');
-    const data = state || {};
-    const busy = data.status === 'busy';
-    if (button) {
-      button.disabled = busy || !steeringAuthorized;
-      button.textContent = busy ? 'Прошиваю…' : 'Прошить модули';
-    }
-    if (wrap) wrap.hidden = !busy && !(Number(data.pct) > 0);
-    if (bar) bar.style.width = Math.max(0, Math.min(100, Number(data.pct) || 0)) + '%';
-    if (percent) percent.textContent = String(Math.max(0, Math.min(100, Number(data.pct) || 0))) + '%';
-    if (log) {
-      const lines = Array.isArray(data.lines) ? data.lines : [];
-      log.hidden = lines.length === 0;
-      log.textContent = lines.join('\n');
-      log.scrollTop = log.scrollHeight;
-    }
-    if (!status) return;
-    if (busy) {
-      status.textContent = data.phase || 'Прошиваю платы…';
-    } else if (data.status === 'done') {
-      status.textContent = 'Готово · ' + (data.summary || 'платы прошиты');
-    } else if (data.status === 'error') {
-      status.textContent = 'Не прошилось · ' + (data.error || data.summary || 'см. журнал');
-    } else {
-      status.textContent = 'Прошивка не запущена';
-    }
-  }
-
-  async function pollFlashState() {
-    try {
-      const response = await fetch('api/kiosk_firmware_flash', {cache: 'no-store'});
-      const body = await response.json().catch(() => ({}));
-      renderFlashState(body && body.ok === false ? {} : body);
-      return body || {};
-    } catch (error) {
-      renderFlashState({status: 'error', error: 'связь потеряна'});
-      return {status: 'error'};
-    }
-  }
-
-  function watchFlash() {
-    if (flashPolling) return;
-    flashPolling = window.setInterval(async () => {
-      const state = await pollFlashState();
-      if (state.status !== 'busy') {
-        window.clearInterval(flashPolling);
-        flashPolling = null;
-      }
-    }, 1500);
-  }
-
-  async function startFlash() {
-    const button = $('drive-flash-start');
-    if (!button || button.disabled) return;
-    const active = !!((lastData || {}).drive || {}).active ||
-      Number(((lastData || {}).drive || {}).commandedPercent || 0) !== 0;
-    const question = active
-      ? 'Тяга включена. Остановить движение и прошить платы? Колёса на минуту перестанут отвечать.'
-      : 'Прошить платы колёс? Колёса на минуту перестанут отвечать.';
-    if (typeof window.confirm === 'function' && !window.confirm(question)) return;
-    button.disabled = true;
-    renderFlashState({status: 'busy', phase: 'Запускаю прошивку…', pct: 1});
-    try {
-      const response = await fetch('api/kiosk_firmware_flash', {
-        method: 'POST', cache: 'no-store',
-        headers: {'Content-Type': 'application/json', 'X-Robot-Control': 'firmware-flash'},
-        body: JSON.stringify({})
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok || body.ok === false) {
-        renderFlashState({status: 'error',
-          error: body.error || 'сервер не принял команду прошивки'});
-        return;
-      }
-      renderFlashState(body);
-      watchFlash();
-    } catch (error) {
-      renderFlashState({status: 'error', error: 'связь потеряна: прошивка не запущена'});
-    }
-  }
-
-  /* Версия прошивки на платах: единственное, что полезно знать перед ручной
-   * прошивкой. Число берётся из телеметрии (@TLM fw=) как есть. */
-  function renderFlashVersions(d) {
-    const flashVersion = $('drive-flash-version');
-    if (!flashVersion) return;
-    const versions = ((d || {}).motors || [])
-      .map((motor) => (motor && motor.firmware != null ? String(motor.firmware) : null))
-      .filter((value) => value !== null);
-    flashVersion.textContent = versions.length
-      ? 'на платах: fw ' + Array.from(new Set(versions)).join('/')
-      : 'на платах: нет связи';
-  }
 
   /* --------------------------------------------------------------- манёвры
    * Пресет здесь — цель, а не время: «метр» и «90°» сервер меряет по
@@ -3074,10 +2967,15 @@
     const drive = d.drive || {};
     const supported = !!(d.steeringControl && d.steeringControl.available);
     // Предел приходит из телеметрии плат (dmax=): он задан прошивкой (100 % —
-    // полный ход драйвера) и не настраивается. Сервер выше своего потолка всё
-    // равно не пустит.
+    // верхний ход «серво»-импульса) и не настраивается. Сервер выше своего
+    // потолка всё равно не пустит.
     const max = Math.max(1, Math.min(100, Number(drive.maxPercent) || 100));
     speed.max = String(max);
+    // Потолок скорости, км/ч (kmh= из телеметрии): его держит регулятор
+    // прошивки по тахометру, поэтому проценты — не «сколько км/ч», а насколько
+    // открыт импульс. Показываем рядом, чтобы шкала не выглядела обещанием.
+    const maxKmh = Number(drive.maxKmh) > 0 ? Number(drive.maxKmh) : 5;
+    const kmhText = ' (не быстрее ' + String(maxKmh).replace('.', ',') + ' км/ч)';
     if (Number(speed.value) > max) speed.value = String(max);
     setText($('drive-speed-value'), String(speed.value));
     const enabled = supported && steeringAuthorized && !!drive.available;
@@ -3096,12 +2994,11 @@
     else if (!supported) status.textContent = 'Тяга доступна при RC_SLAM_SOURCE=master.';
     else if (!steeringAuthorized) status.textContent = 'Управление временно недоступно.';
     else if (reason) status.textContent = reason;
-    else if (drive.active) status.textContent = 'Движение включено · ' + speed.value + '% тяги · отпустите кнопку для торможения.';
-    else status.textContent = 'Готово · ' + speed.value + '% тяги · модули на связи' + angleText + '.';
+    else if (drive.active) status.textContent = 'Движение включено · ' + speed.value + '% тяги' + kmhText + ' · отпустите кнопку для торможения.';
+    else status.textContent = 'Готово · ' + speed.value + '% тяги' + kmhText + ' · модули на связи' + angleText + '.';
     status.dataset.ready = String(!!drive.canDrive && enabled);
     // Тяга каждого колеса: своя готовность и свои кнопки в карточке.
     ['FL', 'FR', 'RL', 'RR'].forEach((id) => renderModuleDriveCard(id, d, supported));
-    renderFlashVersions(d);
     renderManeuvers(d);
   }
 
@@ -3346,9 +3243,9 @@
     const canDrive = enabled && !!state.canDrive;
     const holding = moduleDrive[id] || 0;
     const percent = motor && motor.drivePercent != null ? Number(motor.drivePercent) : null;
-    // Скважность ШИМ на входе «P» — фактическая, а не «сколько мы попросили»:
-    // по ней видно, что прошивка действительно дала тягу.
-    const duty = motor && motor.driveDuty != null ? Number(motor.driveDuty) : null;
+    // «Серво»-импульс на входе «P» — фактический, а не «сколько мы попросили»:
+    // по нему видно, что прошивка действительно дала тягу (1500 — нейтраль).
+    const pulseUs = motor && motor.drivePulseUs != null ? Number(motor.drivePulseUs) : null;
     const tach = motor ? motor.tach : null;
     const rpm = motor && motor.rpm != null ? Number(motor.rpm) : null;
     if (slider) slider.disabled = !canDrive;
@@ -3374,7 +3271,7 @@
     if (stateEl) stateEl.textContent = text;
     if (outputEl) {
       const parts = [];
-      if (duty != null) parts.push('ШИМ ' + duty + '/255');
+      if (pulseUs != null) parts.push('ШИМ ' + pulseUs + ' мкс');
       if (tach === false) parts.push('rpm нет');
       else if (rpm != null) parts.push(Math.round(rpm) + ' об/мин');
       outputEl.textContent = parts.length ? parts.join(' · ') : '—';
@@ -3433,12 +3330,6 @@
       if (stopButton) stopButton.addEventListener('click', () => stopModuleDrive(id));
     });
 
-    // Прошивка плат колёс одной кнопкой (бортовой экран).
-    const flashStart = $('drive-flash-start');
-    if (flashStart) {
-      flashStart.addEventListener('click', () => { void startFlash(); });
-      void pollFlashState();
-    }
     // Манёвры: «Ехать» в строке и общий СТОП манёвра.
     MANEUVER_ORDER.forEach((id) => {
       const button = $('maneuver-' + id);
