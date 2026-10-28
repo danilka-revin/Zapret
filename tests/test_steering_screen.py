@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -511,14 +512,20 @@ def test_maneuver_start_is_refused_before_numbers_are_saved(tmp_path):
     assert "числа" in report["maneuvers"]["status"].lower()
 
 
-def test_maneuver_buttons_need_ready_drive(tmp_path):
-    """Нет связи с платами — кнопки манёвров серые.
+def test_maneuver_buttons_stay_pressable_without_ready_drive(tmp_path):
+    """Пресеты доступны всегда: нет связи с платами — кнопки не гаснут.
 
-    Углы колёс манёвры больше не блокируют: старт на любом угле разрешён.
+    Нажатие «Ехать» всё равно уходит на сервер, а причина видна словами под
+    списком. Углы колёс манёвры не блокируют давно, теперь не блокирует и
+    отсутствие телеметрии: оператор видит не серую кнопку, а объяснение.
     """
     report = run_screen(tmp_path, payload(can_drive=False, drive_reason="module_offline"))
-    assert all(item["disabled"] for item in report["maneuvers"]["buttons"])
-    assert "телеметрии" in report["maneuvers"]["status"]
+    buttons = report["maneuvers"]["buttons"]
+    assert buttons and all(not item["disabled"] for item in buttons), buttons
+    status = report["maneuvers"]["status"]
+    assert "телеметрии" in status
+    assert "«Ехать» покажет точную причину" in status
+    assert report["maneuvers"]["stopDisabled"] is False
 
     angled = payload()
     angled["data"]["drive"].update(aligned=False, spreadDeg=45.0)
@@ -530,6 +537,30 @@ def test_maneuver_buttons_need_ready_drive(tmp_path):
         old["data"]["drive"]["perModule"][module]["canDrive"] = False
     report = run_screen(tmp_path, old)
     assert all(not item["disabled"] for item in report["maneuvers"]["buttons"])
+
+
+def test_pressing_to_go_when_drive_is_not_ready_shows_the_reason(tmp_path):
+    """Кнопка не серая: нажатие спрашивает сервер и печатает его отказ словами."""
+    report = run_screen(tmp_path, payload(
+        can_drive=False, drive_reason="module_offline",
+        maneuverRefuse="module_offline",
+        actions=[{"type": "maneuver", "id": "forward", "target": 1.0, "percent": 10}]))
+    sent = report["maneuversSent"]
+    assert [item["action"] for item in sent] == ["config", "start"], sent
+    status = report["maneuvers"]["status"]
+    assert "свежая телеметрия" in status, status
+
+
+def test_presets_section_is_open_and_never_greyed_in_the_markup():
+    """В разметке борта пресеты раскрыты, и ни одна кнопка не помечена disabled."""
+    page = (ROOT / "slam_gui" / "robot.html").read_text(encoding="utf-8")
+    detail = re.search(r'<details[^>]*id="drive-maneuvers"[^>]*>', page)
+    assert detail and "open" in detail.group(0), detail and detail.group(0)
+    for name in ("forward", "backward", "left", "right", "spin_left", "spin_right"):
+        button = re.search(r'<button[^>]*id="maneuver-%s"[^>]*>' % name, page)
+        assert button and "disabled" not in button.group(0), button and button.group(0)
+    stop = re.search(r'<button[^>]*id="maneuver-stop"[^>]*>', page)
+    assert stop and "disabled" not in stop.group(0), stop and stop.group(0)
 
 
 def test_running_maneuver_shows_progress_and_stop(tmp_path):
@@ -545,7 +576,9 @@ def test_running_maneuver_shows_progress_and_stop(tmp_path):
     assert report["maneuvers"]["stopDisabled"] is False
     buttons = {item["id"]: item for item in report["maneuvers"]["buttons"]}
     assert buttons["forward"]["label"] == "Едем…"
-    assert all(item["disabled"] for item in report["maneuvers"]["buttons"])
+    # Идущий манёвр тоже не гасит пресеты: повторное нажатие получает честный
+    # ответ «другой манёвр уже идёт — сначала СТОП», а не мёртвую кнопку.
+    assert all(not item["disabled"] for item in report["maneuvers"]["buttons"])
 
 
 def test_maneuver_without_tachometer_says_it_goes_by_time(tmp_path):
@@ -577,7 +610,8 @@ def test_finished_maneuver_reports_the_result(tmp_path):
                              "message": "Готово: 1.02 из 1.00."})
     report = run_screen(tmp_path, body)
     assert "1.02" in report["maneuvers"]["status"]
-    assert report["maneuvers"]["stopDisabled"] is True
+    # СТОП манёвра доступен всегда — даже когда манёвр уже закончился.
+    assert report["maneuvers"]["stopDisabled"] is False
 
 
 def test_maneuver_controls_exist_in_the_onboard_page():

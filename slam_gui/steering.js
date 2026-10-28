@@ -166,12 +166,12 @@
                 <b>${item.title}</b>
                 <label>${item.unit}<input type="number" data-maneuver-target min="${item.min}" max="${item.max}" step="${item.step}" value="${item.key === 'distanceM' ? 1 : 90}" aria-label="${item.title}: цель"></label>
                 <label>%<input type="number" data-maneuver-percent min="1" max="100" step="1" value="10" aria-label="${item.title}: рабочий процент"></label>
-                <button type="button" data-maneuver-start disabled>Ехать</button>
+                <button type="button" data-maneuver-start>Ехать</button>
               </div>`).join('')}
             </div>
             <div class="rc-maneuver-actions">
-              <button type="button" id="rc-maneuver-stop" class="stop" disabled>СТОП манёвра</button>
-              <small id="rc-maneuver-status" role="status">манёвры недоступны</small>
+              <button type="button" id="rc-maneuver-stop" class="stop">СТОП манёвра</button>
+              <small id="rc-maneuver-status" role="status">готово · выберите манёвр</small>
             </div>
           </section>
           <small class="rc-drive-warning">Нейтраль и размах серво-ШИМ, тахометр, тормозная линия и линия STOP настраиваются на экране «Руление и тяга» (вкладка /controls): настройка живёт в EEPROM платы. Программный стоп и watchdog (650 мс), не аварийный выключатель. Перед запуском вывесьте колёса и установите аппаратную аварийную кнопку в силовую цепь.</small>
@@ -584,7 +584,6 @@
     const state = drive.maneuver || {};
     const active = !!state.active;
     const control = (snapshot && snapshot.steeringControl) || {};
-    const enabled = supported && authorized && !!control.available && !!drive.canDrive;
     const focused = document.activeElement;
     MANEUVERS.forEach((item) => {
       const row = document.querySelector('[data-rc-maneuver="' + item.id + '"]');
@@ -601,30 +600,33 @@
       }
       const button = row.querySelector('[data-maneuver-start]');
       if (button) {
-        button.disabled = !enabled || active;
+        // Пресеты доступны всегда: кнопка не гаснет. Если робот не готов,
+        // «Ехать» всё равно спросит сервер и покажет его причину.
+        button.disabled = false;
         button.textContent = (active && state.name === item.id) ? 'Едем…' : 'Ехать';
       }
     });
-    stop.disabled = !authorized || !active;
+    stop.disabled = false;
     const kind = state.kind === 'distance' ? 'distance' : 'angle';
     const format = (value) => kind === 'distance'
       ? (Number(value) || 0).toFixed(2) + ' м' : Math.round(Number(value) || 0) + '°';
-    if (!supported) {
-      statusEl.textContent = 'Пресеты манёвров недоступны: сервер не отдал их настройки.';
-    } else if (!control.available) {
-      statusEl.textContent = 'Манёвры — только в режиме master.';
-    } else if (!authorized) {
-      statusEl.textContent = 'Манёвры требуют разблокированного управления.';
-    } else if (active) {
+    if (active) {
       statusEl.textContent = 'Манёвр «' + (state.title || state.name || '') + '»: ' +
         Math.round((Number(state.progress) || 0) * 100) + '% · ' +
         format(state.value) + ' из ' + format(state.target) +
         ' · ' + (state.mode === 'time' ? 'по времени (тахометра нет)' : 'по тахометру');
     } else if (state.state === 'done' || state.state === 'failed' || state.state === 'cancelled') {
       statusEl.textContent = state.message || 'Манёвр завершён.';
+    } else if (!supported) {
+      statusEl.textContent = 'Ждём настройки пресетов от сервера — «Ехать» ответит причиной.';
+    } else if (!control.available) {
+      statusEl.textContent = 'Манёвры ведёт бортовая программа — «Ехать» ответит причиной.';
+    } else if (!authorized) {
+      statusEl.textContent = 'Управление заблокировано: «Ехать» попросит PIN.';
     } else if (!drive.canDrive) {
-      statusEl.textContent = 'Манёвры недоступны: ' +
-        (DRIVE_REASON_TEXT[drive.reason] || 'тяга не готова') + '.';
+      statusEl.textContent = 'Пока не поедет: ' +
+        (DRIVE_REASON_TEXT[drive.reason] || 'тяга не готова') +
+        ' Кнопки работают — «Ехать» покажет точную причину.';
     } else {
       statusEl.textContent = 'Готово · выберите манёвр.';
     }
@@ -651,16 +653,21 @@
     }
     const values = {percent: percent};
     values[item.key] = target;
-    const saved = await json('api/kiosk_maneuver_config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
-      body: JSON.stringify({ name: id, values: values })
-    });
-    if (!saved.response.ok || saved.body.ok === false) {
-      const reason = saved.body.reason || 'command_failed';
-      if (reason === 'pin_required') authorized = false;
-      $('rc-maneuver-status').textContent = MANEUVER_REASON_TEXT[reason] || 'Отказ сервера.';
-      return;
+    // Пока манёвр идёт, числа не сохраняем: сервер откажет (рывок). Зато «Ехать»
+    // ответит «другой манёвр уже идёт — сначала СТОП».
+    const running = !!(((snapshot && snapshot.drive) || {}).maneuver || {}).active;
+    if (!running) {
+      const saved = await json('api/kiosk_maneuver_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
+        body: JSON.stringify({ name: id, values: values })
+      });
+      if (!saved.response.ok || saved.body.ok === false) {
+        const reason = saved.body.reason || 'command_failed';
+        if (reason === 'pin_required') authorized = false;
+        $('rc-maneuver-status').textContent = MANEUVER_REASON_TEXT[reason] || 'Отказ сервера.';
+        return;
+      }
     }
     const started = await json('api/kiosk_maneuver', {
       method: 'POST',

@@ -699,7 +699,10 @@
                Сервер сам ставит углы, плавно набирает тягу, считает путь по
                тахометру (D19) и гасит её на цели; без тахометра — по времени
                и честно об этом пишет. Числа правятся здесь и живут на сервере. -->
-          <details id="drive-maneuvers" class="drive-maneuvers">
+          <!-- Пресеты доступны всегда: секция раскрыта, кнопки не гаснут. Если
+               робот не готов ехать, «Ехать» всё равно отправит запрос, а сервер
+               ответит точной причиной («нет нуля», «нет связи», «PIN истёк»). -->
+          <details id="drive-maneuvers" class="drive-maneuvers" open>
             <summary>Манёвры · метр вперёд, разворот на 90°</summary>
             <p class="drive-setup-hint">
               Кнопка задаёт <b>цель</b>, а не время: «метр» — это метр по тахометру
@@ -710,6 +713,8 @@
               в ход руля ±100° это укладывается. Без тахометра манёвр считается по
               времени по скорости прошлого удачного прогона и пишет об этом.
               Правки чисел сохраняются на сервере и применяются при нажатии «Ехать».
+              <b>Пресеты доступны всегда:</b> кнопки не гаснут — если робот пока не
+              может ехать, нажатие покажет причину под списком.
               <b>Держите руку на СТОП:</b> манёвр отменяется кнопкой СТОП, E-STOP,
               ручной тягой и пропажей колеса.
             </p>
@@ -718,42 +723,42 @@
                 <span class="maneuver-title">Вперёд</span>
                 <label>м <input id="maneuver-target-forward" type="number" min="0.05" max="20" step="0.05" value="1" aria-label="Вперёд: метров"></label>
                 <label>% <input id="maneuver-percent-forward" type="number" min="1" max="100" step="1" value="12" aria-label="Вперёд: рабочий процент тяги"></label>
-                <button id="maneuver-forward" type="button" data-maneuver="forward" disabled>Ехать</button>
+                <button id="maneuver-forward" type="button" data-maneuver="forward">Ехать</button>
               </div>
               <div class="maneuver-row">
                 <span class="maneuver-title">Назад</span>
                 <label>м <input id="maneuver-target-backward" type="number" min="0.05" max="20" step="0.05" value="0.5" aria-label="Назад: метров"></label>
                 <label>% <input id="maneuver-percent-backward" type="number" min="1" max="100" step="1" value="10" aria-label="Назад: рабочий процент тяги"></label>
-                <button id="maneuver-backward" type="button" data-maneuver="backward" disabled>Ехать</button>
+                <button id="maneuver-backward" type="button" data-maneuver="backward">Ехать</button>
               </div>
               <div class="maneuver-row">
                 <span class="maneuver-title">Боком влево</span>
                 <label>м <input id="maneuver-target-left" type="number" min="0.05" max="20" step="0.05" value="0.5" aria-label="Боком влево: метров"></label>
                 <label>% <input id="maneuver-percent-left" type="number" min="1" max="100" step="1" value="10" aria-label="Боком влево: рабочий процент тяги"></label>
-                <button id="maneuver-left" type="button" data-maneuver="left" disabled>Ехать</button>
+                <button id="maneuver-left" type="button" data-maneuver="left">Ехать</button>
               </div>
               <div class="maneuver-row">
                 <span class="maneuver-title">Боком вправо</span>
                 <label>м <input id="maneuver-target-right" type="number" min="0.05" max="20" step="0.05" value="0.5" aria-label="Боком вправо: метров"></label>
                 <label>% <input id="maneuver-percent-right" type="number" min="1" max="100" step="1" value="10" aria-label="Боком вправо: рабочий процент тяги"></label>
-                <button id="maneuver-right" type="button" data-maneuver="right" disabled>Ехать</button>
+                <button id="maneuver-right" type="button" data-maneuver="right">Ехать</button>
               </div>
               <div class="maneuver-row">
                 <span class="maneuver-title">Разворот влево</span>
                 <label>° <input id="maneuver-target-spin_left" type="number" min="5" max="360" step="5" value="90" aria-label="Разворот влево: градусов"></label>
                 <label>% <input id="maneuver-percent-spin_left" type="number" min="1" max="100" step="1" value="10" aria-label="Разворот влево: рабочий процент тяги"></label>
-                <button id="maneuver-spin_left" type="button" data-maneuver="spin_left" disabled>Ехать</button>
+                <button id="maneuver-spin_left" type="button" data-maneuver="spin_left">Ехать</button>
               </div>
               <div class="maneuver-row">
                 <span class="maneuver-title">Разворот вправо</span>
                 <label>° <input id="maneuver-target-spin_right" type="number" min="5" max="360" step="5" value="90" aria-label="Разворот вправо: градусов"></label>
                 <label>% <input id="maneuver-percent-spin_right" type="number" min="1" max="100" step="1" value="10" aria-label="Разворот вправо: рабочий процент тяги"></label>
-                <button id="maneuver-spin_right" type="button" data-maneuver="spin_right" disabled>Ехать</button>
+                <button id="maneuver-spin_right" type="button" data-maneuver="spin_right">Ехать</button>
               </div>
             </div>
             <div class="maneuver-actions">
-              <button id="maneuver-stop" type="button" class="traction-stop" disabled>СТОП манёвра</button>
-              <span id="maneuver-status" role="status">манёвры недоступны</span>
+              <button id="maneuver-stop" type="button" class="traction-stop">СТОП манёвра</button>
+              <span id="maneuver-status" role="status">готово · выберите манёвр</span>
             </div>
           </details>
 
