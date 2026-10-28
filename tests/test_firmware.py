@@ -170,6 +170,36 @@ def test_drive_uses_a_servo_pulse_and_a_five_kmh_ceiling():
     assert re.search(r"^DRIVE_MAX_KMH_X10 = 50$", mirror, re.M)
 
 
+def test_tach_counts_edge_intervals_and_rejects_noise():
+    """Обороты — по среднему интервалу между переходами «SC», а не по окну.
+
+    Главная жалоба «показывает 3600, а по факту 60» лечится двумя вещами:
+    обороты считаются по среднему интервалу (окно 500 мс квантовало медленное
+    вращение шагами по 20 %), а невозможные значения — помеха на проводе, а не
+    скорость. Тогда прошивка честно говорит «нет» и пишет в журнал, что смотреть.
+    """
+    text = _text(WHEEL)
+    code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
+    assert int(_const(text, "DRIVE_TACH_PPR")) == 90
+    assert int(_const(text, "DRIVE_TACH_MIN_EDGE_US")) == 150
+    assert int(_const(text, "DRIVE_TACH_MAX_RPM_X10")) == 6000
+    assert int(_const(text, "DRIVE_BLIND_MAX_US")) == 1600
+    # Интервалы накапливаются в прерывании, обороты — по среднему интервалу.
+    assert "tach_interval_sum_us" in code and "tach_interval_count" in code
+    assert "600000000ULL * (uint64_t)count" in code
+    assert "dt < DRIVE_TACH_MIN_EDGE_US" in code
+    # Помеха не превращается в обороты: rpm обнуляется, tach=0, журнал подсказывает.
+    assert "rpm > DRIVE_TACH_MAX_RPM_X10" in code
+    assert "Проверьте провод SC" in text
+    assert "tachTrustedFlag()" in code
+    # Формула среднего интервала сходится с жизнью: 90 переходов за секунду — 60 об/мин.
+    for per_second in (90, 180, 270):
+        mean_us = 1_000_000 / per_second
+        rpm = 60_000_000 / (90 * mean_us)
+        assert abs(rpm - per_second / 90 * 60) <= 1, (per_second, rpm)
+    assert abs(60_000_000 / (90 * (1_000_000 / 90)) - 60) < 0.01
+
+
 def test_mirrored_wheels_are_fixed_by_the_wheel_name():
     """FR и RR крутятся зеркально: сторона вращения — в прошивке, не настройка.
 
@@ -219,7 +249,9 @@ def test_telemetry_period_and_safety_fields_are_present():
                   # тяга драйвера ZS-Z11H: тахометр, предел прошивки,
                   # фактический серво-импульс, переходов «SC» на оборот и
                   # потолок скорости в десятых долях км/ч
-                  "tach=", "dmax=", "us=", "ppr=", "kmh="):
+                  # hz= — сколько переходов «SC» приходит в секунду: при одном
+                  # обороте в секунду это и есть число импульсов на оборот.
+                  "tach=", "dmax=", "us=", "ppr=", "kmh=", "hz="):
         assert field in text, field
 
 

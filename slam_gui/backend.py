@@ -114,6 +114,10 @@ DRIVE_MAX_KMH_X10 = 50
 #: Драйверы дают и 1, и 60 импульсов: без этой настройки «об/мин» врали ровно
 #: во столько раз (колесо делает оборот в секунду, а экран показывает 3600).
 TACH_PPR_MAX = 1000
+#: Потолок правдоподобия для поля ``hz=`` — сколько переходов «SC» в секунду
+#: бывает на самом деле. Полный ход драйвера даёт ~700 имп/с; всё, что выше
+#: 20 000, — уже не телеметрия, а мусор в строке.
+TACH_HZ_MAX = 20000
 
 # Предел абсолютной команды поворота «w <модуль> <угол>». Одно число на весь
 # стек: столько же в прошивке (STEER_LIMIT_DEG в firmware/motor_wheel),
@@ -332,6 +336,7 @@ def parse_master_line(line, module=None):
             drive_pulse = int(fields["us"]) if "us" in fields else None
             tach_ppr = int(fields["ppr"]) if "ppr" in fields else None
             drive_kmh = int(fields["kmh"]) if "kmh" in fields else None
+            tach_hz = int(fields["hz"]) if "hz" in fields else None
         except ValueError:
             return None
         for key, value in (("tach", tach),):
@@ -349,6 +354,7 @@ def parse_master_line(line, module=None):
                 (drive_pulse is not None and
                  not DRIVE_PULSE_MIN_US <= drive_pulse <= DRIVE_PULSE_MAX_US) or
                 (tach_ppr is not None and not 1 <= tach_ppr <= TACH_PPR_MAX) or
+                (tach_hz is not None and not 0 <= tach_hz <= TACH_HZ_MAX) or
                 (drive_kmh is not None and not 1 <= drive_kmh <= DRIVE_MAX_KMH_X10 * 10)):
             return None
         zeroed = fields.get("cal") == "1"
@@ -382,6 +388,10 @@ def parse_master_line(line, module=None):
             "drivePulseUs": drive_pulse,
             "driveMaxKmhX10": drive_kmh,
             "tachPpr": tach_ppr,
+            # Сколько переходов «SC» приходит в секунду. При вращении ровно один
+            # оборот в секунду это и есть число импульсов на оборот: по нему
+            # видно, тот ли провод на D19 и почему обороты не считаются.
+            "tachHz": tach_hz,
         }
     except (KeyError, ValueError):
         return None
@@ -918,6 +928,8 @@ class MasterSource:
                 "pulseUs": frame.get("drivePulseUs") if frame else None,
                 "rpm": frame.get("rpm") if frame else None,
                 "tach": frame.get("tach") if frame else None,
+                # Переходов «SC» в секунду — диагностика провода тахометра.
+                "tachHz": frame.get("tachHz") if frame else None,
             }
 
         return {
@@ -1514,6 +1526,7 @@ class MasterSource:
                                "tach": frame.get("tach"),
                                "driveMaxPercent": frame.get("driveMaxPercent"),
                                "drivePulseUs": frame.get("drivePulseUs"),
+                               "tachHz": frame.get("tachHz"),
                                "online": True, "fault": None,
                                "moving": frame["moving"], "calibrating": frame["calib"],
                                "cycling": frame.get("cycle", False)})
@@ -1522,7 +1535,7 @@ class MasterSource:
                                "targetAngle": None, "rpm": None, "temp": None,
                                "drivePercent": None, "homed": None, "online": False, "fault": None,
                                "pot": None, "tach": None, "driveMaxPercent": None,
-                               "drivePulseUs": None,
+                               "drivePulseUs": None, "tachHz": None,
                                "moving": False, "calibrating": False})
         out = NoSource().read()              # АКБ и маршрут пока не передаются
         out["motors"] = motors

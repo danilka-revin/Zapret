@@ -168,6 +168,19 @@ const uint8_t EEPROM_POT_MAGIC = 0x51;      // «q» — наклон измер
 // сигнала трёх датчиков Холла). Это свойство драйвера, а не настройка.
 const uint8_t DRIVE_TACH_PPR = 90;             // переходов SC на оборот колеса
 const uint16_t RPM_SAMPLE_PERIOD_MS = 500;
+// Дребезг и наводки. На полном ходу драйвера (≈18 км/ч) интервал между
+// переходами SC — 0,74 мс, на 5 км/ч — 5,4 мс. Два перехода ближе 150 мкс
+// физически невозможны: это помеха на проводе, а не вращение, и в расчёт
+// оборотов она не идёт.
+const uint16_t DRIVE_TACH_MIN_EDGE_US = 150;
+// Потолок правдоподобия: если насчитанные обороты выше 600 об/мин, то это не
+// скорость, а шум на линии «SC» (полный ход драйвера даёт ≈450 об/мин при
+// колесе 216 мм). Прошивка честно говорит «обороты недостоверны», а не
+// показывает выдуманное число.
+const uint32_t DRIVE_TACH_MAX_RPM_X10 = 6000;
+// Пока тахометр недостоверен, скорость держится вслепую: импульс не выше этого.
+// 1600 мкс — 20 % хода драйвера, заведомо медленно.
+const uint16_t DRIVE_BLIND_MAX_US = 1600;
 // Предел тяги прошивки: 100 % — верхний импульс DRIVE_FULL_US.
 const uint8_t DRIVE_MAX_PERCENT = 100;
 const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → нейтраль и тормоз
@@ -207,7 +220,15 @@ volatile bool pulse_high = false;
 volatile int8_t step_dir = 1;
 volatile uint8_t half_period_ticks = 1;
 volatile uint8_t tick_count = 0;
-volatile uint32_t tach_edges = 0;
+// Тахометр: кроме счётчика переходов держим сумму интервалов между ними.
+// Обороты по среднему интервалу точнее, чем по числу переходов за окно:
+// окно 500 мс «квантует» медленное вращение шагами по 20 %.
+volatile uint32_t tach_edges = 0;            // принятые переходы (после дребезга)
+volatile uint32_t tach_raw_edges = 0;        // все переходы — только для hz=
+volatile uint32_t tach_edge_us = 0;
+volatile bool tach_has_edge = false;
+volatile uint32_t tach_interval_sum_us = 0;
+volatile uint16_t tach_interval_count = 0;
 
 const uint8_t OPTO_WATCH_NONE = 0;
 const uint8_t OPTO_WATCH_ACTIVE = 1;   // остановиться, когда датчик сработает
@@ -274,8 +295,11 @@ bool drive_active = false;
 int8_t drive_percent = 0;
 uint32_t last_drive_command_ms = 0;
 uint32_t last_rpm_edges = 0;
+uint32_t last_rpm_raw = 0;
 uint32_t rpm_x10 = 0;
 uint32_t last_rpm_ms = 0;
+uint32_t tach_hz = 0;                  // переходов SC в секунду — диагностика
+bool tach_trusted = true;               // обороты правдоподобны (нет помехи)
 
 // Тяга: какие проценты просили и какой импульс сейчас на входе «P».
 uint16_t drive_pulse_us = DRIVE_NEUTRAL_US;     // фактический импульс на D3
@@ -384,7 +408,21 @@ bool parseLongToken(const char* text, long* out) {
 // Шаги: Timer2 в режиме CTC, 16 МГц / 8 / 100 = 20 кГц, тик 50 мкс
 // (Timer1, Timer3, Timer4 и Timer5 заняты библиотекой Servo — см. выше).
 void tachometerISR() {
+  const uint32_t now = micros();
+  ++tach_raw_edges;
+  if (!tach_has_edge) {                   // первый переход — только точка отсчёта
+    tach_edge_us = now;
+    tach_has_edge = true;
+    return;
+  }
+  const uint32_t dt = now - tach_edge_us;
+  if (dt < DRIVE_TACH_MIN_EDGE_US) return;  // дребезг/наводка: точку не двигаем
+  tach_edge_us = now;
   ++tach_edges;
+  if (tach_interval_count < 30000) {
+    tach_interval_sum_us += dt;
+    ++tach_interval_count;
+  }
 }
 
 bool optoActive() {
@@ -1283,9 +1321,17 @@ void driveTachApply() {
   attachInterrupt(digitalPinToInterrupt(TACH_PIN), tachometerISR, CHANGE);
   noInterrupts();
   tach_edges = 0;
+  tach_raw_edges = 0;
+  tach_edge_us = micros();
+  tach_has_edge = false;
+  tach_interval_sum_us = 0;
+  tach_interval_count = 0;
   interrupts();
   last_rpm_edges = 0;
+  last_rpm_raw = 0;
   rpm_x10 = 0;
+  tach_hz = 0;
+  tach_trusted = true;
 }
 
 void printDriveInfo() {
@@ -1376,6 +1422,15 @@ void updateSpeedGovernor() {
     drive_cap_us = 0;
     return;
   }
+  // Тахометр молчит или врёт помехой — оборотов не знаем. Тогда не разгоняем:
+  // импульс не выше «слепого» предела, а поднимать его обратно нечего.
+  if (!tach_trusted) {
+    if (drive_pulse_us > DRIVE_BLIND_MAX_US) {
+      drive_cap_us = DRIVE_BLIND_MAX_US;
+      driveWritePulse(DRIVE_BLIND_MAX_US);
+    }
+    return;
+  }
   if (rpm_x10 > DRIVE_MAX_RPM_X10 && drive_pulse_us > DRIVE_NEUTRAL_US) {
     const uint16_t next = (drive_pulse_us > DRIVE_NEUTRAL_US + DRIVE_GOVERNOR_STEP_US)
         ? (uint16_t)(drive_pulse_us - DRIVE_GOVERNOR_STEP_US)
@@ -1399,15 +1454,47 @@ void updateRpm() {
   if (elapsed < RPM_SAMPLE_PERIOD_MS) return;
   noInterrupts();
   const uint32_t edges = tach_edges;
+  const uint32_t raw_edges = tach_raw_edges;
+  const uint32_t sum_us = tach_interval_sum_us;
+  const uint16_t count = tach_interval_count;
+  tach_interval_sum_us = 0;
+  tach_interval_count = 0;
   interrupts();
   const uint32_t delta = edges - last_rpm_edges;
+  const uint32_t raw_delta = raw_edges - last_rpm_raw;
   last_rpm_edges = edges;
+  last_rpm_raw = raw_edges;
   last_rpm_ms = now;
-  // RPM = 60 / (PPR × время между переходами). Здесь время — окно замера:
-  // delta переходов за elapsed мс, значит 60·delta·1000/(PPR·elapsed); в
-  // десятых долях (rpm_x10) — 600000·delta/(PPR·elapsed).
-  rpm_x10 = (uint32_t)(((uint64_t)delta * 600000ULL) /
-                       ((uint64_t)elapsed * (uint64_t)DRIVE_TACH_PPR));
+  // Сколько переходов приходит в секунду. Это же число — паспортное «сколько
+  // импульсов на оборот» при вращении ровно один оборот в секунду, поэтому оно
+  // уходит в телеметрию полем hz=: по нему видно, тот ли провод на D19.
+  tach_hz = (uint32_t)(((uint64_t)raw_delta * 1000ULL) / (uint64_t)elapsed);
+  // Обороты — по среднему интервалу между переходами: RPM = 60/(PPR·t).
+  // В десятых долях, t = sum/count мкс: 600000000·count/(PPR·sum).
+  uint32_t rpm = 0;
+  if (count >= 2 && sum_us > 0) {
+    rpm = (uint32_t)(((uint64_t)600000000ULL * (uint64_t)count) /
+                     ((uint64_t)DRIVE_TACH_PPR * (uint64_t)sum_us));
+  } else if (delta > 0) {
+    // Совсем медленное вращение: интервалов ещё не набралось, считаем по окну
+    // (delta переходов за elapsed мс), в десятых долях — 600000·delta/(PPR·окно).
+    rpm = (uint32_t)(((uint64_t)delta * 600000ULL) /
+                     ((uint64_t)elapsed * (uint64_t)DRIVE_TACH_PPR));
+  }
+  // Правдоподобие: выше DRIVE_TACH_MAX_RPM_X10 колесо физически не крутится.
+  // Значит, на линии «SC» помеха — оборотов не показываем и честно это
+  // помечаем (tach=0), а регулятор скорости держит импульс вслепую.
+  if (rpm > DRIVE_TACH_MAX_RPM_X10) {
+    if (tach_trusted) {
+      note(PSTR("тахометр: %lu имп/с — не обороты, а помеха. Проверьте провод SC на D19"),
+           (unsigned long)tach_hz);
+    }
+    rpm = 0;
+    tach_trusted = false;
+  } else {
+    tach_trusted = true;
+  }
+  rpm_x10 = rpm;
   // Ограничитель скорости шагает вместе с замером оборотов (раз в 500 мс), а не
   // на каждом проходе loop(): иначе импульс срезался бы за микросекунды.
   updateSpeedGovernor();
@@ -1699,6 +1786,12 @@ void printHelp() {
        (unsigned)DRIVE_MAX_KMH, (unsigned)DRIVE_TACH_PPR);
 }
 
+// tach=1 — обороты с тахометра можно считать правдой; tach=0 — сигнала нет или
+// он выглядит помехой (см. updateRpm): экран тогда пишет «rpm нет».
+int tachTrustedFlag() {
+  return tach_trusted ? 1 : 0;
+}
+
 // Телеметрия не содержит роли колеса: порт назначает оператор в программе.
 void appendTelemetry() {
   const uint16_t status = moduleStatus();
@@ -1715,14 +1808,15 @@ void appendTelemetry() {
   // ppr — переходов тахометра на оборот (свойство драйвера: 90), kmh — потолок
   // скорости прошивки в десятых долях км/ч.
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u rpm=%s drive=%d fw=%u pot=%d pm=%d tach=%d dmax=%u us=%u ppr=%u kmh=%u t=%lu\r\n"),
+      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u rpm=%s drive=%d fw=%u pot=%d pm=%d tach=%d dmax=%u us=%u ppr=%u kmh=%u hz=%lu t=%lu\r\n"),
       deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
       (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
       home, (unsigned)((status >> 8) & 0x0F), rpm, (int)drive_percent, (unsigned)FIRMWARE_PROTOCOL,
       (status & STATUS_POT) ? 1 : 0,
       (status & STATUS_POT_MODE_SUPPORTED) ? ((status & STATUS_POT_MODE) ? 1 : 0) : -1,
-      1, (unsigned)DRIVE_MAX_PERCENT, (unsigned)drive_pulse_us, (unsigned)DRIVE_TACH_PPR,
-      (unsigned)(DRIVE_MAX_KMH * 10.0f), (unsigned long)millis());
+      tachTrustedFlag(), (unsigned)DRIVE_MAX_PERCENT, (unsigned)drive_pulse_us,
+      (unsigned)DRIVE_TACH_PPR, (unsigned)(DRIVE_MAX_KMH * 10.0f),
+      (unsigned long)tach_hz, (unsigned long)millis());
   if (n <= 0 || n >= (int)sizeof(line)) return;
   txAppend(line, (uint16_t)n);
 }

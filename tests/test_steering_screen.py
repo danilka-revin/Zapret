@@ -36,6 +36,7 @@ def motor(module, *, angle=0.0, target=None, online=True, homed=True, moving=Fal
         "moving": moving, "calibrating": False,
         "cycling": False, "opto": False, "calibError": 0, "drivePercent": 0, "rpm": 0.0,
         "firmware": 8, "pot": True, "tach": True, "driveMaxPercent": 100, "drivePulseUs": 1500,
+        "tachHz": 90,
     }
 
 
@@ -457,6 +458,10 @@ def test_drive_panel_has_no_settings_at_all(tmp_path):
     # Потолок скорости рядом со шкалой — из телеметрии (kmh=): проценты не
     # обещают километров в час, скорость режет регулятор прошивки.
     assert "не быстрее 5 км/ч" in report["driveStatus"], report["driveStatus"]
+    # В карточке колеса рядом с оборотами видно переходы «SC» в секунду (hz=):
+    # при одном обороте в секунду это и есть число импульсов на оборот.
+    cards = {item["id"]: item for item in report["wheelDrive"]}
+    assert "90 имп/с" in cards["FL"]["output"], cards["FL"]["output"]
 
 
 def test_drive_screen_has_no_drive_config_controls():

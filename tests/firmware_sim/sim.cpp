@@ -1161,23 +1161,34 @@ static void scenario_drive_hardware() {
         "стоп: выходы выключены, тормоз взведён, импульс в нейтрали");
 }
 
+// Переходы тахометра «как на железе»: равномерно за отведённое время. Разом (в
+// одну и ту же микросекунду) их слать нельзя: прошивка отбрасывает дребезг —
+// два перехода ближе 150 мкс физически невозможны. Время двигаем через
+// run_for_ms: заодно тикает loop(), то есть окно замера оборотов (500 мс).
+static void spin_tach(sim::Board* board, int edges, double over_ms) {
+  if (edges <= 0) {
+    sim::run_for_ms(over_ms);
+    return;
+  }
+  const double step_ms = over_ms / (double)edges;
+  for (int i = 0; i < edges; ++i) {
+    sim::run_for_ms(step_ms);
+    if (board->tach_fn) board->tach_fn();
+  }
+}
+
 // Потолок 5 км/ч держится по тахометру: разогналось выше — импульс подрезается,
 // остыло — возвращается, но не выше заказанного.
 static void scenario_speed_governor() {
   boot({&board_fr});
   board_fr.serial.send("z");
   sim::run_for_ms(2);
-  auto spin = [](int edges) {
-    for (int i = 0; i < edges; ++i) {
-      if (board_fr.tach_fn) board_fr.tach_fn();
-    }
-  };
   // Heartbeat + обороты одного окна замера (520 мс > 500 мс). Команду шлём до
   // окна, чтобы watchdog 650 мс не успел погасить тягу.
   auto window = [&](int edges) {
     board_fr.serial.send("t 100");
-    spin(edges);
-    sim::run_for_ms(520);
+    sim::run_for_ms(2);
+    spin_tach(&board_fr, edges, 520);
   };
 
   // Полный ход: 2000 мкс, пока колесо в пределах 5 км/ч.
@@ -1318,40 +1329,68 @@ struct Scenario {
 // Обороты по тахометру SC: драйвер даёт 90 переходов на оборот колеса, то есть
 // RPM = 60 / (90 × время между переходами). Число — свойство драйвера, а не
 // настройка: раньше «ppr» подбирали с экрана, теперь он в прошивке.
+//
+// Обороты считаются по среднему интервалу между переходами «SC», а не по числу
+// переходов за окно: окно 500 мс квантует медленное вращение шагами по 20 %.
+// Заодно это защита от главной жалобы «показывает 3600, а по факту 60»:
+// невозможно частые переходы (помеха, дребезг) больше не превращаются в
+// выдуманные обороты — прошивка честно говорит «нет».
 static void scenario_tach() {
   boot({&board_fr});
   board_fr.serial.send("z");
   sim::run_for_ms(2);
   CHECK(FR::DRIVE_TACH_PPR == 90, "90 переходов на оборот: %u",
         (unsigned)FR::DRIVE_TACH_PPR);
+  CHECK(FR::DRIVE_TACH_MIN_EDGE_US == 150, "дребезг ближе 150 мкс отбрасывается: %u",
+        (unsigned)FR::DRIVE_TACH_MIN_EDGE_US);
 
-  // Импульсы тахометра приходят прерыванием: в симуляции их «прокручивает» тот
-  // же обработчик, что зовёт железо.
-  auto spin = [](int edges) {
-    for (int i = 0; i < edges; ++i) {
-      if (board_fr.tach_fn) board_fr.tach_fn();
-    }
-  };
+  // Один оборот в секунду — это 60 об/мин. Переходы идут через 11,1 мс.
+  spin_tach(&board_fr, 90, 1000);
+  CHECK(FR::rpm_x10 >= 550 && FR::rpm_x10 <= 650,
+        "оборот за секунду — 60 об/мин, а не 3600: rpm_x10=%lu",
+        (unsigned long)FR::rpm_x10);
+  CHECK(FR::tach_hz >= 80 && FR::tach_hz <= 100,
+        "переходов в секунду ≈90 (это и есть число импульсов на оборот): %lu",
+        (unsigned long)FR::tach_hz);
+  CHECK(FR::tach_trusted, "нормальный сигнал — обороты достоверны");
 
-  // Один оборот за окно измерения 0,52 с — это ≈115 об/мин.
-  sim::run_for_ms(300);
-  spin(90);
-  sim::run_for_ms(520);
-  CHECK(FR::rpm_x10 >= 1000 && FR::rpm_x10 <= 1300,
-        "оборот за 0,5 с — это ~115 об/мин, а не тысячи: rpm_x10=%lu",
+  // Два оборота в секунду — ровно вдвое больше оборотов.
+  spin_tach(&board_fr, 180, 1000);
+  CHECK(FR::rpm_x10 >= 1100 && FR::rpm_x10 <= 1300,
+        "два оборота за секунду — ~120 об/мин: rpm_x10=%lu",
         (unsigned long)FR::rpm_x10);
 
-  // Вдвое быстрее — вдвое больше оборотов: 180 переходов за то же окно.
-  spin(180);
-  sim::run_for_ms(520);
-  CHECK(FR::rpm_x10 >= 2000 && FR::rpm_x10 <= 2600,
-        "два оборота за 0,5 с — ~230 об/мин: rpm_x10=%lu", (unsigned long)FR::rpm_x10);
-
   // Нет переходов — нет оборотов (колесо стоит), а не «шум».
-  sim::run_for_ms(520);
-  CHECK(FR::rpm_x10 == 0, "без переходов обороты нулевые: %lu", (unsigned long)FR::rpm_x10);
+  sim::run_for_ms(1100);
+  CHECK(FR::rpm_x10 == 0, "без переходов обороты нулевые: %lu",
+        (unsigned long)FR::rpm_x10);
   CHECK(has(board_fr, "rpm=0.0"), "нулевые обороты в @TLM: %s",
         board_fr.serial.output.c_str());
+
+  // Помеха на линии «SC»: 4000 переходов за 0,3 с — больше 10 000 имп/с, колесо
+  // так не крутится (на полном ходу драйвера — 700). Прошивка не показывает
+  // выдуманные тысячи, а честно говорит «нет» и подсказывает, что смотреть.
+  board_fr.serial.send("t 100");
+  spin_tach(&board_fr, 4000, 300);
+  CHECK(!FR::tach_trusted, "помеха не считается оборотами");
+  CHECK(FR::rpm_x10 == 0, "у помехи оборотов нет: %lu", (unsigned long)FR::rpm_x10);
+  CHECK(has(board_fr, "tach=0"), "в телеметрии честное tach=0: %s",
+        board_fr.serial.output.c_str());
+  CHECK(has(board_fr, "Проверьте провод SC"),
+        "журнал подсказывает проверить провод SC: %s",
+        board_fr.serial.output.c_str());
+  // Без достоверного тахометра скорость держится вслепую: не выше 1600 мкс.
+  CHECK(board_fr.servo_us <= wheel_fr::DRIVE_BLIND_MAX_US,
+        "при недостоверном тахометре импульс не выше %u: %u",
+        (unsigned)wheel_fr::DRIVE_BLIND_MAX_US, (unsigned)board_fr.servo_us);
+  board_fr.serial.send("b");
+  sim::run_for_ms(520);
+
+  // Сигнал вернулся — обороты снова считаются, ограничитель снова работает.
+  spin_tach(&board_fr, 90, 1000);
+  CHECK(FR::tach_trusted, "после помехи нормальный сигнал снова достоверен");
+  CHECK(FR::rpm_x10 >= 550 && FR::rpm_x10 <= 650,
+        "и снова 60 об/мин: %lu", (unsigned long)FR::rpm_x10);
 }
 
 static const Scenario SCENARIOS[] = {

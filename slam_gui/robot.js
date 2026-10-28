@@ -3248,6 +3248,10 @@
     const pulseUs = motor && motor.drivePulseUs != null ? Number(motor.drivePulseUs) : null;
     const tach = motor ? motor.tach : null;
     const rpm = motor && motor.rpm != null ? Number(motor.rpm) : null;
+    // Переходов «SC» в секунду: при одном обороте в секунду это и есть число
+    // импульсов на оборот. Экран показывает их рядом с оборотами — по этому
+    // числу видно, что провод тахометра на D19 и что прошивка считает верно.
+    const tachHz = motor && motor.tachHz != null ? Number(motor.tachHz) : null;
     if (slider) slider.disabled = !canDrive;
     if (back) back.disabled = !canDrive;
     if (forward) forward.disabled = !canDrive;
@@ -3272,8 +3276,9 @@
     if (outputEl) {
       const parts = [];
       if (pulseUs != null) parts.push('ШИМ ' + pulseUs + ' мкс');
-      if (tach === false) parts.push('rpm нет');
+      if (tach === false) parts.push('обороты недостоверны — проверьте провод SC');
       else if (rpm != null) parts.push(Math.round(rpm) + ' об/мин');
+      if (tachHz != null) parts.push(tachHz + ' имп/с');
       outputEl.textContent = parts.length ? parts.join(' · ') : '—';
     }
   }
