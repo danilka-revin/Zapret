@@ -35,7 +35,7 @@ def motor(module, *, angle=0.0, target=None, online=True, homed=True, moving=Fal
         "angle": angle, "targetAngle": angle if target is None else target,
         "moving": moving, "calibrating": False,
         "cycling": False, "opto": False, "calibError": 0, "drivePercent": 0, "rpm": 0.0,
-        "firmware": 8, "pot": True, "tach": True, "driveMaxPercent": 100, "drivePulseUs": 1500,
+        "firmware": 8, "pot": True, "tach": True, "driveMaxPercent": 30, "drivePulseUs": 1500,
         "tachHz": 90,
     }
 
@@ -85,7 +85,7 @@ def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_re
             "manualZero": True, "limitDeg": limit,
         },
         "drive": {"available": available, "canDrive": can_drive, "reason": drive_reason,
-                  "maxPercent": 100, "maxKmh": 5.0, "commandedPercent": 0, "active": False,
+                  "maxPercent": 30, "commandedPercent": 0, "active": False,
                   "individual": True, "commandedModules": {},
                   "perModule": per_module if per_module is not None else per_module_state(),
                   "reportedPulse": {}, "alignmentToleranceDeg": 2.5,
@@ -139,7 +139,7 @@ def test_each_wheel_card_has_its_own_drive_controls(tmp_path):
     assert sorted(cards) == MODULES
     # Все колёса на связи и с нулём — кнопки доступны, ползунок тоже.
     assert all(not item["backDisabled"] and not item["forwardDisabled"] for item in cards.values())
-    assert all(item["sliderMax"] == "100" for item in cards.values())
+    assert all(item["sliderMax"] == "30" for item in cards.values())
     assert all(item["state"] == "стоит" for item in cards.values())
 
 
@@ -346,7 +346,7 @@ def test_drive_works_at_any_steering_angle(tmp_path):
     assert [item["percent"] for item in report["drives"]][0] == 8
     assert report["driveStatus"].startswith("Готово") or "Движение включено" in report["driveStatus"]
     # Кнопки не серые: ехать можно, предупреждение — словами.
-    assert report["driveSpeedMax"] == "100"
+    assert report["driveSpeedMax"] == "30"
     assert all(not item["stopDisabled"] for item in report["wheelDrive"])
     assert "под углом" in report["driveStatus"] and "12,5" in report["driveStatus"]
 
@@ -453,11 +453,9 @@ def test_drive_panel_has_no_settings_at_all(tmp_path):
     assert report["driveCfgSent"] == []
     assert "driveCfg" not in report
     assert report["renderErrors"] == []
-    # Предел тяги на экране — тот, что прислала плата (100 % из прошивки).
-    assert report["driveSpeedMax"] == "100"
-    # Потолок скорости рядом со шкалой — из телеметрии (kmh=): проценты не
-    # обещают километров в час, скорость режет регулятор прошивки.
-    assert "не быстрее 5 км/ч" in report["driveStatus"], report["driveStatus"]
+    # Предел тяги на экране — тот, что прислала плата (30 % из прошивки).
+    assert report["driveSpeedMax"] == "30"
+    assert "%" in report["driveStatus"]
     # В карточке колеса рядом с оборотами видно переходы «SC» в секунду (hz=):
     # при одном обороте в секунду это и есть число импульсов на оборот.
     cards = {item["id"]: item for item in report["wheelDrive"]}

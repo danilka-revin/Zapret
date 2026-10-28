@@ -114,14 +114,17 @@ static bool has(const sim::Board& board, const char* text) {
 }
 
 // Выход на драйвер RioRand ZS-Z11H — «серво»-импульс 50 Гц на входе «P»:
-// 1500 мкс — мотор не тянет, 2000 мкс — верхний ход прошивки (5 км/ч).
-// t 8 → 1500 + 8·500/100 = 1540 мкс, t 100 → 2000 мкс.
+// 1500 мкс — мотор не тянет, 2000 мкс — полный ход шкалы. Предел прошивки —
+// 30 %, то есть 1650 мкс: выше плата команду не берёт.
+// t 8 → 1500 + 8·500/100 = 1540 мкс, t 30 → 1650 мкс.
 static int drive_pulse_for(int percent) {
   if (percent <= 0) return 1500;
   return 1500 + (percent * 500 + 50) / 100;
 }
 static const int DRIVE_PULSE_8 = drive_pulse_for(8);
 static const int DRIVE_PULSE_10 = drive_pulse_for(10);
+static const int DRIVE_PULSE_30 = drive_pulse_for(30);
+static const int DRIVE_PULSE_MAX = drive_pulse_for(30);
 
 // Стоит ли колесо (нейтраль 1500 мкс) или едет.
 static bool drive_idle(const sim::Board& board) { return board.servo_us <= 1501; }
@@ -1072,15 +1075,13 @@ static void scenario_drive_hardware() {
         board_fr.serial.output.c_str());
   CHECK(has(board_fr, "us=1500"), "в @TLM импульс покоя: %s",
         board_fr.serial.output.c_str());
-  CHECK(has(board_fr, "kmh=50"), "в @TLM потолок 5 км/ч: %s",
+  CHECK(has(board_fr, "dmax=30"), "в @TLM предел тяги 30 %: %s",
         board_fr.serial.output.c_str());
-  CHECK((int)wheel_fr::DRIVE_MAX_PERCENT == 100, "предел тяги — 100 %: %u",
+  CHECK((int)wheel_fr::DRIVE_MAX_PERCENT == 30, "предел тяги — 30 %: %u",
         (unsigned)wheel_fr::DRIVE_MAX_PERCENT);
-  CHECK((int)wheel_fr::DRIVE_MAX_KMH == 5, "потолок скорости — 5 км/ч: %u",
-        (unsigned)wheel_fr::DRIVE_MAX_KMH);
-  // 5 км/ч при колесе 216 мм — это 122,8 об/мин = 1228 в десятых.
-  CHECK(wheel_fr::DRIVE_MAX_RPM_X10 == 1228, "потолок в об/мин: %lu",
-        (unsigned long)wheel_fr::DRIVE_MAX_RPM_X10);
+  // Предел тяги в микросекундах: 1500 + 500·30/100 = 1650.
+  CHECK(wheel_fr::drivePulseFor(30) == 1650, "30 % — это 1650 мкс: %u",
+        (unsigned)wheel_fr::drivePulseFor(30));
 
   // Драйвер получает серво-импульс 50 Гц, а не скважность регистром.
   CHECK(board_fr.servo_pin == 3, "импульс идёт на D3: %u", (unsigned)board_fr.servo_pin);
@@ -1095,18 +1096,30 @@ static void scenario_drive_hardware() {
   CHECK(has(board_fr, pulse_frame), "импульс виден в @TLM: %s",
         board_fr.serial.output.c_str());
 
-  // Полный предел — верхний импульс прошивки.
+  // Полный предел прошивки — 30 % шкалы, то есть 1650 мкс.
   board_fr.serial.send("b");
   sim::run_for_ms(2);
-  board_fr.serial.send("t 100");
+  board_fr.serial.send("t 30");
   sim::run_for_ms(2);
-  CHECK(board_fr.servo_us == 2000, "t 100 (предел) → 2000 мкс: %u",
-        (unsigned)board_fr.servo_us);
+  CHECK(board_fr.servo_us == DRIVE_PULSE_MAX, "t 30 (предел) → %d мкс: %u",
+        DRIVE_PULSE_MAX, (unsigned)board_fr.servo_us);
 
-  // Весь диапазон: процент тяги = процент хода импульса, 1 % … 100 %.
+  // Выше порога плата команду не берёт и гасит выход: 31 % … 100 %.
+  for (int percent = 31; percent <= 100; ++percent) {
+    char command[12];
+    snprintf(command, sizeof(command), "t %d", percent);
+    board_fr.serial.send("t 30");
+    sim::run_for_ms(2);
+    board_fr.serial.send(command);
+    sim::run_for_ms(2);
+    CHECK(drive_idle(board_fr), "t %d выше порога 30 %% — выход погашен: %u",
+          percent, (unsigned)board_fr.servo_us);
+  }
+
+  // Весь рабочий диапазон: процент тяги = процент хода импульса, 1 % … 30 %.
   {
     int previous = -1;
-    for (int percent = 1; percent <= 100; ++percent) {
+    for (int percent = 1; percent <= 30; ++percent) {
       char command[12];
       snprintf(command, sizeof(command), "t %d", percent);
       board_fr.serial.send(command);
@@ -1118,17 +1131,17 @@ static void scenario_drive_hardware() {
             (int)board_fr.servo_us, previous);
       previous = board_fr.servo_us;
     }
-    CHECK(previous == 2000, "100 % — это 2000 мкс: %d", previous);
+    CHECK(previous == DRIVE_PULSE_MAX, "30 % — это %d мкс: %d", DRIVE_PULSE_MAX, previous);
   }
 
   // Назад — тот же импульс, только другой уровень DIR.
   board_fr.serial.send("b");
   sim::run_for_ms(2);
   const uint8_t forward_dir = board_fr.level[4];
-  board_fr.serial.send("t -50");
+  board_fr.serial.send("t -30");
   sim::run_for_ms(2);
-  CHECK(board_fr.servo_us == drive_pulse_for(50) && board_fr.level[4] != forward_dir,
-        "t -50: импульс как у +50 (%u), DIR перевёрнут", (unsigned)board_fr.servo_us);
+  CHECK(board_fr.servo_us == DRIVE_PULSE_MAX && board_fr.level[4] != forward_dir,
+        "t -30: импульс как у +30 (%u), DIR перевёрнут", (unsigned)board_fr.servo_us);
   board_fr.serial.send("b");
   sim::run_for_ms(2);
 
@@ -1177,55 +1190,49 @@ static void spin_tach(sim::Board* board, int edges, double over_ms) {
   }
 }
 
-// Потолок 5 км/ч держится по тахометру: разогналось выше — импульс подрезается,
-// остыло — возвращается, но не выше заказанного.
-static void scenario_speed_governor() {
+// Порог тяги 30 %: скорость задаётся прямо импульсом (1500…1650 мкс), а не
+// регулятором по тахометру. Выше порога команда отклоняется, выход гаснет.
+static void scenario_drive_threshold() {
   boot({&board_fr});
   board_fr.serial.send("z");
   sim::run_for_ms(2);
-  // Heartbeat + обороты одного окна замера (520 мс > 500 мс). Команду шлём до
-  // окна, чтобы watchdog 650 мс не успел погасить тягу.
-  auto window = [&](int edges) {
-    board_fr.serial.send("t 100");
-    sim::run_for_ms(2);
-    spin_tach(&board_fr, edges, 520);
-  };
+  CHECK(wheel_fr::DRIVE_MAX_PERCENT == 30, "порог тяги — 30 %%, а не %u",
+        (unsigned)wheel_fr::DRIVE_MAX_PERCENT);
 
-  // Полный ход: 2000 мкс, пока колесо в пределах 5 км/ч.
+  // Полный ход прошивки — 30 % шкалы, 1650 мкс. Пока колесо крутится, импульс
+  // не меняется: тахометр на тягу больше не влияет.
+  board_fr.serial.send("t 30");
+  sim::run_for_ms(2);
+  CHECK(board_fr.servo_us == DRIVE_PULSE_MAX, "t 30 → %d мкс: %u",
+        DRIVE_PULSE_MAX, (unsigned)board_fr.servo_us);
+  // Пока колесо «крутится быстро», heartbeat (t 30) продолжается каждые 200 мс:
+  // импульс обязан остаться 1650 мкс, никакой подрезки по оборотам нет.
+  for (int i = 0; i < 3; ++i) {
+    board_fr.serial.send("t 30");
+    spin_tach(&board_fr, 150, 200);       // 750 имп/с — «очень быстро»
+  }
+  CHECK(board_fr.servo_us == DRIVE_PULSE_MAX,
+        "обороты выше любых — импульс не подрезается: %u", (unsigned)board_fr.servo_us);
+  board_fr.serial.send("t 30");
+  CHECK(board_fr.servo_us == DRIVE_PULSE_MAX, "и не меняется от оборотов: %u",
+        (unsigned)board_fr.servo_us);
+
+  // Выше порога — отказ и нейтраль: 31 % и 100 % одинаково не берутся.
+  board_fr.serial.send("t 31");
+  sim::run_for_ms(2);
+  CHECK(drive_idle(board_fr), "t 31 — отказ, нейтраль: %u", (unsigned)board_fr.servo_us);
   board_fr.serial.send("t 100");
   sim::run_for_ms(2);
-  CHECK(board_fr.servo_us == 2000, "полный ход начинается с 2000 мкс: %u",
-        (unsigned)board_fr.servo_us);
+  CHECK(drive_idle(board_fr), "t 100 — отказ, нейтраль: %u", (unsigned)board_fr.servo_us);
 
-  // Колесо раскрутилось сильнее потолка: 5 оборотов за окно 0,52 с ≈ 577 об/мин.
-  window(5 * 90);
-  CHECK(FR::rpm_x10 > wheel_fr::DRIVE_MAX_RPM_X10, "обороты выше потолка: %lu",
-        (unsigned long)FR::rpm_x10);
-  CHECK(board_fr.servo_us == 1980, "импульс подрезан на один шаг: %u",
-        (unsigned)board_fr.servo_us);
-
-  // Ещё окна с теми же оборотами — подрезается дальше, ровно на шаг за окно.
-  window(5 * 90);
-  CHECK(board_fr.servo_us == 1960, "следующее окно — ещё шаг: %u",
-        (unsigned)board_fr.servo_us);
-  for (int i = 0; i < 5; ++i) window(5 * 90);
-  CHECK(board_fr.servo_us < 1960 && board_fr.servo_us >= 1500,
-        "импульс уменьшается, пока не уложится: %u", (unsigned)board_fr.servo_us);
-
-  // Колесо замедлилось — прошивка возвращает импульс к заказанному, плавно.
-  const uint16_t slowed = board_fr.servo_us;
-  for (int i = 0; i < 6; ++i) window(0);
-  CHECK(board_fr.servo_us > slowed && board_fr.servo_us <= 2000,
-        "без оборотов импульс возвращается: %u после %u",
-        (unsigned)board_fr.servo_us, (unsigned)slowed);
-
-  // Стоп обнуляет и подрезку: следующая команда снова с полного импульса.
-  board_fr.serial.send("b");
+  // Отрицательный предел — тот же: −30 % можно, −31 % нельзя.
+  board_fr.serial.send("t -30");
   sim::run_for_ms(2);
-  board_fr.serial.send("t 100");
+  CHECK(board_fr.servo_us == DRIVE_PULSE_MAX, "t -30 → %d мкс: %u",
+        DRIVE_PULSE_MAX, (unsigned)board_fr.servo_us);
+  board_fr.serial.send("t -31");
   sim::run_for_ms(2);
-  CHECK(board_fr.servo_us == 2000, "после стопа предел сброшен: %u",
-        (unsigned)board_fr.servo_us);
+  CHECK(drive_idle(board_fr), "t -31 — отказ, нейтраль: %u", (unsigned)board_fr.servo_us);
   board_fr.serial.send("b");
   sim::run_for_ms(2);
 }
@@ -1370,7 +1377,8 @@ static void scenario_tach() {
   // Помеха на линии «SC»: 4000 переходов за 0,3 с — больше 10 000 имп/с, колесо
   // так не крутится (на полном ходу драйвера — 700). Прошивка не показывает
   // выдуманные тысячи, а честно говорит «нет» и подсказывает, что смотреть.
-  board_fr.serial.send("t 100");
+  // На тягу это не влияет: импульс идёт прямо из процента команды.
+  board_fr.serial.send("t 30");
   spin_tach(&board_fr, 4000, 300);
   CHECK(!FR::tach_trusted, "помеха не считается оборотами");
   CHECK(FR::rpm_x10 == 0, "у помехи оборотов нет: %lu", (unsigned long)FR::rpm_x10);
@@ -1379,14 +1387,13 @@ static void scenario_tach() {
   CHECK(has(board_fr, "Проверьте провод SC"),
         "журнал подсказывает проверить провод SC: %s",
         board_fr.serial.output.c_str());
-  // Без достоверного тахометра скорость держится вслепую: не выше 1600 мкс.
-  CHECK(board_fr.servo_us <= wheel_fr::DRIVE_BLIND_MAX_US,
-        "при недостоверном тахометре импульс не выше %u: %u",
-        (unsigned)wheel_fr::DRIVE_BLIND_MAX_US, (unsigned)board_fr.servo_us);
+  // Помеха не трогает тягу: импульс остаётся тем, что просили (30 % → 1650 мкс).
+  CHECK(board_fr.servo_us == DRIVE_PULSE_MAX,
+        "помеха на тахометре не меняет импульс: %u", (unsigned)board_fr.servo_us);
   board_fr.serial.send("b");
   sim::run_for_ms(520);
 
-  // Сигнал вернулся — обороты снова считаются, ограничитель снова работает.
+  // Сигнал вернулся — обороты снова считаются, порог тяги ни при чём.
   spin_tach(&board_fr, 90, 1000);
   CHECK(FR::tach_trusted, "после помехи нормальный сигнал снова достоверен");
   CHECK(FR::rpm_x10 >= 550 && FR::rpm_x10 <= 650,
@@ -1430,7 +1437,7 @@ static const Scenario SCENARIOS[] = {
     {"pot_slope_survives_reboot", scenario_pot_slope_survives_reboot},
     {"drive_hardware", scenario_drive_hardware},
     {"drive_one_wheel", scenario_drive_one_wheel},
-    {"speed_governor", scenario_speed_governor},
+    {"drive_threshold", scenario_drive_threshold},
     {"mirrored_wheels", scenario_mirrored_wheels},
     {"tach", scenario_tach},
 };
