@@ -142,11 +142,20 @@ def test_drive_uses_a_servo_pulse_and_a_sixty_rpm_scale():
     assert int(_const(text, "DRIVE_MAX_RPM_X10")) == 600
     assert _const(text, "DRIVE_RPM_X10_PER_PERCENT") == "DRIVE_MAX_RPM_X10 / DRIVE_MAX_PERCENT"
     assert 600 // 30 == 20                              # 1 % = 2 об/мин
-    # Регулятор ищет импульс только в узком коридоре над нейтралью: у драйвера
-    # ~100 об/мин на 1 мкс, поэтому 1540 мкс — уже страховочный потолок.
-    assert int(_const(text, "DRIVE_PULSE_CEILING_US")) == 1540
-    assert 1500 + (30 * 500 + 50) // 100 == 1650        # прежний «30 % = 1650 мкс»
-    assert int(_const(text, "DRIVE_PULSE_CEILING_US")) < 1650
+    # «P» управляется скважностью: 0 % — мотор не тянет, 100 % — полный ход.
+    # Servo на Mega даёт ровно 50 Гц, поэтому импульс 1…2 мс — это 5…10 %
+    # скважности; «нейтралью» 1500 мкс больше не считается, регулятор ищет
+    # рабочую точку от минимума.
+    assert int(_const(text, "DRIVE_MIN_PULSE_US")) == 1000
+    assert _const(text, "DRIVE_PULSE_CEILING_US") == "DRIVE_FULL_US"
+    assert int(_const(text, "DRIVE_FULL_US")) == 2000
+    assert int(_const(text, "DRIVE_SEEK_MAX_US")) == 1600
+    # Момент трогания прошивка находит сама, шагами по 20 мкс, и запоминает.
+    assert int(_const(text, "DRIVE_SEEK_STEP_X10")) == 200
+    assert "drive_start_us" in code and "drive_seeking" in code
+    # Ниже момента трогания не опускается, а шаг контура уменьшает на каждой
+    # остановке — иначе у резкого драйвера получались бы рывки.
+    assert "drive_step_cap" in code and "drive_good_x10" in code
 
     # Контур замкнут на тахометр: регулятор правит импульс по оборотам.
     assert "void updateDriveSpeed()" in code
@@ -235,9 +244,9 @@ def test_firmware_has_no_usb_role_discovery():
     # Legacy addressed monitor commands remain compatible; the application
     # sends local commands to the manually selected port.
     assert 'classifyModuleToken' in text
-    # v8 — драйвер ZS-Z11H: «серво»-импульс на D3 (вход «P»), линия STOP на D2,
-    # тахометр «SC» на D19, порог тяги 30 % и без настроек привода.
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '9'
+    # v10 — драйвер ZS-Z11H: ШИМ на D3 (вход «P», управляет скважностью), линия
+    # STOP на D2, тахометр «SC» на D19, регулятор оборотов и без настроек привода.
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '10'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
@@ -416,7 +425,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 9 and frame["calibError"] == 0
+        assert frame["firmware"] == 10 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] == 0.0
         assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False

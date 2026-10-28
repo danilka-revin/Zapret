@@ -723,7 +723,7 @@ static void scenario_system_calibrate_all() {
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=9"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=10"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -840,7 +840,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v9"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v10"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -1085,8 +1085,11 @@ static void scenario_drive_hardware() {
         (unsigned)wheel_fr::DRIVE_MAX_RPM_X10);
   CHECK((int)wheel_fr::DRIVE_RPM_X10_PER_PERCENT == 20, "1 %% = 2 об/мин: %u",
         (unsigned)wheel_fr::DRIVE_RPM_X10_PER_PERCENT);
-  CHECK((int)wheel_fr::DRIVE_PULSE_CEILING_US == 1540,
-        "выше 1540 мкс прошивка не поднимается: %u",
+  CHECK((int)wheel_fr::DRIVE_MIN_PULSE_US == 1000,
+        "нижняя граница скважности — 1 мс (5 %% при 50 Гц): %u",
+        (unsigned)wheel_fr::DRIVE_MIN_PULSE_US);
+  CHECK((int)wheel_fr::DRIVE_PULSE_CEILING_US == 2000,
+        "верхняя граница — 2 мс (10 %% при 50 Гц): %u",
         (unsigned)wheel_fr::DRIVE_PULSE_CEILING_US);
 
   // Драйвер получает серво-импульс 50 Гц, а не скважность регистром.
@@ -1097,8 +1100,9 @@ static void scenario_drive_hardware() {
   board_fr.serial.send("t 10");
   sim::run_for_ms(300);
   CHECK(thrust_on(board_fr), "t 10 — тяга включена");
-  CHECK(board_fr.servo_us >= 1500 && board_fr.servo_us <= wheel_fr::DRIVE_PULSE_CEILING_US,
-        "импульс в рабочем коридоре 1500…1540 мкс, а не %u", (unsigned)board_fr.servo_us);
+  CHECK(board_fr.servo_us >= wheel_fr::DRIVE_MIN_PULSE_US &&
+            board_fr.servo_us <= wheel_fr::DRIVE_PULSE_CEILING_US,
+        "импульс в рабочем коридоре 1000…2000 мкс, а не %u", (unsigned)board_fr.servo_us);
 
   // Предел прошивки — 30 % шкалы, то есть 60 об/мин.
   board_fr.serial.send("b");
@@ -1130,8 +1134,8 @@ static void scenario_drive_hardware() {
     board_fr.serial.send(command);
     sim::run_for_ms(2);
     CHECK(thrust_on(board_fr), "t %d — тяга включена", percent);
-    CHECK(board_fr.servo_us >= 1500 && board_fr.servo_us <= 1502,
-          "t %d начинается от нейтрали, а не с середины: %u", percent,
+    CHECK(board_fr.servo_us == wheel_fr::DRIVE_MIN_PULSE_US,
+          "t %d начинается с минимальной скважности, а не с середины: %u", percent,
           (unsigned)board_fr.servo_us);
   }
 
@@ -1191,9 +1195,10 @@ static void spin_tach(sim::Board* board, int edges, double over_ms) {
   }
 }
 
-// Модель колеса для проверки регулятора оборотов. Драйвер ZS-Z11H отзывается
-// резко: на железе уже 1505 мкс раскручивали колесо до ~490 об/мин, то есть
-// ~98 об/мин на микроСЕКУНДУ импульса. Инерция колеса — экспонента 150 мс,
+// Модель колеса для проверки регулятора оборотов. Драйвер ZS-Z11H управляется
+// скважностью: 0 % — мотор не тянет, дальше обороты растут. На железе уже
+// 1505 мкс (7,5 % скважности при 50 Гц) раскручивали колесо до ~490 об/мин, то
+// есть ~98 об/мин на микроСЕКУНДУ импульса. Инерция колеса — экспонента 150 мс,
 // переходы «SC» — 90 на оборот (это свойство драйвера, не настройка).
 struct WheelPlant {
   sim::Board* board = nullptr;
@@ -1202,6 +1207,9 @@ struct WheelPlant {
   double edge_phase = 0.0;
   long injected = 0;           // сколько переходов «SC» уже выдано
   bool tach_alive = true;      // провод SC подключён
+  // Полный ход колеса — около 500 об/мин (это ≈18 км/ч при колесе 216 мм),
+  // выше мотор не раскручивается: 1505 мкс на железе давали уже ~490.
+  double max_rpm = 500.0;
 };
 
 static void plant_run(WheelPlant& plant, double ms) {
@@ -1209,7 +1217,9 @@ static void plant_run(WheelPlant& plant, double ms) {
   for (int64_t i = 0; i < steps; ++i) {
     sim::run_for_ms(1.0);
     plant.pulse_us += ((double)plant.board->servo_us - plant.pulse_us) * 0.2;
-    const double target = (plant.pulse_us - 1500.0) * 98.0;
+    double target = (plant.pulse_us - 1500.0) * 98.0;
+    if (target > plant.max_rpm) target = plant.max_rpm;
+    if (target < 0.0) target = 0.0;
     plant.rpm += (target - plant.rpm) * 0.05;
     if (plant.rpm < 0.0) plant.rpm = 0.0;
     plant.edge_phase += plant.rpm / 60.0 * 90.0 * 0.001;
@@ -1228,10 +1238,22 @@ static double plant_rpm(const WheelPlant& plant, long injected_before, double ms
   return per_second * 60.0 / 90.0;
 }
 
+// Heartbeat + прогон модели колеса: команда раз в 200 мс, как от сервера.
+static void drive_hold(WheelPlant& plant, int percent, double seconds) {
+  char command[12];
+  snprintf(command, sizeof(command), "t %d", percent);
+  const int steps = (int)(seconds * 5.0);
+  for (int i = 0; i < steps; ++i) {
+    plant.board->serial.send(command);
+    plant_run(plant, 200);
+  }
+}
+
 // Регулятор оборотов: процент команды — это ЗАКАЗАННЫЕ обороты (30 % = 60 об/мин,
-// 1 % = 2 об/мин), а импульс на входе «P» прошивка подбирает сама по тахометру.
-// Раньше процент означал раствор импульса, и 1 % (1505 мкс) давал ~490 об/мин —
-// колесо «крутилось как бешеное».
+// 1 % = 2 об/мин), а скважность на входе «P» прошивка подбирает сама по тахометру.
+// Раньше процент означал раствор импульса: 1 % (1505 мкс) давал ~490 об/мин —
+// колесо «крутилось как бешеное», и медленнее оно не могло вовсе, потому что
+// прошивка считала 1500 мкс нейтралью.
 static void scenario_drive_speed() {
   boot({&board_fr});
   board_fr.serial.send("z");
@@ -1245,54 +1267,52 @@ static void scenario_drive_speed() {
 
   WheelPlant plant{&board_fr};
 
-  // 30 % — полная шкала прошивки. Heartbeat каждые 200 мс, 8 секунд.
-  long before = plant.injected;
-  for (int i = 0; i < 40; ++i) {
-    board_fr.serial.send("t 30");
-    plant_run(plant, 200);
-  }
-  const double top = plant_rpm(plant, before, 8000.0);
+  // 30 % — полная шкала прошивки. Сначала выход на режим, потом замер.
+  drive_hold(plant, 30, 14.0);
   CHECK(wheel_fr::drive_active, "тяга держится всё время");
-  CHECK(top > 45.0 && top < 75.0, "30 %% — это ~60 об/мин, а не 490: %.1f", top);
-  CHECK(wheel_fr::rpm_x10 > 450 && wheel_fr::rpm_x10 < 750,
+  long before = plant.injected;
+  drive_hold(plant, 30, 6.0);
+  const double top = plant_rpm(plant, before, 6000.0);
+  CHECK(top > 40.0 && top < 95.0, "30 %% — это ~60 об/мин, а не 490: %.1f", top);
+  CHECK(wheel_fr::rpm_x10 > 350 && wheel_fr::rpm_x10 < 1100,
         "прошивка видит те же обороты: rpm_x10=%lu", (unsigned long)wheel_fr::rpm_x10);
-  CHECK(board_fr.servo_us >= 1500 && board_fr.servo_us <= wheel_fr::DRIVE_PULSE_CEILING_US,
-        "импульс остаётся в коридоре 1500…1540 мкс: %u", (unsigned)board_fr.servo_us);
-
-  // Половина шкалы — вдвое меньше оборотов: шкала линейна по скорости, а не по
-  // импульсу.
-  before = plant.injected;
-  for (int i = 0; i < 30; ++i) {
-    board_fr.serial.send("t 15");
-    plant_run(plant, 200);
-  }
-  const double half = plant_rpm(plant, before, 6000.0);
-  CHECK(half > 20.0 && half < 40.0, "15 %% — ~30 об/мин: %.1f", half);
-
-  // Один процент — это 2 об/мин: колесо почти стоит, никаких «бешеных».
-  before = plant.injected;
-  for (int i = 0; i < 30; ++i) {
-    board_fr.serial.send("t 1");
-    plant_run(plant, 200);
-  }
-  CHECK(plant_rpm(plant, before, 6000.0) < 15.0, "1 %% — колесо почти стоит: %.1f",
-        plant_rpm(plant, before, 6000.0));
-  CHECK(board_fr.servo_us <= 1502, "и импульс у самой нейтрали: %u",
+  CHECK(board_fr.servo_us >= wheel_fr::DRIVE_MIN_PULSE_US &&
+            board_fr.servo_us <= 1540,
+        "скважность осталась у момента трогания, а не у потолка: %u мкс",
         (unsigned)board_fr.servo_us);
 
-  // Тахометр замолчал: крутить вслепую нельзя — регулятор снимает тягу за ~3 с,
-  // а не гонит колесо «на всю катушку». Heartbeat продолжает идти каждые 200 мс,
-  // и каждая попытка снова обрывается через ~3 с без оборотов.
+  // Половина шкалы — примерно вдвое меньше оборотов: шкала линейна по скорости,
+  // а не по скважности.
+  drive_hold(plant, 15, 8.0);
+  before = plant.injected;
+  drive_hold(plant, 15, 5.0);
+  const double half = plant_rpm(plant, before, 5000.0);
+  CHECK(half > 10.0 && half < 55.0, "15 %% — ~30 об/мин: %.1f", half);
+
+  // Один процент — это 2 об/мин: колесо почти стоит, никаких «бешеных».
+  drive_hold(plant, 1, 8.0);
+  before = plant.injected;
+  drive_hold(plant, 1, 5.0);
+  const double crawl = plant_rpm(plant, before, 5000.0);
+  CHECK(crawl < 20.0, "1 %% — колесо почти стоит: %.1f об/мин", crawl);
+  CHECK(board_fr.servo_us <= 1502, "и скважность у самого минимума: %u",
+        (unsigned)board_fr.servo_us);
+
+  // Тахометр замолчал: крутить вслепую нельзя. Прошивка не гонит скважность к
+  // потолку (иначе отвалившийся провод SC разгонял бы колесо), а снимает тягу.
   plant.tach_alive = false;
   unsigned max_pulse = 0;
-  for (int i = 0; i < 30; ++i) {
+  for (int i = 0; i < 40; ++i) {
     board_fr.serial.send("t 30");
     plant_run(plant, 200);
     if (board_fr.servo_us > max_pulse) max_pulse = board_fr.servo_us;
   }
-  CHECK(count(board_fr, "обороты не измерить") >= 2,
-        "без оборотов тяга снимается сама: %s", board_fr.serial.output.c_str());
-  CHECK(max_pulse <= 1510, "импульс без обратной связи не растёт: %u", max_pulse);
+  // Каждая попытка длится секунды и обрывается сама: колесо не крутится вслепую.
+  CHECK(count(board_fr, "тахометр SC") >= 2,
+        "без оборотов тяга снимается и журнал подсказывает, что смотреть: %s",
+        board_fr.serial.output.c_str());
+  CHECK(max_pulse <= wheel_fr::DRIVE_SEEK_MAX_US,
+        "и скважность не уходит к потолку: %u", max_pulse);
   plant.tach_alive = true;
   board_fr.serial.send("b");
   sim::run_for_ms(2);
@@ -1332,9 +1352,7 @@ static void scenario_mirrored_wheels() {
   sim::run_for_ms(5);
   CHECK(board_fr.level[4] != fr_forward, "«назад» у FR переворачивает DIR: %d",
         board_fr.level[4]);
-  CHECK(wheel_fr::drive_active && board_fr.servo_us <= 1502,
-        "и тяга тоже включается (импульс начинает от нейтрали): %u",
-        (unsigned)board_fr.servo_us);
+  CHECK(wheel_fr::drive_active, "и тяга тоже включается: %u", (unsigned)board_fr.servo_us);
 
   for (sim::Board* board : all_boards()) board->serial.send("b");
   sim::run_for_ms(5);

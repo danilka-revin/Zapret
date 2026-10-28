@@ -712,7 +712,7 @@ def _drive_frame(module, *, tach=1, dmax=30, us=1500, deg=0.0, drive=0, ppr=90, 
     hz — сколько переходов «SC» приходит в секунду (диагностика провода).
     """
     return ("@TLM mod=%s deg=%.2f tgt=0.00 moving=0 cal=1 cycle=0 calib=0 rpm=%.1f "
-            "drive=%d fw=9 pot=1 pm=1 tach=%d dmax=%d us=%d ppr=%d hz=%d"
+            "drive=%d fw=10 pot=1 pm=1 tach=%d dmax=%d us=%d ppr=%d hz=%d"
             % (module, deg, rpm, drive, tach, dmax, us, ppr, hz))
 
 
@@ -779,7 +779,7 @@ def test_master_telemetry_parses_the_wheel_driver_fields():
     """
     backend = _load_backend()
     frame = backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=9 tach=1 "
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=10 tach=1 "
         "dmax=30 us=1540 ppr=90 hz=90 t=1")
     assert frame["tach"] is True
     # hz= — переходов «SC» в секунду: при одном обороте в секунду это и есть ppr.
