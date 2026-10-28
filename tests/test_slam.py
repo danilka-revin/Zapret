@@ -452,8 +452,12 @@ def test_master_telemetry_parses_bldc_rpm_and_drive_percent():
         "@TLM mod=FL deg=0.00 tgt=0.00 moving=0 cal=1 cycle=0 calib=0 opto=0 rpm=245.5 drive=-12 t=42")
     assert frame["rpm"] == 245.5
     assert frame["drivePercent"] == -12
+    # Предел прошивки — 35 %: 36 % плата принять не может, а без dmax= в кадре
+    # действует тот же предел (старая прошивка знала только свои 35 %).
     assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=21") is None
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=36") is None
+    assert backend.parse_master_line(
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=35") is not None
 
 
 def test_master_source_drive_works_at_any_angle_and_prioritizes_stop():
@@ -699,19 +703,23 @@ def test_pot_mode_requires_all_boards_and_idle_telemetry():
 
 
 # --------------------------- гибкая настройка тяги --------------------------- #
-def _drive_frame(module, *, tach=1, dmax=20, trim=1500, span=500, us=1500, stp=1,
-                 brk=1, dr=0, deg=0.0, drive=0, ppr=1, rpm=0.0):
+def _drive_frame(module, *, tach=1, dmax=35, duty=0, deg=0.0, drive=0, ppr=90, rpm=0.0):
+    """Строка @TLM прошивки v7: драйвер ZS-Z11H, настраивать нечего.
+
+    duty — фактическая скважность ШИМ на входе «P» (0…255), ppr — сколько
+    переходов выхода «SC» приходится на оборот колеса (у драйвера 90).
+    """
     return ("@TLM mod=%s deg=%.2f tgt=0.00 moving=0 cal=1 cycle=0 calib=0 rpm=%.1f "
-            "drive=%d fw=6 pot=1 pm=1 tach=%d dmax=%d trim=%d span=%d ppr=%d brk=%d stp=%d dir=%d us=%d"
-            % (module, deg, rpm, drive, tach, dmax, trim, span, ppr, brk, stp, dr, us))
+            "drive=%d fw=7 pot=1 pm=1 tach=%d dmax=%d duty=%d ppr=%d"
+            % (module, deg, rpm, drive, tach, dmax, duty, ppr))
 
 
-def test_wheel_ports_wait_until_the_firmware_is_flashed():
-    """Автопрошивка: порты колёс не открываются, пока идёт прошивка плат.
+def test_wheel_ports_are_released_only_for_a_manual_flash():
+    """Порты колёс отпускает только ручная прошивка, и только на время.
 
-    arduino-cli получает «порт занят», если программа уже читает USB. Поэтому
-    источник создаётся «на паузе»: экран работает, колёса подключаются после
-    прошивки.
+    Автоматической прошивки больше нет: при старте источник сразу открывает
+    порты, а ``suspend_ports``/``resume_ports`` нужны кнопке «Прошить модули» —
+    avrdude не может открыть порт, который читает программа.
     """
     import time
 
@@ -720,15 +728,20 @@ def test_wheel_ports_wait_until_the_firmware_is_flashed():
     backend.MasterSource.RESCAN_S = 0.05
     backend.MasterSource.RETRY_S = 0.02      # без колёс поток иначе спит 2 с
     try:
-        src = backend.MasterSource(module_ports={}, hold_ports=True)
+        src = backend.MasterSource(module_ports={})
         opened = []
         src._open_new_links = lambda: opened.append(1)
+        assert src.ports_held is False, "при старте порты открываются сразу"
+        time.sleep(0.2)
+        assert opened, "без прошивки колёса подключаются сами"
+        opened.clear()
+        src.suspend_ports(wait_s=0.0)
         assert src.ports_held is True
-        time.sleep(0.3)
+        time.sleep(0.2)
         assert opened == [], "пока идёт прошивка, порты открываться не должны"
         src.resume_ports()
         assert src.ports_held is False
-        time.sleep(0.3)
+        time.sleep(0.2)
         assert opened, "после прошивки колёса должны подключаться сами"
         src._stop = True
     finally:
@@ -736,117 +749,48 @@ def test_wheel_ports_wait_until_the_firmware_is_flashed():
         backend.MasterSource.RETRY_S = original_retry
 
 
-def test_firmware_flash_runs_at_kiosk_startup_and_releases_the_ports():
-    """Автопрошивку выполняет бортовой экран; колёса подключаются после неё.
+def test_nothing_starts_a_flash_by_itself():
+    """Ни старт экрана, ни обновление с GitHub платы не прошивают."""
+    from robot_control import firmware_flash
+    from robot_control import slam as slam_module
 
-    Запускается она всегда (скрипт сам решает, есть ли что прошивать), но с
-    ``always=True``: так платы получают код и после обычного git pull, а не
-    только по кнопке «Обновить с GitHub».
+    assert not hasattr(slam_module, "_start_firmware_flash")
+    for gone in ("mark_pending", "flash_if_pending", "pending", "clear_pending"):
+        assert not hasattr(firmware_flash, gone), gone
+    # Ручная кнопка остаётся: она запускает прошивку в фоне.
+    assert callable(firmware_flash.start_flash)
+
+
+def test_master_telemetry_parses_the_wheel_driver_fields():
+    """@TLM прошивки v7: тахометр, предел прошивки, скважность ШИМ и ppr.
+
+    Настроек тяги в протоколе больше нет: trim/span/brk/stp/dir/us не
+    приходят и не выдумываются нулями.
     """
-    import time
-
-    from robot_control import firmware_flash
-    from robot_control import slam as slam_module
-
-    original_flash = firmware_flash.flash_if_pending
-    try:
-        calls = []
-        # Подменяем прошивку ДО создания замыкания: имя импортируется внутрь.
-        firmware_flash.flash_if_pending = lambda *a, **k: calls.append(
-            "flash" if k.get("always") else "flash?")
-        start = slam_module._start_firmware_flash()
-        assert callable(start)
-
-        class Source:
-            def resume_ports(self):
-                calls.append("resume")
-
-        start(Source())
-        for _ in range(100):
-            if "resume" in calls:
-                break
-            time.sleep(0.02)
-        assert calls == ["flash", "resume"]
-    finally:
-        firmware_flash.flash_if_pending = original_flash
-
-
-def test_firmware_flash_result_goes_to_the_screen_journal():
-    """Итог прошивки виден на экране, а не только в консоли службы."""
-    import time
-
-    from robot_control import firmware_flash
-    from robot_control import slam as slam_module
-
-    original_flash = firmware_flash.flash_if_pending
-    original_note = slam_module.note_master_status
-    notes = []
-    try:
-        firmware_flash.flash_if_pending = lambda *a, **k: {
-            "ok": True, "code": 0,
-            "output": "[firmware] итог: прошито 4, уже было актуально 0, ошибок 0, "
-                      "без порта 0, нет устройства 0.",
-        }
-        slam_module.note_master_status = lambda level, text: notes.append((level, text))
-
-        class Source:
-            def resume_ports(self):
-                pass
-
-        slam_module._start_firmware_flash()(Source())
-        for _ in range(100):
-            if notes:
-                break
-            time.sleep(0.02)
-        assert notes and notes[0][0] == "ok"
-        assert "автопрошивка" in notes[0][1] and "прошито 4" in notes[0][1]
-    finally:
-        firmware_flash.flash_if_pending = original_flash
-        slam_module.note_master_status = original_note
-
-
-def test_master_telemetry_parses_flexible_drive_configuration():
-    """Прошивка с командой m: тахометр, предел, нейтраль/размах серво-импульса."""
     backend = _load_backend()
     frame = backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=8 fw=6 tach=0 "
-        "dmax=40 trim=1620 span=300 brk=0 stp=1 dir=1 us=1770 t=1")
-    assert frame["tach"] is False
-    assert frame["driveMaxPercent"] == 40
-    assert (frame["driveTrimUs"], frame["driveSpanUs"]) == (1620, 300)
-    assert frame["drivePulseUs"] == 1770
-    assert frame["brake"] is False and frame["stopInput"] is True
-    assert frame["dirReverse"] is True
-    # Импульсов тахометра на оборот: без него «об/мин» врут ровно в ppr раз.
-    assert frame["tachPpr"] is None
-    with_ppr = backend.parse_master_line(
         "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=7 tach=1 "
-        "dmax=40 trim=1500 span=500 ppr=60 brk=1 stp=1 dir=0 us=1500 t=1")
-    assert with_ppr["tachPpr"] == 60 and with_ppr["rpm"] == 60.0
-    assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=0") is None
-    assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=201") is None
-    assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=abc") is None
+        "dmax=35 duty=58 ppr=90 t=1")
+    assert frame["tach"] is True
+    assert frame["driveMaxPercent"] == 35
+    assert frame["driveDuty"] == 58
+    assert frame["tachPpr"] == 90 and frame["rpm"] == 60.0
+    # Старые поля настройки в кадре ничего не значат и не ломают разбор.
+    for gone in ("brake", "stopInput", "driveTrimUs", "driveSpanUs",
+                 "drivePulseUs", "dirReverse"):
+        assert gone not in frame, gone
 
-    # Прошивка без команды m: поля отсутствуют, а не выдуманы нулями.
+    # Прошивка до драйвера ZS-Z11H: полей тяги нет, а не нули.
     legacy = backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=0 fw=4")
-    assert legacy["tach"] is None and legacy["driveTrimUs"] is None
-    assert legacy["driveMaxPercent"] is None and legacy["drivePulseUs"] is None
+    assert legacy["tach"] is None and legacy["driveMaxPercent"] is None
+    assert legacy["driveDuty"] is None and legacy["tachPpr"] is None
 
-    # Мусор и противоречия не превращаются в «настройку по умолчанию».
+    # Мусор и противоречия не превращаются в «значение по умолчанию».
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 tach=7") is None
-    assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 trim=900 span=100") is None
-    assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 trim=1620 span=480") is None  # 2100 мкс
-    assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 trim=1500 span=600") is None  # шире стандарта
-    assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 us=2500") is None
-    assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dmax=101") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dmax=101") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 duty=256") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=0") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=abc") is None
     # Тяга не может превышать собственный предел платы.
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=30 dmax=20") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=30 dmax=50") is not None
@@ -858,8 +802,8 @@ def test_drive_limit_follows_the_plates_and_server_ceiling():
     src = _bare_master_source(backend)
     for module in ("FL", "FR", "RL", "RR"):
         src.feed(_drive_frame(module), now=100.0)
-    assert src.drive_limit_percent(now=100.2) == 20
-    assert src.drive_status(now=100.2)["maxPercent"] == 20
+    assert src.drive_limit_percent(now=100.2) == 35
+    assert src.drive_status(now=100.2)["maxPercent"] == 35
 
     for module in ("FL", "FR", "RL", "RR"):
         src.feed(_drive_frame(module, dmax=50), now=100.0)
@@ -872,27 +816,6 @@ def test_drive_limit_follows_the_plates_and_server_ceiling():
     assert src.drive_limit_percent(now=100.2) == 10
     assert src.drive(30, now=100.3)["reason"] == "drive_limit"
     assert src.drive(30, now=100.3)["limit"] == 10
-
-
-def test_drive_config_is_mixed_when_the_plates_disagree():
-    backend = _load_backend()
-    src = _bare_master_source(backend)
-    for module in ("FL", "FR", "RL"):
-        src.feed(_drive_frame(module), now=100.0)
-    src.feed(_drive_frame("RR", dmax=40, trim=1520, span=300, ppr=60), now=100.0)
-    config = src.drive_config(now=100.2)
-    assert config["supported"] is True and config["mixed"] is True
-    assert config["maxPercent"] is None and config["trimUs"] is None
-    assert config["perModule"]["RR"]["trimUs"] == 1520
-    assert config["perModule"]["RR"]["spanUs"] == 300
-    # Импульсы на оборот — свойство конкретной платы, поэтому в perModule оно
-    # есть всегда, а общее значение пустое, когда платы разошлись.
-    assert config["perModule"]["RR"]["pulsesPerRev"] == 60
-    assert config["perModule"]["FL"]["pulsesPerRev"] == 1
-    assert config["pulsesPerRev"] is None
-    assert config["outputMode"] == "servo"
-    # Смешанный режим — не повод разрешить тягу: общий предел неизвестен.
-    assert src.drive_limit_percent(now=100.2) == backend.MAX_DRIVE_PERCENT
 
 
 def test_individual_drive_targets_only_its_own_wheel():
@@ -916,7 +839,7 @@ def test_individual_drive_targets_only_its_own_wheel():
 
     result = src.drive_module("fl", 8, now=100.2)
     assert result == {"ok": True, "queued": True, "module": "FL", "percent": 8,
-                      "maxPercent": 20}
+                      "maxPercent": 35}
     assert src.commands.get_nowait() == b"t FL 8\n"
     assert src.drive_status(now=100.2)["commandedModules"] == {"FL": 8}
 
@@ -944,8 +867,8 @@ def test_individual_drive_guards():
 
     assert src.drive_module("XX", 8, now=100.2)["reason"] == "invalid_module"
     assert src.drive_module("FL", "abc", now=100.2)["reason"] == "invalid_drive"
-    assert src.drive_module("FL", 21, now=100.2)["reason"] == "drive_limit"
-    assert src.drive_module("FL", 21, now=100.2)["limit"] == 20
+    assert src.drive_module("FL", 36, now=100.2)["reason"] == "drive_limit"
+    assert src.drive_module("FL", 36, now=100.2)["limit"] == 35
     # Своё колесо должно быть на связи, с нулём и стоять.
     src.feed(_drive_frame("RL", deg=0.0).replace("cal=1", "cal=0"), now=100.0)
     assert src.drive_module("RL", 8, now=100.2)["reason"] == "not_homed"
@@ -979,91 +902,21 @@ def test_individual_drive_guards():
     assert full.drive_module("FL", 8, now=100.2)["reason"] == "command_queue_full"
 
 
-def test_module_direction_is_per_wheel_and_guarded():
-    """Сторона вращения — настройка одного колеса, а не всех четырёх.
-
-    Колёса стоят зеркально, поэтому «вперёд» у левого и правого борта — разные
-    DIR. Сервер должен слать «m FL dir 1» только на порт этого колеса, не
-    трогать остальные и не менять направление на ходу.
-    """
+def test_drive_has_no_settings_at_all():
+    """Настройки тяги убраны целиком: ни API, ни команд «m», ни полей в статусе."""
     backend = _load_backend()
     src = _bare_master_source(backend)
-    src.drive_modules = {}
     for module in ("FL", "FR", "RL", "RR"):
         src.feed(_drive_frame(module), now=100.0)
-
-    assert src.set_drive_config("direction", "reverse", "FL", now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m FL dir 1\n"
-    assert src.set_drive_config("direction", "normal", "FL", now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m FL dir 0\n"
-    answer = src.set_drive_config("direction", True, "FR", now=100.2)
-    assert answer["ok"] is True and answer["reverse"] is True and answer["module"] == "FR"
-    assert src.commands.get_nowait() == b"m FR dir 1\n"
-
-    # Некорректные значения и имена отклоняются, а не «примерно применяются».
-    assert src.set_drive_config("direction", "maybe", "FL", now=100.2)["reason"] == "invalid_value"
-    assert src.set_drive_config("direction", "reverse", None, now=100.2)["reason"] == "invalid_module"
-    assert src.set_drive_config("direction", "reverse", "XX", now=100.2)["reason"] == "invalid_module"
-    assert src.commands.empty()
-
-    # Направление меняют у стоящего колеса: реверс DIR под тягой — рывок.
-    assert src.drive_module("FL", 8, now=100.2)["ok"] is True
-    src.commands.get_nowait()
-    assert src.set_drive_config("direction", "reverse", "FL", now=100.2)["reason"] == "module_busy"
-    # ... а соседнее колесо, которое стоит, — можно: у него своя плата.
-    assert src.set_drive_config("direction", "reverse", "FR", now=100.2)["ok"] is True
-    src.commands.get_nowait()
-    assert src.drive_module("FL", 0, now=100.2)["ok"] is True
-    src.commands.get_nowait()
-
-    # Нет свежей телеметрии этого колеса — понятный отказ.
-    assert src.set_drive_config("direction", "reverse", "RL", now=103.5)["reason"] == "module_offline"
-    src.serial_ready.clear()
-    assert src.set_drive_config("direction", "reverse", "FL", now=100.2)["reason"] == "serial_unavailable"
-    src.serial_ready.set()
-
-    # Старая прошивка (без команды m) направление не умеет.
-    legacy = _bare_master_source(backend)
-    legacy.drive_modules = {}
-    for module in ("FL", "FR", "RL", "RR"):
-        legacy.feed("@TLM mod=%s deg=0 tgt=0 moving=0 cal=1 rpm=0 fw=4" % module, now=100.0)
-    assert legacy.set_drive_config("direction", "reverse", "FL",
-                                   now=100.2)["reason"] == "firmware_update_required"
-
-    # Очередь занята — отказ, а не потерянная настройка.
-    full = _bare_master_source(backend, maxsize=1)
-    full.drive_modules = {}
-    for module in ("FL", "FR", "RL", "RR"):
-        full.feed(_drive_frame(module), now=100.0)
-    full.commands.put_nowait(b"w 1\n")
-    assert full.set_drive_config("direction", "reverse", "FL",
-                                 now=100.2)["reason"] == "command_queue_full"
-
-
-def test_drive_status_reports_direction_of_each_wheel():
-    """Экран рисует «обычное/зеркальное» по телеметрии, а не по своей памяти."""
-    backend = _load_backend()
-    src = _bare_master_source(backend)
-    src.drive_modules = {}
-    for module in ("FL", "FR", "RL", "RR"):
-        src.feed(_drive_frame(module, dr=1 if module in ("FL", "RL") else 0), now=100.0)
-
+    assert not hasattr(src, "set_drive_config")
+    assert not hasattr(src, "drive_config")
     status = src.drive_status(now=100.2)
-    assert status["perModule"]["FL"]["dirReverse"] is True
-    assert status["perModule"]["FR"]["dirReverse"] is False
-    assert all(item["canSetDirection"] for item in status["perModule"].values())
-    assert status["config"]["perModule"]["RL"]["dirReverse"] is True
-
-    # Пока колесо едет, его кнопка направления объясняет, почему нельзя.
-    assert src.drive_module("FR", 8, now=100.2)["ok"] is True
-    item = src.drive_status(now=100.2)["perModule"]["FR"]
-    assert item["canSetDirection"] is False and item["directionReason"] == "module_busy"
-    assert src.drive(0, now=100.2)["ok"] is True
-
-    # Колёса не сошлись в направлении — это норма (зеркальная установка),
-    # поэтому общая настройка не должна считаться «различается» из-за dir.
-    assert src.set_drive_config("direction", "normal", "FL", now=100.2)["ok"] is True
-    src.commands.get_nowait()
+    assert "config" not in status
+    item = status["perModule"]["FL"]
+    for gone in ("dirReverse", "canSetDirection", "directionReason", "pulseUs"):
+        assert gone not in item, gone
+    # Вместо импульса серво-ШИМ экран показывает фактическую скважность.
+    assert item["duty"] == 0 and item["tach"] is True
 
 
 def test_journal_names_the_wheel_that_was_driven():
@@ -1098,8 +951,7 @@ def test_steering_stays_allowed_for_a_stopped_wheel_next_to_a_driving_one():
     src.commands.get_nowait()
     assert src.steer_module("FL", 10, now=100.2)["reason"] == "module_busy"
     assert src.steer_module("FR", 10, now=100.2)["ok"] is True
-    # Калибровка и настройка привода — только когда не едет ни одно колесо.
-    assert src.set_drive_config("limit", 30, now=100.2)["reason"] == "module_busy"
+    # Калибровка — только когда не едет ни одно колесо.
     assert src.calibrate_module("FR", now=100.2)["reason"] == "module_busy"
     # Общая команда «стоп» гасит и одиночную тягу.
     src.feed(_drive_frame("FR", deg=0.0), now=100.0)
@@ -1115,7 +967,7 @@ def test_dispatch_individual_drive_payload_and_statuses():
 
         def __init__(self, result=None):
             self.result = result if result is not None else {"ok": True, "queued": True, "percent": 8,
-                                                             "module": "FL", "maxPercent": 20}
+                                                             "module": "FL", "maxPercent": 35}
             self.calls = []
 
         def drive(self, percent):
@@ -1165,120 +1017,6 @@ def test_dispatch_individual_drive_payload_and_statuses():
     assert result["limit"] == 12
 
 
-def test_set_drive_config_commands_and_guards():
-    backend = _load_backend()
-    src = _bare_master_source(backend, maxsize=8)
-    for module in ("FL", "FR", "RL", "RR"):
-        src.feed(_drive_frame(module), now=100.0)
-
-    assert src.set_drive_config("tach", "off", now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m tach 0\n"
-    assert src.set_drive_config("tach", "on", now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m tach 1\n"
-    assert src.set_drive_config("brake", "off", now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m brake 0\n"
-    assert src.set_drive_config("stop", "off", now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m stop 0\n"
-    assert src.set_drive_config("stop", "on", now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m stop 1\n"
-    assert src.set_drive_config("limit", 45, now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m max 45\n"
-    # Нейтраль и размах «серво»-импульса: края 1000…2000 мкс не переступаем.
-    assert src.set_drive_config("span", 300, now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m span 300\n"
-    assert src.set_drive_config("trim", 1620, now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m trim 1620\n"
-    # Импульсов на оборот — отдельная настройка: у драйверов бывает и 1, и 60.
-    assert src.set_drive_config("ppr", 60, now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m ppr 60\n"
-    assert src.set_drive_config("defaults", now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m reset\n"
-
-    # Недопустимые значения не уходят на платы.
-    for action, value in (("stop", "yes"), ("tach", "yes"), ("limit", 0),
-                          ("limit", 101), ("limit", "abc"), ("trim", 900), ("trim", 2100),
-                          ("span", 0), ("span", 600), ("span", "abc"),
-                          ("ppr", 0), ("ppr", 201), ("ppr", "abc"), ("ppr", None),
-                          ("unknown", None)):
-        result = src.set_drive_config(action, value, now=100.2)
-        expected = "invalid_action" if action == "unknown" else "invalid_value"
-        assert result["ok"] is False and result["reason"] == expected, (action, value)
-    assert src.commands.empty()
-
-    # Настройка — только при выключенной тяге и стоящих колёсах.
-    src.drive_percent = 8
-    assert src.set_drive_config("limit", 30, now=100.2)["reason"] == "module_busy"
-    # Импульсы на оборот — исключение: они не меняют выходной импульс, а
-    # подбирать их надо именно на крутящемся колесе.
-    assert src.set_drive_config("ppr", 60, now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"m ppr 60\n"
-    src.drive_percent = 0
-    src.feed(_drive_frame("FR", deg=4.0), now=100.0)
-    src.frames["FR"] = (dict(src.frames["FR"][0], moving=True), 100.0)
-    assert src.set_drive_config("limit", 30, now=100.2)["reason"] == "module_busy"
-
-    src.feed(_drive_frame("FR"), now=100.0)
-    src.serial_ready.clear()
-    assert src.set_drive_config("limit", 30, now=100.2)["reason"] == "serial_unavailable"
-    src.serial_ready.set()
-    assert src.set_drive_config("limit", 30, now=100.3)["ok"] is True
-
-    # Старая прошивка (без dm/tach/dmax) настройку не принимает.
-    legacy = _bare_master_source(backend)
-    for module in ("FL", "FR", "RL", "RR"):
-        legacy.feed("@TLM mod=%s deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=0 fw=4" % module, now=100.0)
-    assert legacy.set_drive_config("limit", 30, now=100.2)["reason"] == "firmware_update_required"
-
-
-def test_dispatch_drive_config_maps_reasons_to_http_codes():
-    class Source:
-        def __init__(self, result):
-            self.result = result
-            self.calls = []
-
-        def set_drive_config(self, action, value=None, module=None):
-            self.calls.append((action, value, module))
-            return self.result
-
-    for reason, code in (("module_offline", 503), ("serial_unavailable", 503),
-                         ("command_queue_full", 429), ("invalid_value", 400),
-                         ("invalid_action", 400), ("payload", 400), ("module_busy", 409),
-                         ("firmware_update_required", 409)):
-        source = Source({"ok": False, "reason": reason})
-        result, status = slam.dispatch_drive_config(source, {"action": "limit", "value": 30})
-        assert result["reason"] == reason and status == code, reason
-
-    source = Source({"ok": True, "queued": True})
-    result, status = slam.dispatch_drive_config(source, {"action": "limit", "value": 30})
-    assert result["ok"] is True and status == 200
-    assert source.calls == [("limit", 30, None)]
-
-    # Сторона вращения одного колеса: имя уходит в источник вместе с действием.
-    source = Source({"ok": True, "queued": True})
-    result, status = slam.dispatch_drive_config(
-        source, {"action": "direction", "module": "fl", "value": "reverse"})
-    assert result["ok"] is True and status == 200
-    assert source.calls == [("direction", "reverse", "FL")]
-
-    for body in ({"action": "direction", "module": "FX", "value": "reverse"},
-                 {"action": "direction", "module": 4, "value": "reverse"}):
-        result, status = slam.dispatch_drive_config(Source({}), body)
-        assert status == 400 and result["reason"] == "invalid_module", body
-    # Имя колеса имеет смысл только для адресной настройки.
-    result, status = slam.dispatch_drive_config(Source({}), {"action": "limit", "module": "FL", "value": 30})
-    assert status == 400 and result["reason"] == "payload"
-    result, status = slam.dispatch_drive_config(Source({"ok": False, "reason": "invalid_module"}),
-                                               {"action": "direction", "module": "FL", "value": "reverse"})
-    assert status == 400 and result["reason"] == "invalid_module"
-
-    result, status = slam.dispatch_drive_config(Source({}), {"action": "limit", "oops": 1})
-    assert status == 400 and result["reason"] == "payload"
-    result, status = slam.dispatch_drive_config(Source({}), {"action": "limit", "value": 30})
-    assert status == 409 and result["reason"] == "command_failed"
-    result, status = slam.dispatch_drive_config(object(), {"action": "limit", "value": 30})
-    assert status == 409 and result["reason"] == "control_not_supported"
-
-
 def test_drive_api_allows_any_steering_angle_end_to_end(kiosk_client):
     """Сквозная проверка: колёса под углом 30° — тяга по API проходит.
 
@@ -1295,10 +1033,7 @@ def test_drive_api_allows_any_steering_angle_end_to_end(kiosk_client):
     # запрет общей тяги, теперь только подпись на экране.
     for module, deg in (("FL", 30.0), ("FR", 30.0), ("RL", 30.0), ("RR", 45.0)):
         src.feed(_drive_frame(module, deg=deg), now=now)
-    src.drive_limit_percent = lambda now=None: 20
-    src.drive_config = lambda now=None: {"supported": True, "limitPercent": 20,
-                                         "outputMode": "servo", "tach": True,
-                                         "perModule": {}}
+    src.drive_limit_percent = lambda now=None: 35
     src.maneuver_status = lambda now=None: {"supported": False, "active": False}
     kiosk_client.application.extensions["rc_slam"].source = src
 

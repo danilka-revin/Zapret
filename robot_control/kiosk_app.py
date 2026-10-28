@@ -78,7 +78,6 @@ from robot_control.slam import (
     dispatch_drive_command,
     dispatch_steering_calibration,
     dispatch_pot_mode,
-    dispatch_drive_config,
     dispatch_maneuver,
     dispatch_maneuver_config,
     engage_estop,
@@ -889,21 +888,6 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
         navigation.cancel("Смена режима потенциометра — маршрут остановлен.")
         result, status = dispatch_pot_mode(state.source, request.get_json(silent=True))
-        return jsonify(result), status
-
-    @app.post("/api/kiosk_drive_config")
-    def api_kiosk_drive_config():
-        """Настройка привода тяги (серво-ШИМ: нейтраль/размах, тахометр, тормоз, стоп, предел).
-
-        Правила те же, что у режима потенциометра: заголовок команды обязателен,
-        менять настройку можно только при выключенной тяге и стоящих колёсах.
-        """
-        if state is None:
-            return jsonify({"ok": False, "reason": "serial_unavailable"}), 503
-        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
-            return jsonify({"ok": False, "reason": "request_header_required"}), 400
-        navigation.cancel("Настройка привода — маршрут остановлен.")
-        result, status = dispatch_drive_config(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
     @app.post("/api/kiosk_maneuver")

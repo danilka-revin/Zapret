@@ -721,45 +721,23 @@
     if (maneuverStop) maneuverStop.addEventListener('click', () => { void stopManeuver(); });
   }
 
-  /**
-   * Импульс (мкс) для процента тяги: выход один — серво-ШИМ 50 Гц.
-   * 1500 мкс — нейтраль; дальше нейтраль сдвигается настройкой (trim), а
-   * размах (span) задаёт, насколько импульс уходит от неё при полном пределе.
-   */
-  function drivePulseFor(percent, config) {
-    const cfg = config || {};
-    if (!cfg.supported) return null;
-    const trim = Number(cfg.trimUs) || 1500;
-    const span = Number(cfg.spanUs) || 500;
-    const limit = Math.max(1, Number(cfg.maxPercent) || 20);
-    const value = Math.max(0, Math.min(limit, Math.abs(Number(percent) || 0)));
-    return Math.round(trim + span * value / limit);
-  }
-
   function renderDrive() {
     const statusEl = $('rc-drive-status');
     const slider = $('rc-drive-speed');
     if (!statusEl || !slider) return;
     const drive = (snapshot && snapshot.drive) || {};
-    const config = drive.config || {};
-    // Предел — из телеметрии плат (dmax), а не зашитые 20 %: настройка привода
-    // может его поднять, и экран обязан показывать то же число, что и плата.
-    const max = Math.max(1, Math.min(100, Number(drive.maxPercent) || 20));
+    // Предел — из телеметрии плат (dmax=), он задан прошивкой и не настраивается.
+    const max = Math.max(1, Math.min(100, Number(drive.maxPercent) || 35));
     slider.max = String(max);
     if (Number(slider.value) > max) slider.value = String(max);
     $('rc-drive-speed-value').textContent = String(slider.value);
     const modeEl = $('rc-drive-mode');
     if (modeEl) {
-      modeEl.textContent = config.supported
-        ? 'Привод: серво-ШИМ 50 Гц' +
-          (config.mixed ? ' (настройка плат различается)' : '') +
-          ' · нейтраль ' + (config.trimUs || 1500) + ' мкс' +
-          ' · размах ±' + (config.spanUs || 500) + ' мкс' +
-          ' · тахометр ' + (config.tach ? 'есть' : 'нет') +
-          ' · тормоз ' + (config.brake ? 'есть' : 'нет') +
-          ' · стоп ' + (config.stopInput === false ? 'нет' : 'есть') +
-          ' · предел ' + max + '%'
-        : 'Привод: настройка недоступна (прошивка без команды m или нет связи).';
+      // Драйвер ZS-Z11H: ШИМ на входе «P», обороты с «SC». Настроек нет —
+      // экран называет предел, который прислала плата.
+      modeEl.textContent = drive.available
+        ? 'Привод: ШИМ на входе «P» · тахометр SC (90 пер/об) · предел ' + max + '%'
+        : 'Привод: нет связи с платами колёс.';
     }
     const supported = !!(snapshot && snapshot.steeringControl && snapshot.steeringControl.available);
     const authorizedForDrive = authorized && supported && !!drive.available;
@@ -773,12 +751,10 @@
     else if (!authorized) statusEl.textContent = 'Нужен PIN для движения.';
     else if (reason) statusEl.textContent = reason;
     else if (drive.active) {
-      const pulse = drivePulseFor(slider.value, config);
       statusEl.textContent = 'Движение включено · ' + slider.value + '%' +
-        (pulse != null ? ' ≈ ' + pulse + ' мкс' : '') + ' · отпустите кнопку для торможения.';
+        ' · отпустите кнопку для торможения.';
     }
     else {
-      const pulse = drivePulseFor(slider.value, config);
       // Угол колёс тягу не запирает (краб, боковой ход) — только подпись.
       let angleText = 'колёса выровнены';
       const spread = Number(drive.spreadDeg);
@@ -786,8 +762,7 @@
         angleText = 'колёса под углом (разброс ' + spread.toFixed(1).replace('.', ',') +
           '°) — поедет под этим углом';
       }
-      statusEl.textContent = 'Готово · ' + (pulse != null ? slider.value + '% ≈ ' + pulse + ' мкс · ' : '') +
-        'все модули на связи, ' + angleText + '.';
+      statusEl.textContent = 'Готово · ' + slider.value + '% · все модули на связи, ' + angleText + '.';
     }
     statusEl.dataset.ready = String(!!drive.canDrive && authorizedForDrive);
     renderManeuvers();

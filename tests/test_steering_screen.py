@@ -35,21 +35,8 @@ def motor(module, *, angle=0.0, target=None, online=True, homed=True, moving=Fal
         "angle": angle, "targetAngle": angle if target is None else target,
         "moving": moving, "calibrating": False,
         "cycling": False, "opto": False, "calibError": 0, "drivePercent": 0, "rpm": 0.0,
-        "firmware": 6, "pot": True,
+        "firmware": 7, "pot": True, "tach": True, "driveMaxPercent": 35, "driveDuty": 0,
     }
-
-
-def drive_config(**overrides):
-    """Настройка привода в ответе сервера: серво-ШИМ, нейтраль, размах, STOP."""
-    config = {
-        "supported": True, "confirmed": True, "mixed": False,
-        "outputMode": "servo", "tach": True, "brake": True, "stopInput": True,
-        "maxPercent": 20, "limitPercent": 20,
-        "trimUs": 1500, "spanUs": 500, "pulseUs": 0, "pulsesPerRev": 1,
-        "dirReverse": False, "perModule": {},
-    }
-    config.update(overrides)
-    return config
 
 
 def maneuver_config(**overrides):
@@ -97,10 +84,10 @@ def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_re
             "manualZero": True, "limitDeg": limit,
         },
         "drive": {"available": available, "canDrive": can_drive, "reason": drive_reason,
-                  "maxPercent": 20, "commandedPercent": 0, "active": False,
+                  "maxPercent": 35, "commandedPercent": 0, "active": False,
                   "individual": True, "commandedModules": {},
                   "perModule": per_module if per_module is not None else per_module_state(),
-                  "config": drive_config(), "alignmentToleranceDeg": 2.5,
+                  "reportedDuty": {}, "alignmentToleranceDeg": 2.5,
                   # Колёса стоят ровно: справка для подписи, тягу не запирает.
                   "aligned": True, "spreadDeg": 0.0,
                   "maneuver": maneuver or {"supported": True, "active": False,
@@ -151,7 +138,7 @@ def test_each_wheel_card_has_its_own_drive_controls(tmp_path):
     assert sorted(cards) == MODULES
     # Все колёса на связи и с нулём — кнопки доступны, ползунок тоже.
     assert all(not item["backDisabled"] and not item["forwardDisabled"] for item in cards.values())
-    assert all(item["sliderMax"] == "20" for item in cards.values())
+    assert all(item["sliderMax"] == "35" for item in cards.values())
     assert all(item["state"] == "стоит" for item in cards.values())
 
 
@@ -217,74 +204,28 @@ def test_wheel_drive_refusal_stops_the_heartbeat_and_is_shown(tmp_path):
 
 
 def test_wheel_drive_shows_reported_output_and_honest_rpm(tmp_path):
-    """В карточке видно, что реально уходит на мотор; без тахометра — «rpm нет»."""
+    """В карточке видна фактическая скважность ШИМ и обороты по «SC»."""
     motors = [motor(m) for m in MODULES]
-    motors[0] = dict(motors[0], drivePercent=6, drivePulseUs=1650, tach=False, rpm=0.0)
+    motors[0] = dict(motors[0], drivePercent=6, driveDuty=44, tach=True, rpm=95.0)
     report = run_screen(tmp_path, payload(motors=motors, actions=[
         {"type": "wheel-drive", "id": "FL", "direction": 1}]))
     cards = {item["id"]: item for item in report["wheelDrive"]}
-    assert "1650 мкс" in cards["FL"]["output"]
-    assert "rpm нет" in cards["FL"]["output"]
+    assert "ШИМ 44/255" in cards["FL"]["output"]
+    assert "об/мин" in cards["FL"]["output"]
     assert cards["FL"]["state"].startswith("вперёд")
 
 
-def test_each_wheel_card_shows_its_own_direction(tmp_path):
-    """Сторона вращения — по телеметрии: «обычное» / «зеркальное» у каждого колеса."""
-    per_module = per_module_state()
-    per_module["FL"] = dict(per_module["FL"], dirReverse=True)
-    per_module["RR"] = dict(per_module["RR"], dirReverse=False)
-    report = run_screen(tmp_path, payload(per_module=per_module))
+def test_wheel_card_has_no_direction_button(tmp_path):
+    """Кнопки «⇄ зеркалить» больше нет: сторону задают проводами мотора.
+
+    Экран не должен уметь менять ни направление, ни что-либо ещё в тяге —
+    проверяем и разметку, и журнал запросов.
+    """
+    report = run_screen(tmp_path, payload())
     cards = {item["id"]: item for item in report["wheelDrive"]}
-    assert cards["FL"]["dirState"] == "зеркальное"
-    assert cards["FL"]["dirPressed"] == "true"
-    assert cards["RR"]["dirState"] == "обычное"
-    assert cards["RR"]["dirPressed"] == "false"
-    assert all(not item["dirDisabled"] for item in cards.values())
-    # Кнопка называет то, что сделает: у зеркального — «вернуть».
-    assert cards["FL"]["dirLabel"] == "⇄ вернуть"
-    assert cards["RR"]["dirLabel"] == "⇄ зеркалить"
-
-
-def test_wheel_direction_toggle_sends_only_that_wheel(tmp_path):
-    """«⇄» в карточке FR: одна адресная команда, без тяги и без остальных колёс."""
-    report = run_screen(tmp_path, payload(actions=[{"type": "wheel-dir", "id": "FR"}]))
-    assert report["renderErrors"] == [], report["renderErrors"]
-    assert report["drives"] == [], "направление не должно включать тягу"
-    assert report["driveCfgSent"] == [
-        {"action": "direction", "value": "reverse", "module": "FR", "header": "steering"}]
-    # Платы подтвердили — карточка показывает то, что прислала телеметрия,
-    # а не то, что оператор попросил.
-    cards = {item["id"]: item for item in report["wheelDrive"]}
-    assert cards["FL"]["dirState"] == "обычное"
-
-
-def test_wheel_direction_can_be_returned_to_normal(tmp_path):
-    per_module = per_module_state()
-    per_module["RL"] = dict(per_module["RL"], dirReverse=True)
-    report = run_screen(tmp_path, payload(per_module=per_module,
-                                          actions=[{"type": "wheel-dir", "id": "RL"}]))
-    assert report["driveCfgSent"] == [
-        {"action": "direction", "value": "normal", "module": "RL", "header": "steering"}]
-
-
-def test_wheel_direction_is_blocked_while_that_wheel_is_not_ready(tmp_path):
-    """На ходу сторону не меняют: кнопка серая и ничего не отправляет."""
-    per_module = per_module_state()
-    per_module["FR"] = dict(per_module["FR"], canSetDirection=False, directionReason="module_busy")
-    report = run_screen(tmp_path, payload(per_module=per_module,
-                                          actions=[{"type": "wheel-dir", "id": "FR"}]))
-    cards = {item["id"]: item for item in report["wheelDrive"]}
-    assert cards["FR"]["dirDisabled"] is True
-    assert cards["FL"]["dirDisabled"] is False
+    for card in cards.values():
+        assert "dirState" not in card and "dirLabel" not in card
     assert report["driveCfgSent"] == []
-
-
-def test_wheel_direction_refusal_is_shown_in_the_card(tmp_path):
-    """Отказ платы виден там, где нажали, а не «тихо ничего»."""
-    report = run_screen(tmp_path, payload(driveCfgRefuse="module_busy",
-                                          actions=[{"type": "wheel-dir", "id": "FL"}]))
-    cards = {item["id"]: item for item in report["wheelDrive"]}
-    assert cards["FL"]["state"] == "Сначала остановите это колесо: на ходу направление не меняется."
 
 
 def test_all_presets_are_rendered_in_order(tmp_path):
@@ -404,7 +345,7 @@ def test_drive_works_at_any_steering_angle(tmp_path):
     assert [item["percent"] for item in report["drives"]][0] == 8
     assert report["driveStatus"].startswith("Готово") or "Движение включено" in report["driveStatus"]
     # Кнопки не серые: ехать можно, предупреждение — словами.
-    assert report["driveSpeedMax"] == "20"
+    assert report["driveSpeedMax"] == "35"
     assert all(not item["stopDisabled"] for item in report["wheelDrive"])
     assert "под углом" in report["driveStatus"] and "12,5" in report["driveStatus"]
 
@@ -505,191 +446,25 @@ def test_master_refusal_is_marked_as_a_warning_on_the_panel(tmp_path):
     assert html.count('data-warn="true"') == 1
 
 
-def with_drive_config(body, **overrides):
-    """Подменить настройку привода в готовом ответе сервера."""
-    body["data"]["drive"].update(overrides.pop("drive", {}))
-    body["data"]["drive"]["config"] = drive_config(**overrides)
-    return body
-
-
-def test_drive_panel_shows_the_confirmed_drive_setup(tmp_path):
-    """Веб-пульт и борт видят то же, что подтвердили платы: серво-ШИМ, без тахометра."""
-    body = with_drive_config(
-        payload(), tach=False, brake=False, stopInput=False, maxPercent=60,
-        trimUs=1620, spanUs=300, pulseUs=1770)
-    body["data"]["drive"]["maxPercent"] = 60
-    body["data"]["motors"] = [dict(motor(m), tach=False, drivePulseUs=1770) for m in MODULES]
-    report = run_screen(tmp_path, body)
-    cfg = report["driveCfg"]
-    assert cfg["tach"] == "off" and cfg["brake"] == "off" and cfg["stop"] == "off"
-    assert cfg["limit"] == "60" and cfg["trim"] == "1620" and cfg["span"] == "300"
-    assert cfg["applyDisabled"] is False
-    assert "серво-ШИМ" in cfg["status"] and "нейтраль 1620 мкс" in cfg["status"]
-    assert "тахометр нет" in cfg["status"] and "стоп нет" in cfg["status"]
-    # Ползунок тяги идёт за платой, а не за зашитыми 20 %.
-    assert report["driveSpeedMax"] == "60"
-    # Без тахометра оборотов нет — карточка пишет «нет», а не 0.
-    assert report["rpmText"] == ["нет"] * 4
-
-
-def test_drive_setup_is_sent_as_individual_commands(tmp_path):
-    """Настройка уходит по одной команде: семь подряд в порт — это очередь."""
-    report = run_screen(tmp_path, with_drive_config(
-        payload(actions=[{"type": "drivecfg", "trim": 1620, "span": 300, "tach": "off",
-                          "brake": "on", "stop": "off", "limit": 35, "ppr": 60}])))
-    sent = report["driveCfgSent"]
-    # Нейтраль и размах — первыми: прошивка проверяет края каждой команды.
-    assert [item["action"] for item in sent] == ["span", "trim", "ppr", "tach", "brake",
-                                                 "stop", "limit"]
-    assert sent[0]["value"] == 300
-    assert sent[1]["value"] == 1620
-    # Импульсов на оборот — отдельной командой m ppr: от неё зависят об/мин и путь.
-    assert sent[2]["value"] == 60
-    assert sent[3]["value"] == "off"
-    assert sent[5]["value"] == "off"
-    assert sent[6]["value"] == 35
-    assert all(item["header"] == "steering" for item in sent)
-    assert report["renderErrors"] == []
-
-
-def test_drive_setup_is_blocked_while_the_traction_is_active(tmp_path):
-    """Смена режима под работающим мотором — рывок: экран не отправляет её."""
-    body = with_drive_config(payload(actions=[{"type": "drivecfg", "limit": 30}]),
-                             maxPercent=20)
-    body["data"]["drive"].update(active=True, commandedPercent=8, canDrive=False)
-    report = run_screen(tmp_path, body)
+def test_drive_panel_has_no_settings_at_all(tmp_path):
+    """Настроек тяги нет ни в разметке, ни в запросах: драйвер ZS-Z11H их не имеет."""
+    report = run_screen(tmp_path, payload())
     assert report["driveCfgSent"] == []
-    assert report["driveCfg"]["applyDisabled"] is True
-    assert "остановите тягу" in report["driveCfg"]["status"]
-
-
-def test_drive_setup_is_honest_about_old_firmware(tmp_path):
-    body = payload(actions=[{"type": "drivecfg", "limit": 40}])
-    body["data"]["drive"]["config"] = {"supported": False, "outputMode": None, "tach": None,
-                                       "maxPercent": None, "trimUs": None, "spanUs": None,
-                                       "pulseUs": None, "brake": None, "stopInput": None,
-                                       "dirReverse": None}
-    report = run_screen(tmp_path, body)
-    assert report["driveCfgSent"] == []
-    assert report["driveCfg"]["applyDisabled"] is True
-    assert "не умеет" in report["driveCfg"]["status"]
-
-
-def test_drive_setup_refusal_is_explained(tmp_path):
-    report = run_screen(tmp_path, with_drive_config(
-        payload(actions=[{"type": "drivecfg", "limit": 30}], driveCfgRefuse="module_busy")))
-    assert report["driveCfgSent"]
-    assert "остановите тягу" in report["driveCfg"]["status"].lower()
-
-
-def test_drive_setup_fits_the_span_instead_of_refusing_the_neutral(tmp_path):
-    """Нейтраль 2000 плюс размах 500 — это 2500 мкс.
-
-    Раньше экран молча отказывался отправлять такую настройку, и нейтраль нельзя
-    было сдвинуть вообще. Теперь отправляется подрезанная пара: импульс остаётся
-    в 1000…2000 мкс, а человек видит, что размах уменьшен.
-    """
-    report = run_screen(tmp_path, with_drive_config(
-        payload(actions=[{"type": "drivecfg", "trim": 2000, "span": 500}])))
-    sent = report["driveCfgSent"]
-    actions = {item["action"]: item["value"] for item in sent}
-    assert actions["trim"] == 1950
-    assert actions["span"] == 50
-    assert "размах уменьшен" in report["driveCfg"]["status"].lower()
-
-
-def test_drive_panel_shows_pulses_per_rev_and_the_measured_rpm(tmp_path):
-    """Импульсов на оборот видно на панели: именно оно делает об/мин правдой."""
-    body = with_drive_config(payload(), pulsesPerRev=60)
-    body["data"]["motors"] = [dict(motor(m), rpm=60.0) for m in MODULES]
-    report = run_screen(tmp_path, body)
-    cfg = report["driveCfg"]
-    assert cfg["ppr"] == "60"
-    assert "импульсов на оборот 60" in cfg["status"]
-    # Рядом — то, что платы реально насчитали, чтобы было с чем сверять.
-    assert "60 об/мин" in cfg["rpmNow"]
-    assert cfg["fitDisabled"] is False
-
-
-def test_drive_fit_button_recomputes_pulses_from_the_real_rpm(tmp_path):
-    """«Один оборот в секунду — это 60 об/мин»: подбор даёт ppr 60 и уходит на платы."""
-    body = with_drive_config(payload(actions=[
-        {"type": "drivecfg-fit", "fact": 60},
-        {"type": "drivecfg-apply"}]), pulsesPerRev=1)
-    # Платы врут ровно как у оператора: 1 оборот в секунду показан как 3600.
-    body["data"]["motors"] = [dict(motor(m), rpm=3600.0) for m in MODULES]
-    report = run_screen(tmp_path, body)
-    sent = report["driveCfgSent"]
-    assert {"action": "ppr", "value": 60, "module": None, "header": "steering"} in sent
-    assert report["driveCfg"]["ppr"] == "60"
+    assert "driveCfg" not in report
     assert report["renderErrors"] == []
+    # Предел тяги на экране — тот, что прислала плата (35 % из прошивки).
+    assert report["driveSpeedMax"] == "35"
 
 
-def test_drive_fit_works_while_the_wheel_is_spinning(tmp_path):
-    """Подбор импульсов доступен под тягой: крутящееся колесо — единственный источник правды."""
-    body = with_drive_config(payload(actions=[{"type": "drivecfg-fit", "fact": 60}]),
-                             pulsesPerRev=1)
-    body["data"]["drive"].update(active=True, commandedPercent=8, canDrive=False)
-    body["data"]["motors"] = [dict(motor(m), rpm=3600.0) for m in MODULES]
-    report = run_screen(tmp_path, body)
-    cfg = report["driveCfg"]
-    # Обычная настройка заблокирована, а подбор — нет.
-    assert cfg["applyDisabled"] is True and cfg["fitDisabled"] is False
-    assert [item["action"] for item in report["driveCfgSent"]] == ["ppr"]
-    assert report["driveCfgSent"][0]["value"] == 60
-    assert "отправлено платам" in cfg["status"]
-    assert report["renderErrors"] == []
-
-
-def test_drive_ppr_control_is_off_for_firmware_without_it(tmp_path):
-    """Прошивка без ppr в телеметрии: поле выключено, команду m ppr не шлём."""
-    body = with_drive_config(payload(actions=[{"type": "drivecfg", "limit": 30}]),
-                             pulsesPerRev=None)
-    report = run_screen(tmp_path, body)
-    cfg = report["driveCfg"]
-    assert cfg["fitDisabled"] is True
-    assert [item["action"] for item in report["driveCfgSent"]] == \
-        ["span", "trim", "tach", "brake", "stop", "limit"]
-    # Без команд в статусе видно подтверждённую настройку — и что ppr прошивка
-    # не сообщает, то есть обновлять его нечем.
-    quiet = run_screen(tmp_path, with_drive_config(payload(), pulsesPerRev=None))
-    assert "нет в прошивке" in quiet["driveCfg"]["status"]
-
-
-def test_mixed_drive_setup_can_still_be_applied(tmp_path):
-    """Платы разошлись — это не запрет: «Применить» выравнивает все четыре.
-
-    Раньше «смешанная» настройка блокировала кнопку и одновременно требовала
-    «выберите общий режим и примените»: сделать это было невозможно.
-    """
-    per_module = {"FL": {"tach": True, "maxPercent": 20, "trimUs": 1620,
-                         "spanUs": 300, "pulsesPerRev": 60},
-                  "FR": {"tach": False, "maxPercent": 20, "trimUs": 1500,
-                         "spanUs": 500, "pulsesPerRev": 60}}
-
-    def body(actions=None):
-        return with_drive_config(payload(actions=actions or []), mixed=True, tach=None,
-                                 maxPercent=None, trimUs=None, spanUs=None,
-                                 pulsesPerRev=None, perModule=per_module)
-
-    quiet = run_screen(tmp_path, body())
-    cfg = quiet["driveCfg"]
-    assert cfg["applyDisabled"] is False, "«смешанная» настройка не должна блокировать"
-    # Поля показывают настройку реальной платы, а не заводские 1500/500.
-    assert cfg["trim"] == "1620" and cfg["span"] == "300" and cfg["ppr"] == "60"
-    assert cfg["tach"] == "on"
-    assert "по-разному" in cfg["status"] and "Применить" in cfg["status"]
-
-    report = run_screen(tmp_path, body([{"type": "drivecfg", "limit": 20}]))
-    assert report["driveCfgSent"], "настройка должна уходить на платы"
-    assert report["renderErrors"] == []
-
-
-def test_drive_setup_defaults_are_one_command(tmp_path):
-    body = with_drive_config(payload(actions=[{"type": "drivecfg-reset"}]),
-                             tach=False, maxPercent=60, trimUs=1620, spanUs=300)
-    report = run_screen(tmp_path, body)
-    assert [item["action"] for item in report["driveCfgSent"]] == ["defaults"]
+def test_drive_screen_has_no_drive_config_controls():
+    """В самой странице нет полей настройки привода — только кнопка прошивки."""
+    html = (ROOT / "slam_gui" / "robot.html").read_text(encoding="utf-8")
+    for gone in ("drive-cfg-trim", "drive-cfg-span", "drive-cfg-ppr", "drive-cfg-tach",
+                 "drive-cfg-brake", "drive-cfg-stop", "drive-cfg-limit", "drive-cfg-apply",
+                 "drive-cfg-reset", "drive-setup-grid", "data-drive-module-dir"):
+        assert gone not in html, gone
+    # Ручная прошивка осталась: одна кнопка.
+    assert 'id="drive-flash-start"' in html
 
 
 # ------------------------------- манёвры ----------------------------------- #
@@ -869,7 +644,7 @@ def test_flash_button_shows_which_firmware_is_on_the_boards(tmp_path):
     body["data"]["motors"][0]["firmware"] = 6
     body["data"]["motors"][1]["firmware"] = 5
     report = run_screen(tmp_path, body)
-    assert report["flash"]["version"] == "на платах: fw 6/5"
+    assert report["flash"]["version"] == "на платах: fw 6/5/7"
     assert report["flash"]["buttonText"] == "Прошить модули"
     assert report["flash"]["buttonDisabled"] is False
 

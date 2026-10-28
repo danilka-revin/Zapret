@@ -36,7 +36,6 @@
   const moduleDrive = Object.create(null);          // модуль → направление (-1/0/1)
   const moduleDrivePending = Object.create(null);   // модуль → процент в очереди
   const moduleDriveNote = Object.create(null);      // модуль → {text, until}: отказ платы
-  const moduleDirPending = Object.create(null);     // модуль → ждём ответа на m dir
   let moduleDriveTimer = null;
   let moduleDriveSending = false;
   let moduleDriveFlush = Promise.resolve();
@@ -2750,198 +2749,15 @@
     pin_required: 'PIN истёк; плата остановится по watchdog.'
   };
 
-  /* Сторона вращения колеса (m dir 0|1). Колёса стоят зеркально: у левого и
-   * правого борта «вперёд» — противоположные DIR, поэтому сторону задают
-   * каждому колесу отдельно, а не всем сразу. */
-  const DRIVE_DIR_REASON_TEXT = {
-    invalid_module: 'Неизвестное колесо.',
-    invalid_value: 'Плата не поняла сторону вращения.',
-    module_busy: 'Сначала остановите это колесо: на ходу направление не меняется.',
-    module_offline: 'Нет свежей телеметрии этого колеса.',
-    serial_unavailable: 'Нет связи с USB-платами.',
-    firmware_update_required: 'Прошивка платы не умеет менять направление — обновите её.',
-    command_queue_full: 'Очередь команд занята — повторите.',
-    pin_required: 'PIN истёк — разблокируйте управление.',
-    estop: 'Включён E-STOP: настройка заблокирована.',
-    control_not_supported: 'Настройка доступна только в режиме master.',
-    payload: 'Сервер не понял запрос.',
-    command_failed: 'Плата не приняла настройку.'
-  };
-
-  /* ============== Настройка привода тяги (серво-ШИМ, тахометр) ==============
-   * Выход на регулятор скорости один: «серво»-ШИМ 50 Гц, импульс 1000…2000 мкс,
-   * как у сервопривода постоянного вращения (1500 мкс — нейтраль). Аналог 0–5 В
-   * убран в прошивке, поэтому на экране больше нет выбора «ШИМ / 0–5 В» и
-   * милливольтов — зато есть нейтраль (trim) и размах (span): у конкретного
-   * драйвера «стоим» — не ровно 1500 мкс, и вылечить «ползучесть» можно здесь.
-   * Экран показывает то, что подтвердила телеметрия @TLM: tach=, dmax=, trim=,
-   * span=, us=, brk=, stp=.
+  /* ================ Тяга: драйвер ZS-Z11H, настроек нет ================
+   * Драйвер колеса — RioRand ZS-Z11H с датчиками Холла. Тяга задаётся
+   * скважностью ШИМ на его входе «P»: 0 % — мотор не тянет, 100 % — полный ход.
+   * Обороты приходят с выхода «SC»: 90 переходов на оборот колеса. Оба числа —
+   * свойства драйвера, а не настройки: экран их только показывает (какая
+   * скважность и какие об/мин у колеса сейчас), менять нечего и нечем. Предел
+   * тяги задан прошивкой (35 % ≈ 6 км/ч), сторону вращения задают один раз,
+   * поменяв местами два силовых провода мотора.
    */
-  const DRIVE_CONFIG_REASON_TEXT = {
-    invalid_action: 'Неизвестное действие настройки привода.',
-    invalid_value: 'Недопустимое значение: проверьте предел, нейтраль и размах.',
-    firmware_update_required: 'Прошивка плат не умеет настройку привода. Нажмите «Обновить с '
-      + 'GitHub» — она сама прошьёт колёса в порты из настроек (или прошейте '
-      + 'motor_wheel_*.ino с рабочего стола).',
-    module_offline: 'Нужна свежая телеметрия всех четырёх плат.',
-    module_busy: 'Сначала остановите тягу и дождитесь, пока колёса встанут.',
-    serial_unavailable: 'Нет связи с USB-платами.',
-    command_queue_full: 'Очередь команд занята — повторите.',
-    pin_required: 'PIN истёк — разблокируйте управление.',
-    estop: 'Включён E-STOP: настройка привода заблокирована.',
-    control_not_supported: 'Настройка привода доступна только в режиме master.',
-    request_header_required: 'Запрос без заголовка команды.',
-    command_failed: 'Платы не приняли настройку.'
-  };
-  const DRIVE_CONFIG_FIELDS = ['drive-cfg-tach', 'drive-cfg-brake', 'drive-cfg-stop',
-    'drive-cfg-limit', 'drive-cfg-trim', 'drive-cfg-span', 'drive-cfg-ppr'];
-  // Заводские значения прошивки: нейтраль 1500 мкс, размах ±500, тахометр,
-  // тормоз и вход STOP подключены, предел 20 %, один импульс на оборот.
-  const DRIVE_CONFIG_DEFAULTS = { tach: 'on', brake: 'on', stop: 'on', limit: 20,
-    trim: 1500, span: 500, ppr: 1 };
-  // Края импульса в прошивке (SERVO_MIN_US…SERVO_MAX_US): за них не выходим.
-  const SERVO_MIN_US = 1000;
-  const SERVO_MAX_US = 2000;
-  // Минимальный размах: 50 мкс — это уже различимый ход, но ползунок не должен
-  // упираться в 1 мкс, иначе нейтраль нельзя сдвинуть почти никуда.
-  const SERVO_SPAN_MIN_US = 50;
-  const TACH_PPR_MAX = 200;
-  let driveCfgPending = false;
-  let driveCfgQueue = Promise.resolve();
-  let driveCfgDesired = null;      // ожидаемое подтверждение плат
-  let driveCfgMessage = '';
-  let driveCfgMessageUntil = 0;
-  // Отдельная, не затираемая отправкой пометка «размах подрезан»: иначе она
-  // исчезает в тот же миг, когда настройка ушла на платы.
-  let driveCfgSpanNote = '';
-  let driveCfgSpanNoteUntil = 0;
-  // Показанные платами обороты и «какое число импульсов на оборот мы ждём от
-  // плат». Пока платы не подтвердили его, телеметрия поле не переписывает —
-  // иначе только что подобранное значение исчезало бы на следующем кадре.
-  let driveCfgRpmShown = null;
-  let driveCfgPprWanted = null;
-
-  /** Импульс (мкс) для процента тяги — по подтверждённым платами нейтрали и размаху. */
-  function drivePulseFor(percent, config) {
-    const cfg = config || {};
-    if (cfg.outputMode !== 'servo') return null;
-    const trim = Number.isFinite(Number(cfg.trimUs)) ? Number(cfg.trimUs) : 1500;
-    const span = Number.isFinite(Number(cfg.spanUs)) ? Number(cfg.spanUs) : 500;
-    const limit = Math.max(1, Number(cfg.maxPercent) || 20);
-    const value = Math.max(0, Math.min(limit, Math.abs(Number(percent) || 0)));
-    return Math.round(trim + span * value / limit);
-  }
-
-  function driveConfigSignature(cfg) {
-    const c = cfg || {};
-    return [c.outputMode, c.tach, c.brake, c.stopInput, c.maxPercent, c.trimUs,
-      c.spanUs, c.pulsesPerRev].join('|');
-  }
-
-  function driveConfigEnabled(d, cfg, authorized) {
-    const drive = (d || {}).drive || {};
-    const motors = Array.isArray((d || {}).motors) ? d.motors : [];
-    const busy = !!drive.active || Number(drive.commandedPercent || 0) !== 0 ||
-      motors.some((m) => m && (m.moving || m.calibrating || m.cycling || Number(m.drivePercent || 0) !== 0));
-    // Раньше здесь было «&& !cfg.mixed», и получался тупик: платы разошлись
-    // (например, у двух колёс тахометр выключен), экран блокировал «Применить»
-    // И требовал «выберите общий режим и примените». Теперь различие — только
-    // повод сказать об этом: команда m уходит на все четыре платы и выравнивает
-    // их, поэтому кнопка должна быть доступна.
-    const ready = !!cfg.supported;
-    return { enabled: !!authorized && ready && !busy && !driveCfgPending, busy: busy, ready: ready };
-  }
-
-  /**
-   * Что показать в полях панели.
-   *
-   * Если платы настроены одинаково — общие значения. Если разошлись, «общего»
-   * просто нет (сервер отдаёт null), и показывать заводские 1500/500 нельзя:
-   * человек видит одно, а на платах другое. Берём первую плату, которая что-то
-   * сообщила, — и в статусе честно сказано, что настройка различается.
-   */
-  function driveConfigShown(config) {
-    const cfg = config || {};
-    const perModule = cfg.perModule || {};
-    const first = Object.keys(perModule)
-      .map((module) => perModule[module] || {})
-      .find((item) => item.trimUs != null || item.pulsesPerRev != null ||
-        item.maxPercent != null) || {};
-    const pick = (key, fallback) => (cfg[key] != null ? cfg[key]
-      : (first[key] != null ? first[key] : fallback));
-    return {
-      tach: pick('tach', true),
-      brake: pick('brake', true),
-      stopInput: pick('stopInput', true),
-      maxPercent: pick('maxPercent', 20),
-      trimUs: pick('trimUs', 1500),
-      spanUs: pick('spanUs', 500),
-      pulsesPerRev: pick('pulsesPerRev', null),
-      dirReverse: pick('dirReverse', false),
-    };
-  }
-
-  /** Коротко: чем именно разошлись платы («trim 1500/1620, тахометр вкл/выкл»). */
-  function driveConfigDifference(config) {
-    const cfg = config || {};
-    const perModule = cfg.perModule || {};
-    const modules = Object.keys(perModule).sort();
-    const parts = [];
-    const describe = (values, format) => values
-      .map((value) => (value == null ? '—' : format(value))).join('/');
-    const trim = modules.map((m) => perModule[m].trimUs);
-    if (new Set(trim).size > 1) parts.push('нейтраль ' + describe(trim, (v) => v));
-    const span = modules.map((m) => perModule[m].spanUs);
-    if (new Set(span).size > 1) parts.push('размах ' + describe(span, (v) => '±' + v));
-    const tach = modules.map((m) => perModule[m].tach);
-    if (new Set(tach).size > 1) {
-      parts.push('тахометр ' + tach.map((v) => (v === false ? 'нет' : 'есть')).join('/'));
-    }
-    const limit = modules.map((m) => perModule[m].maxPercent);
-    if (new Set(limit).size > 1) parts.push('предел ' + describe(limit, (v) => v + '%'));
-    const ppr = modules.map((m) => perModule[m].pulsesPerRev);
-    if (new Set(ppr).size > 1) parts.push('импульсов на оборот ' + describe(ppr, (v) => v));
-    if (!parts.length) parts.push('порядок обновления плат');
-    return parts.slice(0, 2).join(', ');
-  }
-
-  function setDriveCfgOutput(id, value) {
-    const el = $(id);
-    if (el) el.value = value;
-  }
-
-  /**
-   * Размах подрезается под нейтраль, а не наоборот.
-   *
-   * Раньше ползунок нейтрали получал min = 1000 + размах и max = 2000 − размах:
-   * при заводском размахе ±500 это ровно 1500…1500, то есть нейтраль нельзя
-   * было сдвинуть вообще («настройки невозможно поменять»). Теперь нейтраль
-   * ходит по всей шкале, а размах ужимается сам — импульс обязан остаться в
-   * 1000…2000 мкс, но решает это не запрет, а автоматика с объяснением.
-   */
-  function fitDriveSpan() {
-    const trimEl = $('drive-cfg-trim');
-    const spanEl = $('drive-cfg-span');
-    if (!trimEl || !spanEl) return null;
-    const trim = Math.max(SERVO_MIN_US + SERVO_SPAN_MIN_US,
-      Math.min(SERVO_MAX_US - SERVO_SPAN_MIN_US, Number(trimEl.value) || 1500));
-    const room = Math.min(trim - SERVO_MIN_US, SERVO_MAX_US - trim, 500);
-    const spanMax = Math.max(SERVO_SPAN_MIN_US, Math.floor(room / 10) * 10);
-    let span = Number(spanEl.value) || 500;
-    spanEl.max = String(spanMax);
-    if (span > spanMax) {
-      span = spanMax;
-      spanEl.value = String(span);
-      driveCfgSpanNote = 'Размах уменьшен до ±' + span + ' мкс, чтобы импульс остался в '
-        + SERVO_MIN_US + '…' + SERVO_MAX_US + ' мкс.';
-      driveCfgSpanNoteUntil = Date.now() + 30000;
-    }
-    spanEl.min = String(Math.min(SERVO_SPAN_MIN_US, spanMax));
-    setText($('drive-cfg-span-value'), String(span));
-    setText($('drive-cfg-trim-value'), String(trim));
-    trimEl.value = String(trim);
-    return {trim, span};
-  }
 
   /* ---------------------------------------------------- прошивка плат
    * Одна кнопка на бортовом экране: сервер собирает прошивку из репозитория и
@@ -3038,232 +2854,17 @@
     }
   }
 
-  function renderDriveConfigPanel(d, authorized) {
-    const tach = $('drive-cfg-tach');
-    if (!tach) return;
-    const config = ((d || {}).drive || {}).config || {};
-    const state = driveConfigEnabled(d, config, authorized);
-    // Пока оператор ведёт ползунок, значения из телеметрии его не перебивают.
-    const active = document.activeElement && document.activeElement.id;
-    const editing = DRIVE_CONFIG_FIELDS.indexOf(String(active || '')) >= 0;
-    if (!editing) {
-      const shownCfg = driveConfigShown(config);
-      setDriveCfgOutput('drive-cfg-tach', shownCfg.tach === false ? 'off' : 'on');
-      setDriveCfgOutput('drive-cfg-brake', shownCfg.brake === false ? 'off' : 'on');
-      setDriveCfgOutput('drive-cfg-stop', shownCfg.stopInput === false ? 'off' : 'on');
-      const limit = Math.max(1, Math.min(100, Number(shownCfg.maxPercent) || 20));
-      const trim = Math.max(SERVO_MIN_US, Math.min(SERVO_MAX_US, Number(shownCfg.trimUs) || 1500));
-      const span = Math.max(SERVO_SPAN_MIN_US, Math.min(500, Number(shownCfg.spanUs) || 500));
-      const ppr = Math.max(1, Math.min(TACH_PPR_MAX, Number(shownCfg.pulsesPerRev) || 1));
-      setDriveCfgOutput('drive-cfg-limit', String(limit));
-      setDriveCfgOutput('drive-cfg-trim', String(trim));
-      setDriveCfgOutput('drive-cfg-span', String(span));
-      if (driveCfgPprWanted !== null && ppr === driveCfgPprWanted) {
-        driveCfgPprWanted = null;          // платы подтвердили — поле снова живое
-      }
-      if ($('drive-cfg-ppr') && driveCfgPprWanted === null) {
-        $('drive-cfg-ppr').value = String(ppr);
-      }
-      setText($('drive-cfg-limit-value'), String(limit));
-      setText($('drive-cfg-trim-value'), String(trim));
-      setText($('drive-cfg-span-value'), String(span));
-    }
-    fitDriveSpan();
-    // «Сейчас» — то, что платы прислали в телеметрии: по нему видно, насколько
-    // врут обороты, и какое число вписывать в «по факту».
-    // Какая прошивка на платах сейчас — чтобы было видно, надо ли прошивать.
+  /* Версия прошивки на платах: единственное, что полезно знать перед ручной
+   * прошивкой. Число берётся из телеметрии (@TLM fw=) как есть. */
+  function renderFlashVersions(d) {
     const flashVersion = $('drive-flash-version');
-    if (flashVersion) {
-      const versions = ((d || {}).motors || [])
-        .map((motor) => (motor && motor.firmware != null ? String(motor.firmware) : null))
-        .filter((value) => value !== null);
-      flashVersion.textContent = versions.length
-        ? 'на платах: fw ' + Array.from(new Set(versions)).join('/')
-        : 'на платах: нет связи';
-    }
-    const rpmNow = $('drive-cfg-rpm-now');
-    const rpms = ((d || {}).motors || [])
-      .map((motor) => Number(motor && motor.rpm))
-      .filter((value) => Number.isFinite(value));
-    const shown = rpms.length ? rpms.reduce((a, b) => a + b, 0) / rpms.length : null;
-    if (rpmNow) {
-      rpmNow.textContent = shown == null ? 'сейчас: —' : 'сейчас: ' + Math.round(shown) + ' об/мин';
-    }
-    driveCfgRpmShown = shown;
-    // Подбор импульсов доступен и под тягой: только так и можно увидеть, что
-    // колесо крутится «не с той» скоростью, и сразу это исправить. Прошивка без
-    // ppr в телеметрии толку не даст — тогда поле честно выключено.
-    const pprSupported = driveConfigShown(config).pulsesPerRev != null;
-    const fit = $('drive-cfg-ppr-fit');
-    if (fit) fit.disabled = !authorized || !pprSupported || !!driveCfgDesired;
-    if ($('drive-cfg-ppr')) $('drive-cfg-ppr').disabled = !authorized || !pprSupported;
-    if (driveCfgDesired && config.supported && driveConfigSignature(config) === driveCfgDesired.signature) {
-      driveCfgDesired = null;
-      driveCfgMessage = 'Платы подтвердили настройку привода.';
-      driveCfgMessageUntil = Date.now() + 6000;
-    } else if (driveCfgDesired && Date.now() > driveCfgDesired.deadline) {
-      driveCfgDesired = null;
-      driveCfgMessage = 'Платы не подтвердили настройку — проверьте связь и журнал плат.';
-      driveCfgMessageUntil = Date.now() + 8000;
-    }
-    const apply = $('drive-cfg-apply');
-    const reset = $('drive-cfg-reset');
-    const disabled = !state.enabled || !!driveCfgDesired;
-    if (apply) apply.disabled = disabled;
-    if (reset) reset.disabled = disabled;
-    let text;
-    if (driveCfgMessage && Date.now() < driveCfgMessageUntil) {
-      text = driveCfgMessage;
-    } else if (!config.supported) {
-      text = ((d || {}).drive || {}).available
-        ? 'Прошивка плат не умеет настройку привода: нажмите «Обновить с GitHub» — '
-          + 'после перезапуска экран сам прошьёт колёса в порты из настроек.'
-        : 'Нет телеметрии плат: настройка недоступна. Проверьте USB-порты колёс '
-          + 'ниже («USB-порты колёс · ручное назначение») и питание плат.';
-    } else if (config.mixed) {
-      text = 'Платы настроены по-разному (' + driveConfigDifference(config) +
-        ') — нажмите «Применить»: общее значение уйдёт на все четыре.';
-    } else if (!authorized) {
-      text = 'Настройка привода требует разблокированного управления.';
-    } else if (state.busy) {
-      text = 'Сначала остановите тягу и дождитесь остановки колёс.';
-    } else {
-      text = 'Подтверждено: серво-ШИМ 50 Гц · нейтраль ' + (config.trimUs || 1500) +
-        ' мкс · размах ±' + (config.spanUs || 500) + ' мкс' +
-        ' · тахометр ' + (config.tach ? 'есть' : 'нет') +
-        ' · тормоз ' + (config.brake ? 'есть' : 'нет') +
-        ' · стоп ' + (config.stopInput === false ? 'нет' : 'есть') +
-        ' · предел ' + (config.maxPercent || 20) + '%' +
-        ' · импульсов на оборот ' + (config.pulsesPerRev || '— нет в прошивке') +
-        ' · импульс ' + (config.pulseUs || 0) + ' мкс';
-    }
-    if (driveCfgSpanNote && Date.now() < driveCfgSpanNoteUntil) {
-      text += ' · ' + driveCfgSpanNote;
-    }
-    const status = $('drive-cfg-status');
-    if (status) status.textContent = text;
-  }
-
-  async function sendDriveConfig(payload) {
-    driveCfgPending = true;
-    renderDriveConfigPanel(lastData || {}, steeringAuthorized);
-    try {
-      const response = await fetch('api/kiosk_drive_config', {
-        method: 'POST', cache: 'no-store',
-        headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
-        body: JSON.stringify(payload)
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok || !body.ok) {
-        const reason = body.reason || (response.status === 401 ? 'pin_required' : 'command_failed');
-        if (response.status === 401 || reason === 'pin_required') steeringAuthorized = false;
-        driveCfgMessage = DRIVE_CONFIG_REASON_TEXT[reason] || ('Отказ плат: ' + reason);
-        driveCfgMessageUntil = Date.now() + 8000;
-        return false;
-      }
-      return true;
-    } catch (error) {
-      driveCfgMessage = 'Связь потеряна: настройка не отправлена.';
-      driveCfgMessageUntil = Date.now() + 8000;
-      return false;
-    } finally {
-      driveCfgPending = false;
-    }
-  }
-
-  /** Настройки уходят по одной: пачка команд подряд в один порт — это очередь. */
-  function queueDriveConfig(payload) {
-    const run = () => sendDriveConfig(payload);
-    driveCfgQueue = driveCfgQueue.then(run, run);
-    return driveCfgQueue;
-  }
-
-  function driveConfigFormValues() {
-    const tach = $('drive-cfg-tach');
-    const brake = $('drive-cfg-brake');
-    const stop = $('drive-cfg-stop');
-    const limitEl = $('drive-cfg-limit');
-    const trimEl = $('drive-cfg-trim');
-    const spanEl = $('drive-cfg-span');
-    const pprEl = $('drive-cfg-ppr');
-    return {
-      tach: tach ? String(tach.value || 'on') : 'on',
-      brake: brake ? String(brake.value || 'on') : 'on',
-      stop: stop ? String(stop.value || 'on') : 'on',
-      limit: Math.max(1, Math.min(100, Number(limitEl && limitEl.value) || 20)),
-      trim: Math.max(SERVO_MIN_US, Math.min(SERVO_MAX_US, Number(trimEl && trimEl.value) || 1500)),
-      span: Math.max(1, Math.min(500, Number(spanEl && spanEl.value) || 500)),
-      ppr: Math.max(1, Math.min(TACH_PPR_MAX, Number(pprEl && pprEl.value) || 1))
-    };
-  }
-
-  /** Готова ли панель принимать настройку прямо сейчас. */
-  function driveConfigReadyToSend() {
-    const config = ((lastData || {}).drive || {}).config || {};
-    const state = driveConfigEnabled(lastData || {}, config, steeringAuthorized);
-    return state.enabled && !driveCfgDesired;
-  }
-
-  async function applyDriveConfig() {
-    // Кнопка могла остаться нажатой со старым снимком: не отправляем то, что
-    // нельзя менять на ходу, даже если браузер дал click.
-    if (!driveConfigReadyToSend()) return;
-    const config = ((lastData || {}).drive || {}).config || {};
-    const pprSupported = Number(config.pulsesPerRev) > 0;
-    const values = driveConfigFormValues();
-    if (values.trim - values.span < SERVO_MIN_US || values.trim + values.span > SERVO_MAX_US) {
-      driveCfgMessage = 'Нейтраль ± размах выходят за 1000…2000 мкс: сервопривод уйдёт в упор.';
-      driveCfgMessageUntil = Date.now() + 8000;
-      renderDriveConfigPanel(lastData || {}, steeringAuthorized);
-      return;
-    }
-    driveCfgMessage = 'Отправка настройки платам…';
-    driveCfgMessageUntil = Date.now() + 8000;
-    renderDriveConfigPanel(lastData || {}, steeringAuthorized);
-    const steps = [
-      // Сначала нейтраль и размах, потом остальное: прошивка проверяет края
-      // каждой команды, и «span 400» при нейтрали 1500 пройдёт, а наоборот — нет.
-      { action: 'span', value: values.span },
-      { action: 'trim', value: values.trim },
-      // Импульсов на оборот — до предела: от него считаются «об/мин» и путь
-      // манёвров, и он не связан с краями серво-импульса. Старой прошивке
-      // (без ppr в телеметрии) эту команду не шлём: она её не знает.
-      ...(pprSupported ? [{ action: 'ppr', value: values.ppr }] : []),
-      { action: 'tach', value: values.tach },
-      { action: 'brake', value: values.brake },
-      { action: 'stop', value: values.stop },
-      { action: 'limit', value: values.limit }
-    ];
-    for (const step of steps) {
-      if (!(await queueDriveConfig(step))) return;
-    }
-    driveCfgDesired = {
-      signature: ['servo', values.tach === 'on', values.brake === 'on',
-        values.stop === 'on', values.limit, values.trim, values.span,
-        values.ppr].join('|'),
-      deadline: Date.now() + 8000
-    };
-    driveCfgMessage = 'Команда отправлена · ждём подтверждения телеметрии…';
-    driveCfgMessageUntil = Date.now() + 8000;
-    renderDriveConfigPanel(lastData || {}, steeringAuthorized);
-  }
-
-  async function resetDriveConfig() {
-    if (!driveConfigReadyToSend()) return;
-    driveCfgPprWanted = null;
-    driveCfgMessage = 'Отправка заводских значений…';
-    driveCfgMessageUntil = Date.now() + 8000;
-    renderDriveConfigPanel(lastData || {}, steeringAuthorized);
-    if (!(await queueDriveConfig({ action: 'defaults' }))) return;
-    driveCfgDesired = {
-      signature: ['servo', true, true, true,
-        DRIVE_CONFIG_DEFAULTS.limit, DRIVE_CONFIG_DEFAULTS.trim,
-        DRIVE_CONFIG_DEFAULTS.span, DRIVE_CONFIG_DEFAULTS.ppr].join('|'),
-      deadline: Date.now() + 8000
-    };
-    driveCfgMessage = 'Заводские отправлены · ждём подтверждения плат…';
-    driveCfgMessageUntil = Date.now() + 8000;
-    renderDriveConfigPanel(lastData || {}, steeringAuthorized);
+    if (!flashVersion) return;
+    const versions = ((d || {}).motors || [])
+      .map((motor) => (motor && motor.firmware != null ? String(motor.firmware) : null))
+      .filter((value) => value !== null);
+    flashVersion.textContent = versions.length
+      ? 'на платах: fw ' + Array.from(new Set(versions)).join('/')
+      : 'на платах: нет связи';
   }
 
   /* --------------------------------------------------------------- манёвры
@@ -3471,11 +3072,10 @@
     if (!status || !speed) return;
     const d = data || {};
     const drive = d.drive || {};
-    const config = drive.config || {};
     const supported = !!(d.steeringControl && d.steeringControl.available);
-    // Предел приходит из телеметрии плат (dmax): заводские 20 %, но настройка
-    // привода может поднять его до 100 %. Сервер выше своего потолка не пустит.
-    const max = Math.max(1, Math.min(100, Number(drive.maxPercent) || 20));
+    // Предел приходит из телеметрии плат (dmax=): он задан прошивкой (35 %) и не
+    // настраивается. Сервер выше своего потолка всё равно не пустит.
+    const max = Math.max(1, Math.min(100, Number(drive.maxPercent) || 35));
     speed.max = String(max);
     if (Number(speed.value) > max) speed.value = String(max);
     setText($('drive-speed-value'), String(speed.value));
@@ -3488,22 +3088,19 @@
     if (forward) forward.disabled = !enabled || !drive.canDrive;
     if (stop) stop.disabled = !enabled;
     const reason = drive.reason && DRIVE_REASON_TEXT[drive.reason];
-    const mode = config.outputMode === 'servo' ? 'серво-ШИМ 50 Гц' : '';
     // Угол колёс тягу не запирает: ехать можно на любом (краб, боком). Экран
     // лишь говорит, что робот поедет под углом, а не прямо.
     const angleText = driveAngleText(drive);
-    const pulse = drivePulseFor(speed.value, config);
     if (!supported && String((d.steeringControl || {}).source || '') === 'master-peer') status.textContent = 'Тяга — только на бортовом экране (порт 8090).';
     else if (!supported) status.textContent = 'Тяга доступна при RC_SLAM_SOURCE=master.';
     else if (!steeringAuthorized) status.textContent = 'Управление временно недоступно.';
     else if (reason) status.textContent = reason;
-    else if (drive.active) status.textContent = 'Движение включено · ' + speed.value + '%' + (pulse != null ? ' ≈ ' + pulse + ' мкс' : '') + ' · отпустите кнопку для торможения.';
-    else if (pulse != null) status.textContent = 'Готово · ' + mode + ' · ' + speed.value + '% ≈ ' + pulse + ' мкс' + angleText + '.';
-    else status.textContent = 'Готово · ' + (mode ? mode + ' · ' : '') + 'модули на связи' + angleText + '.';
+    else if (drive.active) status.textContent = 'Движение включено · ' + speed.value + '% тяги · отпустите кнопку для торможения.';
+    else status.textContent = 'Готово · ' + speed.value + '% тяги · модули на связи' + angleText + '.';
     status.dataset.ready = String(!!drive.canDrive && enabled);
     // Тяга каждого колеса: своя готовность и свои кнопки в карточке.
     ['FL', 'FR', 'RL', 'RR'].forEach((id) => renderModuleDriveCard(id, d, supported));
-    renderDriveConfigPanel(d, steeringAuthorized);
+    renderFlashVersions(d);
     renderManeuvers(d);
   }
 
@@ -3748,7 +3345,9 @@
     const canDrive = enabled && !!state.canDrive;
     const holding = moduleDrive[id] || 0;
     const percent = motor && motor.drivePercent != null ? Number(motor.drivePercent) : null;
-    const pulseUs = motor && motor.drivePulseUs != null ? Number(motor.drivePulseUs) : null;
+    // Скважность ШИМ на входе «P» — фактическая, а не «сколько мы попросили»:
+    // по ней видно, что прошивка действительно дала тягу.
+    const duty = motor && motor.driveDuty != null ? Number(motor.driveDuty) : null;
     const tach = motor ? motor.tach : null;
     const rpm = motor && motor.rpm != null ? Number(motor.rpm) : null;
     if (slider) slider.disabled = !canDrive;
@@ -3757,24 +3356,6 @@
     if (stop) stop.disabled = !enabled;
     const card = stateEl && stateEl.closest ? stateEl.closest('.steer-drive') : null;
     if (card) card.dataset.active = String(!!holding || (percent != null && percent !== 0));
-
-    // Сторона вращения: «обычное» — «вперёд» это штатный DIR платы,
-    // «зеркальное» — наоборот. Показываем то, что подтвердила телеметрия.
-    const dirReverse = state && state.dirReverse !== undefined ? state.dirReverse : null;
-    const dirStateEl = $('drive-module-dir-state-' + id);
-    if (dirStateEl) {
-      dirStateEl.textContent = dirReverse === true ? 'зеркальное'
-        : (dirReverse === false ? 'обычное' : '—');
-      dirStateEl.dataset.reverse = String(dirReverse === true);
-    }
-    const dirButton = $('drive-module-dir-' + id);
-    if (dirButton) {
-      const dirReady = support && steeringAuthorized && !!info.drive.available &&
-        !!state && !!state.canSetDirection && !moduleDirPending[id];
-      dirButton.disabled = !dirReady;
-      dirButton.setAttribute('aria-pressed', String(dirReverse === true));
-      dirButton.textContent = dirReverse === true ? '⇄ вернуть' : '⇄ зеркалить';
-    }
 
     // Отказ платы (если он был только что) важнее текущего состояния.
     const note = moduleDriveNote[id];
@@ -3792,44 +3373,10 @@
     if (stateEl) stateEl.textContent = text;
     if (outputEl) {
       const parts = [];
-      if (pulseUs != null) parts.push(pulseUs + ' мкс');
+      if (duty != null) parts.push('ШИМ ' + duty + '/255');
       if (tach === false) parts.push('rpm нет');
       else if (rpm != null) parts.push(Math.round(rpm) + ' об/мин');
       outputEl.textContent = parts.length ? parts.join(' · ') : '—';
-    }
-  }
-
-  /* Сменить сторону вращения одного колеса: «m FL dir 1» уходит только на его
-   * плату. Пока колесо едет, прошивка откажет — экран честно скажет, почему. */
-  async function setModuleDirection(id) {
-    const state = driveModulesInfo(lastData || {}).perModule[id] || null;
-    if (!state || !state.canSetDirection || moduleDirPending[id]) return;
-    const reverse = state.dirReverse !== true;
-    moduleDirPending[id] = true;
-    noteModuleDrive(id, reverse ? 'направление: зеркальное · отправляю…'
-      : 'направление: обычное · отправляю…');
-    try {
-      const response = await fetch('api/kiosk_drive_config', {
-        method: 'POST', cache: 'no-store',
-        headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },
-        body: JSON.stringify({ action: 'direction', module: id,
-          value: reverse ? 'reverse' : 'normal' })
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok || !body.ok) {
-        const reason = body.reason || (response.status === 401 ? 'pin_required' : 'command_failed');
-        if (response.status === 401 || reason === 'pin_required') steeringAuthorized = false;
-        noteModuleDrive(id, DRIVE_DIR_REASON_TEXT[reason] || ('Отказ платы: ' + reason));
-        return;
-      }
-      noteModuleDrive(id, reverse
-        ? 'Направление зеркальное: «вперёд» теперь против прежнего.'
-        : 'Направление обычное: «вперёд» — штатный DIR платы.');
-    } catch (error) {
-      noteModuleDrive(id, 'Связь потеряна: направление не отправлено.');
-    } finally {
-      moduleDirPending[id] = false;
-      renderDriveControls(lastData || {});
     }
   }
 
@@ -3883,16 +3430,8 @@
       bindHold('drive-module-forward-' + id, 1);
       const stopButton = $('drive-module-stop-' + id);
       if (stopButton) stopButton.addEventListener('click', () => stopModuleDrive(id));
-      const dirButton = $('drive-module-dir-' + id);
-      if (dirButton) dirButton.addEventListener('click', () => { void setModuleDirection(id); });
     });
 
-    // Настройка привода: ползунки показывают значение сразу, платы получают
-    // её одной кнопкой — и только при выключенной тяге.
-    const cfgApply = $('drive-cfg-apply');
-    if (cfgApply) cfgApply.addEventListener('click', () => { void applyDriveConfig(); });
-    const cfgReset = $('drive-cfg-reset');
-    if (cfgReset) cfgReset.addEventListener('click', () => { void resetDriveConfig(); });
     // Прошивка плат колёс одной кнопкой (бортовой экран).
     const flashStart = $('drive-flash-start');
     if (flashStart) {
@@ -3906,69 +3445,6 @@
     });
     const maneuverStop = $('maneuver-stop');
     if (maneuverStop) maneuverStop.addEventListener('click', () => { void stopManeuver(); });
-    [['drive-cfg-limit', 'drive-cfg-limit-value', ''],
-      ['drive-cfg-trim', 'drive-cfg-trim-value', ' мкс'],
-      ['drive-cfg-span', 'drive-cfg-span-value', ' мкс']].forEach(([id, out, suffix]) => {
-      const slider = $(id);
-      if (!slider) return;
-      slider.addEventListener('input', () => {
-        setText($(out), String(slider.value) + suffix);
-        // Нейтраль двигает размах за собой: размах — следствие, а не запрет.
-        if (id !== 'drive-cfg-limit') fitDriveSpan();
-      });
-    });
-    // Ручной ввод импульсов на оборот: пока человек его правит, телеметрия поле
-    // не переписывает — иначе набранное число исчезает на следующем кадре.
-    const pprInput = $('drive-cfg-ppr');
-    if (pprInput) {
-      const noteEdit = () => { driveCfgPprWanted = Number(pprInput.value) || null; };
-      pprInput.addEventListener('input', noteEdit);
-      pprInput.addEventListener('change', noteEdit);
-    }
-    // «Подобрать импульсы по факту»: оператор видит, сколько колесо делает на
-    // самом деле, и одно нажатие пересчитывает импульсов-на-оборот так, чтобы
-    // телеметрия совпала с реальностью. Формула: ppr_нов = ppr_стар ×
-    // показанные_об/мин ÷ фактические_об/мин.
-    const pprFit = $('drive-cfg-ppr-fit');
-    if (pprFit) {
-      pprFit.addEventListener('click', () => {
-        const pprEl = $('drive-cfg-ppr');
-        const factEl = $('drive-cfg-rpm-fact');
-        const nowEl = $('drive-cfg-rpm-now');
-        const shown = Number(driveCfgRpmShown) || 0;
-        const fact = Number(factEl && factEl.value) || 0;
-        if (!pprEl) return;
-        if (!(shown > 0)) {
-          driveCfgMessage = 'Оборотов в телеметрии нет: раскрутите колесо и повторите.';
-          driveCfgMessageUntil = Date.now() + 6000;
-          renderDriveConfigPanel(lastData || {}, steeringAuthorized);
-          return;
-        }
-        if (!(fact > 0)) {
-          driveCfgMessage = 'Впишите, сколько колесо делает об/мин на самом деле.';
-          driveCfgMessageUntil = Date.now() + 6000;
-          renderDriveConfigPanel(lastData || {}, steeringAuthorized);
-          return;
-        }
-        const ppr = Number(pprEl.value) || 1;
-        const fitted = Math.max(1, Math.min(TACH_PPR_MAX, Math.round(ppr * shown / fact)));
-        pprEl.value = String(fitted);
-        driveCfgPprWanted = fitted;
-        // Отправляем только импульсы на оборот: это одна команда, и она не
-        // трогает ни нейтраль, ни размах — значит, работает и на ходу.
-        const note = 'Импульсов на оборот: ' + ppr + ' → ' + fitted + ' (было '
-          + Math.round(shown) + ' об/мин, по факту ' + Math.round(fact) + ')';
-        void queueDriveConfig({ action: 'ppr', value: fitted }).then((ok) => {
-          if (!ok) {                       // причину отказа уже объяснил sendDriveConfig
-            renderDriveConfigPanel(lastData || {}, steeringAuthorized);
-            return;
-          }
-          driveCfgMessage = note + ' · отправлено платам.';
-          driveCfgMessageUntil = Date.now() + 12000;
-          renderDriveConfigPanel(lastData || {}, steeringAuthorized);
-        });
-      });
-    }
     const releaseAll = () => { releaseDrive(); releaseModuleDrive(); };
     window.addEventListener('pointerup', releaseAll);
     window.addEventListener('pointercancel', releaseAll);

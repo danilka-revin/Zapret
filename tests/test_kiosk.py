@@ -340,7 +340,7 @@ def test_kiosk_drive_is_available_without_pin_and_accepts_only_bounded_percent(k
     assert response.get_json()["percent"] == -12
     assert source.commands == [-12.5]
 
-    for invalid in ({"percent": 20.1}, {"percent": True}, {"percent": 0, "direction": "forward"}, {}):
+    for invalid in ({"percent": 35.1}, {"percent": True}, {"percent": 0, "direction": "forward"}, {}):
         assert kiosk_client.post("/api/kiosk_drive", json=invalid, headers=header).status_code == 400
     assert source.commands == [-12.5]
 
@@ -1217,52 +1217,13 @@ def test_pot_mode_api(kiosk_app, kiosk_client):
         assert kiosk_client.post('/api/kiosk_pot_mode', json={'action': action}, headers=headers).status_code == 200
 
 
-def test_drive_config_api(kiosk_app, kiosk_client):
-    """Настройка привода: та же защита, что у режима потенциометра."""
-    class Source:
-        supports_drive = True
-
-        def __init__(self):
-            self.calls = []
-
-        def set_drive_config(self, action, value=None, module=None):
-            self.calls.append((action, value, module))
-            if action == 'invalid_value':
-                return {"ok": False, "reason": "invalid_value"}
-            return {"ok": True, "queued": True, "action": action}
-
-    source = Source()
-    kiosk_app.extensions['rc_slam'].source = source
+def test_drive_settings_api_is_gone(kiosk_app, kiosk_client):
+    """Настройки привода больше нет: маршрут отвечает 404, а не «нельзя»."""
     headers = {'X-Robot-Control': 'steering'}
-    assert kiosk_client.post('/api/kiosk_drive_config',
-                             json={'action': 'trim', 'value': 1500}).status_code == 400
-    for body in ({}, {'action': []}, {'action': 'trim', 'value': 1500, 'extra': 1}):
-        assert kiosk_client.post('/api/kiosk_drive_config', json=body, headers=headers).status_code == 400
-    for body in ({'action': 'trim', 'value': 1500},
-                 {'action': 'span', 'value': 400},
-                 {'action': 'tach', 'value': 'off'},
-                 {'action': 'brake', 'value': 'off'},
-                 {'action': 'stop', 'value': 'off'},
-                 {'action': 'limit', 'value': 30},
-                 {'action': 'defaults'}):
+    for body in ({'action': 'trim', 'value': 1500}, {'action': 'limit', 'value': 30},
+                 {'action': 'direction', 'module': 'FL', 'value': 'reverse'}):
         assert kiosk_client.post('/api/kiosk_drive_config', json=body,
-                                 headers=headers).status_code == 200, body
-    refused = kiosk_client.post('/api/kiosk_drive_config',
-                                json={'action': 'invalid_value'}, headers=headers)
-    assert refused.status_code == 400
-    assert refused.get_json()['reason'] == 'invalid_value'
-
-    # Сторона вращения одного колеса идёт тем же путём и с именем колеса.
-    assert kiosk_client.post('/api/kiosk_drive_config',
-                             json={'action': 'direction', 'module': 'fl', 'value': 'reverse'},
-                             headers=headers).status_code == 200
-    assert source.calls[-1] == ('direction', 'reverse', 'FL')
-    assert kiosk_client.post('/api/kiosk_drive_config',
-                             json={'action': 'direction', 'module': 'FX', 'value': 'reverse'},
-                             headers=headers).status_code == 400
-    assert kiosk_client.post('/api/kiosk_drive_config',
-                             json={'action': 'limit', 'module': 'FL', 'value': 30},
-                             headers=headers).status_code == 400
+                                 headers=headers).status_code in (404, 405), body
 
 
 def test_maneuver_api(kiosk_app, kiosk_client):
