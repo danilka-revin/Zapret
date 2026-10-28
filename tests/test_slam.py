@@ -703,17 +703,17 @@ def test_pot_mode_requires_all_boards_and_idle_telemetry():
 
 
 # --------------------------- гибкая настройка тяги --------------------------- #
-def _drive_frame(module, *, tach=1, dmax=30, us=1500, deg=0.0, drive=0, ppr=90, rpm=0.0,
+def _drive_frame(module, *, tach=1, dmax=30, duty=12, deg=0.0, drive=0, ppr=90, rpm=0.0,
                  hz=0):
-    """Строка @TLM прошивки v8: драйвер ZS-Z11H, настраивать нечего.
+    """Строка @TLM прошивки v11: драйвер ZS-Z11H, настраивать нечего.
 
-    us — фактический «серво»-импульс на входе «P» в мкс (1500 — нейтраль),
+    duty — фактическая скважность ШИМ на входе «P» в промилле (12 — это 1,2 %),
     ppr — сколько переходов выхода «SC» приходится на оборот колеса (90),
     hz — сколько переходов «SC» приходит в секунду (диагностика провода).
     """
     return ("@TLM mod=%s deg=%.2f tgt=0.00 moving=0 cal=1 cycle=0 calib=0 rpm=%.1f "
-            "drive=%d fw=10 pot=1 pm=1 tach=%d dmax=%d us=%d ppr=%d hz=%d"
-            % (module, deg, rpm, drive, tach, dmax, us, ppr, hz))
+            "drive=%d fw=11 pot=1 pm=1 tach=%d dmax=%d duty=%d ppr=%d hz=%d"
+            % (module, deg, rpm, drive, tach, dmax, duty, ppr, hz))
 
 
 def test_wheel_ports_are_released_only_for_a_manual_flash():
@@ -779,13 +779,13 @@ def test_master_telemetry_parses_the_wheel_driver_fields():
     """
     backend = _load_backend()
     frame = backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=10 tach=1 "
-        "dmax=30 us=1540 ppr=90 hz=90 t=1")
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=11 tach=1 "
+        "dmax=30 duty=12 ppr=90 hz=90 t=1")
     assert frame["tach"] is True
     # hz= — переходов «SC» в секунду: при одном обороте в секунду это и есть ppr.
     assert frame["tachHz"] == 90
     assert frame["driveMaxPercent"] == 30
-    assert frame["drivePulseUs"] == 1540
+    assert frame["driveDutyPermille"] == 12, "12 промилле — это 1,2 % скважности"
     assert "driveMaxKmhX10" not in frame, "потолок в км/ч ушёл вместе с регулятором"
     assert frame["tachPpr"] == 90 and frame["rpm"] == 60.0
     # Старые поля настройки в кадре ничего не значат и не ломают разбор.
@@ -795,14 +795,14 @@ def test_master_telemetry_parses_the_wheel_driver_fields():
     # Прошивка до драйвера ZS-Z11H: полей тяги нет, а не нули.
     legacy = backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=0 fw=4")
     assert legacy["tach"] is None and legacy["driveMaxPercent"] is None
-    assert legacy["drivePulseUs"] is None and legacy["tachPpr"] is None
+    assert legacy["driveDutyPermille"] is None and legacy["tachPpr"] is None
     assert legacy["tachHz"] is None
 
     # Мусор и противоречия не превращаются в «значение по умолчанию».
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 tach=7") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dmax=101") is None
-    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 us=900") is None
-    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 us=2400") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 duty=1001") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 duty=-5") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=0") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=abc") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 hz=abc") is None
@@ -977,10 +977,10 @@ def test_drive_has_no_settings_at_all():
     status = src.drive_status(now=100.2)
     assert "config" not in status
     item = status["perModule"]["FL"]
-    for gone in ("dirReverse", "canSetDirection", "directionReason", "duty"):
+    for gone in ("dirReverse", "canSetDirection", "directionReason"):
         assert gone not in item, gone
-    # Экран показывает фактический серво-импульс на входе «P».
-    assert item["pulseUs"] == 1500 and item["tach"] is True
+    # Экран показывает фактическую скважность на входе «P» (промилле).
+    assert item["dutyPermille"] == 12 and item["tach"] is True
 
 
 def test_journal_names_the_wheel_that_was_driven():

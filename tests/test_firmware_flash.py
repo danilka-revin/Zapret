@@ -420,9 +420,9 @@ def _load_probe():
 
 def test_probe_parses_the_firmware_field():
     probe = _load_probe()
-    line = ("@TLM mod=FL deg=0.00 tgt=0.00 moving=0 cal=1 rpm=0.0 drive=0 fw=10 "
+    line = ("@TLM mod=FL deg=0.00 tgt=0.00 moving=0 cal=1 rpm=0.0 drive=0 fw=11 "
             "pot=1 pm=1 tach=1 dmax=100 us=1500 ppr=90 kmh=50 t=1234")
-    assert probe.parse_firmware(line) == 10
+    assert probe.parse_firmware(line) == 11
     # Строка журнала прошивки или обрывок — не телеметрия.
     assert probe.parse_firmware("# FL: готов") is None
     assert probe.parse_firmware("@TLM deg=0 fw=") is None

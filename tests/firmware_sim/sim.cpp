@@ -25,6 +25,11 @@ namespace wheel_fl {
 #include "board_prelude.h"
 #include "../../firmware/motor_wheel/motor_wheel.ino"
 #undef SIM_BOARD
+#undef TCCR3A
+#undef TCCR3B
+#undef OCR3A
+#undef OCR3C
+#undef TCNT3
 }  // namespace wheel_fl
 #undef MODULE_ID
 #undef TX_BUFFER_SIZE
@@ -35,6 +40,11 @@ namespace wheel_fr {
 #include "board_prelude.h"
 #include "../../firmware/motor_wheel/motor_wheel.ino"
 #undef SIM_BOARD
+#undef TCCR3A
+#undef TCCR3B
+#undef OCR3A
+#undef OCR3C
+#undef TCNT3
 }  // namespace wheel_fr
 #undef MODULE_ID
 #undef TX_BUFFER_SIZE
@@ -45,6 +55,11 @@ namespace wheel_rl {
 #include "board_prelude.h"
 #include "../../firmware/motor_wheel/motor_wheel.ino"
 #undef SIM_BOARD
+#undef TCCR3A
+#undef TCCR3B
+#undef OCR3A
+#undef OCR3C
+#undef TCNT3
 }  // namespace wheel_rl
 #undef MODULE_ID
 #undef TX_BUFFER_SIZE
@@ -55,6 +70,11 @@ namespace wheel_rr {
 #include "board_prelude.h"
 #include "../../firmware/motor_wheel/motor_wheel.ino"
 #undef SIM_BOARD
+#undef TCCR3A
+#undef TCCR3B
+#undef OCR3A
+#undef OCR3C
+#undef TCNT3
 }  // namespace wheel_rr
 #undef MODULE_ID
 #undef TX_BUFFER_SIZE
@@ -113,10 +133,10 @@ static bool has(const sim::Board& board, const char* text) {
   return board.serial.output.find(text) != std::string::npos;
 }
 
-// Выход на драйвер RioRand ZS-Z11H — «серво»-импульс 50 Гц на входе «P»:
-// 1500 мкс — мотор не тянет, 2000 мкс — полный ход шкалы. Процент команды —
-// это заказанные обороты (30 % = 60 об/мин), а импульс прошивка подбирает сама
-// по тахометру «SC», поэтому «точного» импульса у процента больше нет.
+// Выход на драйвер RioRand ZS-Z11H — аппаратный ШИМ 1 кГц на входе «P»:
+// скважность 0 % мотор не тянет, 100 % полный ход. Процент команды — это
+// заказанные обороты (30 % = 60 об/мин), а скважность прошивка подбирает сама
+// по тахометру «SC», поэтому «точного» процента скважности у команды нет.
 //
 // Едет ли колесо, видно по линиям драйвера: BRAKE (D5) отпущен, STOP (D2)
 // разрешает выходы. В покое наоборот — тормоз взведён, драйвер выключен.
@@ -124,9 +144,12 @@ static bool thrust_on(const sim::Board& board) {
   return board.level[5] == LOW && board.level[2] == HIGH;
 }
 
-// Стоит ли колесо: тормоз взведён, драйвер выключен, импульс нейтральный.
+// Скважность на входе «P» в промилле (25 — это 2,5 %).
+static int duty_permille(const sim::Board& board) { return board.duty_permille(); }
+
+// Стоит ли колесо: тормоз взведён, драйвер выключен, скважность нулевая.
 static bool drive_idle(const sim::Board& board) {
-  return board.level[5] == HIGH && board.level[2] == LOW && board.servo_us <= 1501;
+  return board.level[5] == HIGH && board.level[2] == LOW && duty_permille(board) == 0;
 }
 
 
@@ -202,8 +225,12 @@ static void scenario_boot() {
         board_fr.serial.output.c_str());
   CHECK(board_fr.level[5] == HIGH, "BLDC: тормоз включён после старта");
   CHECK(board_fr.level[2] == LOW, "BLDC: драйвер выключен (STOP = 0) после старта");
-  CHECK(board_fr.servo_us == 1500, "D3: импульс 1500 мкс — мотор не тянет (%u)",
-        (unsigned)board_fr.servo_us);
+  CHECK(board_fr.mode[3] == OUTPUT, "D3 — выход ШИМ");
+  CHECK(board_fr.pwm_running(), "Timer3 крутит ШИМ на D3");
+  CHECK(board_fr.pwm_top == 1999, "период ШИМ — 2000 шагов (1 кГц): %u",
+        (unsigned)board_fr.pwm_top);
+  CHECK(duty_permille(board_fr) == 0, "скважность 0 %% — мотор не тянет (%d %%·10)",
+        duty_permille(board_fr));
 }
 
 static void scenario_calib_left() {
@@ -723,7 +750,7 @@ static void scenario_system_calibrate_all() {
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=10"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=11"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -840,7 +867,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v10"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v11"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -1073,7 +1100,7 @@ static void scenario_drive_hardware() {
         board_fr.serial.output.c_str());
   CHECK(has(board_fr, "ppr=90"), "в @TLM 90 переходов на оборот: %s",
         board_fr.serial.output.c_str());
-  CHECK(has(board_fr, "us=1500"), "в @TLM импульс покоя: %s",
+  CHECK(has(board_fr, "duty=0 "), "в @TLM нулевая скважность покоя: %s",
         board_fr.serial.output.c_str());
   CHECK(has(board_fr, "dmax=30"), "в @TLM предел тяги 30 %: %s",
         board_fr.serial.output.c_str());
@@ -1085,24 +1112,27 @@ static void scenario_drive_hardware() {
         (unsigned)wheel_fr::DRIVE_MAX_RPM_X10);
   CHECK((int)wheel_fr::DRIVE_RPM_X10_PER_PERCENT == 20, "1 %% = 2 об/мин: %u",
         (unsigned)wheel_fr::DRIVE_RPM_X10_PER_PERCENT);
-  CHECK((int)wheel_fr::DRIVE_MIN_PULSE_US == 1000,
-        "нижняя граница скважности — 1 мс (5 %% при 50 Гц): %u",
-        (unsigned)wheel_fr::DRIVE_MIN_PULSE_US);
-  CHECK((int)wheel_fr::DRIVE_PULSE_CEILING_US == 2000,
-        "верхняя граница — 2 мс (10 %% при 50 Гц): %u",
-        (unsigned)wheel_fr::DRIVE_PULSE_CEILING_US);
+  CHECK((int)wheel_fr::DRIVE_PWM_HZ == 1000, "ШИМ 1 кГц — в паспортных 50 Гц…20 кГц: %u",
+        (unsigned)wheel_fr::DRIVE_PWM_HZ);
+  CHECK((int)wheel_fr::DRIVE_DUTY_FULL == 2000, "2000 шагов скважности = 100 %%: %u",
+        (unsigned)wheel_fr::DRIVE_DUTY_FULL);
+  CHECK((int)wheel_fr::DRIVE_DUTY_CEILING == 1000, "потолок прошивки — 50 %%: %u",
+        (unsigned)wheel_fr::DRIVE_DUTY_CEILING);
 
-  // Драйвер получает серво-импульс 50 Гц, а не скважность регистром.
-  CHECK(board_fr.servo_pin == 3, "импульс идёт на D3: %u", (unsigned)board_fr.servo_pin);
+  // Скважность выдаёт аппаратный ШИМ Timer3 на D3, а не библиотека Servo.
+  CHECK(board_fr.mode[3] == OUTPUT && board_fr.pwm_running(),
+        "ШИМ идёт на D3 (OC3C): mode=%u", (unsigned)board_fr.mode[3]);
 
-  // Тяга начинается от нейтрали: колесо трогается плавно, а не прыжком в
-  // 1650 мкс, как было при прямой связи «процент → импульс».
+  // Тяга начинается с нулевой скважности: колесо трогается плавно, а не
+  // прыжком, как было при прямой связи «процент → скважность».
   board_fr.serial.send("t 10");
-  sim::run_for_ms(300);
+  sim::run_for_ms(2);
   CHECK(thrust_on(board_fr), "t 10 — тяга включена");
-  CHECK(board_fr.servo_us >= wheel_fr::DRIVE_MIN_PULSE_US &&
-            board_fr.servo_us <= wheel_fr::DRIVE_PULSE_CEILING_US,
-        "импульс в рабочем коридоре 1000…2000 мкс, а не %u", (unsigned)board_fr.servo_us);
+  CHECK(duty_permille(board_fr) == 0, "и стартует с нуля скважности: %d %%·10",
+        duty_permille(board_fr));
+  sim::run_for_ms(300);
+  CHECK(duty_permille(board_fr) <= 80,
+        "поиск момента трогания не перескакивает 8 %%: %d %%·10", duty_permille(board_fr));
 
   // Предел прошивки — 30 % шкалы, то есть 60 об/мин.
   board_fr.serial.send("b");
@@ -1120,12 +1150,12 @@ static void scenario_drive_hardware() {
     sim::run_for_ms(2);
     board_fr.serial.send(command);
     sim::run_for_ms(2);
-    CHECK(drive_idle(board_fr), "t %d выше порога 30 %% — выход погашен: %u",
-          percent, (unsigned)board_fr.servo_us);
+    CHECK(drive_idle(board_fr), "t %d выше порога 30 %% — выход погашен, скважность %d %%·10",
+          percent, duty_permille(board_fr));
   }
 
-  // Весь рабочий диапазон 1 % … 30 % принимается, и каждый раз тяга стартует от
-  // нейтрали: предела «30 % = 1650 мкс» больше нет, импульс ведёт регулятор.
+  // Весь рабочий диапазон 1 % … 30 % принимается, и каждый раз тяга стартует с
+  // нулевой скважности: скважность ведёт регулятор по оборотам.
   for (int percent = 1; percent <= 30; ++percent) {
     char command[12];
     snprintf(command, sizeof(command), "t %d", percent);
@@ -1134,9 +1164,9 @@ static void scenario_drive_hardware() {
     board_fr.serial.send(command);
     sim::run_for_ms(2);
     CHECK(thrust_on(board_fr), "t %d — тяга включена", percent);
-    CHECK(board_fr.servo_us == wheel_fr::DRIVE_MIN_PULSE_US,
-          "t %d начинается с минимальной скважности, а не с середины: %u", percent,
-          (unsigned)board_fr.servo_us);
+    CHECK(duty_permille(board_fr) == 0,
+          "t %d начинается с нулевой скважности, а не с середины: %d %%·10", percent,
+          duty_permille(board_fr));
   }
 
   // Назад — то же самое, только другой уровень DIR.
@@ -1161,8 +1191,8 @@ static void scenario_drive_hardware() {
         "«m …» больше не настройка: %s", tail.c_str());
   board_fr.serial.send("t 10");
   sim::run_for_ms(2);
-  CHECK(thrust_on(board_fr), "после «m» тяга включается по-прежнему: %u",
-        (unsigned)board_fr.servo_us);
+  CHECK(thrust_on(board_fr), "после «m» тяга включается по-прежнему: %d %%·10",
+        duty_permille(board_fr));
   board_fr.serial.send("b");
   sim::run_for_ms(2);
 
@@ -1175,8 +1205,9 @@ static void scenario_drive_hardware() {
         "на время тяги: STOP = 1 (разрешено), BRAKE = 0 (отпущен)");
   board_fr.serial.send("b");
   sim::run_for_ms(2);
-  CHECK(board_fr.level[2] == LOW && board_fr.level[5] == HIGH && board_fr.servo_us == 1500,
-        "стоп: выходы выключены, тормоз взведён, импульс в нейтрали");
+  CHECK(board_fr.level[2] == LOW && board_fr.level[5] == HIGH &&
+            duty_permille(board_fr) == 0,
+        "стоп: выходы выключены, тормоз взведён, скважность нулевая");
 }
 
 // Переходы тахометра «как на железе»: равномерно за отведённое время. Разом (в
@@ -1196,28 +1227,35 @@ static void spin_tach(sim::Board* board, int edges, double over_ms) {
 }
 
 // Модель колеса для проверки регулятора оборотов. Драйвер ZS-Z11H управляется
-// скважностью: 0 % — мотор не тянет, дальше обороты растут. На железе уже
-// 1505 мкс (7,5 % скважности при 50 Гц) раскручивали колесо до ~490 об/мин, то
-// есть ~98 об/мин на микроСЕКУНДУ импульса. Инерция колеса — экспонента 150 мс,
-// переходы «SC» — 90 на оборот (это свойство драйвера, не настройка).
+// скважностью: 0 % — мотор не тянет, дальше обороты растут почти линейно.
+// На железе 1505 мкс при 50 Гц — это 7,5 % скважности, и колесо уже давало
+// ~490 об/мин, то есть ~65 об/мин на 1 % скважности. Ниже ~0,4 % мотор момент
+// не развивает (трение покоя) — поэтому момент трогания прошивка ищет сама.
+// Инерция колеса — экспонента 150 мс, переходы «SC» — 90 на оборот.
 struct WheelPlant {
   sim::Board* board = nullptr;
   double rpm = 0.0;
-  double pulse_us = 1500.0;    // сглаженный импульс: дробление пишется кадрами
+  double duty = 0.0;           // сглаженная скважность, 0…1
   double edge_phase = 0.0;
   long injected = 0;           // сколько переходов «SC» уже выдано
   bool tach_alive = true;      // провод SC подключён
-  // Полный ход колеса — около 500 об/мин (это ≈18 км/ч при колесе 216 мм),
-  // выше мотор не раскручивается: 1505 мкс на железе давали уже ~490.
+  // Полный ход колеса — около 500 об/мин (≈18 км/ч при колесе 216 мм); выше
+  // мотор не раскручивается: 7,5 % скважности на железе давали уже ~490.
   double max_rpm = 500.0;
+  // Крутизна: 65 об/мин на 1 % скважности (по замеру на железе).
+  double rpm_per_duty = 6500.0;
+  // Трение покоя: ниже этой скважности мотор момент не развивает.
+  double dead_duty = 0.004;
 };
 
 static void plant_run(WheelPlant& plant, double ms) {
   const int64_t steps = (int64_t)(ms + 0.5);
   for (int64_t i = 0; i < steps; ++i) {
     sim::run_for_ms(1.0);
-    plant.pulse_us += ((double)plant.board->servo_us - plant.pulse_us) * 0.2;
-    double target = (plant.pulse_us - 1500.0) * 98.0;
+    const double commanded = (double)plant.board->pwm_compare /
+                             ((double)plant.board->pwm_top + 1.0);
+    plant.duty += (commanded - plant.duty) * 0.2;
+    double target = (plant.duty - plant.dead_duty) * plant.rpm_per_duty;
     if (target > plant.max_rpm) target = plant.max_rpm;
     if (target < 0.0) target = 0.0;
     plant.rpm += (target - plant.rpm) * 0.05;
@@ -1276,10 +1314,9 @@ static void scenario_drive_speed() {
   CHECK(top > 40.0 && top < 95.0, "30 %% — это ~60 об/мин, а не 490: %.1f", top);
   CHECK(wheel_fr::rpm_x10 > 350 && wheel_fr::rpm_x10 < 1100,
         "прошивка видит те же обороты: rpm_x10=%lu", (unsigned long)wheel_fr::rpm_x10);
-  CHECK(board_fr.servo_us >= wheel_fr::DRIVE_MIN_PULSE_US &&
-            board_fr.servo_us <= 1540,
-        "скважность осталась у момента трогания, а не у потолка: %u мкс",
-        (unsigned)board_fr.servo_us);
+  CHECK(duty_permille(board_fr) < 100,
+        "скважность осталась у момента трогания, а не у потолка: %d %%·10",
+        duty_permille(board_fr));
 
   // Половина шкалы — примерно вдвое меньше оборотов: шкала линейна по скорости,
   // а не по скважности.
@@ -1295,24 +1332,26 @@ static void scenario_drive_speed() {
   drive_hold(plant, 1, 5.0);
   const double crawl = plant_rpm(plant, before, 5000.0);
   CHECK(crawl < 20.0, "1 %% — колесо почти стоит: %.1f об/мин", crawl);
-  CHECK(board_fr.servo_us <= 1502, "и скважность у самого минимума: %u",
-        (unsigned)board_fr.servo_us);
+  CHECK(duty_permille(board_fr) < 40, "и скважность около нуля: %d %%·10",
+        duty_permille(board_fr));
 
   // Тахометр замолчал: крутить вслепую нельзя. Прошивка не гонит скважность к
   // потолку (иначе отвалившийся провод SC разгонял бы колесо), а снимает тягу.
   plant.tach_alive = false;
-  unsigned max_pulse = 0;
+  int max_duty = 0;
   for (int i = 0; i < 40; ++i) {
     board_fr.serial.send("t 30");
     plant_run(plant, 200);
-    if (board_fr.servo_us > max_pulse) max_pulse = board_fr.servo_us;
+    if (duty_permille(board_fr) > max_duty) max_duty = duty_permille(board_fr);
   }
   // Каждая попытка длится секунды и обрывается сама: колесо не крутится вслепую.
   CHECK(count(board_fr, "тахометр SC") >= 2,
         "без оборотов тяга снимается и журнал подсказывает, что смотреть: %s",
         board_fr.serial.output.c_str());
-  CHECK(max_pulse <= wheel_fr::DRIVE_SEEK_MAX_US,
-        "и скважность не уходит к потолку: %u", max_pulse);
+  // Первый раз поиск ограничен 8 % скважности — даже без тахометра колесо не
+  // разгоняется «на всю катушку».
+  CHECK(max_duty <= (int)wheel_fr::DRIVE_SEEK_MAX_DUTY / 2 + 5,
+        "и скважность не уходит к потолку: %d %%·10", max_duty);
   plant.tach_alive = true;
   board_fr.serial.send("b");
   sim::run_for_ms(2);
@@ -1352,7 +1391,7 @@ static void scenario_mirrored_wheels() {
   sim::run_for_ms(5);
   CHECK(board_fr.level[4] != fr_forward, "«назад» у FR переворачивает DIR: %d",
         board_fr.level[4]);
-  CHECK(wheel_fr::drive_active, "и тяга тоже включается: %u", (unsigned)board_fr.servo_us);
+  CHECK(wheel_fr::drive_active, "и тяга тоже включается: %d %%·10", duty_permille(board_fr));
 
   for (sim::Board* board : all_boards()) board->serial.send("b");
   sim::run_for_ms(5);
@@ -1366,9 +1405,9 @@ static void scenario_drive_one_wheel() {
   board_fl.serial.send("t FL 8");
   sim::run_for_ms(2);
   CHECK(wheel_fl::drive_active && thrust_on(board_fl),
-        "своё имя во «t FL 8» не мешает тяге: %u", (unsigned)board_fl.servo_us);
+        "своё имя во «t FL 8» не мешает тяге: %d %%·10", duty_permille(board_fl));
   CHECK(!wheel_fr::drive_active && drive_idle(board_fr),
-        "чужое имя «t FL 8» на FR ничего не включает: %u", (unsigned)board_fr.servo_us);
+        "чужое имя «t FL 8» на FR ничего не включает: %d %%·10", duty_permille(board_fr));
   CHECK(!wheel_rr::drive_active && drive_idle(board_rr), "и на RR тоже");
 
   // Heartbeat идёт только на FL: остальные стоят, а через 650 мс FL встаёт сам.
@@ -1467,10 +1506,10 @@ static void scenario_tach() {
   CHECK(has(board_fr, "Проверьте провод SC"),
         "журнал подсказывает проверить провод SC: %s",
         board_fr.serial.output.c_str());
-  // Помеха не разгоняет колесо: регулятор без правдоподобных оборотов импульс
-  // не поднимает, а держит его у нейтрали.
-  CHECK(board_fr.servo_us <= 1502,
-        "помеха на тахометре не поднимает импульс: %u", (unsigned)board_fr.servo_us);
+  // Помеха не разгоняет колесо: регулятор без правдоподобных оборотов скважность
+  // не поднимает выше поиска момента трогания (8 %) и снимает тягу.
+  CHECK(duty_permille(board_fr) <= 80,
+        "помеха на тахометре не поднимает скважность: %d %%·10", duty_permille(board_fr));
   board_fr.serial.send("b");
   sim::run_for_ms(520);
 

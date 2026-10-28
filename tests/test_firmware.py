@@ -89,14 +89,14 @@ def test_pins_levels_and_speeds_match_the_tested_sketch():
     assert "setupStepTimer" in core and "ISR(TIMER2_COMPA_vect)" in core
 
 
-def test_step_timer_does_not_fight_the_servo_library():
-    """Шаги не на Timer1/3/4/5: на Mega библиотека Servo занимает их целиком.
+def test_step_timer_does_not_fight_the_drive_pwm():
+    """Шаги на Timer2, ШИМ тяги на Timer3 — таймеры не делят.
 
-    Servo (avr/Servo.cpp) для Mega объявляет обработчики Timer5, Timer1, Timer3
-    и Timer4 всегда, даже если подключена одна серва. Свой ``ISR(TIMER1_COMPA)``
-    рядом с ней — это «multiple definition of `__vector_17`» и отказ линковки,
-    который видит оператор в Arduino IDE. Поэтому шаги идут на Timer2: он
-    8-битный, 16 МГц / 8 / 100 = 20 кГц — те же 50 мкс.
+    Библиотеки Servo в прошивке больше нет: она занимала на Mega Timer5, Timer1,
+    Timer3 и Timer4 целиком, и настоящую скважность 0…100 % через неё было не
+    получить (ровно 50 Гц, то есть 5…10 %). Теперь ШИМ аппаратный, на Timer3
+    (D3 = OC3C), а шаги остались на Timer2: он 8-битный, 16 МГц / 8 / 100 =
+    20 кГц — те же 50 мкс. Своих ISR у Timer1/4/5 нет, поэтому линковка чистая.
     """
     text = _text(WHEEL)
     assert "ISR(TIMER2_COMPA_vect)" in text
@@ -105,36 +105,42 @@ def test_step_timer_does_not_fight_the_servo_library():
     for vector in ("TIMER1_COMPA_vect", "TIMER3_COMPA_vect",
                    "TIMER4_COMPA_vect", "TIMER5_COMPA_vect"):
         assert "ISR(%s)" % vector not in text, vector
-    # Timer2 в Arduino делится только с tone() и analogWrite на D9/D10 —
-    # ни того, ни другого в коде нет (скорость — серво-импульс на D3).
-    # Проверяем именно код: в комментариях эти имена упоминаются по делу.
+    # Библиотека Servo не подключается: скважность задают регистры Timer3.
+    assert "#include <Servo.h>" not in text
+    assert "Servo " not in text.replace("Servo на", "")
+    # Timer2 в Arduino делится только с tone() и analogWrite на D9/D10 — ни того,
+    # ни другого в коде нет (скорость — аппаратный ШИМ на D3).
     code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
     assert "analogWrite(" not in code
     assert "tone(" not in code
 
 
-def test_drive_uses_a_servo_pulse_and_a_sixty_rpm_scale():
-    """ШИМ на входе «P» — «серво»-импульс 50 Гц, а процент команды — об/мин.
+def test_drive_uses_hardware_pwm_and_a_sixty_rpm_scale():
+    """ШИМ на входе «P» — аппаратный, а процент команды — об/мин.
 
-    Драйвер RioRand ZS-Z11H понимает на «P» ШИМ 50 Гц…20 кГц: 1500 мкс —
-    мотор не тянет, 2000 мкс — полный ход шкалы. Отзывается он резко: на железе
-    уже 1505 мкс давали ~490 об/мин, поэтому процент означает ЗАКАЗАННЫЕ
-    ОБОРОТЫ (30 % = 60 об/мин), а импульс прошивка подбирает по тахометру «SC».
+    Драйвер RioRand ZS-Z11H понимает на «P» ШИМ 50 Гц…20 кГц и управляется
+    СКВАЖНОСТЬЮ: 0 % — мотор не тянет, 100 % — полный ход. Прошивка держит
+    1 кГц на Timer3 (D3 = OC3C) с 2000 шагами на период. Отзывается драйвер
+    резко, поэтому процент означает ЗАКАЗАННЫЕ ОБОРОТЫ (30 % = 60 об/мин), а
+    скважность прошивка подбирает по тахометру «SC».
     """
     text = _text(WHEEL)
     code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
-    # Библиотека Servo на месте: заголовок, объект и вызов на D3.
-    assert "#include <Servo.h>" in text
-    assert "Servo driveServo;" in code
-    assert "driveServo.attach(BLDC_SPEED_PIN);" in code
-    assert "driveServo.writeMicroseconds(" in code
+    # ШИМ регистрами Timer3, без библиотек: вывод OC3C, Fast PWM, TOP = OCR3A.
+    assert "#include <Servo.h>" not in text
+    assert "driveServo" not in code
     assert int(_const(text, "BLDC_SPEED_PIN")) == 3
-    # Импульсы: нейтраль 1500 мкс, верхний ход 2000 мкс, частота 50 Гц.
-    assert int(_const(text, "DRIVE_NEUTRAL_US")) == 1500
-    assert int(_const(text, "DRIVE_FULL_US")) == 2000
-    assert int(_const(text, "DRIVE_SERVO_HZ")) == 50
-    # Прежнего прямого ШИМ регистрами больше нет: Timer3 ушёл библиотеке Servo.
-    for gone in ("TCCR3A", "TCCR3B", "OCR3C", "DRIVE_PWM_HZ"):
+    assert "TCCR3A = (1 << COM3C1)" in code
+    assert "TCCR3B = (1 << WGM33) | (1 << WGM32) | (1 << CS31)" in code
+    assert "OCR3A = DRIVE_PWM_TOP;" in code and "OCR3C = steps;" in code
+    # 1 кГц — в паспортных 50 Гц…20 кГц; 2000 шагов на период — шаг 0,05 %.
+    assert int(_const(text, "DRIVE_PWM_HZ")) == 1000
+    assert int(_const(text, "DRIVE_PWM_TOP")) == 1999
+    assert _const(text, "DRIVE_DUTY_FULL") == "DRIVE_PWM_TOP + 1"
+    # Потолок скважности — половина, полный ход драйвера тележке не нужен.
+    assert _const(text, "DRIVE_DUTY_CEILING") == "DRIVE_DUTY_FULL / 2"
+    for gone in ("DRIVE_NEUTRAL_US", "DRIVE_SERVO_HZ", "DRIVE_MIN_PULSE_US",
+                 "DRIVE_FULL_US", "driveServo.writeMicroseconds"):
         assert gone not in code, gone
 
     # Предел шкалы — 30 %, полная шкала — 60 об/мин: 1 % = 2 об/мин.
@@ -142,32 +148,24 @@ def test_drive_uses_a_servo_pulse_and_a_sixty_rpm_scale():
     assert int(_const(text, "DRIVE_MAX_RPM_X10")) == 600
     assert _const(text, "DRIVE_RPM_X10_PER_PERCENT") == "DRIVE_MAX_RPM_X10 / DRIVE_MAX_PERCENT"
     assert 600 // 30 == 20                              # 1 % = 2 об/мин
-    # «P» управляется скважностью: 0 % — мотор не тянет, 100 % — полный ход.
-    # Servo на Mega даёт ровно 50 Гц, поэтому импульс 1…2 мс — это 5…10 %
-    # скважности; «нейтралью» 1500 мкс больше не считается, регулятор ищет
-    # рабочую точку от минимума.
-    assert int(_const(text, "DRIVE_MIN_PULSE_US")) == 1000
-    assert _const(text, "DRIVE_PULSE_CEILING_US") == "DRIVE_FULL_US"
-    assert int(_const(text, "DRIVE_FULL_US")) == 2000
-    assert int(_const(text, "DRIVE_SEEK_MAX_US")) == 1600
-    # Момент трогания прошивка находит сама, шагами по 20 мкс, и запоминает.
-    assert int(_const(text, "DRIVE_SEEK_STEP_X10")) == 200
-    assert "drive_start_us" in code and "drive_seeking" in code
-    # Ниже момента трогания не опускается, а шаг контура уменьшает на каждой
-    # остановке — иначе у резкого драйвера получались бы рывки.
-    assert "drive_step_cap" in code and "drive_good_x10" in code
 
-    # Контур замкнут на тахометр: регулятор правит импульс по оборотам.
+    # Момент трогания прошивка находит сама: шаги по 0,2 % от нуля, первый раз
+    # не выше 8 %, дальше — найденная точка + 1 %. Иначе обрыв провода «SC»
+    # выглядел бы как «колесо стоит», и прошивка разгоняла бы его до потолка.
+    assert int(_const(text, "DRIVE_SEEK_STEP")) == 4
+    assert int(_const(text, "DRIVE_SEEK_MAX_DUTY")) == 160
+    assert int(_const(text, "DRIVE_SEEK_MARGIN")) == 20
+    assert "drive_start_duty" in code and "drive_seeking" in code
+    # Ниже найденной точки не опускается, а шаг контура уменьшает на каждой
+    # остановке — иначе у резкого драйвера получались бы рывки.
+    assert "drive_step_cap" in code and "drive_good_duty" in code
+
+    # Контур замкнут на тахометр: регулятор правит скважность по оборотам.
     assert "void updateDriveSpeed()" in code
-    assert "void updateDriveOutput()" in code
+    assert "updateDriveSpeed();" in code
     assert "DRIVE_FEEDBACK_TIMEOUT_MS" in code
-    assert "updateDriveSpeed();" in code and "updateDriveOutput();" in code
     # Без правдоподобных оборотов тяга снимается, а не крутится вслепую.
     assert "обороты не измерить" in text
-    # Дробные доли микросекунды выдаются кадрами 50 Гц: иначе цель 60 об/мин
-    # попадала бы между шагами Servo (0,5 мкс) и колесо дёргалось бы.
-    assert "drive_dither_x10" in code
-    assert int(_const(text, "DRIVE_FRAME_MS")) == 20
 
     # Уровни драйвера: STOP HIGH — выходы включены, LOW — выбег; BRAKE HIGH — тормоз.
     assert _const(text, "BLDC_STOP_ENABLE_LEVEL") == "HIGH"
@@ -178,61 +176,8 @@ def test_drive_uses_a_servo_pulse_and_a_sixty_rpm_scale():
     assert re.search(r"^MAX_DRIVE_PERCENT = 30$", mirror, re.M)
     assert re.search(r"^DRIVE_ABS_MAX_PERCENT = 30$", mirror, re.M)
     assert "DRIVE_MAX_KMH_X10" not in mirror
-    assert re.search(r"^DRIVE_TACH_PPR = 90$", mirror, re.M)
-
-
-def test_tach_counts_edge_intervals_and_rejects_noise():
-    """Обороты — по среднему интервалу между переходами «SC», а не по окну.
-
-    Главная жалоба «показывает 3600, а по факту 60» лечится двумя вещами:
-    обороты считаются по среднему интервалу (окно 500 мс квантовало медленное
-    вращение шагами по 20 %), а невозможные значения — помеха на проводе, а не
-    скорость. Тогда прошивка честно говорит «нет» и пишет в журнал, что смотреть.
-    """
-    text = _text(WHEEL)
-    code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
-    assert int(_const(text, "DRIVE_TACH_PPR")) == 90
-    assert int(_const(text, "DRIVE_TACH_MIN_EDGE_US")) == 150
-    assert int(_const(text, "DRIVE_TACH_MAX_RPM_X10")) == 6000
-    # Интервалы накапливаются в прерывании, обороты — по среднему интервалу.
-    assert "tach_interval_sum_us" in code and "tach_interval_count" in code
-    assert "600000000ULL * (uint64_t)count" in code
-    assert "dt < DRIVE_TACH_MIN_EDGE_US" in code
-    # Помеха не превращается в обороты: rpm обнуляется, tach=0, журнал
-    # подсказывает. На тягу это не влияет — импульс идёт прямо из процента.
-    assert "rpm > DRIVE_TACH_MAX_RPM_X10" in code
-    assert "Проверьте провод SC" in text
-    assert "tachTrustedFlag()" in code
-    # Формула среднего интервала сходится с жизнью: 90 переходов за секунду — 60 об/мин.
-    for per_second in (90, 180, 270):
-        mean_us = 1_000_000 / per_second
-        rpm = 60_000_000 / (90 * mean_us)
-        assert abs(rpm - per_second / 90 * 60) <= 1, (per_second, rpm)
-    assert abs(60_000_000 / (90 * (1_000_000 / 90)) - 60) < 0.01
-
-
-def test_mirrored_wheels_are_fixed_by_the_wheel_name():
-    """FR и RR крутятся зеркально: сторона вращения — в прошивке, не настройка.
-
-    Корпус симметричный, поэтому одинаковый уровень DIR на левом и правом борту
-    крутит колёса в разные стороны. Прошивка знает об этом по имени колеса
-    (MODULE_ID), которое уже вписано в каждую из четырёх копий.
-    """
-    text = _text(WHEEL)
-    code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
-    # Имя колеса — уже готовый признак: FR и RR зеркальные.
-    assert 'strcasecmp_P(MODULE_ID, PSTR("FR")) == 0' in code
-    assert 'strcasecmp_P(MODULE_ID, PSTR("RR")) == 0' in code
-    # Ручная фиксация возможна, но по умолчанию — автоопределение по имени.
-    assert "#ifndef DRIVE_MIRRORED" in code and "#define DRIVE_MIRRORED -1" in code
-    # «Вперёд» у зеркального колеса — перевёрнутый уровень DIR.
-    assert "uint8_t driveForwardLevel()" in code
-    assert "const uint8_t direction = forward ? ahead : (ahead == HIGH ? LOW : HIGH);" in code
-    # И это единственное место, где решается сторона: команд направления нет.
-    assert "PSTR(\"dir\")" not in text
-    # Скетчи для рабочего стола по-прежнему различаются только именем колеса.
-    script = _text(ROOT / "scripts" / "sync_firmware_desktop.sh")
-    assert "MODULE_ID" in script
+    # Скважность в телеметрии — в промилле (0…1000), а не в микросекундах.
+    assert re.search(r"^DRIVE_DUTY_MAX_PERMILLE = 1000$", mirror, re.M)
 
 
 def test_firmware_has_no_usb_role_discovery():
@@ -244,9 +189,9 @@ def test_firmware_has_no_usb_role_discovery():
     # Legacy addressed monitor commands remain compatible; the application
     # sends local commands to the manually selected port.
     assert 'classifyModuleToken' in text
-    # v10 — драйвер ZS-Z11H: ШИМ на D3 (вход «P», управляет скважностью), линия
-    # STOP на D2, тахометр «SC» на D19, регулятор оборотов и без настроек привода.
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '10'
+    # v11 — драйвер ZS-Z11H: аппаратный ШИМ на D3 (вход «P», управляет
+    # скважностью), линия STOP на D2, тахометр «SC» на D19, регулятор оборотов.
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '11'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
@@ -258,11 +203,10 @@ def test_telemetry_period_and_safety_fields_are_present():
     for field in ("deg=", "tgt=", "moving=", "cal=", "cycle=", "calib=",
                   "opto=", "home=", "err=", "rpm=", "drive=", "fw=", "pot=", "pm=", "t=",
                   # тяга драйвера ZS-Z11H: тахометр, предел прошивки,
-                  # фактический серво-импульс, переходов «SC» на оборот и
-                  # потолок скорости в десятых долях км/ч
-                  # hz= — сколько переходов «SC» приходит в секунду: при одном
-                  # обороте в секунду это и есть число импульсов на оборот.
-                  "tach=", "dmax=", "us=", "ppr=", "hz="):
+                  # фактическая скважность ШИМ в промилле и переходов «SC» на
+                  # оборот, hz= — сколько переходов «SC» приходит в секунду: при
+                  # одном обороте в секунду это и есть число импульсов на оборот.
+                  "tach=", "dmax=", "duty=", "ppr=", "hz="):
         assert field in text, field
 
 
@@ -425,7 +369,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 10 and frame["calibError"] == 0
+        assert frame["firmware"] == 11 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] == 0.0
         assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False

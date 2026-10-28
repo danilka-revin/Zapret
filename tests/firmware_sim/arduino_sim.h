@@ -73,11 +73,13 @@ typedef bool boolean;
 // симуляция.
 inline uint8_t TCCR2A = 0, TCCR2B = 0, TIMSK2 = 0, OCR2A = 0, TCNT2 = 0;
 constexpr int WGM21 = 1, CS21 = 1, OCIE2A = 1;
-// Timer3 — ШИМ на входе «P» драйвера (D3, OC3C). Сами биты настройки симуляции
-// не нужны, а вот значение сравнения (скважность) — нужно: его пишет прошивка
-// через OCR3C (в каждой плате свой, см. board_prelude.h).
-inline uint8_t TCCR3A = 0, TCCR3B = 0;
-constexpr int COM3C1 = 1, WGM31 = 1, WGM30 = 1, WGM32 = 1, CS31 = 1;
+// Timer3 — аппаратный ШИМ на входе «P» драйвера (D3, OC3C). Скважность прошивка
+// задаёт регистром сравнения OCR3C, период — OCR3A. У каждой платы свои, поэтому
+// в board_prelude.h имена регистров — макросы на поля sim::Board.
+constexpr int COM3C1 = 1, WGM31 = 1, WGM30 = 1, WGM32 = 1, WGM33 = 1, CS31 = 1;
+inline uint8_t SREG = 0;
+inline void cli() {}
+inline void sei() {}
 
 namespace sim {
 
@@ -126,13 +128,20 @@ struct Board {
   void (*isr_fn)() = nullptr;
   void (*tach_fn)() = nullptr;
 
-  // «Серво»-импульс на входе «P» драйвера (D3): длительность в микросекундах.
-  // 1500 мкс — мотор не тянет, 2000 — верхний ход прошивки (5 км/ч). Сюда пишет
-  // библиотека Servo (заглушка stubs/Servo.h), здесь и проверяем.
-  uint16_t servo_us = 1500;
-  uint8_t servo_pin = 0xFF;
-  void set_servo_us(int us) {
-    servo_us = (uint16_t)(us < 0 ? 0 : (us > 3000 ? 3000 : us));
+  // Аппаратный ШИМ на входе «P» (D3 = OC3C): регистры Timer3 этой платы.
+  // Скважность = OCR3C / (OCR3A + 1); прошивка пишет их напрямую (макросы в
+  // board_prelude.h), а здесь мы это читаем и проверяем.
+  uint8_t pwm_tccr_a = 0, pwm_tccr_b = 0;
+  uint16_t pwm_top = 0, pwm_compare = 0, pwm_counter = 0;
+  // Скважность в шагах ШИМ и в промилле (0…1000).
+  int duty_steps() const { return pwm_top ? (int)pwm_compare : 0; }
+  int duty_permille() const {
+    if (!pwm_top) return 0;
+    return (int)((uint32_t)pwm_compare * 1000UL / ((uint32_t)pwm_top + 1));
+  }
+  // ШИМ настроен и выдаёт импульсы: включён выход OC3C и есть тактирование.
+  bool pwm_running() const {
+    return (pwm_tccr_a & (1 << COM3C1)) && (pwm_tccr_b & (1 << CS31));
   }
 
   // Модель руля: phys — где колесо на самом деле, в шагах от «прямо».
