@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import math
 import os
 import re
 import shutil
@@ -114,12 +113,13 @@ def test_step_timer_does_not_fight_the_servo_library():
     assert "tone(" not in code
 
 
-def test_drive_uses_a_servo_pulse_and_a_five_kmh_ceiling():
-    """ШИМ на входе «P» — «серво»-импульс 50 Гц, а сверху потолок 5 км/ч.
+def test_drive_uses_a_servo_pulse_and_a_thirty_percent_ceiling():
+    """ШИМ на входе «P» — «серво»-импульс 50 Гц, порог тяги — 30 % шкалы.
 
     Драйвер RioRand ZS-Z11H понимает на «P» ШИМ 50 Гц…20 кГц: 1500 мкс —
-    мотор не тянет, 2000 мкс — верхний ход прошивки. Полной скважности (а с ней
-    и 18 км/ч) нет вовсе: библиотека Servo, 50 Гц, импульс 1500…2000 мкс.
+    мотор не тянет, 2000 мкс — полный ход шкалы. Прошивка выше 30 % (1650 мкс)
+    команду не берёт, и никакого регулятора по тахометру нет: импульс прямо
+    следует за процентом.
     """
     text = _text(WHEEL)
     code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
@@ -146,28 +146,28 @@ def test_drive_uses_a_servo_pulse_and_a_five_kmh_ceiling():
     assert 1500 + (100 * 500 + 50) // 100 == 2000      # 100 % — 2000 мкс
     assert 1500 + (8 * 500 + 50) // 100 == 1540        # 8 % — 1540 мкс
 
-    # Потолок 5 км/ч: колесо 216 мм, 5 км/ч = 1,389 м/с = 2,047 об/с = 122,8 об/мин.
-    kmh = float(_const(text, "DRIVE_MAX_KMH"))
-    diameter_mm = float(_const(text, "DRIVE_WHEEL_DIAMETER_MM"))
-    assert kmh == 5.0 and diameter_mm == 216.0
-    rpm = kmh / 3.6 / (math.pi * diameter_mm / 1000.0) * 60.0
-    assert abs(rpm - 122.8) < 0.5, rpm
-    assert int(_const(text, "DRIVE_MAX_RPM_X10")) == round(rpm * 10)
-    # Ограничитель стоит в том же месте, где считается скорость, и умеет только
-    # подрезать импульс — не поднимать его выше заказанного.
-    assert "updateSpeedGovernor();" in code.split("void updateRpm()")[1]
-    assert "rpm_x10 > DRIVE_MAX_RPM_X10" in code
-    assert "drive_cap_us < drive_cmd_pulse_us" in code
+    # Порог тяги — 30 % шкалы, то есть 1650 мкс: выше плата команду не берёт.
+    assert int(_const(text, "DRIVE_MAX_PERCENT")) == 30
+    assert 1500 + (30 * 500 + 50) // 100 == 1650
+    for percent in range(31, 101):
+        assert 1500 + (percent * 500 + 50) // 100 > 1650, percent
+    # Регулятора по тахометру нет: импульс идёт прямо из процента команды.
+    assert "updateSpeedGovernor" not in code
+    assert "drive_cap_us" not in code
+    assert "driveWritePulse(drive_cmd_pulse_us);" in code
+    # Тахометр остался только для показаний.
+    assert "rpm_x10 = rpm;" in code
     # Уровни драйвера: STOP HIGH — выходы включены, LOW — выбег; BRAKE HIGH — тормоз.
     assert _const(text, "BLDC_STOP_ENABLE_LEVEL") == "HIGH"
     assert _const(text, "BLDC_STOP_DISABLE_LEVEL") == "LOW"
     assert _const(text, "BLDC_BRAKE_ACTIVE_LEVEL") == "HIGH"
     # Python-зеркало того же: предел тяги, границы импульса и потолок км/ч.
     mirror = _text(ROOT / "slam_gui" / "backend.py")
-    assert re.search(r"^MAX_DRIVE_PERCENT = 100$", mirror, re.M)
+    assert re.search(r"^MAX_DRIVE_PERCENT = 30$", mirror, re.M)
+    assert re.search(r"^DRIVE_ABS_MAX_PERCENT = 30$", mirror, re.M)
     assert re.search(r"^DRIVE_PULSE_MIN_US = 1000$", mirror, re.M)
     assert re.search(r"^DRIVE_PULSE_MAX_US = 2000$", mirror, re.M)
-    assert re.search(r"^DRIVE_MAX_KMH_X10 = 50$", mirror, re.M)
+    assert "DRIVE_MAX_KMH_X10" not in mirror
 
 
 def test_tach_counts_edge_intervals_and_rejects_noise():
@@ -183,12 +183,12 @@ def test_tach_counts_edge_intervals_and_rejects_noise():
     assert int(_const(text, "DRIVE_TACH_PPR")) == 90
     assert int(_const(text, "DRIVE_TACH_MIN_EDGE_US")) == 150
     assert int(_const(text, "DRIVE_TACH_MAX_RPM_X10")) == 6000
-    assert int(_const(text, "DRIVE_BLIND_MAX_US")) == 1600
     # Интервалы накапливаются в прерывании, обороты — по среднему интервалу.
     assert "tach_interval_sum_us" in code and "tach_interval_count" in code
     assert "600000000ULL * (uint64_t)count" in code
     assert "dt < DRIVE_TACH_MIN_EDGE_US" in code
-    # Помеха не превращается в обороты: rpm обнуляется, tach=0, журнал подсказывает.
+    # Помеха не превращается в обороты: rpm обнуляется, tach=0, журнал
+    # подсказывает. На тягу это не влияет — импульс идёт прямо из процента.
     assert "rpm > DRIVE_TACH_MAX_RPM_X10" in code
     assert "Проверьте провод SC" in text
     assert "tachTrustedFlag()" in code
@@ -234,7 +234,7 @@ def test_firmware_has_no_usb_role_discovery():
     # sends local commands to the manually selected port.
     assert 'classifyModuleToken' in text
     # v8 — драйвер ZS-Z11H: «серво»-импульс на D3 (вход «P»), линия STOP на D2,
-    # тахометр «SC» на D19, потолок 5 км/ч и без настроек привода.
+    # тахометр «SC» на D19, порог тяги 30 % и без настроек привода.
     assert _const(text, 'FIRMWARE_PROTOCOL') == '8'
 
 
@@ -251,7 +251,7 @@ def test_telemetry_period_and_safety_fields_are_present():
                   # потолок скорости в десятых долях км/ч
                   # hz= — сколько переходов «SC» приходит в секунду: при одном
                   # обороте в секунду это и есть число импульсов на оборот.
-                  "tach=", "dmax=", "us=", "ppr=", "kmh=", "hz="):
+                  "tach=", "dmax=", "us=", "ppr=", "hz="):
         assert field in text, field
 
 

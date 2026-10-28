@@ -2755,9 +2755,9 @@
    * 2000 мкс — верхний ход прошивки. Обороты приходят с выхода «SC»: 90
    * переходов на оборот колеса. Всё это свойства драйвера, а не настройки:
    * экран только показывает, какой импульс и какие об/мин у колеса сейчас.
-   * Потолок скорости — 5 км/ч, его держит прошивка по тахометру; зеркальные
-   * колёса (FR и RR) она узнаёт по имени колеса, сторон вращения настраивать
-   * не нужно.
+   * Предел тяги — 30 % шкалы (1650 мкс): скорость задаётся прямо импульсом, а
+   * не регулятором по тахометру. Зеркальные колёса (FR и RR) прошивка узнаёт по
+   * имени колеса, сторон вращения настраивать не нужно.
    */
 
   /* --------------------------------------------------------------- манёвры
@@ -2966,16 +2966,13 @@
     const d = data || {};
     const drive = d.drive || {};
     const supported = !!(d.steeringControl && d.steeringControl.available);
-    // Предел приходит из телеметрии плат (dmax=): он задан прошивкой (100 % —
-    // верхний ход «серво»-импульса) и не настраивается. Сервер выше своего
-    // потолка всё равно не пустит.
+    // Предел приходит из телеметрии плат (dmax=): он задан прошивкой (30 %,
+    // то есть 1650 мкс) и не настраивается. Сервер выше своего потолка всё равно
+    // не пустит.
     const max = Math.max(1, Math.min(100, Number(drive.maxPercent) || 100));
     speed.max = String(max);
-    // Потолок скорости, км/ч (kmh= из телеметрии): его держит регулятор
-    // прошивки по тахометру, поэтому проценты — не «сколько км/ч», а насколько
-    // открыт импульс. Показываем рядом, чтобы шкала не выглядела обещанием.
-    const maxKmh = Number(drive.maxKmh) > 0 ? Number(drive.maxKmh) : 5;
-    const kmhText = ' (не быстрее ' + String(maxKmh).replace('.', ',') + ' км/ч)';
+    // Проценты — это раствор «серво»-импульса (1500 мкс — нейтраль, 1650 мкс при
+    // пределе 30 %), а не километры в час: скорость ничем сверху не регулируется.
     if (Number(speed.value) > max) speed.value = String(max);
     setText($('drive-speed-value'), String(speed.value));
     const enabled = supported && steeringAuthorized && !!drive.available;
@@ -2994,8 +2991,8 @@
     else if (!supported) status.textContent = 'Тяга доступна при RC_SLAM_SOURCE=master.';
     else if (!steeringAuthorized) status.textContent = 'Управление временно недоступно.';
     else if (reason) status.textContent = reason;
-    else if (drive.active) status.textContent = 'Движение включено · ' + speed.value + '% тяги' + kmhText + ' · отпустите кнопку для торможения.';
-    else status.textContent = 'Готово · ' + speed.value + '% тяги' + kmhText + ' · модули на связи' + angleText + '.';
+    else if (drive.active) status.textContent = 'Движение включено · ' + speed.value + '% тяги · отпустите кнопку для торможения.';
+    else status.textContent = 'Готово · ' + speed.value + '% тяги · модули на связи' + angleText + '.';
     status.dataset.ready = String(!!drive.canDrive && enabled);
     // Тяга каждого колеса: своя готовность и свои кнопки в карточке.
     ['FL', 'FR', 'RL', 'RR'].forEach((id) => renderModuleDriveCard(id, d, supported));

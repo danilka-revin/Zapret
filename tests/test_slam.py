@@ -452,12 +452,12 @@ def test_master_telemetry_parses_bldc_rpm_and_drive_percent():
         "@TLM mod=FL deg=0.00 tgt=0.00 moving=0 cal=1 cycle=0 calib=0 opto=0 rpm=245.5 drive=-12 t=42")
     assert frame["rpm"] == 245.5
     assert frame["drivePercent"] == -12
-    # Предел прошивки — 100 %: больше полного хода не бывает, а без dmax= в
-    # кадре действует тот же предел (MAX_DRIVE_PERCENT = 100).
+    # Предел прошивки — 30 % шкалы: больше плата не берёт, а без dmax= в кадре
+    # действует тот же предел (MAX_DRIVE_PERCENT = 30).
     assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=101") is None
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=31") is None
     assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=100") is not None
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=30") is not None
 
 
 def test_master_source_drive_works_at_any_angle_and_prioritizes_stop():
@@ -703,17 +703,17 @@ def test_pot_mode_requires_all_boards_and_idle_telemetry():
 
 
 # --------------------------- гибкая настройка тяги --------------------------- #
-def _drive_frame(module, *, tach=1, dmax=100, us=1500, deg=0.0, drive=0, ppr=90, rpm=0.0,
-                 kmh=50, hz=0):
+def _drive_frame(module, *, tach=1, dmax=30, us=1500, deg=0.0, drive=0, ppr=90, rpm=0.0,
+                 hz=0):
     """Строка @TLM прошивки v8: драйвер ZS-Z11H, настраивать нечего.
 
     us — фактический «серво»-импульс на входе «P» в мкс (1500 — нейтраль),
     ppr — сколько переходов выхода «SC» приходится на оборот колеса (90),
-    kmh — потолок скорости прошивки в десятых (50 — это 5 км/ч).
+    hz — сколько переходов «SC» приходит в секунду (диагностика провода).
     """
     return ("@TLM mod=%s deg=%.2f tgt=0.00 moving=0 cal=1 cycle=0 calib=0 rpm=%.1f "
-            "drive=%d fw=8 pot=1 pm=1 tach=%d dmax=%d us=%d ppr=%d kmh=%d hz=%d"
-            % (module, deg, rpm, drive, tach, dmax, us, ppr, kmh, hz))
+            "drive=%d fw=8 pot=1 pm=1 tach=%d dmax=%d us=%d ppr=%d hz=%d"
+            % (module, deg, rpm, drive, tach, dmax, us, ppr, hz))
 
 
 def test_wheel_ports_are_released_only_for_a_manual_flash():
@@ -780,13 +780,13 @@ def test_master_telemetry_parses_the_wheel_driver_fields():
     backend = _load_backend()
     frame = backend.parse_master_line(
         "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=8 tach=1 "
-        "dmax=100 us=1540 ppr=90 kmh=50 hz=90 t=1")
+        "dmax=30 us=1540 ppr=90 hz=90 t=1")
     assert frame["tach"] is True
     # hz= — переходов «SC» в секунду: при одном обороте в секунду это и есть ppr.
     assert frame["tachHz"] == 90
-    assert frame["driveMaxPercent"] == 100
+    assert frame["driveMaxPercent"] == 30
     assert frame["drivePulseUs"] == 1540
-    assert frame["driveMaxKmhX10"] == 50
+    assert "driveMaxKmhX10" not in frame, "потолок в км/ч ушёл вместе с регулятором"
     assert frame["tachPpr"] == 90 and frame["rpm"] == 60.0
     # Старые поля настройки в кадре ничего не значат и не ломают разбор.
     for gone in ("brake", "stopInput", "driveTrimUs", "driveSpanUs", "dirReverse"):
@@ -803,36 +803,38 @@ def test_master_telemetry_parses_the_wheel_driver_fields():
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dmax=101") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 us=900") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 us=2400") is None
-    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 kmh=0") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=0") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=abc") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 hz=abc") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 hz=-5") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 hz=90000") is None
+    # Поле kmh= ушло: предел теперь в процентах (dmax=30); старое поле не мешает.
+    assert "kmh" not in backend.parse_master_line(
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 dmax=30 kmh=50")
     # Тяга не может превышать собственный предел платы.
-    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=30 dmax=20") is None
-    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=30 dmax=50") is not None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=20 dmax=10") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=20 dmax=30") is not None
 
 
 def test_drive_goes_all_the_way_to_full_speed():
-    """Предел тяги — 100 %: сервер отправляет «t 100» и не режет полный ход.
+    """Предел тяги — 30 % шкалы: сервер отправляет «t 30» и не режет полный ход.
 
-    Скважность ШИМ (0 % — выбег, 100 % — полный ход) считается на плате, поэтому
-    сервер обязан пропустить ровно 100 %, а всё, что выше, — отклонить.
+    Импульс (1500…2000 мкс, порог прошивки 1650 мкс) считается на плате, поэтому
+    сервер обязан пропустить ровно предел платы, а всё, что выше, — отклонить.
     """
     backend = _load_backend()
     src = _bare_master_source(backend)
     for module in ("FL", "FR", "RL", "RR"):
-        src.feed(_drive_frame(module, drive=100), now=100.0)
-    assert src.drive_limit_percent(now=100.2) == 100
+        src.feed(_drive_frame(module, drive=30), now=100.0)
+    assert src.drive_limit_percent(now=100.2) == 30
 
-    result = src.drive(100, now=100.2)
+    result = src.drive(30, now=100.2)
     assert result["ok"] is True, result
-    assert src.commands.get_nowait() == b"t 100\n"
+    assert src.commands.get_nowait() == b"t 30\n"
 
-    assert src.drive(101, now=100.3)["reason"] == "drive_limit"
-    assert src.drive(-100, now=100.3)["ok"] is True
-    assert src.commands.get_nowait() == b"t -100\n"
+    assert src.drive(31, now=100.3)["reason"] == "drive_limit"
+    assert src.drive(-30, now=100.3)["ok"] is True
+    assert src.commands.get_nowait() == b"t -30\n"
 
     # Ноль — это тормоз (b), а не «t 0»: скважность 0 и STOP выключен.
     assert src.drive(0, now=100.4)["ok"] is True
@@ -845,14 +847,13 @@ def test_drive_limit_follows_the_plates_and_server_ceiling():
     src = _bare_master_source(backend)
     for module in ("FL", "FR", "RL", "RR"):
         src.feed(_drive_frame(module), now=100.0)
-    assert src.drive_limit_percent(now=100.2) == 100
-    assert src.drive_status(now=100.2)["maxPercent"] == 100
+    assert src.drive_limit_percent(now=100.2) == 30
+    assert src.drive_status(now=100.2)["maxPercent"] == 30
 
+    # Плата разрешила себе больше сервера — сервер выше 30 % не поднимает.
     for module in ("FL", "FR", "RL", "RR"):
         src.feed(_drive_frame(module, dmax=50), now=100.0)
-    assert src.drive_limit_percent(now=100.2) == 50
-    assert src.drive(30, now=100.2)["ok"] is True
-    assert src.commands.get_nowait() == b"t 30\n"
+    assert src.drive_limit_percent(now=100.2) == 30
 
     # Одна плата осторожнее — общий предел по ней: сервер не обещает больше.
     src.feed(_drive_frame("RR", dmax=10), now=100.0)
@@ -861,36 +862,24 @@ def test_drive_limit_follows_the_plates_and_server_ceiling():
     assert src.drive(30, now=100.3)["limit"] == 10
 
 
-def test_speed_ceiling_is_five_kmh_on_the_plate_and_on_the_server():
-    """Потолок скорости — 5 км/ч: его держит прошивка, сервер не обещает больше.
+def test_drive_ceiling_is_thirty_percent_everywhere():
+    """Порог тяги 30 % — одно число на всём стеке, и оно не настройка.
 
-    Проценты — раствор «серво»-импульса, поэтому скорость ограничивает не шкала,
-    а регулятор прошивки по тахометру. Плата сообщает свой потолок полем
-    ``kmh=`` (в десятых долях), сервер берёт самую осторожную из четырёх и не
-    поднимает выше своего предела — 5 км/ч.
+    Проценты — раствор «серво»-импульса, а не километры в час: прошивка берёт
+    не больше 30 % (1650 мкс), сервер не пропускает выше и экран не поднимает
+    ползунок. Регулятора по тахометру больше нет — скорость задаётся импульсом.
     """
     backend = _load_backend()
-    assert backend.DRIVE_MAX_KMH_X10 == 50
+    assert backend.MAX_DRIVE_PERCENT == 30
+    assert backend.DRIVE_ABS_MAX_PERCENT == 30
+    assert not hasattr(backend, "DRIVE_MAX_KMH_X10")
     src = _bare_master_source(backend)
     for module in ("FL", "FR", "RL", "RR"):
         src.feed(_drive_frame(module), now=100.0)
     status = src.drive_status(now=100.2)
-    assert status["maxKmh"] == 5.0
-    assert status["maxPercent"] == 100, "шкала процентов — не потолок скорости"
-
-    # Плата осторожнее — сервер называет её потолок (4,5 км/ч).
-    src.feed(_drive_frame("RR", kmh=45), now=100.0)
-    assert src.drive_max_kmh(now=100.2) == 4.5
-
-    # Плата разрешила себе больше сервера — сервер всё равно 5 км/ч.
-    for module in ("FL", "FR", "RL", "RR"):
-        src.feed(_drive_frame(module, kmh=250), now=100.0)
-    assert src.drive_max_kmh(now=100.2) == 5.0
-
-    # Старые прошивки без km= полем: действует константа сервера.
-    src_new = _bare_master_source(backend)
-    src_new.feed("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 fw=3", now=100.0)
-    assert src_new.drive_max_kmh(now=100.2) == 5.0
+    assert status["maxPercent"] == 30
+    assert "maxKmh" not in status
+    assert not hasattr(src, "drive_max_kmh")
 
 
 def test_individual_drive_targets_only_its_own_wheel():
@@ -914,7 +903,7 @@ def test_individual_drive_targets_only_its_own_wheel():
 
     result = src.drive_module("fl", 8, now=100.2)
     assert result == {"ok": True, "queued": True, "module": "FL", "percent": 8,
-                      "maxPercent": 100}
+                      "maxPercent": 30}
     assert src.commands.get_nowait() == b"t FL 8\n"
     assert src.drive_status(now=100.2)["commandedModules"] == {"FL": 8}
 
@@ -943,7 +932,7 @@ def test_individual_drive_guards():
     assert src.drive_module("XX", 8, now=100.2)["reason"] == "invalid_module"
     assert src.drive_module("FL", "abc", now=100.2)["reason"] == "invalid_drive"
     assert src.drive_module("FL", 101, now=100.2)["reason"] == "drive_limit"
-    assert src.drive_module("FL", 101, now=100.2)["limit"] == 100
+    assert src.drive_module("FL", 101, now=100.2)["limit"] == 30
     # Своё колесо должно быть на связи, с нулём и стоять.
     src.feed(_drive_frame("RL", deg=0.0).replace("cal=1", "cal=0"), now=100.0)
     assert src.drive_module("RL", 8, now=100.2)["reason"] == "not_homed"
@@ -1042,7 +1031,7 @@ def test_dispatch_individual_drive_payload_and_statuses():
 
         def __init__(self, result=None):
             self.result = result if result is not None else {"ok": True, "queued": True, "percent": 8,
-                                                             "module": "FL", "maxPercent": 100}
+                                                             "module": "FL", "maxPercent": 30}
             self.calls = []
 
         def drive(self, percent):
