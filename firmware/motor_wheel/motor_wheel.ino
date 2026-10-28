@@ -188,15 +188,31 @@ const uint8_t DRIVE_MAX_PERCENT = 30;
 const uint16_t DRIVE_MAX_RPM_X10 = 600;
 const uint16_t DRIVE_RPM_X10_PER_PERCENT = DRIVE_MAX_RPM_X10 / DRIVE_MAX_PERCENT;
 const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → нейтраль и тормоз
-// Серво-ШИМ на D3: 50 Гц, импульс 1500…2000 мкс. 1500 мкс — «стоп» (на входе «P»
-// это 7,5 % скважности, поэтому в покое драйвер ещё и выключен линией STOP).
-const uint16_t DRIVE_NEUTRAL_US = 1500;
-const uint16_t DRIVE_FULL_US = 2000;
+// Серво-ШИМ на D3: 50 Гц, импульс 1000…2000 мкс. Драйвер управляется
+// СКВАЖНОСТЬЮ («P»: 0 % — мотор не тянет, 100 % — полный ход), поэтому
+// «нейтрали» у импульса нет: при 50 Гц 1 мс — это 5 % скважности, а 2 мс — 10 %.
+// Полный диапазон драйвера Servo на Mega не выдаёт (у него ровно 50 Гц), но и
+// 5…10 % хватает: момент на валу зависит от скважности, а обороты держит
+// регулятор. В покое драйвер выключен линией STOP и заторможен.
+const uint16_t DRIVE_MIN_PULSE_US = 1000;   // 5 % скважности при 50 Гц
+const uint16_t DRIVE_NEUTRAL_US = 1500;     // что стоит на D3, пока тяга снята
+const uint16_t DRIVE_FULL_US = 2000;        // 10 % скважности при 50 Гц
 const uint16_t DRIVE_SERVO_HZ = 50;
-// Регулятор оборотов ищет импульс только в узком коридоре над нейтралью: на этом
-// драйвере 1505 мкс — уже ~490 об/мин, поэтому выше 1540 мкс прошивка не
-// поднимается ни при каких оборотах. Это страховка, а не настройка.
-const uint16_t DRIVE_PULSE_CEILING_US = 1540;
+// Верхняя граница поиска импульса. Драйвер отзывается резко, поэтому вверх
+// прошивка идёт только по обратной связи: если обороты уже больше заказанных,
+// скважность не растёт. Здесь — абсолютная страховка, а не настройка.
+const uint16_t DRIVE_PULSE_CEILING_US = DRIVE_FULL_US;
+// Момент трогания заранее неизвестен: у каждого драйвера и колеса своя
+// минимальная скважность. Прошивка находит её сама шагами по 20 мкс.
+const uint16_t DRIVE_SEEK_PERIOD_MS = 150;
+const int16_t DRIVE_SEEK_STEP_X10 = 200;    // 20 мкс за шаг поиска
+const uint16_t DRIVE_LEARN_BACKOFF_US = 20; // следующий старт — на 20 мкс ниже
+// Сколько прошивка поднимает скважность, пока ищет момент трогания. Первый раз
+// (точка ещё неизвестна) — не выше 1600 мкс; дальше — не выше найденной точки
+// плюс 40 мкс. Иначе отвалившийся провод «SC» выглядел бы как «колесо стоит», и
+// прошивка разгоняла бы его до полного хода.
+const uint16_t DRIVE_SEEK_MAX_US = 1600;
+const uint16_t DRIVE_SEEK_MARGIN_US = 40;
 // Как часто регулятор правит импульс и сколько он терпит молчание тахометра,
 // прежде чем снять тягу: без оборотов регулировать нечего.
 const uint16_t DRIVE_SPEED_PERIOD_MS = 500;
@@ -212,11 +228,12 @@ const uint16_t DRIVE_FRAME_MS = 20;
 #define DRIVE_MIRRORED -1
 #endif
 
-// v9: тяга — «серво»-импульс 50 Гц (Servo) на входе «P», обороты держит
-// регулятор по тахометру SC (90 переходов на оборот): процент команды —
-// заказанные об/мин (30 % = 60 об/мин), зеркальные FR/RR. Настроек тяги нет:
-// все числа — свойство железа, EEPROM для тяги не используется.
-const uint8_t FIRMWARE_PROTOCOL = 9;           // поле fw= в @TLM
+// v10: тяга — ШИМ 50 Гц (Servo) на входе «P» драйвера; управляет скважностью,
+// поэтому обороты держит регулятор по тахометру SC (90 переходов на оборот):
+// процент команды — заказанные об/мин (30 % = 60 об/мин), момент трогания
+// прошивка находит сама, зеркальные FR/RR. Настроек тяги нет: все числа —
+// свойство железа, EEPROM для тяги не используется.
+const uint8_t FIRMWARE_PROTOCOL = 10;          // поле fw= в @TLM
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -314,10 +331,16 @@ bool drive_mirrored = false;                    // это колесо стои�
 // Регулятор оборотов: уровень импульса в десятых долях микросекунды, остаток
 // дробной доли при выводе на Servo и таймеры (тяга, обратная связь, шаг).
 int32_t drive_level_x10 = (int32_t)DRIVE_NEUTRAL_US * 10;
-int16_t drive_dither_x10 = 0;
+int32_t drive_dither_x10 = 0;
 uint32_t drive_feedback_ms = 0;
 uint32_t drive_speed_ms = 0;
 uint32_t drive_frame_ms = 0;
+bool drive_seeking = false;        // ещё ищем момент трогания (переходов SC нет)
+uint32_t drive_seek_ms = 0;
+uint16_t drive_start_us = 0;       // скважность, на которой колесо поехало (0 — неизв.)
+int32_t drive_good_x10 = 0;        // последняя скважность, на которой колесо ехало
+int32_t drive_step_cap = 40;       // предел шага контура, 0,1 мкс (40 = 4 мкс)
+bool drive_floor_noted = false;    // «медленнее не могу» уже сказано в журнал
 
 char tx_buf[TX_BUFFER_SIZE];
 uint16_t tx_length = 0;
@@ -1294,11 +1317,16 @@ void setupDrivePwm() {
   driveServo.writeMicroseconds(DRIVE_NEUTRAL_US);
   drive_pulse_us = DRIVE_NEUTRAL_US;
   drive_cmd_pulse_us = DRIVE_NEUTRAL_US;
+  drive_level_x10 = (int32_t)DRIVE_NEUTRAL_US * 10;
+  drive_dither_x10 = 0;
+  drive_seeking = false;
+  drive_start_us = 0;
+  drive_floor_noted = false;
 }
 
 
 void driveWritePulse(uint16_t us) {
-  if (us < DRIVE_NEUTRAL_US) us = DRIVE_NEUTRAL_US;
+  if (us < DRIVE_MIN_PULSE_US) us = DRIVE_MIN_PULSE_US;
   if (us > DRIVE_FULL_US) us = DRIVE_FULL_US;
   driveServo.writeMicroseconds(us);
   drive_pulse_us = us;
@@ -1340,7 +1368,7 @@ void driveTachApply() {
 void printDriveInfo() {
   // Строка должна влезть в буфер строки (176 байт с кириллицей по 2 байта):
   // поэтому проценты словами, без «%%» — они и так висят на экране.
-  note(PSTR("Двигатель: Servo %u Гц на D3 · импульс %u мкс · шкала %u %% = %u об/мин · %s"),
+  note(PSTR("Двигатель: Servo %u Гц · импульс %u мкс · %u %% = %u об/мин · %s"),
        (unsigned)DRIVE_SERVO_HZ, (unsigned)drive_pulse_us,
        (unsigned)DRIVE_MAX_PERCENT, (unsigned)(DRIVE_MAX_RPM_X10 / 10),
        drive_mirrored ? "зеркальное" : "прямое");
@@ -1368,11 +1396,23 @@ void applyDriveCommand(int8_t percent) {
     driveSetStop(true);
     digitalWrite(BLDC_DIR_PIN, direction);
     delayMicroseconds(100);
-    // Регулятор начинает от нейтрали и поднимает импульс сам, по оборотам:
-    // так колесо трогается плавно, а не прыжком в пол-оборота.
-    drive_level_x10 = (int32_t)DRIVE_NEUTRAL_US * 10;
+    // Скважность начинается с минимума (или чуть ниже найденного в прошлый раз
+    // момента трогания) и дальше поднимается сама по оборотам: колесо трогается
+    // плавно, а не прыжком в пол-оборота.
+    uint16_t from = DRIVE_MIN_PULSE_US;
+    if (drive_start_us > DRIVE_MIN_PULSE_US + DRIVE_LEARN_BACKOFF_US) {
+      const uint16_t learned = drive_start_us - DRIVE_LEARN_BACKOFF_US;
+      if (learned > from) from = learned;
+    }
+    drive_level_x10 = (int32_t)from * 10;
     drive_dither_x10 = 0;
-    drive_cmd_pulse_us = DRIVE_NEUTRAL_US;
+    drive_cmd_pulse_us = from;
+    driveWritePulse(from);   // сразу, не дожидаясь кадра Servo: меньше рывка
+    drive_seeking = true;
+    drive_good_x10 = 0;
+    drive_step_cap = 40;
+    drive_floor_noted = false;
+    drive_seek_ms = millis();
     drive_feedback_ms = millis();
     drive_speed_ms = millis();
     drive_frame_ms = millis();
@@ -1394,6 +1434,8 @@ void stopDriveLocal() {
   drive_cmd_pulse_us = DRIVE_NEUTRAL_US;
   drive_level_x10 = (int32_t)DRIVE_NEUTRAL_US * 10;
   drive_dither_x10 = 0;
+  drive_seeking = false;
+  drive_floor_noted = false;
 }
 
 bool applyLocalDrive(int8_t percent) {
@@ -1466,35 +1508,75 @@ void updateRpm() {
   rpm_x10 = rpm;
 }
 
-// Импульс регулятора → на D3. Дробные доли микросекунды выдаём по очереди
-// кадрами: Servo на Mega шагает по 0,5 мкс, а цель вроде 60 об/мин приходится
-// между шагами (≈1500,6 мкс). Без этого колесо прыгало бы между «стоит» и
-// «100 об/мин», а не держало середину.
+// Импульс регулятора → на D3. Уровень хранится в десятых долях микросекунды, а
+// Servo на Mega шагает по 0,5 мкс, поэтому дробную часть выдаём по очереди
+// кадрами (в среднем 0,1 мкс): цель вроде 60 об/мин приходится между шагами, и
+// без этого колесо прыгало бы между «стоит» и «сотней оборотов».
 void updateDriveOutput() {
   if (!drive_active) return;
   const uint32_t now = millis();
   if ((uint32_t)(now - drive_frame_ms) < DRIVE_FRAME_MS) return;
   drive_frame_ms = now;
-  int32_t extra_x10 = drive_level_x10 - (int32_t)DRIVE_NEUTRAL_US * 10;
-  if (extra_x10 < 0) extra_x10 = 0;
-  drive_dither_x10 = (int16_t)(drive_dither_x10 + extra_x10);
+  drive_dither_x10 += drive_level_x10;
   int32_t whole = drive_dither_x10 / 10;
-  drive_dither_x10 = (int16_t)(drive_dither_x10 - whole * 10);
-  driveWritePulse((uint16_t)(DRIVE_NEUTRAL_US + whole));
+  drive_dither_x10 -= whole * 10;
+  driveWritePulse((uint16_t)whole);
 }
 
-// Регулятор оборотов: команда задаёт заказанные об/мин (процент × 2), а импульс
-// на входе «P» прошивка подбирает сама по тахометру «SC». Шаг — 0,1 мкс за
-// проход и не больше 0,2 мкс: драйвер отзывается резко (~100 об/мин на 1 мкс),
-// поэтому крупный шаг дал бы рывки вокруг цели.
+// Регулятор оборотов. Команда задаёт заказанные об/мин (процент × 2), а
+// скважность на входе «P» прошивка подбирает сама по тахометру «SC».
+//
+// Драйвер управляется скважностью, а не «нейтральным» импульсом: 0 % — мотор не
+// тянет, дальше скорость растёт. Поэтому:
+//   1) пока переходов «SC» нет, колесо стоит — скважность прибавляется шагами по
+//      20 мкс, пока оно не поедет (момент трогания у каждого экземпляра свой);
+//   2) как только поехало — работает обычный контур по оборотам: шаг 0,1 мкс за
+//      проход и не больше 0,2 мкс, чтобы не было рывков;
+//   3) ниже найденного момента трогания прошивка не опускается: там колесо
+//      просто встанет, а не поедет медленнее. Если заказано медленнее, чем
+//      получается, она честно пишет это в журнал один раз за поездку.
 void updateDriveSpeed() {
   const uint32_t now = millis();
-  if ((uint32_t)(now - drive_speed_ms) < DRIVE_SPEED_PERIOD_MS) return;
-  drive_speed_ms = now;
   if (!drive_active) {
     drive_level_x10 = (int32_t)DRIVE_NEUTRAL_US * 10;
+    drive_seeking = false;
     return;
   }
+  const uint32_t target = (uint32_t)abs((int)drive_percent) * DRIVE_RPM_X10_PER_PERCENT;
+  const int32_t lo = (int32_t)DRIVE_MIN_PULSE_US * 10;
+  const int32_t hi = (int32_t)DRIVE_PULSE_CEILING_US * 10;
+
+  // Поиск момента трогания: колесо ещё не выдало ни одного перехода «SC».
+  if (drive_seeking) {
+    if ((uint32_t)(now - drive_seek_ms) < DRIVE_SEEK_PERIOD_MS) return;
+    drive_seek_ms = now;
+    if (tach_trusted && tach_hz > 0) {
+      // Поехало: запоминаем, на какой скважности это случилось, и дальше держим
+      // обороты контуром. Следующий старт начнётся чуть ниже этой точки.
+      drive_seeking = false;
+      drive_start_us = drive_cmd_pulse_us;
+      drive_feedback_ms = now;
+      drive_speed_ms = now;
+      return;
+    }
+    uint16_t seek_limit = DRIVE_SEEK_MAX_US;
+    if (drive_start_us != 0) {
+      const uint32_t known = (uint32_t)drive_start_us + DRIVE_SEEK_MARGIN_US;
+      seek_limit = (known > DRIVE_PULSE_CEILING_US) ? DRIVE_PULSE_CEILING_US : (uint16_t)known;
+    }
+    if (drive_level_x10 >= (int32_t)seek_limit * 10 || drive_level_x10 >= hi) {
+      stopDriveLocal();
+      note(PSTR("тяга: колесо не трогается — проверьте тахометр SC на D19 и драйвер"));
+      return;
+    }
+    drive_level_x10 += DRIVE_SEEK_STEP_X10;
+    if (drive_level_x10 > hi) drive_level_x10 = hi;
+    drive_cmd_pulse_us = (uint16_t)((drive_level_x10 + 5) / 10);
+    return;
+  }
+
+  if ((uint32_t)(now - drive_speed_ms) < DRIVE_SPEED_PERIOD_MS) return;
+  drive_speed_ms = now;
   // Обратная связь: без правдоподобных оборотов крутить вслепую нельзя. Если
   // тахометр молчит или врёт (нет переходов SC, помеха) дольше
   // DRIVE_FEEDBACK_TIMEOUT_MS, тяга снимается целиком — это fail closed.
@@ -1505,21 +1587,49 @@ void updateDriveSpeed() {
     note(PSTR("тяга: обороты не измерить (тахометр SC молчит) — тяга снята"));
     return;
   }
-  const uint32_t target = (uint32_t)abs((int)drive_percent) * DRIVE_RPM_X10_PER_PERCENT;
   if (target == 0) return;
+
+  // Колесо стоит. Значит, скважность ниже момента трогания: поднимаем её мелким
+  // шагом 0,1 мкс и ждём, пока оно поедет. Если стоим далеко внизу (например,
+  // колесо заглохло под нагрузкой), сразу прыгаем к найденной раньше точке.
+  if (rpm_x10 == 0) {
+    // Каждый останов — повод вдвое уменьшить шаг: так прошивка сама находит и
+    // минимальную скважность, при которой колесо ещё едет, и цену одного её шага.
+    const int32_t nudge = (drive_step_cap > 1) ? (drive_step_cap / 2) : 1;
+    if (drive_step_cap > 1) drive_step_cap /= 2;
+    if (drive_good_x10 > lo) {
+      // Возвращаемся на рабочую точку — но чуть выше и с меньшим шагом: ниже
+      // неё колесо уже останавливается.
+      drive_level_x10 = drive_good_x10 + nudge;
+      drive_start_us = (uint16_t)((drive_good_x10 + 5) / 10);
+    } else {
+      drive_level_x10 += 1;
+    }
+    if (drive_level_x10 > hi) drive_level_x10 = hi;
+    drive_cmd_pulse_us = (uint16_t)((drive_level_x10 + 5) / 10);
+    return;
+  }
+
+  drive_good_x10 = drive_level_x10;   // на этой скважности колесо едет
   const int32_t err = (int32_t)target - (int32_t)rpm_x10;
   const int32_t deadband = (int32_t)(target / 8) + 20;  // 12,5 % цели + 2 об/мин
   if (err > deadband || err < -deadband) {
-    int32_t step = err / 100;
-    if (step > 2) step = 2;
-    if (step < -2) step = -2;
+    // Шаг пропорционален ошибке, но не больше выученного предела: драйвер
+    // отзывается резко, и крупный шаг дал бы рывки вокруг цели.
+    int32_t step = err / 50;
+    if (step > drive_step_cap) step = drive_step_cap;
+    if (step < -drive_step_cap) step = -drive_step_cap;
     if (step == 0) step = (err > 0) ? 1 : -1;
     drive_level_x10 += step;
   }
-  const int32_t lo = (int32_t)DRIVE_NEUTRAL_US * 10;
-  const int32_t hi = (int32_t)DRIVE_PULSE_CEILING_US * 10;
   if (drive_level_x10 < lo) drive_level_x10 = lo;
   if (drive_level_x10 > hi) drive_level_x10 = hi;
+  if (!drive_floor_noted && drive_level_x10 == lo &&
+      (int32_t)rpm_x10 > (int32_t)target + 100) {
+    drive_floor_noted = true;
+    note(PSTR("тяга: медленнее не могу — на минимальной скважности уже %u об/мин"),
+         (unsigned)(rpm_x10 / 10));
+  }
   drive_cmd_pulse_us = (uint16_t)((drive_level_x10 + 5) / 10);
 }
 
