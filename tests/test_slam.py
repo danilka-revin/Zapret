@@ -704,7 +704,7 @@ def test_pot_mode_requires_all_boards_and_idle_telemetry():
 
 # --------------------------- гибкая настройка тяги --------------------------- #
 def _drive_frame(module, *, tach=1, dmax=100, us=1500, deg=0.0, drive=0, ppr=90, rpm=0.0,
-                 kmh=50):
+                 kmh=50, hz=0):
     """Строка @TLM прошивки v8: драйвер ZS-Z11H, настраивать нечего.
 
     us — фактический «серво»-импульс на входе «P» в мкс (1500 — нейтраль),
@@ -712,8 +712,8 @@ def _drive_frame(module, *, tach=1, dmax=100, us=1500, deg=0.0, drive=0, ppr=90,
     kmh — потолок скорости прошивки в десятых (50 — это 5 км/ч).
     """
     return ("@TLM mod=%s deg=%.2f tgt=0.00 moving=0 cal=1 cycle=0 calib=0 rpm=%.1f "
-            "drive=%d fw=8 pot=1 pm=1 tach=%d dmax=%d us=%d ppr=%d kmh=%d"
-            % (module, deg, rpm, drive, tach, dmax, us, ppr, kmh))
+            "drive=%d fw=8 pot=1 pm=1 tach=%d dmax=%d us=%d ppr=%d kmh=%d hz=%d"
+            % (module, deg, rpm, drive, tach, dmax, us, ppr, kmh, hz))
 
 
 def test_wheel_ports_are_released_only_for_a_manual_flash():
@@ -780,8 +780,10 @@ def test_master_telemetry_parses_the_wheel_driver_fields():
     backend = _load_backend()
     frame = backend.parse_master_line(
         "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=8 tach=1 "
-        "dmax=100 us=1540 ppr=90 kmh=50 t=1")
+        "dmax=100 us=1540 ppr=90 kmh=50 hz=90 t=1")
     assert frame["tach"] is True
+    # hz= — переходов «SC» в секунду: при одном обороте в секунду это и есть ppr.
+    assert frame["tachHz"] == 90
     assert frame["driveMaxPercent"] == 100
     assert frame["drivePulseUs"] == 1540
     assert frame["driveMaxKmhX10"] == 50
@@ -794,6 +796,7 @@ def test_master_telemetry_parses_the_wheel_driver_fields():
     legacy = backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=0 drive=0 fw=4")
     assert legacy["tach"] is None and legacy["driveMaxPercent"] is None
     assert legacy["drivePulseUs"] is None and legacy["tachPpr"] is None
+    assert legacy["tachHz"] is None
 
     # Мусор и противоречия не превращаются в «значение по умолчанию».
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 tach=7") is None
@@ -803,6 +806,9 @@ def test_master_telemetry_parses_the_wheel_driver_fields():
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 kmh=0") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=0") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 ppr=abc") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 hz=abc") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 hz=-5") is None
+    assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=0 hz=90000") is None
     # Тяга не может превышать собственный предел платы.
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=30 dmax=20") is None
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=30 dmax=50") is not None
