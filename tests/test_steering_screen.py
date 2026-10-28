@@ -35,7 +35,8 @@ def motor(module, *, angle=0.0, target=None, online=True, homed=True, moving=Fal
         "angle": angle, "targetAngle": angle if target is None else target,
         "moving": moving, "calibrating": False,
         "cycling": False, "opto": False, "calibError": 0, "drivePercent": 0, "rpm": 0.0,
-        "firmware": 8, "pot": True, "tach": True, "driveMaxPercent": 30, "drivePulseUs": 1500,
+        "firmware": 11, "pot": True, "tach": True, "driveMaxPercent": 30,
+        "driveDutyPermille": 0,
         "tachHz": 90,
     }
 
@@ -68,7 +69,7 @@ def maneuver_config(**overrides):
 def per_module_state(**overrides):
     """Готовность одиночной тяги по колёсам (drive.perModule от сервера)."""
     state = {"canDrive": True, "reason": None, "percent": 0, "commandedPercent": 0,
-             "pulseUs": 1500, "rpm": 0.0, "tach": True,
+             "dutyPermille": 0, "rpm": 0.0, "tach": True,
              "dirReverse": False, "canSetDirection": True, "directionReason": None}
     state.update(overrides)
     return {module: dict(state) for module in MODULES}
@@ -88,7 +89,7 @@ def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_re
                   "maxPercent": 30, "commandedPercent": 0, "active": False,
                   "individual": True, "commandedModules": {},
                   "perModule": per_module if per_module is not None else per_module_state(),
-                  "reportedPulse": {}, "alignmentToleranceDeg": 2.5,
+                  "reportedDuty": {}, "alignmentToleranceDeg": 2.5,
                   # Колёса стоят ровно: справка для подписи, тягу не запирает.
                   "aligned": True, "spreadDeg": 0.0,
                   "maneuver": maneuver or {"supported": True, "active": False,
@@ -205,13 +206,13 @@ def test_wheel_drive_refusal_stops_the_heartbeat_and_is_shown(tmp_path):
 
 
 def test_wheel_drive_shows_reported_output_and_honest_rpm(tmp_path):
-    """В карточке виден фактический серво-импульс и обороты по «SC»."""
+    """В карточке видна фактическая скважность ШИМ и обороты по «SC»."""
     motors = [motor(m) for m in MODULES]
-    motors[0] = dict(motors[0], drivePercent=6, drivePulseUs=1530, tach=True, rpm=95.0)
+    motors[0] = dict(motors[0], drivePercent=6, driveDutyPermille=13, tach=True, rpm=95.0)
     report = run_screen(tmp_path, payload(motors=motors, actions=[
         {"type": "wheel-drive", "id": "FL", "direction": 1}]))
     cards = {item["id"]: item for item in report["wheelDrive"]}
-    assert "ШИМ 1530 мкс" in cards["FL"]["output"]
+    assert "скважность 1,3 %" in cards["FL"]["output"], cards["FL"]["output"]
     assert "об/мин" in cards["FL"]["output"]
     assert cards["FL"]["state"].startswith("вперёд")
 

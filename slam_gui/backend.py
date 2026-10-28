@@ -85,7 +85,7 @@ MODULE_TITLES = {
 WHEEL_R_M = 0.127            # радиус колеса Xiaomi M365 Pro, м
 #: Предел тяги в процентах — константа прошивки, а не настройка: 30 % шкалы, и
 #: это 60 об/мин. Процент означает заказанные обороты колеса (2 об/мин на
-#: процент), а «серво»-импульс на входе «P» драйвера ZS-Z11H плата подбирает
+#: процент), а скважность ШИМ на входе «P» драйвера ZS-Z11H плата подбирает
 #: сама по тахометру «SC». Плата присылает свой предел в @TLM полем ``dmax=``;
 #: значение совпадает с DRIVE_MAX_PERCENT в firmware/motor_wheel.
 MAX_DRIVE_PERCENT = 30
@@ -98,18 +98,18 @@ DRIVE_ABS_MAX_PERCENT = 30
 #: число осталось только для подсказки «колёса стоят ровно / под углом».
 DRIVE_ANGLE_ALIGNMENT_DEG = 2.5
 #: Драйвер колеса — RioRand ZS-Z11H с датчиками Холла. Тяга задаётся
-#: «серво»-импульсом 50 Гц на входе «P»: 1500 мкс — мотор не тянет, дальше
-#: прошивка подбирает импульс по оборотам (30 % = 60 об/мин); датчик «SC» даёт
+#: скважностью аппаратного ШИМ 1 кГц на входе «P»: 0 % — мотор не тянет,
+#: дальше прошивка подбирает скважность по оборотам (30 % = 60 об/мин); «SC» даёт
 #: 90 изменений состояния за оборот колеса, то есть
 #: RPM = 60 / (90 × время между переходами). Оба числа — свойства драйвера, а не
 #: настройки: экран их только показывает.
 DRIVE_TACH_PPR = 90
-#: Границы импульса на входе «P» драйвера, мкс. При 50 Гц 1000 мкс — это 5 %
-#: скважности, 2000 — 10 % (0 % — мотор не тянет, 100 % — полный ход, шире
-#: библиотека Servo на Mega не умеет). Всё, что вне диапазона, — испорченный
-#: кадр телеметрии, а не значение.
-DRIVE_PULSE_MIN_US = 1000
-DRIVE_PULSE_MAX_US = 2000
+#: Границы скважности на входе «P» драйвера в промилле: 0 — мотор не тянет,
+#: 1000 — полный ход. Прошивка подаёт настоящий ШИМ 1 кГц с шагом 0,05 %
+#: (2000 шагов на период), а в телеметрию отдаёт промилле. Всё, что вне
+#: диапазона, — испорченный кадр телеметрии, а не значение.
+DRIVE_DUTY_MIN_PERMILLE = 0
+DRIVE_DUTY_MAX_PERMILLE = 1000
 #: Сколько импульсов тахометра бывает на оборот колеса — предел команды m ppr.
 #: Драйверы дают и 1, и 60 импульсов: без этой настройки «об/мин» врали ровно
 #: во столько раз (колесо делает оборот в секунду, а экран показывает 3600).
@@ -326,7 +326,7 @@ def parse_master_line(line, module=None):
         calib_error = int(fields["err"]) if "err" in fields else None
         home = fields.get("home")
         # Тяга: tach=1 — тахометр SC включён, dmax= — предел прошивки в процентах,
-        # us= — фактический импульс на входе «P» в мкс (1000…2000),
+        # duty= — фактическая скважность на входе «P» в промилле (25 = 2,5 %),
         # ppr= — сколько переходов SC приходится на оборот колеса, hz= —
         # сколько их приходит в секунду (диагностика провода тахометра). Всё это
         # свойства драйвера ZS-Z11H: настраивать тут нечего, экран только
@@ -334,7 +334,7 @@ def parse_master_line(line, module=None):
         tach = {"0": False, "1": True}.get(fields.get("tach")) if "tach" in fields else None
         try:
             drive_max = int(fields["dmax"]) if "dmax" in fields else None
-            drive_pulse = int(fields["us"]) if "us" in fields else None
+            drive_duty = int(fields["duty"]) if "duty" in fields else None
             tach_ppr = int(fields["ppr"]) if "ppr" in fields else None
             tach_hz = int(fields["hz"]) if "hz" in fields else None
         except ValueError:
@@ -351,8 +351,8 @@ def parse_master_line(line, module=None):
                 (calib_error is not None and not 0 <= calib_error <= 15) or
                 (home is not None and home not in HOME_SOURCES) or
                 (drive_max is not None and not 1 <= drive_max <= 100) or
-                (drive_pulse is not None and
-                 not DRIVE_PULSE_MIN_US <= drive_pulse <= DRIVE_PULSE_MAX_US) or
+                (drive_duty is not None and
+                 not DRIVE_DUTY_MIN_PERMILLE <= drive_duty <= DRIVE_DUTY_MAX_PERMILLE) or
                 (tach_ppr is not None and not 1 <= tach_ppr <= TACH_PPR_MAX) or
                 (tach_hz is not None and not 0 <= tach_hz <= TACH_HZ_MAX)):
             return None
@@ -384,7 +384,7 @@ def parse_master_line(line, module=None):
             # Тяга (ZS-Z11H): None у старой прошивки без этих полей.
             "tach": tach,
             "driveMaxPercent": drive_max,
-            "drivePulseUs": drive_pulse,
+            "driveDutyPermille": drive_duty,
             "tachPpr": tach_ppr,
             # Сколько переходов «SC» приходит в секунду. При вращении ровно один
             # оборот в секунду это и есть число импульсов на оборот: по нему
@@ -900,8 +900,8 @@ class MasterSource:
                 "reason": why or None,
                 "percent": motors.get(module),
                 "commandedPercent": commanded_modules.get(module, 0),
-                # «Серво»-импульс на входе «P» этого драйвера и обороты по «SC».
-                "pulseUs": frame.get("drivePulseUs") if frame else None,
+                # Скважность на входе «P» этого драйвера (промилле) и обороты по «SC».
+                "dutyPermille": frame.get("driveDutyPermille") if frame else None,
                 "rpm": frame.get("rpm") if frame else None,
                 "tach": frame.get("tach") if frame else None,
                 # Переходов «SC» в секунду — диагностика провода тахометра.
@@ -919,7 +919,7 @@ class MasterSource:
             "perModule": per_module,
             "active": any(value not in (None, 0) for value in motors.values()),
             "reportedPercent": motors,
-            "reportedPulse": {module: frame.get("drivePulseUs")
+            "reportedDuty": {module: frame.get("driveDutyPermille")
                               for module, frame in fresh_frames.items()},
             "maneuver": self.maneuver_status(now),
             # Справка для экрана: колёса стоят ровно (0°) или под углом.
@@ -1494,11 +1494,11 @@ class MasterSource:
                                "pot": frame.get("pot", False),
                                "potMode": frame.get("potMode"),
                                # Тяга своей платы: тахометр «SC» включён всегда,
-                               # серво-импульс — фактический, предел — из
+                               # скважность — фактическая (промилле), предел — из
                                # прошивки. Настраивать здесь нечего.
                                "tach": frame.get("tach"),
                                "driveMaxPercent": frame.get("driveMaxPercent"),
-                               "drivePulseUs": frame.get("drivePulseUs"),
+                               "driveDutyPermille": frame.get("driveDutyPermille"),
                                "tachHz": frame.get("tachHz"),
                                "online": True, "fault": None,
                                "moving": frame["moving"], "calibrating": frame["calib"],
@@ -1508,7 +1508,7 @@ class MasterSource:
                                "targetAngle": None, "rpm": None, "temp": None,
                                "drivePercent": None, "homed": None, "online": False, "fault": None,
                                "pot": None, "tach": None, "driveMaxPercent": None,
-                               "drivePulseUs": None, "tachHz": None,
+                               "driveDutyPermille": None, "tachHz": None,
                                "moving": False, "calibrating": False})
         out = NoSource().read()              # АКБ и маршрут пока не передаются
         out["motors"] = motors
