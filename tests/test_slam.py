@@ -452,12 +452,12 @@ def test_master_telemetry_parses_bldc_rpm_and_drive_percent():
         "@TLM mod=FL deg=0.00 tgt=0.00 moving=0 cal=1 cycle=0 calib=0 opto=0 rpm=245.5 drive=-12 t=42")
     assert frame["rpm"] == 245.5
     assert frame["drivePercent"] == -12
-    # Предел прошивки — 30 % шкалы: больше плата не берёт, а без dmax= в кадре
-    # действует тот же предел (MAX_DRIVE_PERCENT = 30).
+    # Предел прошивки — 100 % шкалы (500 об/мин): больше плата не берёт, а без
+    # dmax= в кадре действует тот же предел (MAX_DRIVE_PERCENT = 100).
     assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=31") is None
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=101") is None
     assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=30") is not None
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=100") is not None
 
 
 def test_master_source_drive_works_at_any_angle_and_prioritizes_stop():
@@ -712,7 +712,7 @@ def _drive_frame(module, *, tach=1, dmax=30, duty=12, deg=0.0, drive=0, ppr=90, 
     hz — сколько переходов «SC» приходит в секунду (диагностика провода).
     """
     return ("@TLM mod=%s deg=%.2f tgt=0.00 moving=0 cal=1 cycle=0 calib=0 rpm=%.1f "
-            "drive=%d fw=11 pot=1 pm=1 tach=%d dmax=%d duty=%d ppr=%d hz=%d"
+            "drive=%d fw=12 pot=1 pm=1 tach=%d dmax=%d duty=%d ppr=%d hz=%d"
             % (module, deg, rpm, drive, tach, dmax, duty, ppr, hz))
 
 
@@ -779,12 +779,12 @@ def test_master_telemetry_parses_the_wheel_driver_fields():
     """
     backend = _load_backend()
     frame = backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=11 tach=1 "
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=12 tach=1 "
         "dmax=30 duty=12 ppr=90 hz=90 t=1")
     assert frame["tach"] is True
     # hz= — переходов «SC» в секунду: при одном обороте в секунду это и есть ppr.
     assert frame["tachHz"] == 90
-    assert frame["driveMaxPercent"] == 30
+    assert frame["driveMaxPercent"] == 30  # плата со старой шкалой: свой предел
     assert frame["driveDutyPermille"] == 12, "12 промилле — это 1,2 % скважности"
     assert "driveMaxKmhX10" not in frame, "потолок в км/ч ушёл вместе с регулятором"
     assert frame["tachPpr"] == 90 and frame["rpm"] == 60.0
@@ -847,13 +847,17 @@ def test_drive_limit_follows_the_plates_and_server_ceiling():
     src = _bare_master_source(backend)
     for module in ("FL", "FR", "RL", "RR"):
         src.feed(_drive_frame(module), now=100.0)
-    assert src.drive_limit_percent(now=100.2) == 30
+    assert src.drive_limit_percent(now=100.2) == 30   # плата v11 прислала dmax=30
     assert src.drive_status(now=100.2)["maxPercent"] == 30
 
-    # Плата разрешила себе больше сервера — сервер выше 30 % не поднимает.
+    # Плата v11 называет всю шкалу — 100 %, то есть 500 об/мин.
     for module in ("FL", "FR", "RL", "RR"):
-        src.feed(_drive_frame(module, dmax=50), now=100.0)
-    assert src.drive_limit_percent(now=100.2) == 30
+        src.feed(_drive_frame(module, dmax=100), now=100.0)
+    assert src.drive_limit_percent(now=100.2) == 100
+    # Мусор в dmax (больше 100 %) не превращается в разрешение: кадр отбрасывается,
+    # а действует предел сервера.
+    src.feed(_drive_frame("FL", dmax=150), now=100.0)
+    assert src.drive_limit_percent(now=100.2) == 100
 
     # Одна плата осторожнее — общий предел по ней: сервер не обещает больше.
     src.feed(_drive_frame("RR", dmax=10), now=100.0)
@@ -862,22 +866,23 @@ def test_drive_limit_follows_the_plates_and_server_ceiling():
     assert src.drive(30, now=100.3)["limit"] == 10
 
 
-def test_drive_ceiling_is_thirty_percent_everywhere():
-    """Порог тяги 30 % — одно число на всём стеке, и оно не настройка.
+def test_drive_ceiling_is_the_whole_scale_everywhere():
+    """Верх шкалы тяги — 100 %, то есть 500 об/мин: одно число на всём стеке.
 
-    Проценты — раствор «серво»-импульса, а не километры в час: прошивка берёт
-    не больше 30 % (1650 мкс), сервер не пропускает выше и экран не поднимает
-    ползунок. Регулятора по тахометру больше нет — скорость задаётся импульсом.
+    Проценты — заказанные обороты колеса, а не раствор ШИМ: прошивка берёт не
+    больше 100 % (500 об/мин, 5 об/мин на процент), сервер не пропускает выше и
+    экран не поднимает ползунок. Скважность на входе «P» подбирает регулятор
+    прошивки по тахометру «SC».
     """
     backend = _load_backend()
-    assert backend.MAX_DRIVE_PERCENT == 30
-    assert backend.DRIVE_ABS_MAX_PERCENT == 30
+    assert backend.MAX_DRIVE_PERCENT == 100
+    assert backend.DRIVE_ABS_MAX_PERCENT == 100
     assert not hasattr(backend, "DRIVE_MAX_KMH_X10")
     src = _bare_master_source(backend)
     for module in ("FL", "FR", "RL", "RR"):
         src.feed(_drive_frame(module), now=100.0)
     status = src.drive_status(now=100.2)
-    assert status["maxPercent"] == 30
+    assert status["maxPercent"] == 30    # предел взят из кадра платы (dmax=30)
     assert "maxKmh" not in status
     assert not hasattr(src, "drive_max_kmh")
 

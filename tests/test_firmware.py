@@ -115,14 +115,14 @@ def test_step_timer_does_not_fight_the_drive_pwm():
     assert "tone(" not in code
 
 
-def test_drive_uses_hardware_pwm_and_a_sixty_rpm_scale():
+def test_drive_uses_hardware_pwm_and_a_full_scale_of_five_hundred_rpm():
     """ШИМ на входе «P» — аппаратный, а процент команды — об/мин.
 
     Драйвер RioRand ZS-Z11H понимает на «P» ШИМ 50 Гц…20 кГц и управляется
     СКВАЖНОСТЬЮ: 0 % — мотор не тянет, 100 % — полный ход. Прошивка держит
     1 кГц на Timer3 (D3 = OC3C) с 2000 шагами на период. Отзывается драйвер
-    резко, поэтому процент означает ЗАКАЗАННЫЕ ОБОРОТЫ (30 % = 60 об/мин), а
-    скважность прошивка подбирает по тахометру «SC».
+    резко, поэтому процент означает ЗАКАЗАННЫЕ ОБОРОТЫ: 100 % = 500 об/мин,
+    5 об/мин на процент, а скважность прошивка подбирает по тахометру «SC».
     """
     text = _text(WHEEL)
     code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
@@ -143,17 +143,22 @@ def test_drive_uses_hardware_pwm_and_a_sixty_rpm_scale():
                  "DRIVE_FULL_US", "driveServo.writeMicroseconds"):
         assert gone not in code, gone
 
-    # Предел шкалы — 30 %, полная шкала — 60 об/мин: 1 % = 2 об/мин.
-    assert int(_const(text, "DRIVE_MAX_PERCENT")) == 30
-    assert int(_const(text, "DRIVE_MAX_RPM_X10")) == 600
+    # Шкала — 100 % = 500 об/мин: 5 об/мин на процент. Сам мотор без нагрузки
+    # выдаёт ≈578 об/мин (замер MAD-EE), поэтому 500 — это почти его предел.
+    assert int(_const(text, "DRIVE_MAX_PERCENT")) == 100
+    assert int(_const(text, "DRIVE_MAX_RPM_X10")) == 5000
     assert _const(text, "DRIVE_RPM_X10_PER_PERCENT") == "DRIVE_MAX_RPM_X10 / DRIVE_MAX_PERCENT"
-    assert 600 // 30 == 20                              # 1 % = 2 об/мин
+    assert 5000 // 100 == 50                            # 1 % = 5 об/мин
+    # Потолок правдоподобия выше физического максимума мотора: иначе прошивка
+    # ругалась бы «помеха» на полном ходу.
+    assert int(_const(text, "DRIVE_TACH_MAX_RPM_X10")) > 5780
 
-    # Момент трогания прошивка находит сама: шаги по 0,2 % от нуля, первый раз
-    # не выше 8 %, дальше — найденная точка + 1 %. Иначе обрыв провода «SC»
-    # выглядел бы как «колесо стоит», и прошивка разгоняла бы его до потолка.
-    assert int(_const(text, "DRIVE_SEEK_STEP")) == 4
-    assert int(_const(text, "DRIVE_SEEK_MAX_DUTY")) == 160
+    # Момент трогания прошивка находит сама: шаги по 0,4 % от нуля (и крупнее с
+    # ростом скважности), первый раз не выше 20 %, дальше — найденная точка +
+    # 1 %. Иначе обрыв провода «SC» выглядел бы как «колесо стоит», и прошивка
+    # разгоняла бы его до потолка.
+    assert int(_const(text, "DRIVE_SEEK_STEP")) == 8
+    assert int(_const(text, "DRIVE_SEEK_MAX_DUTY")) == 400
     assert int(_const(text, "DRIVE_SEEK_MARGIN")) == 20
     assert "drive_start_duty" in code and "drive_seeking" in code
     # Ниже найденной точки не опускается, а шаг контура уменьшает на каждой
@@ -173,8 +178,9 @@ def test_drive_uses_hardware_pwm_and_a_sixty_rpm_scale():
     assert _const(text, "BLDC_BRAKE_ACTIVE_LEVEL") == "HIGH"
     # Python-зеркало того же: предел тяги и тахометр.
     mirror = _text(ROOT / "slam_gui" / "backend.py")
-    assert re.search(r"^MAX_DRIVE_PERCENT = 30$", mirror, re.M)
-    assert re.search(r"^DRIVE_ABS_MAX_PERCENT = 30$", mirror, re.M)
+    # Оба потолка — 100 % = 500 об/мин, как DRIVE_MAX_PERCENT в прошивке.
+    assert re.search(r"^MAX_DRIVE_PERCENT = 100$", mirror, re.M)
+    assert re.search(r"^DRIVE_ABS_MAX_PERCENT = 100$", mirror, re.M)
     assert "DRIVE_MAX_KMH_X10" not in mirror
     # Скважность в телеметрии — в промилле (0…1000), а не в микросекундах.
     assert re.search(r"^DRIVE_DUTY_MAX_PERMILLE = 1000$", mirror, re.M)
@@ -191,7 +197,7 @@ def test_firmware_has_no_usb_role_discovery():
     assert 'classifyModuleToken' in text
     # v11 — драйвер ZS-Z11H: аппаратный ШИМ на D3 (вход «P», управляет
     # скважностью), линия STOP на D2, тахометр «SC» на D19, регулятор оборотов.
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '11'
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '12'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
@@ -369,7 +375,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 11 and frame["calibError"] == 0
+        assert frame["firmware"] == 12 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] == 0.0
         assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False
