@@ -161,9 +161,11 @@ const uint8_t EEPROM_POT_MAGIC = 0x51;      // «q» — наклон измер
 
 // ---- тяга BLDC: драйвер RioRand ZS-Z11H (hoverboard-мотор) ----
 // Вход «P» (PWM): 50 Гц…20 кГц. Прошивка подаёт на него «серво»-импульс 50 Гц
-// библиотекой Servo: 1500 мкс — мотор не тянет, 2000 мкс — полный ход шкалы
-// (скважность 7,5 % … 10 %). Предел прошивки — 30 % шкалы (1650 мкс): так колесо
-// заведомо медленное, а полный ход драйвера (~18 км/ч) недостижим в принципе.
+// библиотекой Servo: 1500 мкс — мотор не тянет, 2000 мкс — полный ход шкалы.
+// Драйвер отзывается очень резко: уже 1505 мкс раскручивают колесо почти до
+// полного хода (~490 об/мин). Поэтому процент команды — это ЗАКАЗАННЫЕ ОБОРОТЫ,
+// а импульс прошивка подбирает сама по тахометру «SC»: контур замкнут, и
+// «1 % — и уже 490 об/мин» больше не получится. Полная шкала 30 % — 60 об/мин.
 // Тахометр — выход SC: 90 переходов на оборот колеса (по одному на каждую смену
 // сигнала трёх датчиков Холла). Это свойство драйвера, а не настройка.
 const uint8_t DRIVE_TACH_PPR = 90;             // переходов SC на оборот колеса
@@ -178,19 +180,30 @@ const uint16_t DRIVE_TACH_MIN_EDGE_US = 150;
 // колесе 216 мм). Прошивка честно говорит «обороты недостоверны», а не
 // показывает выдуманное число.
 const uint32_t DRIVE_TACH_MAX_RPM_X10 = 6000;
-// Предел тяги прошивки: 30 % шкалы, то есть импульс не выше
-// 1500 + 500·30/100 = 1650 мкс. Это константа прошивки, а не настройка:
-// команду больше 30 % плата отклоняет и гасит выход.
+// Предел тяги прошивки: 30 % шкалы. Процент — это обороты, а не раствор
+// импульса: 30 % = 60 об/мин, 1 % = 2 об/мин. Команду больше 30 % плата
+// отклоняет и гасит выход. Константа прошивки, а не настройка.
 const uint8_t DRIVE_MAX_PERCENT = 30;
+// Полная шкала (30 %) — 60 об/мин: дальше колесо тележке не нужно.
+const uint16_t DRIVE_MAX_RPM_X10 = 600;
+const uint16_t DRIVE_RPM_X10_PER_PERCENT = DRIVE_MAX_RPM_X10 / DRIVE_MAX_PERCENT;
 const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → нейтраль и тормоз
 // Серво-ШИМ на D3: 50 Гц, импульс 1500…2000 мкс. 1500 мкс — «стоп» (на входе «P»
 // это 7,5 % скважности, поэтому в покое драйвер ещё и выключен линией STOP).
 const uint16_t DRIVE_NEUTRAL_US = 1500;
 const uint16_t DRIVE_FULL_US = 2000;
 const uint16_t DRIVE_SERVO_HZ = 50;
-// Скорость НЕ регулируется по тахометру: импульс прямо следует за процентом
-// команды (1500…1650 мкс при пороге 30 %). Тахометр остаётся только для
-// показаний: об/мин в телеметрии и в карточке колеса на экране.
+// Регулятор оборотов ищет импульс только в узком коридоре над нейтралью: на этом
+// драйвере 1505 мкс — уже ~490 об/мин, поэтому выше 1540 мкс прошивка не
+// поднимается ни при каких оборотах. Это страховка, а не настройка.
+const uint16_t DRIVE_PULSE_CEILING_US = 1540;
+// Как часто регулятор правит импульс и сколько он терпит молчание тахометра,
+// прежде чем снять тягу: без оборотов регулировать нечего.
+const uint16_t DRIVE_SPEED_PERIOD_MS = 500;
+const uint16_t DRIVE_FEEDBACK_TIMEOUT_MS = 3000;
+// Период перезаписи импульса: Servo обновляет выход на 50 Гц, поэтому дробные
+// доли микросекунды прошивка выдаёт по очереди кадрами (в среднем 0,1 мкс).
+const uint16_t DRIVE_FRAME_MS = 20;
 // Зеркальные колёса. Корпус симметричный, поэтому правое колесо при том же
 // уровне DIR крутится в другую сторону относительно робота. По умолчанию
 // прошивка сама понимает это по имени колеса: FR и RR — зеркальные.
@@ -199,11 +212,11 @@ const uint16_t DRIVE_SERVO_HZ = 50;
 #define DRIVE_MIRRORED -1
 #endif
 
-// v8: тяга — «серво»-импульс 50 Гц (Servo) на входе «P», ровно из процента
-// команды, предел прошивки 30 % шкалы (1650 мкс), зеркальные FR/RR, тахометр SC
-// (90 переходов на оборот) — только для показаний. Настроек тяги нет: все
-// числа — свойство железа, EEPROM для тяги не используется.
-const uint8_t FIRMWARE_PROTOCOL = 8;           // поле fw= в @TLM
+// v9: тяга — «серво»-импульс 50 Гц (Servo) на входе «P», обороты держит
+// регулятор по тахометру SC (90 переходов на оборот): процент команды —
+// заказанные об/мин (30 % = 60 об/мин), зеркальные FR/RR. Настроек тяги нет:
+// все числа — свойство железа, EEPROM для тяги не используется.
+const uint8_t FIRMWARE_PROTOCOL = 9;           // поле fw= в @TLM
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -296,8 +309,15 @@ bool tach_trusted = true;               // обороты правдоподоб
 
 // Тяга: какие проценты просили и какой импульс сейчас на входе «P».
 uint16_t drive_pulse_us = DRIVE_NEUTRAL_US;     // фактический импульс на D3
-uint16_t drive_cmd_pulse_us = DRIVE_NEUTRAL_US; // что просила команда
+uint16_t drive_cmd_pulse_us = DRIVE_NEUTRAL_US; // уровень регулятора (в мкс)
 bool drive_mirrored = false;                    // это колесо стоит зеркально
+// Регулятор оборотов: уровень импульса в десятых долях микросекунды, остаток
+// дробной доли при выводе на Servo и таймеры (тяга, обратная связь, шаг).
+int32_t drive_level_x10 = (int32_t)DRIVE_NEUTRAL_US * 10;
+int16_t drive_dither_x10 = 0;
+uint32_t drive_feedback_ms = 0;
+uint32_t drive_speed_ms = 0;
+uint32_t drive_frame_ms = 0;
 
 char tx_buf[TX_BUFFER_SIZE];
 uint16_t tx_length = 0;
@@ -1276,15 +1296,6 @@ void setupDrivePwm() {
   drive_cmd_pulse_us = DRIVE_NEUTRAL_US;
 }
 
-// Импульс из процента тяги: 0 % — нейтраль (1500 мкс, мотор не тянет),
-// 100 % — DRIVE_FULL_US (2000 мкс, полный ход прошивки). Команда выше порога
-// DRIVE_MAX_PERCENT (30 %) сюда не доходит: её отклоняет applyLocalDrive.
-uint16_t drivePulseFor(uint8_t percent) {
-  if (percent == 0) return DRIVE_NEUTRAL_US;
-  if (percent > DRIVE_MAX_PERCENT) percent = DRIVE_MAX_PERCENT;
-  const uint16_t span = DRIVE_FULL_US - DRIVE_NEUTRAL_US;
-  return (uint16_t)(DRIVE_NEUTRAL_US + ((uint32_t)percent * span + 50UL) / 100UL);
-}
 
 void driveWritePulse(uint16_t us) {
   if (us < DRIVE_NEUTRAL_US) us = DRIVE_NEUTRAL_US;
@@ -1329,9 +1340,10 @@ void driveTachApply() {
 void printDriveInfo() {
   // Строка должна влезть в буфер строки (176 байт с кириллицей по 2 байта):
   // поэтому проценты словами, без «%%» — они и так висят на экране.
-  note(PSTR("Двигатель: Servo %u Гц на D3 · импульс %u мкс · потолок %u %% · %s"),
+  note(PSTR("Двигатель: Servo %u Гц на D3 · импульс %u мкс · шкала %u %% = %u об/мин · %s"),
        (unsigned)DRIVE_SERVO_HZ, (unsigned)drive_pulse_us,
-       (unsigned)DRIVE_MAX_PERCENT, drive_mirrored ? "зеркальное" : "прямое");
+       (unsigned)DRIVE_MAX_PERCENT, (unsigned)(DRIVE_MAX_RPM_X10 / 10),
+       drive_mirrored ? "зеркальное" : "прямое");
 }
 
 // ---------------------------------------------------------------------------
@@ -1356,13 +1368,18 @@ void applyDriveCommand(int8_t percent) {
     driveSetStop(true);
     digitalWrite(BLDC_DIR_PIN, direction);
     delayMicroseconds(100);
+    // Регулятор начинает от нейтрали и поднимает импульс сам, по оборотам:
+    // так колесо трогается плавно, а не прыжком в пол-оборота.
+    drive_level_x10 = (int32_t)DRIVE_NEUTRAL_US * 10;
+    drive_dither_x10 = 0;
+    drive_cmd_pulse_us = DRIVE_NEUTRAL_US;
+    drive_feedback_ms = millis();
+    drive_speed_ms = millis();
+    drive_frame_ms = millis();
   }
   digitalWrite(BLDC_DIR_PIN, direction);
   driveSetBrake(false);                       // тормоз отпущен
   driveSetStop(false);                        // драйвер разрешён на время тяги
-  // Импульс прямо из процента: никакой подрезки по оборотам между командами.
-  drive_cmd_pulse_us = drivePulseFor((uint8_t)abs((int)percent));
-  driveWritePulse(drive_cmd_pulse_us);
   drive_percent = percent;
   drive_active = percent != 0;
   last_drive_command_ms = millis();
@@ -1375,6 +1392,8 @@ void stopDriveLocal() {
   drive_percent = 0;
   drive_active = false;
   drive_cmd_pulse_us = DRIVE_NEUTRAL_US;
+  drive_level_x10 = (int32_t)DRIVE_NEUTRAL_US * 10;
+  drive_dither_x10 = 0;
 }
 
 bool applyLocalDrive(int8_t percent) {
@@ -1445,6 +1464,63 @@ void updateRpm() {
     tach_trusted = true;
   }
   rpm_x10 = rpm;
+}
+
+// Импульс регулятора → на D3. Дробные доли микросекунды выдаём по очереди
+// кадрами: Servo на Mega шагает по 0,5 мкс, а цель вроде 60 об/мин приходится
+// между шагами (≈1500,6 мкс). Без этого колесо прыгало бы между «стоит» и
+// «100 об/мин», а не держало середину.
+void updateDriveOutput() {
+  if (!drive_active) return;
+  const uint32_t now = millis();
+  if ((uint32_t)(now - drive_frame_ms) < DRIVE_FRAME_MS) return;
+  drive_frame_ms = now;
+  int32_t extra_x10 = drive_level_x10 - (int32_t)DRIVE_NEUTRAL_US * 10;
+  if (extra_x10 < 0) extra_x10 = 0;
+  drive_dither_x10 = (int16_t)(drive_dither_x10 + extra_x10);
+  int32_t whole = drive_dither_x10 / 10;
+  drive_dither_x10 = (int16_t)(drive_dither_x10 - whole * 10);
+  driveWritePulse((uint16_t)(DRIVE_NEUTRAL_US + whole));
+}
+
+// Регулятор оборотов: команда задаёт заказанные об/мин (процент × 2), а импульс
+// на входе «P» прошивка подбирает сама по тахометру «SC». Шаг — 0,1 мкс за
+// проход и не больше 0,2 мкс: драйвер отзывается резко (~100 об/мин на 1 мкс),
+// поэтому крупный шаг дал бы рывки вокруг цели.
+void updateDriveSpeed() {
+  const uint32_t now = millis();
+  if ((uint32_t)(now - drive_speed_ms) < DRIVE_SPEED_PERIOD_MS) return;
+  drive_speed_ms = now;
+  if (!drive_active) {
+    drive_level_x10 = (int32_t)DRIVE_NEUTRAL_US * 10;
+    return;
+  }
+  // Обратная связь: без правдоподобных оборотов крутить вслепую нельзя. Если
+  // тахометр молчит или врёт (нет переходов SC, помеха) дольше
+  // DRIVE_FEEDBACK_TIMEOUT_MS, тяга снимается целиком — это fail closed.
+  if (tach_trusted && tach_hz > 0) {
+    drive_feedback_ms = now;
+  } else if ((uint32_t)(now - drive_feedback_ms) > DRIVE_FEEDBACK_TIMEOUT_MS) {
+    stopDriveLocal();
+    note(PSTR("тяга: обороты не измерить (тахометр SC молчит) — тяга снята"));
+    return;
+  }
+  const uint32_t target = (uint32_t)abs((int)drive_percent) * DRIVE_RPM_X10_PER_PERCENT;
+  if (target == 0) return;
+  const int32_t err = (int32_t)target - (int32_t)rpm_x10;
+  const int32_t deadband = (int32_t)(target / 8) + 20;  // 12,5 % цели + 2 об/мин
+  if (err > deadband || err < -deadband) {
+    int32_t step = err / 100;
+    if (step > 2) step = 2;
+    if (step < -2) step = -2;
+    if (step == 0) step = (err > 0) ? 1 : -1;
+    drive_level_x10 += step;
+  }
+  const int32_t lo = (int32_t)DRIVE_NEUTRAL_US * 10;
+  const int32_t hi = (int32_t)DRIVE_PULSE_CEILING_US * 10;
+  if (drive_level_x10 < lo) drive_level_x10 = lo;
+  if (drive_level_x10 > hi) drive_level_x10 = hi;
+  drive_cmd_pulse_us = (uint16_t)((drive_level_x10 + 5) / 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -1890,6 +1966,8 @@ void setup() {
 void loop() {
   readSerialLines();
   steeringLoop();
+  updateDriveSpeed();   // обороты: процент команды → импульс на «P»
+  updateDriveOutput();  // импульс регулятора → Servo (с дробными долями)
   const uint32_t now = millis();
   if ((uint32_t)(now - last_telemetry_ms) >= TELEMETRY_PERIOD_MS) {
     last_telemetry_ms = now;

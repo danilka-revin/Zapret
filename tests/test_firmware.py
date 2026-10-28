@@ -113,17 +113,17 @@ def test_step_timer_does_not_fight_the_servo_library():
     assert "tone(" not in code
 
 
-def test_drive_uses_a_servo_pulse_and_a_thirty_percent_ceiling():
-    """ШИМ на входе «P» — «серво»-импульс 50 Гц, порог тяги — 30 % шкалы.
+def test_drive_uses_a_servo_pulse_and_a_sixty_rpm_scale():
+    """ШИМ на входе «P» — «серво»-импульс 50 Гц, а процент команды — об/мин.
 
     Драйвер RioRand ZS-Z11H понимает на «P» ШИМ 50 Гц…20 кГц: 1500 мкс —
-    мотор не тянет, 2000 мкс — полный ход шкалы. Прошивка выше 30 % (1650 мкс)
-    команду не берёт, и никакого регулятора по тахометру нет: импульс прямо
-    следует за процентом.
+    мотор не тянет, 2000 мкс — полный ход шкалы. Отзывается он резко: на железе
+    уже 1505 мкс давали ~490 об/мин, поэтому процент означает ЗАКАЗАННЫЕ
+    ОБОРОТЫ (30 % = 60 об/мин), а импульс прошивка подбирает по тахометру «SC».
     """
     text = _text(WHEEL)
     code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
-    # Библиотека Servo вернулась: заголовок, объект и вызов на D3.
+    # Библиотека Servo на месте: заголовок, объект и вызов на D3.
     assert "#include <Servo.h>" in text
     assert "Servo driveServo;" in code
     assert "driveServo.attach(BLDC_SPEED_PIN);" in code
@@ -133,41 +133,43 @@ def test_drive_uses_a_servo_pulse_and_a_thirty_percent_ceiling():
     assert int(_const(text, "DRIVE_NEUTRAL_US")) == 1500
     assert int(_const(text, "DRIVE_FULL_US")) == 2000
     assert int(_const(text, "DRIVE_SERVO_HZ")) == 50
-    assert int(_const(text, "DRIVE_FULL_US")) - int(_const(text, "DRIVE_NEUTRAL_US")) == 500
     # Прежнего прямого ШИМ регистрами больше нет: Timer3 ушёл библиотеке Servo.
     for gone in ("TCCR3A", "TCCR3B", "OCR3C", "DRIVE_PWM_HZ"):
         assert gone not in code, gone
-    # Формула: процент → импульс 1500…2000 мкс с округлением до микросекунды.
-    assert "DRIVE_NEUTRAL_US + ((uint32_t)percent * span + 50UL) / 100UL" in code
-    for percent in range(1, 101):
-        us = 1500 + (percent * 500 + 50) // 100
-        assert 1500 < us <= 2000, percent
-        assert abs(us - (1500 + percent * 5)) <= 3, percent
-    assert 1500 + (100 * 500 + 50) // 100 == 2000      # 100 % — 2000 мкс
-    assert 1500 + (8 * 500 + 50) // 100 == 1540        # 8 % — 1540 мкс
 
-    # Порог тяги — 30 % шкалы, то есть 1650 мкс: выше плата команду не берёт.
+    # Предел шкалы — 30 %, полная шкала — 60 об/мин: 1 % = 2 об/мин.
     assert int(_const(text, "DRIVE_MAX_PERCENT")) == 30
-    assert 1500 + (30 * 500 + 50) // 100 == 1650
-    for percent in range(31, 101):
-        assert 1500 + (percent * 500 + 50) // 100 > 1650, percent
-    # Регулятора по тахометру нет: импульс идёт прямо из процента команды.
-    assert "updateSpeedGovernor" not in code
-    assert "drive_cap_us" not in code
-    assert "driveWritePulse(drive_cmd_pulse_us);" in code
-    # Тахометр остался только для показаний.
-    assert "rpm_x10 = rpm;" in code
+    assert int(_const(text, "DRIVE_MAX_RPM_X10")) == 600
+    assert _const(text, "DRIVE_RPM_X10_PER_PERCENT") == "DRIVE_MAX_RPM_X10 / DRIVE_MAX_PERCENT"
+    assert 600 // 30 == 20                              # 1 % = 2 об/мин
+    # Регулятор ищет импульс только в узком коридоре над нейтралью: у драйвера
+    # ~100 об/мин на 1 мкс, поэтому 1540 мкс — уже страховочный потолок.
+    assert int(_const(text, "DRIVE_PULSE_CEILING_US")) == 1540
+    assert 1500 + (30 * 500 + 50) // 100 == 1650        # прежний «30 % = 1650 мкс»
+    assert int(_const(text, "DRIVE_PULSE_CEILING_US")) < 1650
+
+    # Контур замкнут на тахометр: регулятор правит импульс по оборотам.
+    assert "void updateDriveSpeed()" in code
+    assert "void updateDriveOutput()" in code
+    assert "DRIVE_FEEDBACK_TIMEOUT_MS" in code
+    assert "updateDriveSpeed();" in code and "updateDriveOutput();" in code
+    # Без правдоподобных оборотов тяга снимается, а не крутится вслепую.
+    assert "обороты не измерить" in text
+    # Дробные доли микросекунды выдаются кадрами 50 Гц: иначе цель 60 об/мин
+    # попадала бы между шагами Servo (0,5 мкс) и колесо дёргалось бы.
+    assert "drive_dither_x10" in code
+    assert int(_const(text, "DRIVE_FRAME_MS")) == 20
+
     # Уровни драйвера: STOP HIGH — выходы включены, LOW — выбег; BRAKE HIGH — тормоз.
     assert _const(text, "BLDC_STOP_ENABLE_LEVEL") == "HIGH"
     assert _const(text, "BLDC_STOP_DISABLE_LEVEL") == "LOW"
     assert _const(text, "BLDC_BRAKE_ACTIVE_LEVEL") == "HIGH"
-    # Python-зеркало того же: предел тяги, границы импульса и потолок км/ч.
+    # Python-зеркало того же: предел тяги и тахометр.
     mirror = _text(ROOT / "slam_gui" / "backend.py")
     assert re.search(r"^MAX_DRIVE_PERCENT = 30$", mirror, re.M)
     assert re.search(r"^DRIVE_ABS_MAX_PERCENT = 30$", mirror, re.M)
-    assert re.search(r"^DRIVE_PULSE_MIN_US = 1000$", mirror, re.M)
-    assert re.search(r"^DRIVE_PULSE_MAX_US = 2000$", mirror, re.M)
     assert "DRIVE_MAX_KMH_X10" not in mirror
+    assert re.search(r"^DRIVE_TACH_PPR = 90$", mirror, re.M)
 
 
 def test_tach_counts_edge_intervals_and_rejects_noise():
@@ -235,7 +237,7 @@ def test_firmware_has_no_usb_role_discovery():
     assert 'classifyModuleToken' in text
     # v8 — драйвер ZS-Z11H: «серво»-импульс на D3 (вход «P»), линия STOP на D2,
     # тахометр «SC» на D19, порог тяги 30 % и без настроек привода.
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '8'
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '9'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
@@ -414,7 +416,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 8 and frame["calibError"] == 0
+        assert frame["firmware"] == 9 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] == 0.0
         assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False
