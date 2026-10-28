@@ -1664,10 +1664,9 @@ body.swipe-open .kiosk {
 .traction-actions button:disabled { opacity: .38; cursor: not-allowed; }
 .traction-warning { grid-column: 1 / -1; line-height: 1.45; }
 
-/* Настройка привода: серво-ШИМ (нейтраль и размах), тахометр, тормоз,
-   линия STOP и предел. Раньше способ управления мотором был зашит в прошивку —
-   теперь это настройка платы, и экран показывает подтверждённые телеметрией
-   значения. */
+/* Ящик тяги: подсказка про драйвер и одна кнопка ручной прошивки. Настроек
+   привода нет — драйвер ZS-Z11H задаёт их сам, а экран только показывает
+   скважность ШИМ и обороты. */
 .drive-setup {
   grid-column: 1 / -1;
   border: 1px solid var(--line-2);
@@ -1681,40 +1680,6 @@ body.swipe-open .kiosk {
 .drive-setup > summary { cursor: pointer; color: var(--text); font-size: 13px; font-weight: 800; }
 .drive-setup-hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .drive-setup-hint b { color: var(--text); }
-.drive-setup-fixed { display: block; padding: 7px 10px; border: 1px dashed var(--line-2); border-radius: 8px; color: var(--text); font-size: 12px; font-weight: 800; }
-.drive-setup-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; }
-.drive-setup-grid label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
-.drive-setup-grid select {
-  width: 100%; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line-2);
-  background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px;
-}
-.drive-setup-grid input[type="range"] { width: 100%; accent-color: var(--accent); }
-.drive-setup-grid input[type="number"] {
-  width: 100%; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line-2);
-  background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-/* Подбор импульсов на оборот: кнопка «по факту» и текущие об/мин рядом. */
-.drive-setup-fit { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.drive-setup-fit button {
-  padding: 7px 10px; border-radius: 10px; border: 1px solid var(--line-2);
-  background: var(--bg-2); color: var(--text); font: inherit; font-size: 12px;
-  font-weight: 800; cursor: pointer;
-}
-.drive-setup-fit button:disabled { opacity: .45; cursor: not-allowed; }
-#drive-cfg-rpm-now { color: var(--muted); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.drive-setup-grid b { color: var(--text); font-variant-numeric: tabular-nums; }
-.drive-setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.drive-setup-actions button {
-  padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line-2);
-  background: var(--bg-2); color: var(--text); font: inherit; font-size: 12px;
-  font-weight: 800; cursor: pointer;
-}
-.drive-setup-actions button.quiet { color: var(--muted); }
-.drive-setup-actions button:disabled { opacity: .45; cursor: not-allowed; }
-#drive-cfg-status { color: var(--muted); font-size: 11px; font-weight: 700; }
-@media (max-width: 900px) { .drive-setup-grid { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 560px) { .drive-setup-grid { grid-template-columns: 1fr; } }
 /* Прошивка плат колёс: одна кнопка, прогресс и журнал сборки. */
 .drive-flash {
   border: 1px solid var(--line-2); border-radius: 14px; background: var(--bg-2);
@@ -1847,26 +1812,6 @@ body.swipe-open .kiosk {
 .steer-actions button.steer-drive-back { min-height: 40px; font-size: 13px; }
 .steer-actions button.steer-drive-fwd { border-color: rgba(120, 200, 140, .55); background: rgba(120, 200, 140, .10); }
 .steer-actions button.steer-drive-stop { border-color: rgba(192, 80, 90, .55); color: var(--accent-strong); background: rgba(192, 80, 90, .12); }
-/* Сторона вращения колеса: колёса стоят зеркально, поэтому «вперёд» у каждого
-   своё. Кнопка показывает, что произойдёт, подпись — что подтвердила плата. */
-.steer-drive-dir { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; font-weight: 800; }
-.steer-drive-dir b { color: var(--text); font-size: 12px; }
-.steer-drive-dir b[data-reverse="true"] { color: var(--warn); }
-.steer-drive-dir-btn {
-  min-height: 30px;
-  padding: 4px 10px;
-  border: 1px solid var(--line-2);
-  border-radius: 8px;
-  background: var(--bg-2);
-  color: var(--text);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 800;
-  cursor: pointer;
-  touch-action: manipulation;
-}
-.steer-drive-dir-btn[aria-pressed="true"] { border-color: var(--warn); color: var(--warn); }
-.steer-drive-dir-btn:disabled { opacity: .4; cursor: not-allowed; }
 .steer-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: -4px; font-size: 11px; font-weight: 800; color: var(--muted); }
 .steer-meta span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .steer-meta [data-home="opto"] { color: var(--text); }

@@ -27,7 +27,6 @@
     '/api/kiosk_zero': '/api/control/zero',
     '/api/kiosk_calibrate': '/api/control/calibrate',
     '/api/kiosk_pot_mode': '/api/control/pot_mode',
-    '/api/kiosk_drive_config': '/api/control/drive_config',
     '/api/kiosk_drive': '/api/control/drive',
     '/api/estop': '/api/control/estop',
     '/api/estop/release': '/api/control/estop/release',

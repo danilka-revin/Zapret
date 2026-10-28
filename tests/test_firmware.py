@@ -122,8 +122,9 @@ def test_firmware_has_no_usb_role_discovery():
     # Legacy addressed monitor commands remain compatible; the application
     # sends local commands to the manually selected port.
     assert 'classifyModuleToken' in text
-    # v6 — серво-ШИМ на D3, линия STOP на D2, тахометр на D19.
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '6'
+    # v7 — драйвер ZS-Z11H: скважность ШИМ на D3 (вход «P»), линия STOP на D2,
+    # тахометр «SC» на D19, без библиотеки Servo и без настроек привода.
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '7'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
@@ -134,9 +135,9 @@ def test_telemetry_period_and_safety_fields_are_present():
     # Строка @TLM несёт все поля, которые ждёт сервер (parse_master_line).
     for field in ("deg=", "tgt=", "moving=", "cal=", "cycle=", "calib=",
                   "opto=", "home=", "err=", "rpm=", "drive=", "fw=", "pot=", "pm=", "t=",
-                  # гибкая настройка тяги: тахометр, предел, нейтраль, размах,
-                  # тормоз, линия STOP, сторона вращения, длительность импульса
-                  "tach=", "dmax=", "trim=", "span=", "brk=", "stp=", "dir=", "us="):
+                  # тяга драйвера ZS-Z11H: тахометр, предел прошивки,
+                  # фактическая скважность ШИМ и переходов «SC» на оборот
+                  "tach=", "dmax=", "duty=", "ppr="):
         assert field in text, field
 
 
@@ -299,7 +300,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 6 and frame["calibError"] == 0
+        assert frame["firmware"] == 7 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] == 0.0
         assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False

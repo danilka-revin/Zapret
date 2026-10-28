@@ -9,24 +9,28 @@
 // Команды с USB (как в проверенном скетче): k, q, c, d, h, s, g, z, p, w, t, b.
 //   w 12.5 | w FL 12.5 — поворот колеса; w zero / w calib — ноль и калибровка;
 //   t N — тяга BLDC ±N% (heartbeat раз в <650 мс, иначе плата сама тормозит);
-//   b — тормоз; m … — настройка тяги (нейтраль/размах импульса, тахометр,
-//   тормоз, стоп, предел, реверс); ? — справка.
+//   b — тормоз; p — состояние; ? — справка.
 //
-// Выход на регулятор скорости — один: ШИМ 50 Гц с импульсами 1000…2000 мкс,
-// как у сервопривода постоянного вращения (библиотека Servo, вывод D3). Такой
-// вход понимают и ESC/сервоприводы, и контроллеры BLDC с «серво»-входом:
-// 1500 мкс — нейтраль (стоим), 1500±размах — полный ход назад/вперёд.
-// Нейтраль конкретного драйвера часто уезжает на 10–30 мкс, поэтому она
-// настраивается командой m trim, а размах — m span.
+// Выход на регулятор скорости — «PWM» драйвера RioRand ZS-Z11H (hoverboard,
+// разбор входов: mad-ee.com/easy-inexpensive-hoverboard-motor-controller):
+//   * P (PWM) — скважность: 0 % мотор не тянет, 100 % полный ход; частота
+//     50 Гц…20 кГц. Здесь 7,8 кГц (Timer3, fast PWM 8 бит) — ровный «DC» на
+//     входе и без писка на слух;
+//   * DIR — уровень: 1 (в покое) — штатное вращение, 0 — обратное;
+//   * BRAKE — 1 = тормоз включён, 0 = отпущен;
+//   * STOP — 1 = драйвер разрешён, 0 = выходы выключены (свободный выбег).
+// Всё это — константы прошивки, а не настройки: подбирать на экране нечего.
+// Если конкретное колесо крутится не в ту сторону — поменяйте местами два
+// фазных провода мотора или константы уровней ниже.
 //
-// Настройка живёт в EEPROM: сервер при открытии порта перезагружает плату
-// (DTR), и без сохранения колесо после каждого старта ехало бы «по-старому».
+// Тахометр — выход SC того же драйвера: он меняет состояние на каждой смене
+// сигнала датчиков Холла, 90 переходов на оборот колеса. Отсюда об/мин:
+//   RPM = 60 / (90 × время между переходами).
 //
 // На каждой плате: свой TB6600 (шаговый руль), оптодатчик нуля на D18,
 // потенциометр положения колеса на A0 и интерфейс BLDC-тяги:
 // DIR (D4), BRAKE (D5), STOP (D2), SPEED/«серво»-ШИМ (D3) и общая земля.
 // Тахометр BLDC — отдельным проводом на D19 (внешнее прерывание INT2).
-#include <Servo.h>
 #include <avr/eeprom.h>
 #include <avr/interrupt.h>
 #include <avr/pgmspace.h>
@@ -68,8 +72,8 @@
 // тахометром: на плате это разные вещи, поэтому STOP теперь выход, а тахометр
 // переехал на D19 (INT2). D19 рядом с оптодатчиком D18 и не занят.
 const uint8_t TACH_PIN = 19;         // BLDC SC — тахометр (прерывание INT2)
-const uint8_t BLDC_STOP_PIN = 2;     // BLDC STOP — вход «стоп» драйвера (LOW — едем)
-const uint8_t BLDC_SPEED_PIN = 3;    // BLDC speed — «серво»-ШИМ 50 Гц (Servo, Timer5)
+const uint8_t BLDC_STOP_PIN = 2;     // BLDC STOP — вход «разрешить» драйвера
+const uint8_t BLDC_SPEED_PIN = 3;    // BLDC PWM — вход «P» драйвера (Timer3, OC3C)
 const uint8_t BLDC_DIR_PIN = 4;      // BLDC DIR
 const uint8_t BLDC_BRAKE_PIN = 5;    // BLDC BRAKE
 const uint8_t STEP_PUL_PIN = 6;      // TB6600 PUL
@@ -83,12 +87,13 @@ const uint8_t STEP_DIR_PLUS_LEVEL = LOW;       // LOW — «вправо» (f), 
 const uint8_t STEP_DIR_MINUS_LEVEL = HIGH;     // HIGH — «влево» (b), шаги убывают
 const uint8_t STEP_ENABLE_LEVEL = HIGH;        // ENA = HIGH сразу при включении и всегда
 const bool OPTO_ACTIVE_LOW = true;             // датчик сработал → на D18 LOW
-const uint8_t BLDC_BRAKE_ACTIVE_LEVEL = HIGH;  // проверьте по своему контроллеру BLDC
-const uint8_t BLDC_DIR_FORWARD_LEVEL = LOW;
-// STOP: LOW на входе драйвера — движение разрешено, HIGH — стоп. Пока тяги нет
-// (старт платы, «b», watchdog), выход держится в HIGH.
-const uint8_t BLDC_STOP_HOLD_LEVEL = HIGH;
-const uint8_t BLDC_STOP_RELEASE_LEVEL = LOW;
+// Уровни — по документации драйвера (RioRand ZS-Z11H, см. шапку файла):
+// BRAKE активен высоким, DIR меняет сторону низким, STOP разрешает высоким.
+// Пока тяги нет (старт платы, «b», watchdog), драйвер выключен, тормоз взведён.
+const uint8_t BLDC_BRAKE_ACTIVE_LEVEL = HIGH;  // BRAKE = 1 → мотор заторможен
+const uint8_t BLDC_DIR_FORWARD_LEVEL = HIGH;   // DIR = 1 (в покое) — штатное вращение
+const uint8_t BLDC_STOP_ENABLE_LEVEL = HIGH;   // STOP = 1 → драйвер разрешён
+const uint8_t BLDC_STOP_DISABLE_LEVEL = LOW;   // STOP = 0 → выходы выключены (выбег)
 
 // ---- механика и скорость руля ----
 const float STEPS_PER_DEGREE = 133.333333f;    // шагов_на_оборот × микрошаг × редуктор / 360
@@ -150,51 +155,27 @@ const uint16_t EEPROM_POT_MAGIC_SLOT = 2;
 const uint16_t EEPROM_POT_SLOPE_SLOT = 3;   // 4 байта, float, little-endian
 const uint8_t EEPROM_POT_MAGIC = 0x51;      // «q» — наклон измерен
 
-// ---- тяга BLDC ----
-// Импульсов SC на оборот колеса. Заводское 1 — так подписан вход «SC» у
-// контроллера, но реальные драйверы дают и 6, и 60 импульсов на оборот: тогда
-// «об/мин» и путь манёвров завышались ровно в это число раз. Поэтому значение
-// не константа, а настройка (m ppr) в EEPROM: экран подбирает её по факту.
-const uint8_t TACH_PPR_DEFAULT = 1;
-const uint8_t TACH_PPR_MAX = 200;
+// ---- тяга BLDC: драйвер RioRand ZS-Z11H (hoverboard-мотор) ----
+// Вход «P» (PWM): скважность 0…100 %, частота 50 Гц…20 кГц. Скважность — это и
+// есть тяга: 0 % мотор не тянет (свободный выбег), 100 % — полный ход.
+// Тахометр — выход SC: 90 переходов на оборот колеса (по одному на каждую смену
+// сигнала трёх датчиков Холла). Это свойство драйвера, а не настройка.
+const uint8_t DRIVE_TACH_PPR = 90;             // переходов SC на оборот колеса
 const uint16_t RPM_SAMPLE_PERIOD_MS = 500;
-const int8_t DRIVE_MAX_PERCENT = 20;           // заводской предел; меняется командой m max
+// Предел тяги прошивки. 20 % на скважности мотор трогается вяло и не тянет
+// тележку, 100 % на четырёх колёсах — это ~18 км/ч, слишком много. 35 % плавно
+// страгивает и даёт около 6 км/ч; это константа, а не настройка.
+const uint8_t DRIVE_MAX_PERCENT = 35;
 const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → выход 0 и тормоз
+// ШИМ на входе «P»: Timer3, fast PWM 8 бит, предделитель 8 → 16 МГц / 8 / 256 =
+// 7,8 кГц (в паспортном диапазоне 50 Гц…20 кГц). Скважность 0…255 ↔ 0…100 %.
+const uint16_t DRIVE_PWM_HZ = 7812;
 
-// Выход на регулятор скорости — «серво»-ШИМ: 50 Гц, импульс 1000…2000 мкс,
-// как у сервопривода постоянного вращения. Раньше на D3 был analogWrite с
-// расчётом под аналог 0–5 В (фильтр/ЦАП); этот режим убран — вход скорости
-// драйверов на роботе понимает именно серво-импульс.
-//
-// Почему библиотека Servo: она сама держит 50 Гц и скважность импульса и даёт
-// точность 1 мкс, поэтому analogWrite на D3 больше не используется вовсе.
-//
-// ВАЖНО про таймеры. На Mega библиотека Servo объявляет обработчики сразу для
-// Timer5, Timer1, Timer3 и Timer4 — независимо от того, сколько серв реально
-// подключено (первый серв занимает Timer5). Поэтому шаги руля НЕЛЬЗЯ вешать на
-// Timer1: получается «multiple definition of `__vector_17'» (это
-// TIMER1_COMPA) и прошивка не линкуется. Шаги идут на Timer2: он 8-битный, но
-// 16 МГц / 8 / 100 = 20 кГц — те же 50 мкс на тик. Timer2 в Arduino занимает
-// только tone() (не используется) и analogWrite на D9/D10 (тоже не нужны:
-// скорость — серво-импульс на D3, DIR/BRAKE/STOP — обычные цифровые выходы).
-const uint16_t SERVO_MIN_US = 1000;            // край «полный назад»
-const uint16_t SERVO_MAX_US = 2000;            // край «полный вперёд»
-const uint16_t SERVO_CENTER_US = 1500;         // нейтраль завода
-const uint16_t SERVO_SPAN_DEFAULT_US = 500;    // 1500 ± 500 = 1000…2000
-const uint16_t SERVO_SPAN_MAX_US = 500;        // шире стандарта не задаём
-const uint8_t DRIVE_ABS_MAX_PERCENT = 100;     // выше не поднять даже командой m
-
-// Настройка тяги — свойство железа, а не сессии, поэтому EEPROM. Ячейки 2…6
-// заняты наклоном потенциометра, 0…1 — бывший адрес I²C; берём 8…16.
-// Раскладка сменилась вместе с выходом (были режим и милливольты, стали
-// нейтраль и размах импульса), поэтому и «магия» новая: старый блок
-// игнорируется, а не читается как чужие числа.
-const uint16_t EEPROM_DRIVE_MAGIC_SLOT = 8;
-const uint16_t EEPROM_DRIVE_CONFIG_SLOT = 9;   // 8 байт: флаги, предел, trim, span, резерв, CRC
-const uint8_t EEPROM_DRIVE_MAGIC = 0x45;       // «E» — настройка серво-выхода сохранена
-
-// v6: вместо аналога 0–5 В — «серво»-ШИМ (us/trim/span), STOP на D2, тахометр на D19.
-const uint8_t FIRMWARE_PROTOCOL = 6;           // поле fw= в @TLM
+// v7: тяга — скважность ШИМ 0…100 % на входе «P» драйвера RioRand ZS-Z11H
+// (Timer3, 7,8 кГц), тахометр — выход SC: 90 переходов на оборот колеса.
+// Настроек тяги нет: все числа — свойство железа, поэтому EEPROM для тяги
+// больше не используется (ячейки 8…16 свободны, старые значения игнорируются).
+const uint8_t FIRMWARE_PROTOCOL = 7;           // поле fw= в @TLM
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -274,18 +255,8 @@ uint32_t last_rpm_edges = 0;
 uint32_t rpm_x10 = 0;
 uint32_t last_rpm_ms = 0;
 
-// Настройка тяги (команда m; загружается из EEPROM при старте). Заводские
-// значения: нейтраль 1500 мкс, размах ±500 мкс, предел 20 %.
-bool drive_tach_enabled = true;
-bool drive_brake_enabled = true;
-bool drive_stop_enabled = true;        // вход STOP драйвера подключён (D2)
-bool drive_dir_reverse = false;
-uint8_t drive_max_percent = (uint8_t)DRIVE_MAX_PERCENT;
-uint16_t drive_trim_us = SERVO_CENTER_US;      // нейтраль этого драйвера
-uint16_t drive_span_us = SERVO_SPAN_DEFAULT_US; // ± от нейтрали на полный предел
-uint16_t drive_us = SERVO_CENTER_US;           // фактический импульс на D3, мкс
-uint8_t drive_tach_ppr = TACH_PPR_DEFAULT;     // импульсов тахометра на оборот
-Servo drive_servo;                             // 50 Гц на D3, как сервопривод
+// Тяга: сколько процентов и какая скважность ШИМ сейчас на входе «P».
+uint8_t drive_duty = 0;                // 0…255 на D3 (OCR3C), 0 — мотор не тянет
 
 char tx_buf[TX_BUFFER_SIZE];
 uint16_t tx_length = 0;
@@ -1216,86 +1187,49 @@ bool setZeroHere() {
 }
 
 // ---------------------------------------------------------------------------
-// Настройка тяги: серво-импульс (нейтраль/размах), тахометр, тормоз, стоп,
-// предел и реверс. Всё меняется командой m (см. handleDriveConfigCommand) и
-// живёт в EEPROM.
-uint8_t driveConfigChecksum(const uint8_t* bytes, uint8_t length) {
-  uint8_t sum = 0x5A;
-  for (uint8_t i = 0; i < length; ++i) sum ^= bytes[i];
-  return sum;
+// Выход на драйвер: ШИМ (вход «P»), DIR, BRAKE, STOP. Настроек нет — только
+// константы железа (см. шапку файла и блок «тяга BLDC»).
+void setupDrivePwm() {
+  // D3 — OC3C (Timer3). Fast PWM 8 бит: TOP = 0xFF, предделитель 8 → 7,8 кГц.
+  // Пока скважность 0, вход «P» в нуле: драйвер мотор не тянет (свободный
+  // выбег), ровно как при выключенном потенциометре.
+  pinMode(BLDC_SPEED_PIN, OUTPUT);
+  TCCR3A = (1 << COM3C1) | (1 << WGM31) | (1 << WGM30);
+  TCCR3B = (1 << WGM32) | (1 << CS31);
+  OCR3C = 0;
+  drive_duty = 0;
 }
 
-void driveConfigSave() {
-  const uint8_t flags = (drive_tach_enabled ? 0x01 : 0) |
-                        (drive_brake_enabled ? 0x02 : 0) |
-                        (drive_dir_reverse ? 0x04 : 0) |
-                        (drive_stop_enabled ? 0x08 : 0);
-  uint8_t bytes[8];
-  bytes[0] = flags;
-  bytes[1] = drive_max_percent;
-  bytes[2] = (uint8_t)(drive_trim_us & 0xFF);
-  bytes[3] = (uint8_t)(drive_trim_us >> 8);
-  bytes[4] = (uint8_t)(drive_span_us & 0xFF);
-  bytes[5] = (uint8_t)(drive_span_us >> 8);
-  bytes[6] = drive_tach_ppr;           // 0 в старой прошивке = заводское 1
-  bytes[7] = driveConfigChecksum(bytes, 7);
-  for (uint8_t i = 0; i < sizeof(bytes); ++i) {
-    eeprom_update_byte((uint8_t*)(uintptr_t)(EEPROM_DRIVE_CONFIG_SLOT + i), bytes[i]);
-  }
-  eeprom_update_byte((uint8_t*)(uint16_t)EEPROM_DRIVE_MAGIC_SLOT, EEPROM_DRIVE_MAGIC);
+// Скважность из процента тяги: 0 % — ноль, DRIVE_MAX_PERCENT — полный ход.
+uint8_t driveDutyFor(uint8_t percent) {
+  if (percent == 0) return 0;
+  if (percent > DRIVE_MAX_PERCENT) percent = DRIVE_MAX_PERCENT;
+  return (uint8_t)(((uint32_t)percent * 255UL) / DRIVE_MAX_PERCENT);
 }
 
-// Битая или чужая ячейка не должна менять поведение платы: проверяем и
-// контрольную сумму, и правдоподобие каждого поля.
-void driveConfigLoad() {
-  if (eeprom_read_byte((const uint8_t*)(uint16_t)EEPROM_DRIVE_MAGIC_SLOT) != EEPROM_DRIVE_MAGIC) return;
-  uint8_t bytes[8];
-  for (uint8_t i = 0; i < sizeof(bytes); ++i) {
-    bytes[i] = eeprom_read_byte((const uint8_t*)(uintptr_t)(EEPROM_DRIVE_CONFIG_SLOT + i));
-  }
-  if (bytes[7] != driveConfigChecksum(bytes, 7)) return;
-  if (bytes[1] < 1 || bytes[1] > DRIVE_ABS_MAX_PERCENT) return;
-  const uint16_t trim_us = (uint16_t)(bytes[2] | (bytes[3] << 8));
-  const uint16_t span_us = (uint16_t)(bytes[4] | (bytes[5] << 8));
-  // Импульс за края 1000…2000 мкс выводить нельзя: сервопривод уйдёт в упор.
-  if (span_us < 1 || span_us > SERVO_SPAN_MAX_US) return;
-  if (trim_us < SERVO_MIN_US || trim_us > SERVO_MAX_US) return;
-  if ((uint32_t)trim_us < (uint32_t)SERVO_MIN_US + span_us ||
-      (uint32_t)trim_us + span_us > (uint32_t)SERVO_MAX_US) return;
-  drive_tach_enabled = (bytes[0] & 0x01) != 0;
-  drive_brake_enabled = (bytes[0] & 0x02) != 0;
-  drive_dir_reverse = (bytes[0] & 0x04) != 0;
-  drive_stop_enabled = (bytes[0] & 0x08) != 0;
-  drive_max_percent = bytes[1];
-  drive_trim_us = trim_us;
-  drive_span_us = span_us;
-  // Ячейка 6 раньше была резервной (0) — такие настройки читаются как 1.
-  drive_tach_ppr = (bytes[6] >= 1 && bytes[6] <= TACH_PPR_MAX) ? bytes[6] : TACH_PPR_DEFAULT;
+void driveWriteDuty(uint8_t duty) {
+  OCR3C = duty;
+  drive_duty = duty;
 }
 
-// Заводские значения: нейтраль 1500 мкс, размах ±500 мкс, тахометр, тормоз и
-// STOP подключены, предел 20 %, обычное направление.
-void driveConfigDefaults() {
-  drive_tach_enabled = true;
-  drive_brake_enabled = true;
-  drive_stop_enabled = true;
-  drive_dir_reverse = false;
-  drive_max_percent = (uint8_t)DRIVE_MAX_PERCENT;
-  drive_trim_us = SERVO_CENTER_US;
-  drive_span_us = SERVO_SPAN_DEFAULT_US;
-  drive_tach_ppr = TACH_PPR_DEFAULT;
+// Тормоз: BRAKE = 1 включает тормоз драйвера, 0 — отпускает.
+void driveSetBrake(bool active) {
+  digitalWrite(BLDC_BRAKE_PIN, active ? BLDC_BRAKE_ACTIVE_LEVEL
+                                      : (BLDC_BRAKE_ACTIVE_LEVEL == HIGH ? LOW : HIGH));
 }
 
-// Тахометр может быть не подключён: тогда прерывание не включаем вовсе, а не
-// считаем «0 об/мин» за измеренные обороты.
+// STOP драйвера: 1 — выходы разрешены, 0 — выключены (свободный выбег).
+// Пока тяги нет (старт платы, «b», watchdog), драйвер выключен.
+void driveSetStop(bool stopped) {
+  digitalWrite(BLDC_STOP_PIN, stopped ? BLDC_STOP_DISABLE_LEVEL
+                                      : BLDC_STOP_ENABLE_LEVEL);
+}
+
+// Тахометр — выход SC драйвера: 90 переходов на оборот. Считаем КАЖДУЮ смену
+// сигнала (CHANGE), иначе импульсов было бы вдвое меньше и обороты врали вдвое.
 void driveTachApply() {
-  if (drive_tach_enabled) {
-    pinMode(TACH_PIN, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(TACH_PIN), tachometerISR, RISING);
-  } else {
-    detachInterrupt(digitalPinToInterrupt(TACH_PIN));
-    pinMode(TACH_PIN, INPUT_PULLUP);
-  }
+  pinMode(TACH_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(TACH_PIN), tachometerISR, CHANGE);
   noInterrupts();
   tach_edges = 0;
   interrupts();
@@ -1303,170 +1237,12 @@ void driveTachApply() {
   rpm_x10 = 0;
 }
 
-uint8_t driveBrakeReleaseLevel() {
-  return BLDC_BRAKE_ACTIVE_LEVEL == HIGH ? LOW : HIGH;
-}
-
-// Тормоз не подключён — выход BRAKE всегда в неактивном уровне, чтобы плата не
-// тянула чужой вход в «тормоз».
-void driveSetBrake(bool active) {
-  const uint8_t level = (active && drive_brake_enabled) ? BLDC_BRAKE_ACTIVE_LEVEL
-                                                       : driveBrakeReleaseLevel();
-  digitalWrite(BLDC_BRAKE_PIN, level);
-}
-
-// STOP драйвера: HIGH — стоп, LOW — движение разрешено. Пока вход не подключён
-// (m stop 0), вывод всегда в разрешающем уровне и ничего не тянет.
-void driveSetStop(bool stopped) {
-  const uint8_t level = (stopped && drive_stop_enabled) ? BLDC_STOP_HOLD_LEVEL
-                                                        : BLDC_STOP_RELEASE_LEVEL;
-  digitalWrite(BLDC_STOP_PIN, level);
-}
-
-// Импульс серво-ШИМ (мкс) из процента тяги: нейтраль ± размах. Нейтраль и
-// размах — настройка платы (m trim / m span), потому что у разных драйверов
-// «стоим» — это 1480…1520 мкс, а полный ход — не всегда ±500 мкс.
-uint16_t driveUsFor(uint8_t percent) {
-  if (percent == 0 || drive_max_percent == 0) return drive_trim_us;
-  if (percent > drive_max_percent) percent = drive_max_percent;
-  const uint32_t span = ((uint32_t)drive_span_us * (uint32_t)percent) / drive_max_percent;
-  return (uint16_t)((uint32_t)drive_trim_us + span);
-}
-
-void driveWriteOutput(uint16_t us) {
-  drive_servo.writeMicroseconds(us);
-  drive_us = us;
-}
-
-void printDriveConfig() {
-  // Две строки, а не три: ответ на «p» уже печатает состояние и настройку, и
-  // лишняя строка выбивает из буфера USB последнюю заметку.
-  note(PSTR("Двигатель: серво-ШИМ 50 Гц · нейтраль %u · размах ±%u мкс · %u мкс"),
-       (unsigned)drive_trim_us, (unsigned)drive_span_us, (unsigned)drive_us);
-  note(PSTR("Тах %s %u имп/об · тормоз %s · стоп %s · реверс %s · предел %u%%"),
-       drive_tach_enabled ? "есть" : "нет", (unsigned)drive_tach_ppr,
-       drive_brake_enabled ? "есть" : "нет",
-       drive_stop_enabled ? "есть" : "нет", drive_dir_reverse ? "да" : "нет",
-       (unsigned)drive_max_percent);
-}
-
-// Команды настройки тяги. Менять нейтраль, размах и предел на ходу нельзя:
-// под работающим мотором это рывок, а не настройка. Импульсы на оборот — можно:
-// они не трогают выходной импульс, только арифметику оборотов, и подбирать их
-// надо именно тогда, когда колесо крутится.
-void handleDriveConfigCommand(char* arg1, char* arg2, char* extra) {
-  if (!arg1) {
-    printDriveConfig();
-    return;
-  }
-  const bool busy = drive_percent != 0 || drive_active;
-  const bool liveOk = strcasecmp_P(arg1, PSTR("ppr")) == 0;
-  if (busy && !liveOk && strcasecmp_P(arg1, PSTR("reset")) != 0) {
-    note(PSTR("Настройка двигателя: сначала b (тормоз)"));
-    return;
-  }
-
-  if (strcasecmp_P(arg1, PSTR("tach")) == 0) {
-    if (!arg2 || extra || (strcmp(arg2, "0") && strcmp(arg2, "1"))) {
-      note(PSTR("Шаблон: m tach 0|1"));
-      return;
-    }
-    drive_tach_enabled = arg2[0] == '1';
-    driveTachApply();
-  } else if (strcasecmp_P(arg1, PSTR("ppr")) == 0) {
-    // Сколько импульсов тахометра приходится на один оборот колеса. Если
-    // экран показывает 3600 об/мин, а колесо делает один оборот в секунду
-    // (60 об/мин), значит импульсов 60 — вот это число сюда и идёт.
-    long value = 0;
-    if (!arg2 || extra || !parseLongToken(arg2, &value) ||
-        value < 1 || value > TACH_PPR_MAX) {
-      note(PSTR("Шаблон: m ppr 1…%u (импульсов на оборот)"), (unsigned)TACH_PPR_MAX);
-      return;
-    }
-    drive_tach_ppr = (uint8_t)value;
-    noInterrupts();                 // счётчик обнуляем вместе с прежними отсчётами
-    tach_edges = 0;
-    interrupts();
-    last_rpm_edges = 0;
-    rpm_x10 = 0;
-  } else if (strcasecmp_P(arg1, PSTR("brake")) == 0) {
-    if (!arg2 || extra || (strcmp(arg2, "0") && strcmp(arg2, "1"))) {
-      note(PSTR("Шаблон: m brake 0|1"));
-      return;
-    }
-    drive_brake_enabled = arg2[0] == '1';
-    driveSetBrake(!drive_active);   // выключили тормоз — снять и активный уровень
-  } else if (strcasecmp_P(arg1, PSTR("stop")) == 0) {
-    if (!arg2 || extra || (strcmp(arg2, "0") && strcmp(arg2, "1"))) {
-      note(PSTR("Шаблон: m stop 0|1"));
-      return;
-    }
-    drive_stop_enabled = arg2[0] == '1';
-    driveSetStop(!drive_active);    // вход отключили — вывод не тянем в «стоп»
-  } else if (strcasecmp_P(arg1, PSTR("dir")) == 0) {
-    if (!arg2 || extra || (strcmp(arg2, "0") && strcmp(arg2, "1"))) {
-      note(PSTR("Шаблон: m dir 0|1"));
-      return;
-    }
-    drive_dir_reverse = arg2[0] == '1';
-  } else if (strcasecmp_P(arg1, PSTR("max")) == 0) {
-    long value = 0;
-    if (!arg2 || extra || !parseLongToken(arg2, &value) ||
-        value < 1 || value > DRIVE_ABS_MAX_PERCENT) {
-      note(PSTR("Шаблон: m max 1…%u"), (unsigned)DRIVE_ABS_MAX_PERCENT);
-      return;
-    }
-    drive_max_percent = (uint8_t)value;
-  } else if (strcasecmp_P(arg1, PSTR("trim")) == 0) {
-    // Нейтраль: у конкретного драйвера «стоим» — это не ровно 1500 мкс.
-    long value = 0;
-    if (!arg2 || extra || !parseLongToken(arg2, &value) ||
-        value < SERVO_MIN_US || value > SERVO_MAX_US) {
-      note(PSTR("Шаблон: m trim %u…%u (мкс)"),
-           (unsigned)SERVO_MIN_US, (unsigned)SERVO_MAX_US);
-      return;
-    }
-    // Нейтраль сдвигают чаще всего — и почти всегда при размахе «на всю шкалу».
-    // Вместо отказа («сначала m span») подрезаем размах сами и говорим об этом:
-    // оператор двигает нейтраль, а не решает задачу про края импульса.
-    const long room_low = value - (long)SERVO_MIN_US;
-    const long room_high = (long)SERVO_MAX_US - value;
-    const long room = room_low < room_high ? room_low : room_high;
-    if (room < 1) {
-      note(PSTR("Нейтраль %ld мкс — вне %u…%u"), value,
-           (unsigned)SERVO_MIN_US, (unsigned)SERVO_MAX_US);
-      return;
-    }
-    if ((long)drive_span_us > room) {
-      note(PSTR("Нейтраль %ld: размах уменьшен с ±%u до ±%ld мкс — импульс в %u…%u"),
-           value, (unsigned)drive_span_us, room, (unsigned)SERVO_MIN_US, (unsigned)SERVO_MAX_US);
-      drive_span_us = (uint16_t)room;
-    }
-    drive_trim_us = (uint16_t)value;
-  } else if (strcasecmp_P(arg1, PSTR("span")) == 0) {
-    // Размах: сколько микросекунд от нейтрали до полного предела тяги.
-    long value = 0;
-    if (!arg2 || extra || !parseLongToken(arg2, &value) ||
-        value < 1 || value > SERVO_SPAN_MAX_US) {
-      note(PSTR("Шаблон: m span 1…%u (мкс)"), (unsigned)SERVO_SPAN_MAX_US);
-      return;
-    }
-    if ((long)drive_trim_us - value < (long)SERVO_MIN_US ||
-        (long)drive_trim_us + value > (long)SERVO_MAX_US) {
-      note(PSTR("Нейтраль %u мкс с размахом ±%ld выходит за %u…%u — сначала m trim"),
-           (unsigned)drive_trim_us, value, (unsigned)SERVO_MIN_US, (unsigned)SERVO_MAX_US);
-      return;
-    }
-    drive_span_us = (uint16_t)value;
-  } else if (strcasecmp_P(arg1, PSTR("reset")) == 0 && !arg2) {
-    driveConfigDefaults();
-    driveTachApply();
-  } else {
-    note(PSTR("Шаблон: m [tach 0|1|ppr 1…200|brake 0|1|stop 0|1|dir 0|1|max 1…100|trim мкс|span мкс|reset]"));
-    return;
-  }
-  driveConfigSave();
-  printDriveConfig();
+void printDriveInfo() {
+  // Строка должна влезть в буфер строки (176 байт с кириллицей по 2 байта):
+  // поэтому проценты словами, без «%%» — они и так висят на экране.
+  note(PSTR("Двигатель: ШИМ %u Гц на D3 · скважность %u/255 · предел %u процентов · тах %u пер/об"),
+       (unsigned)DRIVE_PWM_HZ, (unsigned)drive_duty,
+       (unsigned)DRIVE_MAX_PERCENT, (unsigned)DRIVE_TACH_PPR);
 }
 
 // ---------------------------------------------------------------------------
@@ -1477,33 +1253,35 @@ bool localDriveAllowed() {
 }
 
 void applyDriveCommand(int8_t percent) {
-  const bool forward = (percent >= 0) != drive_dir_reverse;
+  // Процент > 0 — вперёд: DIR в уровне покоя. Процент < 0 — назад: DIR в
+  // противоположном уровне (у драйвера это «переключить сторону»).
+  const bool forward = percent >= 0;
   const uint8_t direction = forward
       ? BLDC_DIR_FORWARD_LEVEL
       : (BLDC_DIR_FORWARD_LEVEL == HIGH ? LOW : HIGH);
   const bool reversing = drive_active && ((percent > 0) != (drive_percent > 0));
   if (!drive_active || reversing) {
-    // Останавливаемся паузой: нейтраль, тормоз, смена DIR — и только потом
-    // импульс. Иначе смена направления приходится на вращающийся мотор.
-    driveWriteOutput(drive_trim_us);
+    // Сначала снимаем тягу и тормозим, потом меняем DIR — иначе смена
+    // направления приходится на вращающийся мотор (у драйвера это рывок).
+    driveWriteDuty(0);
     driveSetBrake(true);
     driveSetStop(true);
     digitalWrite(BLDC_DIR_PIN, direction);
     delayMicroseconds(100);
   }
   digitalWrite(BLDC_DIR_PIN, direction);
-  driveSetBrake(false);
-  driveSetStop(false);            // «стоп» драйвера снят только на время тяги
-  driveWriteOutput(driveUsFor((uint8_t)abs((int)percent)));
+  driveSetBrake(false);                       // тормоз отпущен
+  driveSetStop(false);                        // драйвер разрешён на время тяги
+  driveWriteDuty(driveDutyFor((uint8_t)abs((int)percent)));
   drive_percent = percent;
   drive_active = percent != 0;
   last_drive_command_ms = millis();
 }
 
 void stopDriveLocal() {
-  driveWriteOutput(drive_trim_us);   // нейтраль: сервопривод стоит
-  driveSetBrake(true);
-  driveSetStop(true);
+  driveWriteDuty(0);          // скважность 0 — драйвер мотор не тянет
+  driveSetBrake(true);        // тормоз: колесо не катится
+  driveSetStop(true);         // выходы драйвера выключены
   drive_percent = 0;
   drive_active = false;
 }
@@ -1513,7 +1291,7 @@ bool applyLocalDrive(int8_t percent) {
     stopDriveLocal();
     return true;
   }
-  if (abs((int)percent) > (int)drive_max_percent || !localDriveAllowed() ||
+  if (abs((int)percent) > (int)DRIVE_MAX_PERCENT || !localDriveAllowed() ||
       (drive_active && ((percent > 0) != (drive_percent > 0)))) {
     stopDriveLocal();
     return false;
@@ -1525,11 +1303,7 @@ bool applyLocalDrive(int8_t percent) {
 void updateDriveWatchdog() {
   if (drive_active && (uint32_t)(millis() - last_drive_command_ms) > DRIVE_COMMAND_TIMEOUT_MS) {
     stopDriveLocal();
-    if (drive_brake_enabled) {
-      note(PSTR("тяга: нет команды дольше 650 мс — выход 0, тормоз"));
-    } else {
-      note(PSTR("тяга: нет команды дольше 650 мс — выход 0"));
-    }
+    note(PSTR("тяга: нет команды дольше 650 мс — скважность 0, тормоз"));
   }
 }
 
@@ -1543,14 +1317,11 @@ void updateRpm() {
   const uint32_t delta = edges - last_rpm_edges;
   last_rpm_edges = edges;
   last_rpm_ms = now;
-  if (!drive_tach_enabled || drive_tach_ppr == 0) {
-    // Тахометр не подключён: «0 об/мин» означало бы измеренный ноль, поэтому
-    // обороты не считаем, а экран показывает «нет датчика» (поле tach=).
-    rpm_x10 = 0;
-    return;
-  }
+  // RPM = 60 / (PPR × время между переходами). Здесь время — окно замера:
+  // delta переходов за elapsed мс, значит 60·delta·1000/(PPR·elapsed); в
+  // десятых долях (rpm_x10) — 600000·delta/(PPR·elapsed).
   rpm_x10 = (uint32_t)(((uint64_t)delta * 600000ULL) /
-                       ((uint64_t)elapsed * (uint64_t)drive_tach_ppr));
+                       ((uint64_t)elapsed * (uint64_t)DRIVE_TACH_PPR));
 }
 
 // ---------------------------------------------------------------------------
@@ -1579,7 +1350,7 @@ void printModuleStatus() {
   note(PSTR("Текущий: %s° | Целевой: %s° [%s] · ноль %s · датчик %s · тяга %d%%"),
        current, target, state, zero, optoActive() ? "закрыт" : "свободен", (int)drive_percent);
   potPrintStatus();
-  printDriveConfig();
+  printDriveInfo();
 }
 
 // Команды одного рулевого модуля (проверенный скетч). Плата принимает их со
@@ -1740,15 +1511,13 @@ void handleModuleCommand(char* line) {
   } else if (strcasecmp_P(command, PSTR("t")) == 0) {
     long percent = 0;
     if (!arg1 || arg2 || !parseLongToken(arg1, &percent) ||
-        percent < -(long)drive_max_percent || percent > (long)drive_max_percent) {
+        percent < -(long)DRIVE_MAX_PERCENT || percent > (long)DRIVE_MAX_PERCENT) {
       stopDriveLocal();
       return;
     }
     applyLocalDrive((int8_t)percent);
   } else if (strcasecmp_P(command, PSTR("b")) == 0) {
     stopDriveLocal();
-  } else if (strcasecmp_P(command, PSTR("m")) == 0) {
-    handleDriveConfigCommand(arg1, arg2, extra);
   } else if (strcasecmp_P(command, PSTR("p")) == 0) {
     printModuleStatus();
   } else {
@@ -1757,26 +1526,19 @@ void handleModuleCommand(char* line) {
 }
 
 void steeringSetup() {
-  // Настройку тяги читаем до первого касания выходов: от неё зависит, есть ли
-  // тахометр, подключён ли тормоз и стоп, какая нейтраль у драйвера.
-  driveConfigLoad();
   driveTachApply();
 
   // Сначала безопасные уровни в выходных регистрах, потом включаем выходы:
-  // при старте нет ни тяги, ни лишнего шага, а «стоп» драйвера взведён.
+  // при старте нет ни тяги, ни лишнего шага, драйвер выключен, тормоз взведён.
   digitalWrite(BLDC_SPEED_PIN, LOW);
   digitalWrite(BLDC_DIR_PIN, BLDC_DIR_FORWARD_LEVEL);
   digitalWrite(BLDC_BRAKE_PIN, BLDC_BRAKE_ACTIVE_LEVEL);
-  digitalWrite(BLDC_STOP_PIN, BLDC_STOP_HOLD_LEVEL);
-  pinMode(BLDC_SPEED_PIN, OUTPUT);
+  digitalWrite(BLDC_STOP_PIN, BLDC_STOP_DISABLE_LEVEL);
   pinMode(BLDC_DIR_PIN, OUTPUT);
   pinMode(BLDC_BRAKE_PIN, OUTPUT);
   pinMode(BLDC_STOP_PIN, OUTPUT);
-  // Выход скорости — серво-импульсы 50 Гц. До первой команды держим нейтраль:
-  // «0» на этом входе многие драйверы понимают как полный ход.
-  drive_servo.attach(BLDC_SPEED_PIN, SERVO_MIN_US, SERVO_MAX_US);
-  drive_servo.writeMicroseconds(drive_trim_us);
-  drive_us = drive_trim_us;
+  // Вход «P» драйвера — ШИМ с нулевой скважностью: мотор не тянет.
+  setupDrivePwm();
   driveSetBrake(true);
   driveSetStop(true);
 
@@ -1843,7 +1605,8 @@ uint8_t classifyModuleToken(const char* token) {
 void printHelp() {
   note(PSTR("команды: k, q, c [°], c c, d [°] [f/b], h, s, g, z, p, ?"));
   note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: t [FL] %%, b (своё колесо)"));
-  note(PSTR("двигатель: m [FL] [tach 0|1|ppr имп/об|brake 0|1|stop 0|1|dir 0|1|max %|trim мкс|span мкс]"));
+  note(PSTR("двигатель: ШИМ D3 (7,8 кГц, скважность 0…100 процентов), предел %u, тах SC: %u пер/об"),
+       (unsigned)DRIVE_MAX_PERCENT, (unsigned)DRIVE_TACH_PPR);
 }
 
 // Телеметрия не содержит роли колеса: порт назначает оператор в программе.
@@ -1858,34 +1621,19 @@ void appendTelemetry() {
   formatFixed((long)rpm_x10, 1, rpm, sizeof(rpm));
   const char* home = !(status & STATUS_ZERO) ? "none"
       : ((status & STATUS_HOME_OPTO) ? "opto" : "manual");
-  // tach, dmax, trim (нейтраль, мкс), span (размах, мкс), brk, stp, dir, us
-  // (фактический импульс на D3): экран показывает, каким импульсом управляется
-  // мотор, и не выдаёт «0 об/мин» за измерение, если тахометра нет.
+  // dmax — предел тяги прошивки, duty — скважность ШИМ на входе «P» (0…255),
+  // ppr — переходов тахометра на оборот (свойство драйвера: 90).
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u rpm=%s drive=%d fw=%u pot=%d pm=%d tach=%d dmax=%u trim=%u span=%u brk=%d stp=%d dir=%d us=%u ppr=%u t=%lu\r\n"),
+      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u rpm=%s drive=%d fw=%u pot=%d pm=%d tach=%d dmax=%u duty=%u ppr=%u t=%lu\r\n"),
       deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
       (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
       home, (unsigned)((status >> 8) & 0x0F), rpm, (int)drive_percent, (unsigned)FIRMWARE_PROTOCOL,
       (status & STATUS_POT) ? 1 : 0,
       (status & STATUS_POT_MODE_SUPPORTED) ? ((status & STATUS_POT_MODE) ? 1 : 0) : -1,
-      drive_tach_enabled ? 1 : 0, (unsigned)drive_max_percent,
-      (unsigned)drive_trim_us, (unsigned)drive_span_us,
-      drive_brake_enabled ? 1 : 0, drive_stop_enabled ? 1 : 0,
-      drive_dir_reverse ? 1 : 0, (unsigned)drive_us, (unsigned)drive_tach_ppr,
+      1, (unsigned)DRIVE_MAX_PERCENT, (unsigned)drive_duty, (unsigned)DRIVE_TACH_PPR,
       (unsigned long)millis());
   if (n <= 0 || n >= (int)sizeof(line)) return;
   txAppend(line, (uint16_t)n);
-}
-
-// Токены настройки двигателя: «m dir 1» — это настройка, а не имя колеса,
-// поэтому такое слово нельзя принять за «m FX 8».
-bool driveConfigTokenKnown(const char* token) {
-  static const char* const known[] = {"tach", "ppr", "brake", "stop", "dir",
-                                      "max", "trim", "span", "reset"};
-  for (uint8_t i = 0; i < sizeof(known) / sizeof(known[0]); ++i) {
-    if (strcasecmp_P(token, known[i]) == 0) return true;
-  }
-  return false;
 }
 
 // Общая точка входа USB: «w [FL] …» разбирается на имя колеса и команду ядра,
@@ -1913,7 +1661,7 @@ void handleWheelCommand(char* line) {
       char* extra = strtok_r(nullptr, " \t", &save);
       if (!arg2 || extra) {
         note(PSTR("Шаблон: t [FL] -%u…%u (0 — стоп); b — тормоз"),
-             (unsigned)drive_max_percent, (unsigned)drive_max_percent);
+             (unsigned)DRIVE_MAX_PERCENT, (unsigned)DRIVE_MAX_PERCENT);
         return;
       }
       char local[16];
@@ -1928,40 +1676,6 @@ void handleWheelCommand(char* line) {
       return;
     }
     // «t», «t 8» — прежняя команда на это колесо.
-    handleModuleCommand(line);
-    return;
-  }
-  // Настройка двигателя одного колеса: «m FL dir 1» — как «t FL 8», только для
-  // команды m. Своё имя снимается, чужое молча пропускается: сервер шлёт имя,
-  // чтобы команда ушла на нужный USB, а плата видит привычное «m dir 1».
-  if (strcasecmp_P(command, PSTR("m")) == 0) {
-    char* arg1 = strtok_r(nullptr, " \t", &save);
-    const uint8_t kind = classifyModuleToken(arg1);
-    if (kind == MOD_OTHER) return;
-    if (kind == MOD_MINE || kind == MOD_ALL) {
-      char* arg2 = strtok_r(nullptr, " \t", &save);
-      char* arg3 = strtok_r(nullptr, " \t", &save);
-      char* extra = strtok_r(nullptr, " \t", &save);
-      if (!arg2 || extra) {
-        note(PSTR("Шаблон: m [FL] [tach 0|1|brake 0|1|stop 0|1|dir 0|1|max %|trim мкс|span мкс]"));
-        return;
-      }
-      char local[32];
-      if (arg3) {
-        snprintf_P(local, sizeof(local), PSTR("m %s %s"), arg2, arg3);
-      } else {
-        snprintf_P(local, sizeof(local), PSTR("m %s"), arg2);
-      }
-      handleModuleCommand(local);
-      return;
-    }
-    // «m FX 8» — не имя колеса и не настройка: подсказываем имена колёс.
-    if (kind == MOD_UNKNOWN && arg1 != nullptr && isalpha((unsigned char)arg1[0]) &&
-        strtok_r(nullptr, " \t", &save) && !driveConfigTokenKnown(arg1)) {
-      note(PSTR("неизвестный модуль %s (есть FL, FR, RL, RR, ALL)"), arg1);
-      return;
-    }
-    // «m», «m dir 1», «m trim 1520» — прежняя команда на это колесо.
     handleModuleCommand(line);
     return;
   }

@@ -241,9 +241,7 @@ def test_update_syncs_wheel_firmware_to_desktop(tmp_path, monkeypatch):
     assert '#define MODULE_ID "FL"' in fl
     assert "motor_wheel_FR.ino" in [p.name for p in desktop.iterdir()]
     assert any("[firmware]" in line for line in state.get("output", []))
-    # И заявка на автопрошивку: платы прошьёт бортовой экран при перезапуске —
-    # USB-порты колёс держит он, а не процесс, который ставит обновление.
-    request = json.loads((clone / "var" / "firmware-pending.json").read_text(encoding="utf-8"))
-    assert request["reason"] == "обновление с GitHub"
-    assert request["sha"]
-    assert any("порты из настроек" in line for line in state.get("output", []))
+    # Автопрошивки больше нет: заявка не создаётся, обновление только напоминает
+    # прошить платы кнопкой «Прошить модули».
+    assert not (clone / "var" / "firmware-pending.json").exists()
+    assert any("Прошить модули" in line for line in state.get("output", []))

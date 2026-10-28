@@ -54,10 +54,6 @@ class Motors:
         self.calls.append(('drive', module, percent))
         return {'ok': True, 'queued': True, 'module': module, 'percent': round(percent)}
 
-    def set_drive_config(self, action, value=None, module=None):
-        self.calls.append(('drive_config', action, value, module))
-        return {'ok': True, 'queued': True}
-
     def start_maneuver(self, name):
         self.calls.append(('maneuver', 'start', name))
         return {'ok': True, 'maneuver': {'name': name, 'state': 'steering'}}
@@ -124,18 +120,6 @@ def test_controls_page_reuses_full_motor_ui(client, operator):
     ('zero', {'module': 'FL'}, 'steering', ('zero', 'FL')),
     ('calibrate', {'module': 'ALL'}, 'steering', ('calibrate', 'ALL')),
     ('pot_mode', {'action': 'on'}, 'steering', ('pot_mode', 'on')),
-    ('drive_config', {'action': 'tach', 'value': 'off'}, 'steering',
-     ('drive_config', 'tach', 'off', None)),
-    ('drive_config', {'action': 'trim', 'value': 1620}, 'steering',
-     ('drive_config', 'trim', 1620, None)),
-    ('drive_config', {'action': 'span', 'value': 300}, 'steering',
-     ('drive_config', 'span', 300, None)),
-    ('drive_config', {'action': 'stop', 'value': 'off'}, 'steering',
-     ('drive_config', 'stop', 'off', None)),
-    # Сторона вращения — настройка одного колеса: имя доезжает до бортового
-    # сервера, иначе реверс получили бы все четыре платы сразу.
-    ('drive_config', {'action': 'direction', 'module': 'FR', 'value': 'reverse'}, 'steering',
-     ('drive_config', 'direction', 'reverse', 'FR')),
     # Манёвры: старт/стоп пресета и правка его чисел идут как команды руления.
     ('maneuver', {'action': 'start', 'name': 'forward'}, 'steering',
      ('maneuver', 'start', 'forward')),
@@ -162,7 +146,8 @@ def test_all_commands_reach_onboard_owner(client, operator, transport, operation
 
 def test_onboard_rejections_remain_effective(client, operator, transport):
     login(client)
-    assert client.post('/api/control/drive', json={'percent': 21},
+    # Предел тяги задан прошивкой: 35 % — можно, 36 % сервер отклоняет.
+    assert client.post('/api/control/drive', json={'percent': 36},
                        headers=headers(client, 'drive')).status_code == 400
     assert client.post('/api/control/steer', json={'module': 'FL', 'angle': 101},
                        headers=headers(client)).status_code == 400

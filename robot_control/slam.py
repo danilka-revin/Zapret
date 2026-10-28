@@ -71,9 +71,10 @@ DRIVE_COMMAND_HEADER_VALUE = "drive"
 #: оператора, поэтому запрос на остановку помечается так же, как команды
 #: движения — сторонний POST из браузера такой заголовок поставить не может.
 STOP_COMMAND_HEADER_VALUE = "stop"
-#: Заводской предел тяги. Плата может прислать свой (поле dmax= прошивки с
-#: командой m): экран и API берут предел из телеметрии, но не выше потолка.
-MAX_DRIVE_PERCENT = 20
+#: Предел тяги из прошивки (DRIVE_MAX_PERCENT, 35 %). Плата сообщает его полем
+#: dmax= в @TLM: экран и API берут предел из телеметрии, но не выше потолка.
+#: Настройки у тяги нет — это константа драйвера ZS-Z11H.
+MAX_DRIVE_PERCENT = 35
 DRIVE_ABS_MAX_PERCENT = 100
 
 
@@ -463,28 +464,6 @@ def _drive_limit(source) -> int:
     return max(1, min(limit, DRIVE_ABS_MAX_PERCENT))
 
 
-def dispatch_drive_config(source, body):
-    """Настройка привода тяги: серво-ШИМ (нейтраль/размах), тахометр, тормоз, стоп, предел.
-
-    Отдельное действие ``direction`` — про одно колесо: у зеркально
-    поставленных колёс «вперёд» физически разный, и оператор говорит плате,
-    что считать «вперёд» (``{"action": "direction", "module": "FL",
-    "value": "reverse"}``). В журнале видно, какое именно колесо меняли.
-    """
-    action = body.get("action") if isinstance(body, dict) else None
-    module = body.get("module") if isinstance(body, dict) else None
-    where = action or "?"
-    if isinstance(module, str) and module:
-        where = "%s %s" % (where, module.upper())
-    result, status = _drive_config(source, body)
-    if not result.get("ok"):
-        note_command_rejected("настройка привода (%s)" % where,
-                              str(result.get("reason", "")))
-    else:
-        eventlog.record("ok", "настройка привода тяги: %s" % where, source="тяга")
-    return result, status
-
-
 def dispatch_maneuver(source, body):
     """Пресет-манёвр тяги: «метр вперёд», «развернуться на 90°».
 
@@ -563,39 +542,6 @@ def _maneuver_config(source, body):
     reason = result.get("reason", "command_failed")
     status = 409
     if reason in {"payload", "invalid_maneuver", "invalid_value", "invalid_action"}:
-        status = 400
-    return dict(result, ok=False, reason=reason), status
-
-
-def _drive_config(source, body):
-    if estop_latch.latched() is not None:
-        return {"ok": False, "reason": "estop"}, 409
-    if not isinstance(body, dict) or set(body) - {"action", "value", "module"}:
-        return {"ok": False, "reason": "payload"}, 400
-    action = body.get("action")
-    if not isinstance(action, str):
-        return {"ok": False, "reason": "payload"}, 400
-    module = body.get("module")
-    if module is not None:
-        # Имя колеса осмысленно только для настройки одного колеса.
-        if action != "direction":
-            return {"ok": False, "reason": "payload"}, 400
-        if not isinstance(module, str) or module.upper() not in {"FL", "FR", "RL", "RR"}:
-            return {"ok": False, "reason": "invalid_module"}, 400
-        module = module.upper()
-    command = getattr(source, "set_drive_config", None)
-    if not callable(command):
-        return {"ok": False, "reason": "control_not_supported"}, 409
-    result = command(action, body.get("value"), module)
-    if result.get("ok"):
-        return result, 200
-    reason = result.get("reason", "command_failed")
-    status = 409
-    if reason in {"serial_unavailable", "module_offline"}:
-        status = 503
-    elif reason == "command_queue_full":
-        status = 429
-    elif reason in {"payload", "invalid_action", "invalid_value", "invalid_module"}:
         status = 400
     return dict(result, ok=False, reason=reason), status
 
@@ -929,53 +875,6 @@ def peer_kiosk_url() -> str:
     return f"http://127.0.0.1:{port}/api/kiosk_state"
 
 
-def _start_firmware_flash():
-    """Автопрошивка плат колёс при старте экрана → функция запуска.
-
-    Две причины запускать её здесь:
-
-    * кнопка «Обновить с GitHub» оставляет заявку (robot_control/updater.py) —
-      прошивать в момент обновления нельзя, USB-порты колёс держит этот процесс,
-      а не тот, что ставит код;
-    * прошивка изменилась, а заявки нет (git pull, ручная правка) — тогда скрипт
-      всё равно сверит хеш и прошьёт только изменившиеся платы.
-
-    Скрипт сам решает, что делать: если прошивать нечего, он выходит за доли
-    секунды и порты открываются сразу. Порты берутся из настроек
-    (RC_WHEEL_*_PORT) — из того же места, что и подключение колёс.
-    """
-    try:
-        from .firmware_flash import flash_if_pending, summarize
-    except ImportError:                       # pragma: no cover — старые сборки
-        return None
-
-    def run(source):
-        import threading
-
-        def work():
-            report = None
-            try:
-                report = flash_if_pending(always=True)
-            finally:
-                try:
-                    source.resume_ports()
-                except Exception:             # noqa: BLE001 — колёса важнее отчёта
-                    log.exception("автопрошивка: не удалось вернуть подключение колёс")
-                # Итог прошивки — в журнал экрана: иначе оператор не знает, что
-                # платы действительно получили новую версию.
-                text = summarize(report) if report else ""
-                if text:
-                    try:
-                        note_master_status("ok" if report.get("ok") else "warn",
-                                           "автопрошивка: " + text)
-                    except Exception:         # noqa: BLE001 — журнал не критичен
-                        log.exception("автопрошивка: не удалось записать итог в журнал")
-
-        threading.Thread(target=work, daemon=True, name="firmware-flash").start()
-
-    return run
-
-
 def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
     """Источник данных робота.
 
@@ -1016,12 +915,10 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
                 assignments.pop(module)
         if not assignments:
             log.warning("Порты колёс не назначены: выберите их на бортовом экране → Тяга и руление")
-        # Автопрошивка после обновления с GitHub. Порядок важен: платы должны
-        # быть прошиты, пока их USB никто не занял, поэтому источник создаётся
-        # «на паузе» (порты не открываются), прошивка идёт в фоне, и только
-        # потом колёса подключаются. Экран при этом уже работает.
-        flash = _start_firmware_flash()
-        source = mod.MasterSource(
+        # Прошивку никто не запускает сам: платы шьёт оператор кнопкой
+        # «Прошить модули» на бортовом экране. Обновление с GitHub больше не
+        # трогает USB колёс — оно только кладёт новый код на диск.
+        return mod.MasterSource(
             module_ports=assignments,
             on_message=note_master_message,
             on_status=note_master_status,
@@ -1030,11 +927,7 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
             yield_to_lidar=lidar_holds_port,
             tag_module=tag_module_port,
             untag_module=untag_module_port,
-            hold_ports=flash is not None,
         )
-        if flash is not None:
-            flash(source)
-        return source
 
     if mode != "auto":
         log.warning("неизвестный RC_SLAM_SOURCE=%r — использую auto", mode)
@@ -1525,17 +1418,6 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         result, status = dispatch_maneuver_config(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
-    @bp.post("/api/kiosk_drive_config")
-    def api_kiosk_drive_config():
-        """Настройка привода тяги: серво-ШИМ (нейтраль/размах), тахометр, тормоз, стоп, предел."""
-        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
-            return jsonify({"ok": False, "reason": "request_header_required"}), 400
-        if not steering_access_valid():
-            note_pin_required("настройка привода")
-            return jsonify({"ok": False, "reason": "pin_required"}), 401
-        result, status = dispatch_drive_config(state.source, request.get_json(silent=True))
-        return jsonify(result), status
-
     # -------------------------------- API -------------------------------- #
     @bp.get("/api/state")
     @guard
@@ -1587,16 +1469,6 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
             note_pin_required("настройка манёвра")
             return jsonify({"ok": False, "reason": "pin_required"}), 401
         result, status = dispatch_maneuver_config(state.source, request.get_json(silent=True))
-        return jsonify(result), status
-
-    @bp.post("/api/drive_config")
-    @guard
-    def api_drive_config():
-        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
-            return jsonify({"ok": False, "reason": "request_header_required"}), 400
-        if not steering_access_valid():
-            return jsonify({"ok": False, "reason": "pin_required"}), 401
-        result, status = dispatch_drive_config(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
     # ----------------------------- ЛИДАР --------------------------------- #

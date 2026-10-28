@@ -35,15 +35,20 @@ for (const name of ['slam_auth.js', 'web_controls.js']) {
   assert.equal(drive.headers['x-csrf-token'], 'signed-csrf');
   assert.equal(drive.headers['x-robot-control'], 'drive');
   assert.equal(drive.body.percent, 8);
+  // Настройки привода больше нет: запрос «api/kiosk_drive_config» уходит как
+  // есть (маршрута в таблице нет), то есть бортовой сервер ответит 404.
   await context.window.fetch('api/kiosk_drive_config', {method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-Robot-Control': 'steering'},
-    body: JSON.stringify({action: 'output', value: 'volt'})});
-  const config = calls.at(-1);
-  assert.equal(new URL(config.url).pathname, '/api/control/drive_config');
-  assert.equal(config.headers['x-robot-control'], 'steering');
-  assert.equal(config.headers['x-csrf-token'], 'signed-csrf');
-  assert.equal(config.body.action, 'output');
-  assert.equal(config.body.value, 'volt');
+    body: JSON.stringify({action: 'trim', value: 1500})});
+  assert.equal(new URL(calls.at(-1).url).pathname, '/api/kiosk_drive_config');
+  await context.window.fetch('api/kiosk_calibrate', {method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Robot-Control': 'steering'},
+    body: JSON.stringify({module: 'FL'})});
+  const calibration = calls.at(-1);
+  assert.equal(new URL(calibration.url).pathname, '/api/control/calibrate');
+  assert.equal(calibration.headers['x-robot-control'], 'steering');
+  assert.equal(calibration.headers['x-csrf-token'], 'signed-csrf');
+  assert.equal(calibration.body.module, 'FL');
   await context.window.fetch('api/kiosk_logs?limit=400');
   const logs = new URL(calls.at(-1).url);
   assert.equal(logs.pathname, '/api/control/logs');

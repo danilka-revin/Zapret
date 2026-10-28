@@ -35,6 +35,7 @@
 #define OUTPUT 1
 #define INPUT_PULLUP 2
 #define RISING 3
+#define CHANGE 4
 #define DEFAULT 1
 // На Mega 2560 аналоговые входы — это цифровые выводы 54…69.
 #define A0 54
@@ -69,9 +70,14 @@ typedef uint8_t byte;
 typedef bool boolean;
 
 // Регистры Timer2 (шаги руля): прошивка их только настраивает, ход задаёт
-// симуляция. Timer1/3/4/5 заняты библиотекой Servo, поэтому здесь Timer2.
+// симуляция.
 inline uint8_t TCCR2A = 0, TCCR2B = 0, TIMSK2 = 0, OCR2A = 0, TCNT2 = 0;
 constexpr int WGM21 = 1, CS21 = 1, OCIE2A = 1;
+// Timer3 — ШИМ на входе «P» драйвера (D3, OC3C). Сами биты настройки симуляции
+// не нужны, а вот значение сравнения (скважность) — нужно: его пишет прошивка
+// через OCR3C (в каждой плате свой, см. board_prelude.h).
+inline uint8_t TCCR3A = 0, TCCR3B = 0;
+constexpr int COM3C1 = 1, WGM31 = 1, WGM30 = 1, WGM32 = 1, CS31 = 1;
 
 namespace sim {
 
@@ -120,14 +126,10 @@ struct Board {
   void (*isr_fn)() = nullptr;
   void (*tach_fn)() = nullptr;
 
-  // «Серво»-ШИМ на D3 (библиотека Servo, заглушка stubs/Servo.h): импульс в мкс.
-  // Прошивка больше не пишет на D3 через analogWrite, поэтому board.analog[3]
-  // остаётся нулём, а реальный выход виден здесь.
-  bool servo_attached = false;
-  uint8_t servo_pin = 0xFF;
-  int16_t servo_min_us = 1000;
-  int16_t servo_max_us = 2000;
-  uint16_t servo_us = 0;
+  // ШИМ на входе «P» драйвера (D3, OC3C): скважность 0…255. 0 — мотор не тянет,
+  // 255 — полный ход. Сюда пишет прошивка (OCR3C), здесь и проверяем.
+  uint8_t duty = 0;
+  void set_duty(uint8_t value) { duty = value; }
 
   // Модель руля: phys — где колесо на самом деле, в шагах от «прямо».
   long phys = 0;

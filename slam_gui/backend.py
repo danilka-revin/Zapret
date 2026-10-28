@@ -83,7 +83,10 @@ MODULE_TITLES = {
     "RL": "задний левый", "RR": "задний правый",
 }
 WHEEL_R_M = 0.127            # радиус колеса Xiaomi M365 Pro, м
-MAX_DRIVE_PERCENT = 20       # заводской предел; плата может прислать свой (dmax=)
+#: Предел тяги в процентах — константа прошивки, а не настройка. 35 % ≈ 6 км/ч;
+#: плата присылает его в @TLM полем ``dmax=``, и больше своего предела она всё
+#: равно не даст. Значение совпадает с DRIVE_MAX_PERCENT в firmware/motor_wheel.
+MAX_DRIVE_PERCENT = 35
 #: Жёсткий потолок сервера: выше него тягу не пропустит ни экран, ни API, даже
 #: если плата разрешила себе больше. Заводской предел 20 % остаётся настройкой
 #: по умолчанию — поднимать его можно только осознанно, на вывешенных колёсах.
@@ -92,17 +95,17 @@ DRIVE_ABS_MAX_PERCENT = 100
 #: блокирует: ездить можно на любом угле (0° — прямо, 45° — краб, 90° — боком),
 #: число осталось только для подсказки «колёса стоят ровно / под углом».
 DRIVE_ANGLE_ALIGNMENT_DEG = 2.5
-#: Выход на регулятор скорости — «серво»-ШИМ 50 Гц: импульс 1000…2000 мкс, как
-#: у сервопривода постоянного вращения. 1500 мкс — нейтраль (стоим), ±размах —
-#: полный ход. Числа совпадают с SERVO_* в firmware/motor_wheel.
-SERVO_MIN_US = 1000
-SERVO_MAX_US = 2000
-SERVO_CENTER_US = 1500
-SERVO_SPAN_MAX_US = 500
+#: Драйвер колеса — RioRand ZS-Z11H с датчиками Холла. Тяга задаётся скважностью
+#: ШИМ на входе «P» (0 % — мотор не тянет, 100 % — полный ход); датчик «SC» даёт
+#: 90 изменений состояния за оборот колеса, то есть RPM = 60 / (90 × время между
+#: переходами). Оба числа — свойства драйвера, а не настройки: экран их только
+#: показывает, менять нечего.
+DRIVE_TACH_PPR = 90
+DRIVE_DUTY_MAX = 255
 #: Сколько импульсов тахометра бывает на оборот колеса — предел команды m ppr.
 #: Драйверы дают и 1, и 60 импульсов: без этой настройки «об/мин» врали ровно
 #: во столько раз (колесо делает оборот в секунду, а экран показывает 3600).
-TACH_PPR_MAX = 200
+TACH_PPR_MAX = 1000
 
 # Предел абсолютной команды поворота «w <модуль> <угол>». Одно число на весь
 # стек: столько же в прошивке (STEER_LIMIT_DEG в firmware/motor_wheel),
@@ -268,11 +271,7 @@ class NoSource:
                 "drive": {"available": False, "canDrive": False, "reason": "source_unavailable",
                           "maxPercent": MAX_DRIVE_PERCENT, "commandedPercent": 0,
                           "commandedModules": {}, "individual": False, "perModule": {},
-                          "active": False, "reportedPercent": {},
-                          "config": {"supported": False, "tach": None, "maxPercent": None,
-                                     "trimUs": None, "spanUs": None, "pulseUs": None,
-                                     "brake": None, "stopInput": None,
-                                     "dirReverse": None}},
+                          "active": False, "reportedPercent": {}},
                 "linkOk": False}
 
 
@@ -314,27 +313,18 @@ def parse_master_line(line, module=None):
         firmware = int(fields["fw"]) if "fw" in fields else None
         calib_error = int(fields["err"]) if "err" in fields else None
         home = fields.get("home")
-        # Настройка тяги (прошивка с командой m): тахометр, предел, нейтраль и
-        # размах серво-импульса, фактический импульс на выходе скорости.
-        # dm/vmin/vmax (аналог 0–5 В) больше не приходят: выход один — серво-ШИМ.
+        # Тяга: tach=1 — тахометр SC включён, dmax= — предел прошивки в процентах,
+        # duty= — фактическая скважность ШИМ на входе «P» (0…255), ppr= — сколько
+        # переходов SC приходится на оборот колеса. Всё это свойства драйвера
+        # ZS-Z11H: настраивать тут нечего, экран только показывает.
         tach = {"0": False, "1": True}.get(fields.get("tach")) if "tach" in fields else None
-        drive_max = int(fields["dmax"]) if "dmax" in fields else None
         try:
-            drive_trim_us = int(fields["trim"]) if "trim" in fields else None
-            drive_span_us = int(fields["span"]) if "span" in fields else None
-            drive_pulse_us = int(fields["us"]) if "us" in fields else None
-        except ValueError:
-            return None
-        brake = {"0": False, "1": True}.get(fields.get("brk")) if "brk" in fields else None
-        stop_input = {"0": False, "1": True}.get(fields.get("stp")) if "stp" in fields else None
-        dir_reverse = {"0": False, "1": True}.get(fields.get("dir")) if "dir" in fields else None
-        # Импульсов тахометра на оборот колеса: драйверы дают и 1, и 60 —
-        # отсюда «об/мин» и путь манёвров. Поле появилось вместе с командой m ppr.
-        try:
+            drive_max = int(fields["dmax"]) if "dmax" in fields else None
+            drive_duty = int(fields["duty"]) if "duty" in fields else None
             tach_ppr = int(fields["ppr"]) if "ppr" in fields else None
         except ValueError:
             return None
-        for key, value in (("tach", tach), ("brk", brake), ("dir", dir_reverse), ("stp", stop_input)):
+        for key, value in (("tach", tach),):
             if key in fields and value is None:
                 return None
         # Обороты и тягу проверяем по тому же пределу, что разрешила плата:
@@ -346,12 +336,7 @@ def parse_master_line(line, module=None):
                 (calib_error is not None and not 0 <= calib_error <= 15) or
                 (home is not None and home not in HOME_SOURCES) or
                 (drive_max is not None and not 1 <= drive_max <= DRIVE_ABS_MAX_PERCENT) or
-                (drive_trim_us is not None and not SERVO_MIN_US <= drive_trim_us <= SERVO_MAX_US) or
-                (drive_span_us is not None and not 1 <= drive_span_us <= SERVO_SPAN_MAX_US) or
-                (drive_trim_us is not None and drive_span_us is not None and
-                 (drive_trim_us - drive_span_us < SERVO_MIN_US or
-                  drive_trim_us + drive_span_us > SERVO_MAX_US)) or
-                (drive_pulse_us is not None and not SERVO_MIN_US <= drive_pulse_us <= SERVO_MAX_US) or
+                (drive_duty is not None and not 0 <= drive_duty <= DRIVE_DUTY_MAX) or
                 (tach_ppr is not None and not 1 <= tach_ppr <= TACH_PPR_MAX)):
             return None
         zeroed = fields.get("cal") == "1"
@@ -379,16 +364,10 @@ def parse_master_line(line, module=None):
             # Поле появилось в прошивке v2 после руля; старые кадры его не содержат.
             "pot": fields.get("pot") == "1",
             "potMode": fields.get("pm") == "1" if fields.get("pm") in {"0", "1"} else None,
-            # Настройка тяги: None у прошивки без команды m (до гибкого привода)
-            # и у прошивки v5 с аналогом 0–5 В: у неё нет trim/span/us.
+            # Тяга (ZS-Z11H): None у старой прошивки без этих полей.
             "tach": tach,
             "driveMaxPercent": drive_max,
-            "driveTrimUs": drive_trim_us,
-            "driveSpanUs": drive_span_us,
-            "drivePulseUs": drive_pulse_us,
-            "brake": brake,
-            "stopInput": stop_input,
-            "dirReverse": dir_reverse,
+            "driveDuty": drive_duty,
             "tachPpr": tach_ppr,
         }
     except (KeyError, ValueError):
@@ -454,7 +433,7 @@ class MasterSource:
     STALE_S = 1.0
     DRIVE_STALE_S = 0.75
     MAX_STEER_DEG = STEER_LIMIT_DEG
-    MAX_DRIVE_PERCENT = 20
+    MAX_DRIVE_PERCENT = MAX_DRIVE_PERCENT
     MESSAGE_LIMIT = 40
     #: Сколько ждать строку @TLM после открытия порта (плата перезагружается).
     PROBE_S = 5.0
@@ -471,7 +450,7 @@ class MasterSource:
     def __init__(self, port=None, baud=115200, on_message=None, on_status=None,
                  port_provider=None, probe=None, claim=None, release=None,
                  yield_to_lidar=None, tag_module=None, untag_module=None,
-                 module_ports=None, hold_ports=False):
+                 module_ports=None):
         # Legacy positional ports/providers are deliberately NOT candidates.
         # Without a wheel-to-port assignment, never open any device.
         self.module_ports = {}
@@ -530,24 +509,23 @@ class MasterSource:
         self._serial = None
         self._spawning = set()
         self._cooldown = {}              # порт → время следующей попытки открыть
-        #: Пока True, порты не открываются. Нужно автопрошивке: платы прошиваются
-        #: до того, как программа займёт их USB, иначе arduino-cli получает
-        #: «порт занят». Экран в это время уже работает и честно показывает,
-        #: что колёс ещё нет.
-        self._hold_ports = bool(hold_ports)
+        #: Пока True, порты не открываются. Ставится только на время ручной
+        #: прошивки (кнопка «Прошить модули»): avrdude не может открыть порт,
+        #: который читает программа. Автоматически никто не прошивает.
+        self._hold_ports = False
         threading.Thread(target=self._reader, daemon=True).start()
 
     @property
     def ports_held(self):
-        """Порты колёс ещё не открываются (идёт автопрошивка)."""
+        """Порты колёс сейчас отпущены под ручную прошивку."""
         return self._hold_ports
 
     def resume_ports(self):
-        """Разрешить открытие портов после автопрошивки."""
+        """Разрешить открытие портов после прошивки."""
         self._hold_ports = False
         self._cooldown.clear()
         try:
-            self._note_status("info", "колёса: автопрошивка закончена — подключаюсь к платам")
+            self._note_status("info", "колёса: прошивка закончена — подключаюсь к платам")
         except Exception:                 # noqa: BLE001 — журнал не критичен
             pass
 
@@ -810,86 +788,26 @@ class MasterSource:
             return {"ok": False, "reason": "command_queue_full"}
         return {"ok": True, "queued": True, "module": module}
 
-    def drive_config(self, now=None):
-        """Настройка привода тяги по телеметрии всех четырёх плат.
+    def drive_limit_percent(self, now=None):
+        """Действующий предел тяги: минимум из присланных платами, не выше сервера.
 
-        Платы должны присылать одинаковую настройку: если одна управляется
-        ШИМ, а другая 0–5 В, «общего режима» нет, и экран честно пишет
-        «различаются» вместо того, чтобы показать настройку одной платы.
+        Предел задан прошивкой (``DRIVE_MAX_PERCENT``) и приходит в ``@TLM``
+        полем ``dmax=``. Платы останавливают мотор по своему пределу, поэтому
+        сервер не обещает экрану больше, чем подтвердила самая осторожная из
+        четырёх. Пока платы молчат, действует константа.
         """
         now = time.time() if now is None else now
         with self.lock:
             frames = dict(self.frames)
-        fresh = {}
+        limits = []
         for module in MODULE_TITLES:
             entry = frames.get(module)
-            if entry is not None and now - entry[1] < self.STALE_S:
-                fresh[module] = entry[0]
-        values = list(fresh.values())
-
-        def common(key):
-            if len(values) != len(MODULE_TITLES):
-                return None
-            first = values[0].get(key)
-            if any(frame.get(key) != first for frame in values):
-                return None
-            return first
-
-        supported = bool(values) and all(frame.get("driveTrimUs") is not None for frame in values)
-        tach = common("tach")
-        max_percent = common("driveMaxPercent")
-        # Даже если платы не сошлись в пределе, осторожная из них задаёт общий:
-        # сервер не должен обещать экрану больше, чем подтвердила самая узкая.
-        limits = [frame.get("driveMaxPercent") for frame in values
-                  if frame.get("driveMaxPercent") is not None]
-        limit_percent = min(limits) if len(limits) == len(MODULE_TITLES) else None
-        trim_us = common("driveTrimUs")
-        span_us = common("driveSpanUs")
-        # Импульсов тахометра на оборот: от этого зависят «об/мин» и путь
-        # манёвров, поэтому экран показывает и правит именно это число.
-        tach_ppr = common("tachPpr")
-        pulse_us = common("drivePulseUs")
-        partial = {
-            "supported": supported,
-            "confirmed": supported and all(frame.get(field) is not None
-                                           for frame in values
-                                           for field in ("driveMaxPercent", "tach", "driveTrimUs")),
-            # Выход один — «серво»-ШИМ 50 Гц; поле оставлено, чтобы экран и
-            # сторонние клиенты не гадали, что за режим у плат.
-            "outputMode": "servo" if supported else None,
-            "tach": tach,
-            "maxPercent": max_percent,
-            "limitPercent": limit_percent,
-            "trimUs": trim_us,
-            "spanUs": span_us,
-            "pulseUs": pulse_us,
-            "pulsesPerRev": tach_ppr,
-            "brake": common("brake"),
-            "stopInput": common("stopInput"),
-            "dirReverse": common("dirReverse"),
-            "perModule": {module: {
-                "tach": frame.get("tach"),
-                "maxPercent": frame.get("driveMaxPercent"),
-                "trimUs": frame.get("driveTrimUs"),
-                "spanUs": frame.get("driveSpanUs"),
-                "pulseUs": frame.get("drivePulseUs"),
-                "pulsesPerRev": frame.get("tachPpr"),
-                "dirReverse": frame.get("dirReverse"),
-            } for module, frame in fresh.items()},
-        }
-        partial["mixed"] = supported and (
-            tach is None or max_percent is None or trim_us is None)
-        return partial
-
-    def drive_limit_percent(self, now=None):
-        """Действующий предел тяги: минимум из присланных платами, не выше сервера.
-
-        Платы останавливают мотор по своему пределу; сервер не должен обещать
-        экрану больше, чем подтвердила самая осторожная из четырёх.
-        """
-        config = self.drive_config(now)
-        reported = config.get("limitPercent")
-        limit = reported if isinstance(reported, int) and reported > 0 else self.MAX_DRIVE_PERCENT
+            if entry is None or now - entry[1] >= self.STALE_S:
+                continue
+            value = entry[0].get("driveMaxPercent")
+            if isinstance(value, int) and value > 0:
+                limits.append(value)
+        limit = min(limits) if limits else self.MAX_DRIVE_PERCENT
         return max(1, min(int(limit), DRIVE_ABS_MAX_PERCENT))
 
     def drive_status(self, now=None):
@@ -956,36 +874,17 @@ class MasterSource:
                 why = "not_homed"
             elif frame.get("calib") or frame.get("cycle") or frame.get("moving"):
                 why = "module_busy"
-            # Сторону вращения меняют только у стоящего колеса: реверс DIR под
-            # тягой — рывок. Мёртвый ноль и чужие колёса здесь не мешают —
-            # настройка живёт в EEPROM именно этой платы.
-            why_dir = ""
-            if not self.serial_ready.is_set():
-                why_dir = "serial_unavailable"
-            elif frame is None:
-                why_dir = "module_offline"
-            elif frame.get("driveTrimUs") is None:
-                why_dir = "firmware_update_required"
-            elif (commanded != 0 or commanded_modules.get(module, 0) or
-                  frame.get("calib") or frame.get("cycle") or frame.get("moving") or
-                  frame.get("drivePercent")):
-                why_dir = "module_busy"
             per_module[module] = {
                 "canDrive": not why,
                 "reason": why or None,
                 "percent": motors.get(module),
                 "commandedPercent": commanded_modules.get(module, 0),
-                "pulseUs": frame.get("drivePulseUs") if frame else None,
+                # Скважность ШИМ на входе «P» этого драйвера и обороты по «SC».
+                "duty": frame.get("driveDuty") if frame else None,
                 "rpm": frame.get("rpm") if frame else None,
                 "tach": frame.get("tach") if frame else None,
-                # Сторона вращения этого колеса (m dir 0|1 в прошивке):
-                # «вперёд» на зеркальном колесе — обратный DIR.
-                "dirReverse": frame.get("dirReverse") if frame else None,
-                "canSetDirection": not why_dir,
-                "directionReason": why_dir or None,
             }
 
-        config = self.drive_config(now)
         return {
             "available": self.serial_ready.is_set(),
             "canDrive": not reason,
@@ -997,9 +896,8 @@ class MasterSource:
             "perModule": per_module,
             "active": any(value not in (None, 0) for value in motors.values()),
             "reportedPercent": motors,
-            "reportedPulseUs": {module: frame.get("drivePulseUs")
-                                for module, frame in fresh_frames.items()},
-            "config": config,
+            "reportedDuty": {module: frame.get("driveDuty")
+                             for module, frame in fresh_frames.items()},
             "maneuver": self.maneuver_status(now),
             # Справка для экрана: колёса стоят ровно (0°) или под углом.
             # Тягу это не ограничивает — см. drive_status().
@@ -1109,134 +1007,9 @@ class MasterSource:
     def stop_drive(self, now=None):
         return self.drive(0, now)
 
-    #: Что можно менять командой m. Каждое действие — один токен настройки.
-    DRIVE_CONFIG_ACTIONS = ("tach", "ppr", "brake", "stop", "limit", "trim", "span",
-                            "defaults", "direction")
-
-    def set_drive_config(self, action, value=None, module=None, now=None):
-        """Настройка привода тяги на всех четырёх платах (команда m).
-
-        Смена режима выхода или предела под работающим мотором — это рывок,
-        поэтому требуется покой: тяга выключена, колёса стоят, калибровка не
-        идёт. Перед командой проверяем, что все четыре платы на связи, свежи и
-        вообще поддерживают настройку (в @TLM есть dm/tach/dmax).
-        """
-        if action not in self.DRIVE_CONFIG_ACTIONS:
-            return {"ok": False, "reason": "invalid_action"}
-        if not self.serial_ready.is_set():
-            return {"ok": False, "reason": "serial_unavailable"}
-        if action == "direction":
-            # Направление — свойство конкретного колеса, поэтому и команда
-            # адресная: «m FL dir 1». Остальные колёса не трогаются вовсе.
-            return self._set_module_direction(value, module, now)
-        now = time.time() if now is None else now
-        with self.lock:
-            frames = dict(self.frames)
-            drive_active = self._module_drive_active()
-        if any(mid not in frames or now - frames[mid][1] >= self.STALE_S for mid in MODULE_TITLES):
-            return {"ok": False, "reason": "module_offline"}
-        values = [frames[mid][0] for mid in MODULE_TITLES]
-        if any(f.get("driveTrimUs") is None for f in values):
-            return {"ok": False, "reason": "firmware_update_required"}
-        # Импульсы на оборот не влияют на выходной импульс — их разрешено менять
-        # под тягой: подбирать их и надо на крутящемся колесе.
-        busy = drive_active or any(f.get("moving") or f.get("calib") or f.get("cycle") or
-                                   f.get("drivePercent") for f in values)
-        if busy and action != "ppr":
-            return {"ok": False, "reason": "module_busy"}
-        commands = self._drive_config_commands(action, value, values)
-        if isinstance(commands, dict):
-            return commands
-        for command in commands:
-            try:
-                self.commands.put_nowait(command)
-            except queue.Full:
-                return {"ok": False, "reason": "command_queue_full"}
-        return {"ok": True, "queued": True, "action": action,
-                "commands": [c.decode("ascii").strip() for c in commands]}
-
-    def _set_module_direction(self, value, module, now=None):
-        """Сторона вращения одного колеса: ``m FL dir 0|1`` только на его порт.
-
-        Физически колёса стоят зеркально, поэтому «вперёд» у левого и правого
-        борта — противоположные DIR. Здесь оператор говорит плате, что считать
-        «вперёд»; логика тяги не меняется, меняется только уровень DIR, и
-        выбор живёт в EEPROM платы.
-        """
-        module = str(module or "").upper()
-        if module not in MODULE_TITLES:
-            return {"ok": False, "reason": "invalid_module"}
-        if isinstance(value, bool):
-            reverse = value
-        elif isinstance(value, str):
-            reverse = {"reverse": True, "normal": False}.get(value.lower())
-            if reverse is None:
-                return {"ok": False, "reason": "invalid_value"}
-        else:
-            return {"ok": False, "reason": "invalid_value"}
-        now = time.time() if now is None else now
-        with self.lock:
-            entry = self.frames.get(module)
-            drive_active = self._module_drive_active(module)
-        if entry is None or now - entry[1] >= self.STALE_S:
-            return {"ok": False, "reason": "module_offline"}
-        frame = entry[0]
-        if frame.get("driveTrimUs") is None:
-            return {"ok": False, "reason": "firmware_update_required"}
-        if (drive_active or frame.get("moving") or frame.get("calib") or
-                frame.get("cycle") or frame.get("drivePercent")):
-            return {"ok": False, "reason": "module_busy"}
-        command = ("m %s dir %d\n" % (module, 1 if reverse else 0)).encode("ascii")
-        try:
-            self.commands.put_nowait(command)
-        except queue.Full:
-            return {"ok": False, "reason": "command_queue_full"}
-        return {"ok": True, "queued": True, "action": "direction", "module": module,
-                "reverse": reverse,
-                "commands": [command.decode("ascii").strip()]}
-
-    def _drive_config_commands(self, action, value, values):
-        """Действие экрана → команды прошивке или отказ с причиной."""
-        if action in ("tach", "brake", "stop"):
-            if value not in ("on", "off"):
-                return {"ok": False, "reason": "invalid_value"}
-            return [("m %s %d\n" % (action, 1 if value == "on" else 0)).encode("ascii")]
-        if action == "ppr":
-            # Импульсов тахометра на оборот колеса. Одно число на все четыре
-            # платы: колёса одной модели, и «об/мин» должны совпадать.
-            try:
-                ppr = int(value)
-            except (TypeError, ValueError):
-                return {"ok": False, "reason": "invalid_value"}
-            if not 1 <= ppr <= TACH_PPR_MAX:
-                return {"ok": False, "reason": "invalid_value"}
-            return [("m ppr %d\n" % ppr).encode("ascii")]
-        if action == "limit":
-            try:
-                limit = int(value)
-            except (TypeError, ValueError):
-                return {"ok": False, "reason": "invalid_value"}
-            if not 1 <= limit <= DRIVE_ABS_MAX_PERCENT:
-                return {"ok": False, "reason": "invalid_value"}
-            return [("m max %d\n" % limit).encode("ascii")]
-        if action in ("trim", "span"):
-            # Нейтраль и размах «серво»-импульса. Здесь проверяется только
-            # разумный диапазон одного числа: сочетание «нейтраль ± размах»
-            # проверяет сама плата, у которой свежая настройка (у сервера
-            # телеметрия отстаёт на кадр, и жёсткая сверка отвергала бы
-            # правильную последовательность «span, затем trim»).
-            try:
-                pulse = int(value)
-            except (TypeError, ValueError):
-                return {"ok": False, "reason": "invalid_value"}
-            if action == "trim" and not SERVO_MIN_US <= pulse <= SERVO_MAX_US:
-                return {"ok": False, "reason": "invalid_value"}
-            if action == "span" and not 1 <= pulse <= SERVO_SPAN_MAX_US:
-                return {"ok": False, "reason": "invalid_value"}
-            return [("m %s %d\n" % (action, pulse)).encode("ascii")]
-        if action == "defaults":
-            return [b"m reset\n"]
-        return {"ok": False, "reason": "invalid_action"}
+    # Настройки тяги у драйвера ZS-Z11H нет: команда «m» из прошивки убрана, и
+    # set_drive_config/direction здесь тоже нет. Тяга — это только проценты
+    # (см. drive/drive_module), предел и оформление ШИМ заданы прошивкой.
 
     # ------------------------------------------------------------- манёвры # #
     def maneuver_status(self, now=None):
@@ -1665,7 +1438,7 @@ class MasterSource:
         while not self._stop:
             if time.monotonic() >= next_scan:
                 next_scan = time.monotonic() + self.RESCAN_S
-                if not self._hold_ports:      # автопрошивка: USB ещё наш
+                if not self._hold_ports:      # прошивка: USB занят avrdude
                     self._open_new_links()
             self._fanout_commands()
             self._maneuver_tick()
@@ -1697,12 +1470,12 @@ class MasterSource:
                                "firmware": frame.get("firmware"),
                                "pot": frame.get("pot", False),
                                "potMode": frame.get("potMode"),
-                               # Настройка тяги своей платы: экран не выдаёт
-                               # «0 об/мин» за измерение, если тахометра нет, и
-                               # показывает фактический импульс серво-ШИМ.
+                               # Тяга своей платы: тахометр «SC» включён всегда,
+                               # скважность ШИМ — фактическая, предел — из
+                               # прошивки. Настраивать здесь нечего.
                                "tach": frame.get("tach"),
                                "driveMaxPercent": frame.get("driveMaxPercent"),
-                               "drivePulseUs": frame.get("drivePulseUs"),
+                               "driveDuty": frame.get("driveDuty"),
                                "online": True, "fault": None,
                                "moving": frame["moving"], "calibrating": frame["calib"],
                                "cycling": frame.get("cycle", False)})
@@ -1711,7 +1484,7 @@ class MasterSource:
                                "targetAngle": None, "rpm": None, "temp": None,
                                "drivePercent": None, "homed": None, "online": False, "fault": None,
                                "pot": None, "tach": None, "driveMaxPercent": None,
-                               "drivePulseUs": None,
+                               "driveDuty": None,
                                "moving": False, "calibrating": False})
         out = NoSource().read()              # АКБ и маршрут пока не передаются
         out["motors"] = motors
