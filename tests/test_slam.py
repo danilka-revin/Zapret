@@ -452,12 +452,12 @@ def test_master_telemetry_parses_bldc_rpm_and_drive_percent():
         "@TLM mod=FL deg=0.00 tgt=0.00 moving=0 cal=1 cycle=0 calib=0 opto=0 rpm=245.5 drive=-12 t=42")
     assert frame["rpm"] == 245.5
     assert frame["drivePercent"] == -12
-    # Предел прошивки — 35 %: 36 % плата принять не может, а без dmax= в кадре
-    # действует тот же предел (старая прошивка знала только свои 35 %).
+    # Предел прошивки — 100 %: больше полного хода не бывает, а без dmax= в
+    # кадре действует тот же предел (MAX_DRIVE_PERCENT = 100).
     assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=36") is None
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=101") is None
     assert backend.parse_master_line(
-        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=35") is not None
+        "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=20 drive=100") is not None
 
 
 def test_master_source_drive_works_at_any_angle_and_prioritizes_stop():
@@ -703,7 +703,7 @@ def test_pot_mode_requires_all_boards_and_idle_telemetry():
 
 
 # --------------------------- гибкая настройка тяги --------------------------- #
-def _drive_frame(module, *, tach=1, dmax=35, duty=0, deg=0.0, drive=0, ppr=90, rpm=0.0):
+def _drive_frame(module, *, tach=1, dmax=100, duty=0, deg=0.0, drive=0, ppr=90, rpm=0.0):
     """Строка @TLM прошивки v7: драйвер ZS-Z11H, настраивать нечего.
 
     duty — фактическая скважность ШИМ на входе «P» (0…255), ppr — сколько
@@ -770,10 +770,10 @@ def test_master_telemetry_parses_the_wheel_driver_fields():
     backend = _load_backend()
     frame = backend.parse_master_line(
         "@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 rpm=60.0 drive=8 fw=7 tach=1 "
-        "dmax=35 duty=58 ppr=90 t=1")
+        "dmax=100 duty=20 ppr=90 t=1")
     assert frame["tach"] is True
-    assert frame["driveMaxPercent"] == 35
-    assert frame["driveDuty"] == 58
+    assert frame["driveMaxPercent"] == 100
+    assert frame["driveDuty"] == 20
     assert frame["tachPpr"] == 90 and frame["rpm"] == 60.0
     # Старые поля настройки в кадре ничего не значат и не ломают разбор.
     for gone in ("brake", "stopInput", "driveTrimUs", "driveSpanUs",
@@ -796,14 +796,39 @@ def test_master_telemetry_parses_the_wheel_driver_fields():
     assert backend.parse_master_line("@TLM mod=FL deg=0 tgt=0 moving=0 cal=1 drive=30 dmax=50") is not None
 
 
+def test_drive_goes_all_the_way_to_full_speed():
+    """Предел тяги — 100 %: сервер отправляет «t 100» и не режет полный ход.
+
+    Скважность ШИМ (0 % — выбег, 100 % — полный ход) считается на плате, поэтому
+    сервер обязан пропустить ровно 100 %, а всё, что выше, — отклонить.
+    """
+    backend = _load_backend()
+    src = _bare_master_source(backend)
+    for module in ("FL", "FR", "RL", "RR"):
+        src.feed(_drive_frame(module, drive=100), now=100.0)
+    assert src.drive_limit_percent(now=100.2) == 100
+
+    result = src.drive(100, now=100.2)
+    assert result["ok"] is True, result
+    assert src.commands.get_nowait() == b"t 100\n"
+
+    assert src.drive(101, now=100.3)["reason"] == "drive_limit"
+    assert src.drive(-100, now=100.3)["ok"] is True
+    assert src.commands.get_nowait() == b"t -100\n"
+
+    # Ноль — это тормоз (b), а не «t 0»: скважность 0 и STOP выключен.
+    assert src.drive(0, now=100.4)["ok"] is True
+    assert src.commands.get_nowait() == b"b\n"
+
+
 def test_drive_limit_follows_the_plates_and_server_ceiling():
     """Предел тяги берётся из телеметрии плат, но не выше потолка сервера."""
     backend = _load_backend()
     src = _bare_master_source(backend)
     for module in ("FL", "FR", "RL", "RR"):
         src.feed(_drive_frame(module), now=100.0)
-    assert src.drive_limit_percent(now=100.2) == 35
-    assert src.drive_status(now=100.2)["maxPercent"] == 35
+    assert src.drive_limit_percent(now=100.2) == 100
+    assert src.drive_status(now=100.2)["maxPercent"] == 100
 
     for module in ("FL", "FR", "RL", "RR"):
         src.feed(_drive_frame(module, dmax=50), now=100.0)
@@ -839,7 +864,7 @@ def test_individual_drive_targets_only_its_own_wheel():
 
     result = src.drive_module("fl", 8, now=100.2)
     assert result == {"ok": True, "queued": True, "module": "FL", "percent": 8,
-                      "maxPercent": 35}
+                      "maxPercent": 100}
     assert src.commands.get_nowait() == b"t FL 8\n"
     assert src.drive_status(now=100.2)["commandedModules"] == {"FL": 8}
 
@@ -867,8 +892,8 @@ def test_individual_drive_guards():
 
     assert src.drive_module("XX", 8, now=100.2)["reason"] == "invalid_module"
     assert src.drive_module("FL", "abc", now=100.2)["reason"] == "invalid_drive"
-    assert src.drive_module("FL", 36, now=100.2)["reason"] == "drive_limit"
-    assert src.drive_module("FL", 36, now=100.2)["limit"] == 35
+    assert src.drive_module("FL", 101, now=100.2)["reason"] == "drive_limit"
+    assert src.drive_module("FL", 101, now=100.2)["limit"] == 100
     # Своё колесо должно быть на связи, с нулём и стоять.
     src.feed(_drive_frame("RL", deg=0.0).replace("cal=1", "cal=0"), now=100.0)
     assert src.drive_module("RL", 8, now=100.2)["reason"] == "not_homed"
@@ -967,7 +992,7 @@ def test_dispatch_individual_drive_payload_and_statuses():
 
         def __init__(self, result=None):
             self.result = result if result is not None else {"ok": True, "queued": True, "percent": 8,
-                                                             "module": "FL", "maxPercent": 35}
+                                                             "module": "FL", "maxPercent": 100}
             self.calls = []
 
         def drive(self, percent):
@@ -1033,7 +1058,7 @@ def test_drive_api_allows_any_steering_angle_end_to_end(kiosk_client):
     # запрет общей тяги, теперь только подпись на экране.
     for module, deg in (("FL", 30.0), ("FR", 30.0), ("RL", 30.0), ("RR", 45.0)):
         src.feed(_drive_frame(module, deg=deg), now=now)
-    src.drive_limit_percent = lambda now=None: 35
+    src.drive_limit_percent = lambda now=None: 100
     src.maneuver_status = lambda now=None: {"supported": False, "active": False}
     kiosk_client.application.extensions["rc_slam"].source = src
 

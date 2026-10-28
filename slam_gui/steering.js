@@ -152,7 +152,7 @@
           <div class="rc-drive-top"><div><b>Движение</b><small>Зажмите направление; отпустите для торможения</small></div>
             <span id="rc-drive-status" role="status">Нужен ноль всех колёс (калибровка)</span></div>
           <label class="rc-drive-speed">Ограничение скорости <b><span id="rc-drive-speed-value">8</span>%</b>
-            <input id="rc-drive-speed" type="range" min="1" max="20" value="8" disabled></label>
+            <input id="rc-drive-speed" type="range" min="1" max="100" value="8" disabled></label>
           <div class="rc-drive-actions">
             <button type="button" data-drive-direction="-1" disabled>Зажать: назад</button>
             <button type="button" data-drive-direction="1" disabled>Зажать: вперёд</button>
@@ -727,7 +727,7 @@
     if (!statusEl || !slider) return;
     const drive = (snapshot && snapshot.drive) || {};
     // Предел — из телеметрии плат (dmax=), он задан прошивкой и не настраивается.
-    const max = Math.max(1, Math.min(100, Number(drive.maxPercent) || 35));
+    const max = Math.max(1, Math.min(100, Number(drive.maxPercent) || 100));
     slider.max = String(max);
     if (Number(slider.value) > max) slider.value = String(max);
     $('rc-drive-speed-value').textContent = String(slider.value);

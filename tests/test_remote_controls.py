@@ -146,8 +146,8 @@ def test_all_commands_reach_onboard_owner(client, operator, transport, operation
 
 def test_onboard_rejections_remain_effective(client, operator, transport):
     login(client)
-    # Предел тяги задан прошивкой: 35 % — можно, 36 % сервер отклоняет.
-    assert client.post('/api/control/drive', json={'percent': 36},
+    # Предел тяги задан прошивкой: 100 % — можно, 101 % сервер отклоняет.
+    assert client.post('/api/control/drive', json={'percent': 101},
                        headers=headers(client, 'drive')).status_code == 400
     assert client.post('/api/control/steer', json={'module': 'FL', 'angle': 101},
                        headers=headers(client)).status_code == 400
