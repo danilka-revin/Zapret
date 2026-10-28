@@ -2838,6 +2838,30 @@
     }
   }
 
+  /** Почему манёвр сейчас не поедет — словами, но кнопку не гасим.
+   *
+   * Пресеты доступны всегда: оператор нажимает «Ехать», запрос уходит на сервер,
+   * и тот отвечает точной причиной («нет нуля», «нет связи с платой», «PIN
+   * истёк»). Мёртвая серая кнопка не говорит ничего и заставляет гадать.
+   */
+  function maneuverReadiness(ctx) {
+    const drive = ctx.drive || {};
+    if (!ctx.supported) {
+      return 'Пресеты ждут настройки от сервера — нажмите «Ехать», он ответит причиной.';
+    }
+    if (!ctx.available) {
+      return 'Манёвры ведёт бортовая программа — нажмите «Ехать», она ответит причиной.';
+    }
+    if (!ctx.authorized) {
+      return 'Управление заблокировано: «Ехать» попросит PIN.';
+    }
+    if (!drive.canDrive) {
+      const reason = DRIVE_REASON_TEXT[drive.reason] || 'тяга не готова';
+      return 'Пока не поедет: ' + reason + ' Кнопки работают — «Ехать» покажет точную причину.';
+    }
+    return '';
+  }
+
   function renderManeuvers(data) {
     const stop = $('maneuver-stop');
     const statusEl = $('maneuver-status');
@@ -2864,20 +2888,17 @@
       }
       const button = $('maneuver-' + id);
       if (!button) return;
-      button.disabled = !supported || !authorized || !drive.canDrive || active || maneuverPending;
+      // «Доступны всегда»: гасим только на время полёта запроса (двойной клик).
+      // Всё остальное — не повод для серой кнопки: пусть ответит сервер.
+      button.disabled = maneuverPending;
       button.textContent = (active && state.name === id) ? 'Едем…' : 'Ехать';
     });
-    stop.disabled = !authorized || !active;
+    // СТОП манёвра доступен всегда: он же и просто «снять тягу».
+    stop.disabled = maneuverPending;
     const kind = state.kind === 'distance' ? 'distance' : 'angle';
     let text;
     if (maneuverMessage && Date.now() < maneuverMessageUntil) {
       text = maneuverMessage;
-    } else if (!supported) {
-      text = 'Пресеты манёвров недоступны: сервер не отдал их настройки.';
-    } else if (!available) {
-      text = 'Манёвры — только в режиме master (RC_SLAM_SOURCE=master).';
-    } else if (!steeringAuthorized) {
-      text = 'Манёвры требуют разблокированного управления.';
     } else if (active) {
       const percent = Math.round((Number(state.progress) || 0) * 100);
       text = 'Манёвр «' + (state.title || state.name || '') + '»: ' + percent + '% · ' +
@@ -2885,10 +2906,10 @@
         ' · ' + (state.mode === 'time' ? 'по времени (тахометра нет)' : 'по тахометру');
     } else if (state.state === 'done' || state.state === 'failed' || state.state === 'cancelled') {
       text = (state.message || 'Манёвр завершён.');
-    } else if (!drive.canDrive) {
-      text = 'Манёвры недоступны: ' + (DRIVE_REASON_TEXT[drive.reason] || 'тяга не готова') + '.';
     } else {
-      text = 'Готово · выберите манёвр. Числа в строках — метры, градусы и рабочий процент.';
+      const ready = maneuverReadiness({supported: supported, available: available,
+                                       authorized: authorized, drive: drive});
+      text = ready || 'Готово · выберите манёвр. Числа в строках — метры, градусы и рабочий процент.';
     }
     statusEl.textContent = text;
     statusEl.dataset.active = String(active);
@@ -2898,9 +2919,16 @@
   async function startManeuver(id) {
     if (maneuverPending) return;
     if (!steeringAuthorized) {
+      // Не молчим: пресет доступен, просто сначала нужен PIN.
+      maneuverMessage = 'Разблокируйте управление PIN — и манёвр поедет.';
+      maneuverMessageUntil = Date.now() + 8000;
+      renderManeuvers(lastData || {});
       if (window._openSteeringAuth) window._openSteeringAuth();
       return;
     }
+    // Пока манёвр идёт, числа не сохраняем: сервер всё равно откажет (рывок).
+    // Зато «Ехать» отвечает «другой манёвр уже идёт — сначала СТОП».
+    const running = !!(((lastData || {}).drive || {}).maneuver || {}).active;
     const preset = maneuverPreset(id, (lastData || {}).maneuverConfig || {});
     const kind = maneuverKind(preset);
     const targetEl = $('maneuver-target-' + id);
@@ -2918,12 +2946,14 @@
     const values = kind === 'distance'
       ? {distanceM: target, percent: percent}
       : {angleDeg: target, percent: percent};
-    const saved = await postManeuver('api/kiosk_maneuver_config', {name: id, values: values});
-    if (!saved.ok) {
-      maneuverPending = false;
-      maneuverRefusal(saved);
-      renderManeuvers(lastData || {});
-      return;
+    if (!running) {
+      const saved = await postManeuver('api/kiosk_maneuver_config', {name: id, values: values});
+      if (!saved.ok) {
+        maneuverPending = false;
+        maneuverRefusal(saved);
+        renderManeuvers(lastData || {});
+        return;
+      }
     }
     const started = await postManeuver('api/kiosk_maneuver', {action: 'start', name: id});
     maneuverPending = false;
