@@ -100,7 +100,7 @@ def test_kiosk_movement_block_is_at_the_bottom_of_the_steering_panel():
         'class="steer-hero"',              # схема колёс
         'class="steer-calib-bar"',         # калибровка
         'class="steer-fine"',              # точная настройка колёс
-        'class="steer-footnote"',          # сноска
+        'class="steer-footnote',           # сноска прямого режима
         'class="traction-controls"',       # движение — самое последнее
     ]
     positions = [panel.index(marker) for marker in order]

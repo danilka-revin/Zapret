@@ -2,10 +2,11 @@
 """Сборка скетча под Arduino Mega 2560 без Arduino IDE — проверка, что прошивка
 вообще компилируется тем же avr-gcc, что и в IDE.
 
-Нужны avr-gcc (с avr-libc) и исходники ядра https://github.com/arduino/ArduinoCore-avr:
+Нужны avr-gcc (с avr-libc), ядро ArduinoCore-avr и штатная библиотека Servo:
 
     AVR_ROOT=/путь/к/avr     # каталог, где лежит bin/avr-gcc (у IDE: .../tools/avr-gcc/7.3.0-…)
     CORE_ROOT=/путь/к/ArduinoCore-avr
+    SERVO_ROOT=/путь/к/Servo # https://github.com/arduino-libraries/Servo
     python3 firmware/tools/avr_build.py firmware/motor_wheel/motor_wheel.ino
 
 Делает то же, что arduino-cli: дописывает #include <Arduino.h> и прототипы
@@ -48,6 +49,19 @@ def toolchain() -> tuple[Path, Path]:
     return avr, core
 
 
+def servo_library(core: Path) -> Path:
+    """Найти исходники штатной Servo, не подменяя её тестовой заглушкой."""
+    candidates = []
+    if os.environ.get("SERVO_ROOT"):
+        candidates.append(Path(os.environ["SERVO_ROOT"]).expanduser())
+    candidates.extend([core / "libraries" / "Servo", core.parent / "libraries" / "Servo"])
+    for candidate in candidates:
+        for source in (candidate / "src", candidate):
+            if (source / "Servo.h").is_file() and (source / "avr" / "Servo.cpp").is_file():
+                return source
+    raise SystemExit("библиотека Servo не найдена: задайте SERVO_ROOT")
+
+
 def run(command: list[str]) -> str:
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
@@ -75,8 +89,12 @@ def sketch_source(ino: Path) -> str:
 
 def build(ino: Path, out_dir: Path) -> str:
     avr, core = toolchain()
+    needs_servo = re.search(r'^\s*#include\s*[<"]Servo\.h[>"]', ino.read_text(encoding="utf-8"), re.M)
+    servo = servo_library(core) if needs_servo else None
     gcc, gxx = str(avr / "bin" / "avr-gcc"), str(avr / "bin" / "avr-g++")
     include = ["-I", str(core / "cores" / "arduino"), "-I", str(core / "variants" / "mega")]
+    if servo is not None:
+        include += ["-I", str(servo)]
     common = ["-c", "-g", "-Os", "-ffunction-sections", "-fdata-sections", "-flto",
               "-mmcu=" + MCU, *DEFINES, *include]
     cflags = [*common, "-std=gnu11", "-fno-fat-lto-objects"]
@@ -85,6 +103,8 @@ def build(ino: Path, out_dir: Path) -> str:
     sources = sorted((core / "cores" / "arduino").glob("*.c")) \
         + sorted((core / "cores" / "arduino").glob("*.cpp")) \
         + sorted((core / "cores" / "arduino").glob("*.S"))
+    if servo is not None:
+        sources.append(servo / "avr" / "Servo.cpp")
     objects = []
     for source in sources:
         target = out_dir / (source.name + ".o")
@@ -101,9 +121,16 @@ def build(ino: Path, out_dir: Path) -> str:
     sketch_object = out_dir / (ino.stem + ".ino.o")
     warnings = run([gxx, *cxxflags, "-Wall", "-Wextra", "-I", str(ino.parent), str(cpp),
                     "-o", str(sketch_object)])
+    # Arduino IDE помещает ядро в архив: иначе неиспользуемый Tone.cpp
+    # определит тот же Timer2 ISR, что и прошивка руления.
+    archive = out_dir / "core.a"
+    ar = avr / "bin" / "avr-gcc-ar"
+    if not ar.exists():
+        ar = avr / "bin" / "avr-ar"
+    run([str(ar), "rcs", str(archive), *objects])
     elf = out_dir / (ino.stem + ".elf")
     run([gcc, "-w", "-Os", "-g", "-flto", "-fuse-linker-plugin", "-Wl,--gc-sections",
-         "-mmcu=" + MCU, "-o", str(elf), str(sketch_object), *objects, "-lm"])
+         "-mmcu=" + MCU, "-o", str(elf), str(sketch_object), str(archive), "-lm"])
     size = run([str(avr / "bin" / "avr-size"), "-C", "--mcu=" + MCU, str(elf)])
     return warnings + size
 

@@ -549,7 +549,7 @@
         <header class="steer-panel-head">
           <div>
             <h3>Тяга и руление</h3>
-            <p>1) выберите режим · 2) колёса встанут на угол · 3) кнопки движения — в самом низу экрана</p>
+            <p>1) выберите режим · 2) колёса встанут на угол · 3) ползунок движения — в самом низу экрана</p>
           </div>
           <div class="steer-access">
             <span id="steer-auth-status" class="steer-auth-status">доступ без PIN</span>
@@ -570,7 +570,7 @@
 
         <section class="steer-modes" aria-labelledby="steer-modes-title">
           <div class="steer-modes-head">
-            <div><b id="steer-modes-title">Режим движения</b><small>Пресет выставляет все четыре колеса в пределах <span data-steer-limit>±100°</span>. Кнопки движения — в самом низу экрана: удерживайте их.</small></div>
+            <div><b id="steer-modes-title">Режим движения</b><small>Пресет выставляет все четыре колеса в пределах <span data-steer-limit>±100°</span>. Ползунок движения — в самом низу экрана.</small></div>
             <span id="steer-preset-status" class="steer-preset-status" role="status">Проверка связи…</span>
           </div>
           <div id="steer-preset-grid" class="steer-preset-grid" role="group" aria-label="Пресеты углов колёс"></div>
@@ -598,7 +598,7 @@
           <div class="steer-hero-copy">
             <b id="steer-hero-angle">0°</b>
             <span id="steer-hero-mode">Прямо · движение вперёд/назад</span>
-            <small>Схема показывает целевой угол. Фактический угол каждого колеса — в точной настройке ниже, кнопки движения — в самом низу.</small>
+            <small>Схема показывает целевой угол. Фактический угол каждого колеса — в точной настройке ниже, ползунок движения — в самом низу.</small>
           </div>
         </div>
 
@@ -620,11 +620,21 @@
               <input id="steer-slider-FL" data-steer-slider="FL" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол переднего левого рулевого модуля" disabled />
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
               <div class="steer-drive" data-drive-card="FL">
-                <div class="steer-readout"><span>Тяга <b id="drive-module-state-FL">—</b></span><span>Выход <b id="drive-module-output-FL">—</b></span></div>
-                <label class="steer-drive-speed">Тяга <b><output id="drive-module-value-FL">8</output>%</b>
-                  <input id="drive-module-FL" data-drive-module-slider="FL" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга колеса переднее левое, процент" disabled />
+                <div class="steer-readout direct-servo-control"><span>Тяга <b id="drive-module-state-FL">—</b></span><span>Выход <b id="drive-module-output-FL">—</b></span></div>
+                <label class="steer-drive-speed direct-servo-control">Servo.write <b><output id="drive-module-value-FL">0</output></b>
+                  <input id="drive-module-FL" data-drive-module-slider="FL" type="range" min="0" max="150" step="1" value="0" aria-label="Servo.write колеса переднее левое, 0–150" disabled />
                 </label>
-                <div class="steer-actions steer-drive-actions"><button type="button" class="steer-drive-back" id="drive-module-back-FL" data-drive-module="FL" data-drive-direction="-1" disabled>◀ назад</button><button type="button" class="steer-drive-fwd" id="drive-module-forward-FL" data-drive-module="FL" data-drive-direction="1" disabled>вперёд ▶</button><button type="button" class="steer-drive-stop" id="drive-module-stop-FL" data-drive-module-stop="FL" disabled>СТОП</button></div>
+                <div class="steer-actions steer-drive-actions direct-servo-control"><button type="button" class="steer-drive-stop" id="drive-module-stop-FL" data-drive-module-stop="FL" disabled>СТОП FL</button></div>
+                <div class="remote-legacy-drive">
+                  <span id="remote-drive-state-FL">Ожидание телеметрии</span>
+                  <label class="steer-drive-speed">Тяга, % <b><output id="remote-drive-value-FL">8</output></b>
+                    <input id="remote-drive-speed-FL" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга FL в процентах" disabled></label>
+                  <div class="steer-actions steer-drive-actions">
+                    <button type="button" id="drive-module-back-FL" data-remote-drive="FL" data-direction="-1" disabled>Назад</button>
+                    <button type="button" id="drive-module-forward-FL" data-remote-drive="FL" data-direction="1" disabled>Вперёд</button>
+                    <button type="button" class="steer-drive-stop" data-remote-stop="FL">СТОП FL</button>
+                  </div>
+                </div>
               </div>
               <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="FL" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="FL" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="FL" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="FL" disabled>0°</button><button type="button" data-steer-adjust="FL" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="FL" disabled>Повернуть FL</button></div>
             </article>
@@ -635,11 +645,21 @@
               <input id="steer-slider-FR" data-steer-slider="FR" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол переднего правого рулевого модуля" disabled />
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
               <div class="steer-drive" data-drive-card="FR">
-                <div class="steer-readout"><span>Тяга <b id="drive-module-state-FR">—</b></span><span>Выход <b id="drive-module-output-FR">—</b></span></div>
-                <label class="steer-drive-speed">Тяга <b><output id="drive-module-value-FR">8</output>%</b>
-                  <input id="drive-module-FR" data-drive-module-slider="FR" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга колеса переднее правое, процент" disabled />
+                <div class="steer-readout direct-servo-control"><span>Тяга <b id="drive-module-state-FR">—</b></span><span>Выход <b id="drive-module-output-FR">—</b></span></div>
+                <label class="steer-drive-speed direct-servo-control">Servo.write <b><output id="drive-module-value-FR">0</output></b>
+                  <input id="drive-module-FR" data-drive-module-slider="FR" type="range" min="0" max="150" step="1" value="0" aria-label="Servo.write колеса переднее правое, 0–150" disabled />
                 </label>
-                <div class="steer-actions steer-drive-actions"><button type="button" class="steer-drive-back" id="drive-module-back-FR" data-drive-module="FR" data-drive-direction="-1" disabled>◀ назад</button><button type="button" class="steer-drive-fwd" id="drive-module-forward-FR" data-drive-module="FR" data-drive-direction="1" disabled>вперёд ▶</button><button type="button" class="steer-drive-stop" id="drive-module-stop-FR" data-drive-module-stop="FR" disabled>СТОП</button></div>
+                <div class="steer-actions steer-drive-actions direct-servo-control"><button type="button" class="steer-drive-stop" id="drive-module-stop-FR" data-drive-module-stop="FR" disabled>СТОП FR</button></div>
+                <div class="remote-legacy-drive">
+                  <span id="remote-drive-state-FR">Ожидание телеметрии</span>
+                  <label class="steer-drive-speed">Тяга, % <b><output id="remote-drive-value-FR">8</output></b>
+                    <input id="remote-drive-speed-FR" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга FR в процентах" disabled></label>
+                  <div class="steer-actions steer-drive-actions">
+                    <button type="button" id="drive-module-back-FR" data-remote-drive="FR" data-direction="-1" disabled>Назад</button>
+                    <button type="button" id="drive-module-forward-FR" data-remote-drive="FR" data-direction="1" disabled>Вперёд</button>
+                    <button type="button" class="steer-drive-stop" data-remote-stop="FR">СТОП FR</button>
+                  </div>
+                </div>
               </div>
               <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="FR" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="FR" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="FR" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="FR" disabled>0°</button><button type="button" data-steer-adjust="FR" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="FR" disabled>Повернуть FR</button></div>
             </article>
@@ -650,11 +670,21 @@
               <input id="steer-slider-RL" data-steer-slider="RL" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол заднего левого рулевого модуля" disabled />
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
               <div class="steer-drive" data-drive-card="RL">
-                <div class="steer-readout"><span>Тяга <b id="drive-module-state-RL">—</b></span><span>Выход <b id="drive-module-output-RL">—</b></span></div>
-                <label class="steer-drive-speed">Тяга <b><output id="drive-module-value-RL">8</output>%</b>
-                  <input id="drive-module-RL" data-drive-module-slider="RL" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга колеса заднее левое, процент" disabled />
+                <div class="steer-readout direct-servo-control"><span>Тяга <b id="drive-module-state-RL">—</b></span><span>Выход <b id="drive-module-output-RL">—</b></span></div>
+                <label class="steer-drive-speed direct-servo-control">Servo.write <b><output id="drive-module-value-RL">0</output></b>
+                  <input id="drive-module-RL" data-drive-module-slider="RL" type="range" min="0" max="150" step="1" value="0" aria-label="Servo.write колеса заднее левое, 0–150" disabled />
                 </label>
-                <div class="steer-actions steer-drive-actions"><button type="button" class="steer-drive-back" id="drive-module-back-RL" data-drive-module="RL" data-drive-direction="-1" disabled>◀ назад</button><button type="button" class="steer-drive-fwd" id="drive-module-forward-RL" data-drive-module="RL" data-drive-direction="1" disabled>вперёд ▶</button><button type="button" class="steer-drive-stop" id="drive-module-stop-RL" data-drive-module-stop="RL" disabled>СТОП</button></div>
+                <div class="steer-actions steer-drive-actions direct-servo-control"><button type="button" class="steer-drive-stop" id="drive-module-stop-RL" data-drive-module-stop="RL" disabled>СТОП RL</button></div>
+                <div class="remote-legacy-drive">
+                  <span id="remote-drive-state-RL">Ожидание телеметрии</span>
+                  <label class="steer-drive-speed">Тяга, % <b><output id="remote-drive-value-RL">8</output></b>
+                    <input id="remote-drive-speed-RL" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга RL в процентах" disabled></label>
+                  <div class="steer-actions steer-drive-actions">
+                    <button type="button" id="drive-module-back-RL" data-remote-drive="RL" data-direction="-1" disabled>Назад</button>
+                    <button type="button" id="drive-module-forward-RL" data-remote-drive="RL" data-direction="1" disabled>Вперёд</button>
+                    <button type="button" class="steer-drive-stop" data-remote-stop="RL">СТОП RL</button>
+                  </div>
+                </div>
               </div>
               <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="RL" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="RL" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="RL" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="RL" disabled>0°</button><button type="button" data-steer-adjust="RL" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="RL" disabled>Повернуть RL</button></div>
             </article>
@@ -665,11 +695,21 @@
               <input id="steer-slider-RR" data-steer-slider="RR" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол заднего правого рулевого модуля" disabled />
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
               <div class="steer-drive" data-drive-card="RR">
-                <div class="steer-readout"><span>Тяга <b id="drive-module-state-RR">—</b></span><span>Выход <b id="drive-module-output-RR">—</b></span></div>
-                <label class="steer-drive-speed">Тяга <b><output id="drive-module-value-RR">8</output>%</b>
-                  <input id="drive-module-RR" data-drive-module-slider="RR" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга колеса заднее правое, процент" disabled />
+                <div class="steer-readout direct-servo-control"><span>Тяга <b id="drive-module-state-RR">—</b></span><span>Выход <b id="drive-module-output-RR">—</b></span></div>
+                <label class="steer-drive-speed direct-servo-control">Servo.write <b><output id="drive-module-value-RR">0</output></b>
+                  <input id="drive-module-RR" data-drive-module-slider="RR" type="range" min="0" max="150" step="1" value="0" aria-label="Servo.write колеса заднее правое, 0–150" disabled />
                 </label>
-                <div class="steer-actions steer-drive-actions"><button type="button" class="steer-drive-back" id="drive-module-back-RR" data-drive-module="RR" data-drive-direction="-1" disabled>◀ назад</button><button type="button" class="steer-drive-fwd" id="drive-module-forward-RR" data-drive-module="RR" data-drive-direction="1" disabled>вперёд ▶</button><button type="button" class="steer-drive-stop" id="drive-module-stop-RR" data-drive-module-stop="RR" disabled>СТОП</button></div>
+                <div class="steer-actions steer-drive-actions direct-servo-control"><button type="button" class="steer-drive-stop" id="drive-module-stop-RR" data-drive-module-stop="RR" disabled>СТОП RR</button></div>
+                <div class="remote-legacy-drive">
+                  <span id="remote-drive-state-RR">Ожидание телеметрии</span>
+                  <label class="steer-drive-speed">Тяга, % <b><output id="remote-drive-value-RR">8</output></b>
+                    <input id="remote-drive-speed-RR" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга RR в процентах" disabled></label>
+                  <div class="steer-actions steer-drive-actions">
+                    <button type="button" id="drive-module-back-RR" data-remote-drive="RR" data-direction="-1" disabled>Назад</button>
+                    <button type="button" id="drive-module-forward-RR" data-remote-drive="RR" data-direction="1" disabled>Вперёд</button>
+                    <button type="button" class="steer-drive-stop" data-remote-stop="RR">СТОП RR</button>
+                  </div>
+                </div>
               </div>
               <div class="steer-actions"><button type="button" class="steer-calib" data-steer-calib="RR" disabled>Калибровка</button><button type="button" class="steer-origin" data-steer-origin="RR" disabled title="Запасной вариант: выставить колесо прямо руками и назначить текущее положение нулём">0° вручную</button><button type="button" data-steer-adjust="RR" data-step="-5" disabled>−5°</button><button type="button" data-steer-zero="RR" disabled>0°</button><button type="button" data-steer-adjust="RR" data-step="5" disabled>+5°</button><button type="button" class="steer-send" data-steer-send="RR" disabled>Повернуть RR</button></div>
             </article>
@@ -677,33 +717,16 @@
           <ul id="steer-messages" class="steer-messages" aria-label="Сообщения прошивки руля" hidden></ul>
         </details>
 
-        <p class="steer-footnote">Тяга в карточке колеса — только это колесо: удерживайте «вперёд/назад», отпустили — тормоз этого колеса, остальные не трогаются. Так делают разворот на месте (левые колёса вперёд, правые назад) и проверку одного мотора. Правый борт (FR и RR) стоит зеркально, и прошивка сама считает «вперёд» своим для каждого колеса — имя колеса уже вписано в его копию скетча, кнопки «⇄ зеркалить» на экране нет и настроек в EEPROM тоже. Пока колесо едет, его руль не поворачивается — прошивка этого не разрешает. Ноль задаёт «Калибровка» по оптодатчику D18; «0° вручную» — запасной вариант, если датчик снят. Ноль сбрасывается при перезапуске Arduino. Пресеты и общий ползунок выставляют цель всем четырём колёсам в пределах <span data-steer-limit>±100°</span>: 0° — прямо, 45° — диагональ (краб), 90° — чистый боковой ход. Кнопки «Движение» внизу дают тягу всем четырём колёсам на любом угле поворота: 0° — прямо, 45° — краб, 90° — чистый боковой ход; углы колёс только показываются числом.</p>
+        <p class="steer-footnote direct-servo-control">Ползунок в карточке управляет только этим колесом; общий ползунок ниже — всеми четырьмя. Число от 0 до 150 без пересчёта отправляется в Servo.write. 0 и кнопка СТОП снимают тягу. Калибровка руля и тахометр на значение тяги не влияют. Первые испытания — с вывешенными колёсами и физическим аварийным выключателем.</p>
 
         <section class="traction-controls" aria-label="Тяговые BLDC-моторы">
           <div class="traction-head">
-            <div><b>Движение</b><span>Удерживайте кнопку · отпустили — тормоз</span></div>
-            <span id="drive-status" role="status">Нужен ноль всех колёс (калибровка)</span>
+            <div><b>Движение</b><span class="direct-servo-control">Общий ползунок · Servo.write 0–150</span><span class="remote-legacy-drive">Удерживайте кнопку движения</span></div>
+            <span id="drive-status" class="direct-servo-control" role="status">Проверка связи с платами…</span><span id="remote-drive-status" class="remote-legacy-drive" role="status">Проверка связи с платами…</span>
           </div>
 
-          <!-- Настроек у тяги нет: драйвер колеса — RioRand ZS-Z11H с датчиками
-               Холла, вход «P» ведёт штатная библиотека Servo (50 Гц), значение
-               write 0…180 — это 0…100 % шкалы тяги, 1 % = 1,8 (0 — мотор не
-               тянет, 180 — полный ход, как в проверенном скетче оператора).
-               Обороты приходят с выхода «SC» (90 переходов на оборот) и нужны
-               телеметрии и страховке «тяга есть, а колесо стоит».
-               Прошивку плат заливают вручную
-               из Arduino IDE копиями motor_wheel_*.ino с рабочего стола — кнопки
-               прошивки на экране нет. Перед первым пуском на драйвере замыкают
-               перемычку J1 (вход «P») и до упора против часовой стрелки крутят
-               его подстроечный резистор — это один раз отвёрткой, не с экрана. -->
-          <!-- Манёвры: не «держать процент», а цель — метры или градусы.
-               Сервер сам ставит углы, плавно набирает тягу, считает путь по
-               тахометру (D19) и гасит её на цели; без тахометра — по времени
-               и честно об этом пишет. Числа правятся здесь и живут на сервере. -->
-          <!-- Пресеты доступны всегда: секция раскрыта, кнопки не гаснут. Если
-               робот не готов ехать, «Ехать» всё равно отправит запрос, а сервер
-               ответит точной причиной («нет нуля», «нет связи», «PIN истёк»). -->
-          <details id="drive-maneuvers" class="drive-maneuvers" open>
+          <!-- Манёвры не участвуют в прямой команде ползунка. -->
+          <details id="drive-maneuvers" class="drive-maneuvers">
             <summary>Манёвры · метр вперёд, разворот на 90°</summary>
             <p class="drive-setup-hint">
               Кнопка задаёт <b>цель</b>, а не время: «метр» — это метр по тахометру
@@ -763,14 +786,22 @@
             </div>
           </details>
 
-          <div class="traction-actions">
-            <button id="drive-back" type="button" disabled>◀ Зажать: назад</button>
-            <button id="drive-forward" type="button" disabled>Зажать: вперёд ▶</button>
+          <label class="traction-speed direct-servo-control">Значение Servo.write <b><output id="drive-speed-value">0</output></b>
+            <input id="drive-speed" type="range" min="0" max="150" step="1" value="0" aria-label="Servo.write всех колёс, 0–150" disabled></label>
+          <div class="traction-actions direct-servo-control">
             <button id="drive-stop" class="traction-stop" type="button" disabled>СТОП</button>
           </div>
-          <label class="traction-speed">Предел <b><output id="drive-speed-value">8</output>%</b>
-            <input id="drive-speed" type="range" min="1" max="100" value="8" disabled></label>
-          <small class="traction-warning">Проценты — это положение ручки на входе «P» драйвера: 0 % мотор не тянет, 100 % — полный ход (в прошивке это значение Servo.write 0…180, 1 % = 1,8). Никакого контура нет: сколько попросили, столько и стоит на драйвере — тот же приём, что в проверенном скетче с сервоприводом постоянного вращения. Обороты прошивка не задаёт, а только измеряет тахометром «SC» (90 переходов на оборот): они видны в карточке колеса. Если значение есть, а переходов нет дольше 3 с, тяга снимается — значит, сигнал не доходит до мотора. Настроек у тяги нет. Программный стоп и watchdog (650 мс) не заменяют физическую аварийную кнопку. Первые испытания — с вывешенными колёсами.</small>
+          <div class="remote-legacy-drive remote-drive-panel">
+            <label class="traction-speed">Тяга, % <b><output id="remote-drive-value-ALL">8</output></b>
+              <input id="remote-drive-speed-ALL" type="range" min="1" max="100" step="1" value="8" aria-label="Тяга всех колёс в процентах" disabled></label>
+            <div class="traction-actions remote-drive-actions">
+              <button id="drive-back" type="button" data-remote-drive="ALL" data-direction="-1" disabled>Назад</button>
+              <button id="drive-forward" type="button" data-remote-drive="ALL" data-direction="1" disabled>Вперёд</button>
+              <button id="remote-drive-stop" class="traction-stop" type="button" data-remote-stop="ALL">СТОП</button>
+            </div>
+            <small>Движение только при удержании. Отпускание и потеря связи останавливают моторы. Первые проверки — с вывешенными колёсами и физическим E-STOP.</small>
+          </div>
+          <small class="traction-warning direct-servo-control">Число ползунка без пересчёта передаётся в Servo.write на D3. Отпустив ползунок, вы сохраняете значение; 0 или СТОП отключает тягу. Калибровка руля и тахометр не влияют на сигнал. При уходе с экрана или потере связи тяга снимается; watchdog платы — 650 мс. Программный стоп не заменяет физическую аварийную кнопку. Испытывайте с вывешенными колёсами.</small>
         </section>
       </section>
     </div>

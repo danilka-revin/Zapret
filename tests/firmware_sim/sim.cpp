@@ -647,6 +647,62 @@ static void scenario_drive() {
   CHECK(drive_idle(board_fr) && board_fr.level[5] == HIGH, "s выключает и тягу");
 }
 
+// Прямая тяга с бортового экрана: никакого пересчёта и зависимости от руля/SC.
+static void scenario_direct_servo() {
+  boot({&board_fl, &board_fr});
+  CHECK(!FR::zero_set, "ноль руля после включения не задан");
+  board_fr.serial.send("d 10 f");
+  sim::run_for_ms(2);
+  CHECK(FR::motorBusy(), "руль движется до прямой команды");
+  board_fr.serial.send("v 40");
+  sim::run_for_ms(2);
+  CHECK(FR::motorBusy() && servo_value(board_fr) == 40 && thrust_on(board_fr),
+        "v 40 без нуля и при движении руля → Servo.write(40), got %d", servo_value(board_fr));
+  CHECK(drive_idle(board_fl), "другая плата не затронута");
+
+  for (int value = 0; value <= 150; ++value) {
+    char command[16];
+    std::snprintf(command, sizeof(command), "v %d", value);
+    board_fr.serial.send(command);
+    sim::run_for_ms(2);
+    CHECK(servo_value(board_fr) == value, "v %d → Servo.write(%d), got %d",
+          value, value, servo_value(board_fr));
+    CHECK(value == 0 ? drive_idle(board_fr) : thrust_on(board_fr),
+          "v %d: уровни BRAKE/STOP", value);
+  }
+
+  // Ни отсутствие нуля, ни молчащий SC не гасят прямое значение: только
+  // heartbeat, а не какой-либо датчик, поддерживает watchdog в 650 мс.
+  for (int i = 0; i < 20; ++i) {
+    board_fr.serial.send("v 150");
+    sim::run_for_ms(200);
+    CHECK(servo_value(board_fr) == 150 && thrust_on(board_fr),
+          "v 150 держится без тахометра, тик %d", i);
+  }
+  CHECK(has(board_fr, "sv=150 "), "в телеметрии фактическое Servo.write(150)");
+  sim::run_for_ms(700);
+  CHECK(drive_idle(board_fr) && !FR::drive_active, "без heartbeat watchdog ставит 0");
+
+  board_fl.serial.send("v FR 75");
+  board_fr.serial.send("v FR 75");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fl) && servo_value(board_fr) == 75,
+        "адресная v FR 75 не трогает FL");
+  for (const char* invalid : {"v -1", "v 151", "v 1.5", "v abc", "v 50 60"}) {
+    board_fr.serial.send("v 40");
+    sim::run_for_ms(2);
+    board_fr.serial.send(invalid);
+    sim::run_for_ms(2);
+    CHECK(drive_idle(board_fr), "неверная команда %s не включает мотор", invalid);
+  }
+  board_fr.serial.send("v 1");
+  sim::run_for_ms(2);
+  CHECK(FR::drive_active && servo_value(board_fr) == 1, "минимум — именно Servo.write(1)");
+  board_fr.serial.send("b");
+  sim::run_for_ms(2);
+  CHECK(drive_idle(board_fr), "b выключает прямую тягу");
+}
+
 static void scenario_serial_garbage() {
   boot({&board_fl, &board_fr, &board_rl, &board_rr});
   for (const char* chunk : {"@TLM deg=0.00 tgt=0.00 mov", "\x07\xff#"}) {
@@ -732,7 +788,7 @@ static void scenario_system_calibrate_all() {
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=13"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=14"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -849,7 +905,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v13"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v14"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -1005,6 +1061,7 @@ static void scenario_tlm_dump() {
 // ./sim pty /tmp/wheel — четыре колеса в реальном времени за псевдотерминалами
 // /tmp/wheel-FL … /tmp/wheel-RR: задайте вручную RC_WHEEL_FL/FR/RL/RR_PORT и видит настоящую логику прошивки — для ручной проверки без железа.
 static int run_pty(const char* link_base) {
+  bind_boards();  // имена нужны уже при создании ссылок на псевдотерминалы
   struct Link {
     int fd;
     std::string path;
@@ -1038,7 +1095,6 @@ static int run_pty(const char* link_base) {
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
     links.push_back(link);
   }
-  bind_boards();
   board_fl.phys = -3000;
   board_fr.phys = 2500;
   board_rl.phys = 40;
@@ -1503,6 +1559,7 @@ static const Scenario SCENARIOS[] = {
     {"pause_resume", scenario_pause_resume},
     {"zero_manual", scenario_zero_manual},
     {"drive", scenario_drive},
+    {"direct_servo", scenario_direct_servo},
     {"serial_garbage", scenario_serial_garbage},
     {"system_calibrate_all", scenario_system_calibrate_all},
     {"system_server_commands", scenario_system_server_commands},

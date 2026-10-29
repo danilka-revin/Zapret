@@ -36,8 +36,8 @@ def motor(module, *, angle=0.0, target=None, online=True, homed=True, moving=Fal
         "angle": angle, "targetAngle": angle if target is None else target,
         "moving": moving, "calibrating": False,
         "cycling": False, "opto": False, "calibError": 0, "drivePercent": 0, "rpm": 0.0,
-        "firmware": 11, "pot": True, "tach": True, "driveMaxPercent": 30,
-        "driveDutyPermille": 0,
+        "firmware": 14, "pot": True, "tach": True, "driveMaxPercent": 30,
+        "driveDutyPermille": 0, "driveServoValue": 0,
         "tachHz": 90,
     }
 
@@ -77,7 +77,7 @@ def per_module_state(**overrides):
 
 
 def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_reason=None,
-            actions=None, drive=None, per_module=None, maneuver=None, **extra):
+            actions=None, drive=None, per_module=None, servo=None, maneuver=None, **extra):
     data = {
 
         "linkOk": True,
@@ -90,6 +90,9 @@ def payload(*, limit=90.0, motors=None, available=True, can_drive=True, drive_re
                   "maxPercent": 30, "commandedPercent": 0, "active": False,
                   "individual": True, "commandedModules": {},
                   "perModule": per_module if per_module is not None else per_module_state(),
+                  "servo": servo if servo is not None else {
+                      "maxValue": 150, "canDrive": available, "reason": None,
+                      "perModule": {m: {"canDrive": available, "reason": None} for m in MODULES}},
                   "reportedDuty": {}, "alignmentToleranceDeg": 2.5,
                   # Колёса стоят ровно: справка для подписи, тягу не запирает.
                   "aligned": True, "spreadDeg": 0.0,
@@ -133,89 +136,74 @@ def wheel_drive(mod):
     return next(item for item in mod["wheelDrive"] if item["id"] == "FL") if isinstance(mod, dict) else None
 
 
-def test_each_wheel_card_has_its_own_drive_controls(tmp_path):
-    """В карточке колеса — своя тяга: кнопки, ползунок и свой предел."""
+def test_each_wheel_card_has_its_own_direct_slider(tmp_path):
     report = run_screen(tmp_path, payload())
     assert report["renderErrors"] == []
     cards = {item["id"]: item for item in report["wheelDrive"]}
     assert sorted(cards) == MODULES
-    # Все колёса на связи и с нулём — кнопки доступны, ползунок тоже.
-    assert all(not item["backDisabled"] and not item["forwardDisabled"] for item in cards.values())
-    assert all(item["sliderMax"] == "30" for item in cards.values())
-    assert all(item["state"] == "стоит" for item in cards.values())
+    assert all(not item["sliderDisabled"] for item in cards.values())
+    assert all(item["sliderMin"] == "0" and item["sliderMax"] == "150" for item in cards.values())
+    assert all(item["sliderValue"] == "0" and item["state"] == "стоит" for item in cards.values())
 
 
-def test_single_wheel_drive_sends_only_that_wheel(tmp_path):
-    """Удержание «вперёд» в карточке FL: только {module: FL}, без общей тяги."""
+def test_single_wheel_slider_sends_exact_value_and_release_does_not_stop(tmp_path):
     report = run_screen(tmp_path, payload(actions=[
-        {"type": "wheel-drive", "id": "FL", "direction": 1, "percent": 6}]))
+        {"type": "wheel-drive", "id": "FL", "value": 40}]))
     assert report["drives"], report["netlog"]
-    assert all(item["module"] == "FL" for item in report["drives"])
-    assert report["drives"][0]["percent"] == 6
-    # Отпустили — 0 именно этому колесу, а не «стоп всем».
-    assert report["drives"][-1] == {"module": "FL", "percent": 0}
-    assert all(item["percent"] in (0, 6) for item in report["drives"])
+    assert all(item == {"module": "FL", "value": 40} for item in report["drives"])
+    assert next(c for c in report["wheelDrive"] if c["id"] == "FL")["sliderValue"] == "40"
 
 
-def test_two_wheels_drive_opposite_directions(tmp_path):
-    """Разворот на месте: FL вперёд, FR назад — у каждого своя команда."""
+def test_two_wheels_have_independent_values_and_global_stop(tmp_path):
     report = run_screen(tmp_path, payload(actions=[
-        {"type": "wheel-drive", "id": "FL", "direction": 1, "keep": True},
-        {"type": "wheel-drive", "id": "FR", "direction": -1, "keep": True},
+        {"type": "wheel-drive", "id": "FL", "value": 40},
+        {"type": "wheel-drive", "id": "FR", "value": 150},
         {"type": "stop"}]))
-    per_wheel = [item for item in report["drives"] if item["module"]]
-    assert {item["module"] for item in per_wheel} == {"FL", "FR"}
-    assert any(item["module"] == "FL" and item["percent"] > 0 for item in per_wheel)
-    assert any(item["module"] == "FR" and item["percent"] < 0 for item in per_wheel)
-    # Общий СТОП гасит всё: одиночные нули каждому колесу и общая нулевая.
-    assert {"module": "FL", "percent": 0} in report["drives"]
-    assert {"module": "FR", "percent": 0} in report["drives"]
-    # Общая нулевая тоже уходит: на плате это «b» — тормоз всем колёсам.
-    assert any(item["module"] is None and item["percent"] == 0 for item in report["drives"])
+    assert {"module": "FL", "value": 40} in report["drives"]
+    assert {"module": "FR", "value": 150} in report["drives"]
+    assert report["drives"][-1] == {"module": None, "value": 0}
+    assert all(item["sliderValue"] == "0" for item in report["wheelDrive"])
 
 
-def test_single_wheel_drive_is_blocked_when_that_wheel_is_not_ready(tmp_path):
-    """Колесо без нуля не крутится одно — кнопки серые и ничего не отправляют."""
-    ready = per_module_state()
-    ready["RL"] = dict(ready["RL"], canDrive=False, reason="not_homed")
-    report = run_screen(tmp_path, payload(per_module=ready, actions=[
-        {"type": "wheel-drive", "id": "RL", "direction": 1},
-        {"type": "wheel-drive", "id": "FL", "direction": 1}]))
+def test_only_offline_wheel_slider_is_blocked(tmp_path):
+    states = {m: {"canDrive": True, "reason": None} for m in MODULES}
+    states["RL"] = {"canDrive": False, "reason": "module_offline"}
+    servo = {"maxValue": 150, "canDrive": False, "reason": "module_offline", "perModule": states}
+    report = run_screen(tmp_path, payload(servo=servo, actions=[
+        {"type": "wheel-drive", "id": "RL", "value": 75},
+        {"type": "wheel-drive", "id": "FL", "value": 40}]))
     cards = {item["id"]: item for item in report["wheelDrive"]}
-    assert cards["RL"]["backDisabled"] and cards["RL"]["forwardDisabled"]
-    assert cards["RL"]["state"] == "Сначала откалибруйте колёса по датчику (или задайте 0° вручную)."
-    assert cards["FL"]["forwardDisabled"] is False
-    # Команда ушла только готовому колесу.
+    assert cards["RL"]["sliderDisabled"] and not cards["FL"]["sliderDisabled"]
     assert {item["module"] for item in report["drives"]} == {"FL"}
+    assert all(item["value"] == 40 for item in report["drives"])
 
 
 def test_wheel_drive_stop_button_stops_only_that_wheel(tmp_path):
     report = run_screen(tmp_path, payload(actions=[
-        {"type": "wheel-drive", "id": "FR", "direction": 1, "keep": True},
+        {"type": "wheel-drive", "id": "FR", "value": 75},
         {"type": "wheel-stop", "id": "FR"}]))
     assert all(item["module"] == "FR" for item in report["drives"])
-    assert report["drives"][-1] == {"module": "FR", "percent": 0}
+    assert report["drives"][-1] == {"module": "FR", "value": 0}
 
 
-def test_wheel_drive_refusal_stops_the_heartbeat_and_is_shown(tmp_path):
-    """Отказ платы виден в карточке, и экран не повторяет его 5 раз в секунду."""
-    report = run_screen(tmp_path, payload(driveRefuse="module_busy", actions=[
-        {"type": "wheel-drive", "id": "FL", "direction": 1, "keep": True}]))
+def test_wheel_drive_refusal_stops_heartbeat_and_is_shown(tmp_path):
+    report = run_screen(tmp_path, payload(driveRefuse="servo_firmware_required", actions=[
+        {"type": "wheel-drive", "id": "FL", "value": 40}]))
     cards = {item["id"]: item for item in report["wheelDrive"]}
-    assert cards["FL"]["state"] == "Дождитесь остановки рулевых модулей."
-    assert len(report["drives"]) == 1, report["drives"]
+    assert "v14" in cards["FL"]["state"]
+    assert report["drives"][0] == {"module": "FL", "value": 40}
+    assert report["drives"][-1] == {"module": "FL", "value": 0}
+    assert sum(item["value"] != 0 for item in report["drives"]) == 1
 
 
-def test_wheel_drive_shows_reported_output_and_honest_rpm(tmp_path):
-    """В карточке видно, что стоит на входе «P», и обороты по «SC»."""
+def test_wheel_drive_shows_actual_servo_value_and_honest_rpm(tmp_path):
     motors = [motor(m) for m in MODULES]
-    motors[0] = dict(motors[0], drivePercent=6, driveDutyPermille=13, tach=True, rpm=95.0)
-    report = run_screen(tmp_path, payload(motors=motors, actions=[
-        {"type": "wheel-drive", "id": "FL", "direction": 1}]))
-    cards = {item["id"]: item for item in report["wheelDrive"]}
-    assert "на «P» 1,3 %" in cards["FL"]["output"], cards["FL"]["output"]
-    assert "об/мин" in cards["FL"]["output"]
-    assert cards["FL"]["state"].startswith("вперёд")
+    motors[0] = dict(motors[0], driveServoValue=40, tach=True, rpm=95.0)
+    report = run_screen(tmp_path, payload(motors=motors))
+    card = next(c for c in report["wheelDrive"] if c["id"] == "FL")
+    assert "Servo.write(40)" in card["output"]
+    assert "об/мин" in card["output"]
+    assert card["state"] == "Servo.write(40)"
 
 
 def test_wheel_card_has_no_direction_button(tmp_path):
@@ -321,42 +309,41 @@ def test_angle_beyond_the_limit_is_refused_by_the_server(tmp_path):
     assert angles_sent(report) == [("FL", 90)]
 
 
-def test_drive_is_hold_to_move_and_release_to_stop(tmp_path):
-    report = run_screen(tmp_path, payload(actions=[{"type": "drive", "direction": 1}]))
-    percents = [item["percent"] for item in report["drives"]]
-    assert percents[0] == 8, percents
-    assert percents[-1] == 0, percents
+@pytest.mark.parametrize("value", [0, 1, 40, 75, 150])
+def test_common_slider_sends_exact_servo_value(tmp_path, value):
+    report = run_screen(tmp_path, payload(actions=[{"type": "drive", "value": value}]))
+    assert report["drives"][0] == {"module": None, "value": value}
+    assert all(item["value"] == value for item in report["drives"])
+    assert report["driveSpeedMin"] == "0" and report["driveSpeedMax"] == "150"
 
 
-def test_drive_refusal_is_shown_to_the_operator(tmp_path):
-    report = run_screen(tmp_path, payload(
-        can_drive=False, drive_reason="module_offline",
-        actions=[{"type": "drive", "direction": 1}]))
-    assert report["drives"] == []
-    assert "телеметрии" in report["driveStatus"]
+def test_common_slider_refuses_old_firmware(tmp_path):
+    states = {m: {"canDrive": True, "reason": None} for m in MODULES}
+    states["RR"] = {"canDrive": False, "reason": "servo_firmware_required"}
+    servo = {"maxValue": 150, "canDrive": False, "reason": "servo_firmware_required", "perModule": states}
+    report = run_screen(tmp_path, payload(servo=servo, actions=[{"type": "drive", "value": 40}]))
+    assert report["drives"] == [] and report["driveSpeedDisabled"]
+    assert "v14" in report["driveStatus"]
 
 
-def test_drive_works_at_any_steering_angle(tmp_path):
-    """Колёса под углом 12,5° — тяга разрешена, но экран честно пишет про угол.
-
-    Поворотные модули ездят на любом угле: 0° — прямо, 45° — краб, 90° — боком.
-    Блокировка «сначала выровняйте колёса» снята, осталась только подпись.
-    """
-    body = payload(actions=[{"type": "drive", "direction": 1}])
-    body["data"]["drive"].update(aligned=False, spreadDeg=12.5)
-    report = run_screen(tmp_path, body)
-    assert [item["percent"] for item in report["drives"]][0] == 8
-    assert report["driveStatus"].startswith("Готово") or "Движение включено" in report["driveStatus"]
-    # Кнопки не серые: ехать можно, предупреждение — словами.
-    assert report["driveSpeedMax"] == "30"
-    assert all(not item["stopDisabled"] for item in report["wheelDrive"])
-    assert "под углом" in report["driveStatus"] and "12,5" in report["driveStatus"]
+def test_direct_slider_ignores_legacy_steering_and_tach_readiness(tmp_path):
+    motors = [motor(m, homed=False, moving=True) for m in MODULES]
+    for item in motors:
+        item.update(tach=False, rpm=0)
+    report = run_screen(tmp_path, payload(motors=motors, can_drive=False,
+                                          drive_reason="not_homed",
+                                          actions=[{"type": "drive", "value": 75}]))
+    assert report["drives"][0] == {"module": None, "value": 75}
+    assert not report["driveSpeedDisabled"]
 
 
-def test_straight_wheels_are_reported_as_aligned(tmp_path):
-    report = run_screen(tmp_path, payload())
-    assert "колёса выровнены" in report["driveStatus"]
-    assert "под углом" not in report["driveStatus"]
+def test_blur_stops_direct_drive_without_resuming(tmp_path):
+    report = run_screen(tmp_path, payload(actions=[{"type": "drive", "value": 40}, {"type": "blur"}]))
+    assert report["drives"][0] == {"module": None, "value": 40}
+    assert report["drives"][-1] == {"module": None, "value": 0}
+    first_zero = next(i for i, item in enumerate(report["drives"]) if item["value"] == 0)
+    assert all(item["value"] == 0 for item in report["drives"][first_zero:])
+    assert report["driveSpeedValue"] == "0"
 
 
 def test_presets_are_blocked_while_the_robot_is_moving(tmp_path):
@@ -371,16 +358,11 @@ def test_presets_are_blocked_while_the_robot_is_moving(tmp_path):
 
 
 def test_stop_button_sends_zero_thrust(tmp_path):
-    report = run_screen(tmp_path, payload(actions=[{"type": "drive", "direction": 1},
-                                                   {"type": "stop"}]))
-    percents = [item["percent"] for item in report["drives"]]
-    # Пока кнопку держат, экран повторяет команду: прошивка сбрасывает тягу
-    # через 650 мс без подтверждения. СТОП и отпускание дают ноль — и после
-    # первого нуля никаких «8» быть не должно, иначе робот поедет сам.
-    assert percents[0] == 8
-    assert percents[-1] == 0
-    first_zero = percents.index(0)
-    assert percents[first_zero:] == [0] * (len(percents) - first_zero)
+    report = run_screen(tmp_path, payload(actions=[{"type": "drive", "value": 40}, {"type": "stop"}]))
+    values = [item["value"] for item in report["drives"]]
+    assert values[0] == 40 and values[-1] == 0
+    first_zero = values.index(0)
+    assert all(value == 0 for value in values[first_zero:])
 
 
 def test_wheel_that_stopped_short_does_not_hang_the_screen(tmp_path):
@@ -455,9 +437,9 @@ def test_drive_panel_has_no_settings_at_all(tmp_path):
     assert report["driveCfgSent"] == []
     assert "driveCfg" not in report
     assert report["renderErrors"] == []
-    # Предел тяги на экране — тот, что прислала плата (30 % из прошивки).
-    assert report["driveSpeedMax"] == "30"
-    assert "%" in report["driveStatus"]
+    # Прямой предел независим от прежнего процентного лимита платы.
+    assert report["driveSpeedMax"] == "150"
+    assert "0 до 150" in report["driveStatus"]
     # В карточке колеса рядом с оборотами видно переходы «SC» в секунду (hz=):
     # при одном обороте в секунду это и есть число импульсов на оборот.
     cards = {item["id"]: item for item in report["wheelDrive"]}
@@ -551,11 +533,11 @@ def test_pressing_to_go_when_drive_is_not_ready_shows_the_reason(tmp_path):
     assert "свежая телеметрия" in status, status
 
 
-def test_presets_section_is_open_and_never_greyed_in_the_markup():
-    """В разметке борта пресеты раскрыты, и ни одна кнопка не помечена disabled."""
+def test_maneuvers_are_separate_and_never_greyed_in_the_markup():
+    """Манёвры свёрнуты и не мешают простому ползунку; кнопки доступны."""
     page = (ROOT / "slam_gui" / "robot.html").read_text(encoding="utf-8")
     detail = re.search(r'<details[^>]*id="drive-maneuvers"[^>]*>', page)
-    assert detail and "open" in detail.group(0), detail and detail.group(0)
+    assert detail and "open" not in detail.group(0), detail and detail.group(0)
     for name in ("forward", "backward", "left", "right", "spin_left", "spin_right"):
         button = re.search(r'<button[^>]*id="maneuver-%s"[^>]*>' % name, page)
         assert button and "disabled" not in button.group(0), button and button.group(0)
@@ -639,3 +621,22 @@ def test_web_remote_also_drives_at_any_angle():
     assert "spreadDeg" in console and "поедет под этим углом" in console
     # Блокировка кнопок движения смотрит только на готовность привода, не на углы.
     assert "button.disabled = !authorizedForDrive || !drive.canDrive;" in console
+
+
+def test_stop_overtakes_queued_heartbeat_after_delayed_request(tmp_path):
+    report = run_screen(tmp_path, payload(deferFirstDrive=True, actions=[
+        {"type": "drive", "value": 40}, {"type": "stop"}, {"type": "finish-drive"}]))
+    assert report["drives"] == [{"module": None, "value": 40}, {"module": None, "value": 0}]
+    assert report["driveSpeedValue"] == "0"
+
+
+def test_lost_active_wheel_does_not_restart_after_connection_returns(tmp_path):
+    report = run_screen(tmp_path, payload(actions=[
+        {"type": "wheel-drive", "id": "FL", "value": 40},
+        {"type": "servo-offline", "id": "FL"},
+        {"type": "servo-online", "id": "FL"}]))
+    values = [item["value"] for item in report["drives"]]
+    assert values[0] == 40 and values[-1] == 0
+    first_zero = values.index(0)
+    assert all(value == 0 for value in values[first_zero:])
+    assert all(card["sliderValue"] == "0" for card in report["wheelDrive"])

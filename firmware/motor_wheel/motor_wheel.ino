@@ -4,11 +4,13 @@
 // MODULE_ID используется только для подписей журнала и совместимости старых
 // адресных команд монитора. Программа посылает локальные команды (w 12.5).
 // Телеметрия @TLM раз в 250 мс не сообщает роль колеса и не определяет порт.
-// Все четыре платы можно прошить одним файлом при ручном назначении портов.
+// Для зеркалирования DIR при прошивке задайте MODULE_ID нужного колеса.
 //
-// Команды с USB (как в проверенном скетче): k, q, c, d, h, s, g, z, p, w, t, b.
+// Команды с USB (как в проверенном скетче): k, q, c, d, h, s, g, z, p, w, v, t, b.
 //   w 12.5 | w FL 12.5 — поворот колеса; w zero / w calib — ноль и калибровка;
-//   t N — тяга BLDC ±N% (heartbeat раз в <650 мс, иначе плата сама тормозит);
+//   v N — прямое значение Servo.write для тяги (0…150);
+//   t N — прежняя команда тяги BLDC ±N% для других пультов;
+//   обе команды повторяются чаще 650 мс, иначе плата сама тормозит.
 //   b — тормоз; p — состояние; ? — справка.
 //
 // Выход на регулятор скорости — «PWM» драйвера RioRand ZS-Z11H (hoverboard,
@@ -17,11 +19,10 @@
 // проверено на железе рабочим скетчем оператора:
 //     #include <Servo.h>
 //     Servo mk1;   void setup(){ mk1.attach(9); }   void loop(){ mk1.write(40); }
-// Такой скетч дал ровные, адекватные обороты без всякого контура, поэтому
-// прошивка v13 повторяет его один в один (вход «P» — это D3):
-//   * P (D3) — сигнал Servo, 50 Гц: 0…180 значения — вся шкала тяги. 0 — мотор
-//     не тянет (≈0,54 мс импульса), 180 — полный ход (≈2,4 мс). Процент
-//     команды переводится в значение напрямую: 1 % = 1,8, 100 % = 180;
+// Такой скетч дал ровные, адекватные обороты без всякого контура. Бортовой
+// экран передаёт целое значение 0…150 непосредственно в Servo.write() (D3).
+// Прежняя команда t с процентами оставлена для старых пультов и манёвров.
+//   * P (D3) — сигнал Servo, 50 Гц; 0 — мотор не тянет;
 //   * DIR — уровень: для этого колеса «вперёд» (у FR и RR он перевёрнут —
 //     колёса стоят зеркально), инверсия — назад;
 //   * BRAKE — 1 = тормоз включён, 0 = отпущен;
@@ -37,7 +38,7 @@
 // На каждой плате: свой TB6600 (шаговый руль), оптодатчик нуля на D18,
 // потенциометр положения колеса на A0 и интерфейс BLDC-тяги:
 // DIR (D4), BRAKE (D5), STOP (D2), SPEED/ШИМ (D3) и общая земля.
-// ШИМ на D3 — аппаратный, Timer3 в режиме Fast PWM (ни одной библиотеки).
+// Сигнал на D3 формирует штатная библиотека Servo.
 // Тахометр BLDC — отдельным проводом на D19 (внешнее прерывание INT2).
 #include <Servo.h>
 #include <avr/eeprom.h>
@@ -170,12 +171,13 @@ const uint8_t EEPROM_POT_MAGIC = 0x51;      // «q» — наклон измер
 // регистрами вручную. Значение write() — это ШКАЛА, а не обороты: 0 — мотор
 // не тянет, 180 — полный ход. Как и в проверенном скетче, контура нет: сколько
 // попросили процентов, столько и стоит на входе «P».
-const uint8_t DRIVE_SERVO_MAX_VALUE = 180;      // верх шкалы Servo.write
+const uint8_t DRIVE_SERVO_MAX_VALUE = 180;      // шкала прежней команды t
+const uint8_t DRIVE_DIRECT_MAX_VALUE = 150;     // прямое значение с бортового экрана
 // 1 % = 1,8 значения шкалы (180 / 100). В целых десятых, чтобы не тащить float
 // в горячую часть: 18 десятых на процент.
 const uint16_t DRIVE_SERVO_TENTHS_PER_PERCENT = 18;
-// Тахометр остаётся только для телеметрии и одной страховки: если значение на
-// «P» есть, а переходов «SC» нет дольше этого срока, тяга снимается.
+// Тахометр в прямом режиме v используется только для телеметрии. Для старой
+// команды t сохранена страховка «значение есть, а переходов SC нет».
 // Тахометр — выход SC: 90 переходов на оборот колеса (по одному на каждую смену
 // сигнала трёх датчиков Холла). Это свойство драйвера, а не настройка.
 const uint8_t DRIVE_TACH_PPR = 90;             // переходов SC на оборот колеса
@@ -201,13 +203,9 @@ const uint16_t DRIVE_FEEDBACK_TIMEOUT_MS = 3000;
 #define DRIVE_MIRRORED -1
 #endif
 
-// v13: тяга — как в проверенном на железе скетче с сервоприводом постоянного
-// вращения: штатная библиотека Servo, 50 Гц на входе «P» (D3), значение
-// write(0…180) = 0…100 % шкалы, 1 % = 1,8. Контура оборотов больше нет — сколько
-// попросили, столько и стоит на входе драйвера (в v12 был ШИМ с регулятором по
-// тахометру, 100 % = 500 об/мин). Тахометр SC остался для телеметрии и
-// страховки «тяга есть, а колесо стоит». Зеркальные FR/RR. Настроек тяги нет.
-const uint8_t FIRMWARE_PROTOCOL = 13;          // поле fw= в @TLM
+// v14: команда v передаёт значение 0…150 прямо в Servo.write(), независимо от
+// руля и тахометра. t остаётся совместимой со старыми пультами и манёврами.
+const uint8_t FIRMWARE_PROTOCOL = 14;          // поле fw= в @TLM
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -290,6 +288,7 @@ bool resume_allowed = false;           // g продолжит поворот, �
 
 bool drive_active = false;
 int8_t drive_percent = 0;
+bool drive_direct = false;         // v: тахометр не управляет выходом Servo
 uint32_t last_drive_command_ms = 0;
 uint32_t last_rpm_edges = 0;
 uint32_t last_rpm_raw = 0;
@@ -1353,6 +1352,9 @@ bool localDriveAllowed() {
 }
 
 void applyDriveCommand(int8_t percent) {
+  // При переходе с прямого режима отсчёт страховки старой команды начинается заново.
+  if (drive_direct) drive_feedback_ms = millis();
+  drive_direct = false;
   // Процент > 0 — вперёд: DIR в «своём» уровне колеса (у зеркального FR/RR он
   // перевёрнут). Процент < 0 — назад: противоположный уровень.
   const bool forward = percent >= 0;
@@ -1389,7 +1391,34 @@ void stopDriveLocal() {
   driveSetBrake(true);               // тормоз: колесо не катится
   driveSetStop(true);                // выходы драйвера выключены
   drive_percent = 0;
+  drive_direct = false;
   drive_active = false;
+}
+
+// v: число с ползунка попадает в Servo.write без пересчёта, без проверки нуля
+// руля и без обратной связи тахометра. Направление — штатное для этого колеса.
+void applyDirectDrive(uint8_t value) {
+  if (value == 0) {
+    stopDriveLocal();
+    return;
+  }
+  const uint8_t direction = driveForwardLevel();
+  if (drive_active && digitalRead(BLDC_DIR_PIN) != direction) {
+    // Если до этого старая команда ехала назад, сначала снять тягу.
+    driveWriteServo(0);
+    driveSetBrake(true);
+    driveSetStop(true);
+    delayMicroseconds(100);
+  }
+  digitalWrite(BLDC_DIR_PIN, direction);
+  driveSetBrake(false);
+  driveSetStop(false);
+  driveWriteServo(value);
+  // Процент нужен только старой телеметрии; на выдаваемое значение не влияет.
+  drive_percent = (int8_t)(((uint16_t)value * 100U + 90U) / 180U);
+  drive_direct = true;
+  drive_active = true;
+  last_drive_command_ms = millis();
 }
 
 bool applyLocalDrive(int8_t percent) {
@@ -1467,6 +1496,8 @@ void updateRpm() {
 // переходов «SC» нет дольше DRIVE_FEEDBACK_TIMEOUT_MS, значит тяга не доходит
 // до мотора (провод, драйвер, питание) — тогда честно снимаем тягу и пишем это.
 void updateDriveFeedback() {
+  // В прямом режиме SC — только телеметрия, он не меняет Servo.write.
+  if (drive_direct) return;
   const uint32_t now = millis();
   if (!drive_active) {
     drive_feedback_ms = now;
@@ -1520,8 +1551,8 @@ void printModuleStatus() {
 //   d <°> f|b      повернуть на угол: f — вправо (+), b — влево (−)
 //   c <°> | c c    качание на угол / выключить качание
 //   w <°>          абсолютный угол (нужен ноль, предел ±90°) — команда сервера
-//   t <%> | b      тяга BLDC в пределах предела / тормоз
-//   m …            настройка тяги: tach, brake, stop, dir, max, trim, span, reset
+//   v <0…150>      прямое значение Servo.write с бортового экрана
+//   t <%> | b      прежняя команда тяги / тормоз
 //   p              состояние
 void stopEverything() {
   const bool cycling = cycle_active;
@@ -1672,6 +1703,14 @@ void handleModuleCommand(char* line) {
       return;
     }
     applyLocalDrive((int8_t)percent);
+  } else if (strcasecmp_P(command, PSTR("v")) == 0) {
+    long value = 0;
+    if (!arg1 || arg2 || !parseLongToken(arg1, &value) ||
+        value < 0 || value > (long)DRIVE_DIRECT_MAX_VALUE) {
+      stopDriveLocal();
+      return;
+    }
+    applyDirectDrive((uint8_t)value);
   } else if (strcasecmp_P(command, PSTR("b")) == 0) {
     stopDriveLocal();
   } else if (strcasecmp_P(command, PSTR("p")) == 0) {
@@ -1762,9 +1801,9 @@ uint8_t classifyModuleToken(const char* token) {
 
 void printHelp() {
   note(PSTR("команды: k, q, c [°], c c, d [°] [f/b], h, s, g, z, p, ?"));
-  note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: t [FL] %%, b (своё колесо)"));
-  note(PSTR("двигатель: Servo D3 50 Гц (0…%u = 0…%u %%), тах SC: %u/об"),
-       (unsigned)DRIVE_SERVO_MAX_VALUE, (unsigned)DRIVE_MAX_PERCENT,
+  note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: v [FL] 0…%u, b"),
+       (unsigned)DRIVE_DIRECT_MAX_VALUE);
+  note(PSTR("Servo D3 50 Гц; t [FL] %% — прежняя команда; тах SC: %u/об"),
        (unsigned)DRIVE_TACH_PPR);
 }
 
@@ -1817,10 +1856,9 @@ void handleWheelCommand(char* line) {
     printHelp();
     return;
   }
-  // Тяга одного колеса: «t FL 8». Сервер шлёт имя колеса адресной команде
-  // (своё колесо — на своём USB), поэтому своё имя принимаем, а чужое молча
-  // пропускаем, как и «w FR 90» на FL. Без имени — прежняя команда всем.
-  if (strcasecmp_P(command, PSTR("t")) == 0) {
+  // Адресные t и v принимают своё имя, а чужое молча пропускают.
+  const bool direct_command = strcasecmp_P(command, PSTR("v")) == 0;
+  if (strcasecmp_P(command, PSTR("t")) == 0 || direct_command) {
     char* arg1 = strtok_r(nullptr, " \t", &save);
     const uint8_t kind = classifyModuleToken(arg1);
     if (kind == MOD_OTHER) return;
@@ -1828,12 +1866,20 @@ void handleWheelCommand(char* line) {
       char* arg2 = strtok_r(nullptr, " \t", &save);
       char* extra = strtok_r(nullptr, " \t", &save);
       if (!arg2 || extra) {
-        note(PSTR("Шаблон: t [FL] -%u…%u (0 — стоп); b — тормоз"),
-             (unsigned)DRIVE_MAX_PERCENT, (unsigned)DRIVE_MAX_PERCENT);
+        if (direct_command) {
+          note(PSTR("Шаблон: v [FL] 0…%u; b — тормоз"), (unsigned)DRIVE_DIRECT_MAX_VALUE);
+        } else {
+          note(PSTR("Шаблон: t [FL] -%u…%u (0 — стоп); b — тормоз"),
+               (unsigned)DRIVE_MAX_PERCENT, (unsigned)DRIVE_MAX_PERCENT);
+        }
         return;
       }
       char local[16];
-      snprintf_P(local, sizeof(local), PSTR("t %s"), arg2);
+      const int written = snprintf_P(local, sizeof(local), direct_command ? PSTR("v %s") : PSTR("t %s"), arg2);
+      if (written < 0 || written >= (int)sizeof(local)) {
+        stopDriveLocal();
+        return;
+      }
       handleModuleCommand(local);
       return;
     }

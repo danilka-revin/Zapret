@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -177,9 +178,8 @@ def test_firmware_has_no_usb_role_discovery():
     # Legacy addressed monitor commands remain compatible; the application
     # sends local commands to the manually selected port.
     assert 'classifyModuleToken' in text
-    # v13 — драйвер ZS-Z11H: вход «P» (D3) ведёт библиотека Servo, значение
-    # 0…180 = 0…100 % тяги; линия STOP на D2, тахометр «SC» на D19.
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '13'
+    # v14 добавляет прямую команду v 0…150, не меняя ручного назначения USB.
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '14'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
@@ -357,7 +357,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 13 and frame["calibError"] == 0
+        assert frame["firmware"] == 14 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] == 0.0
         assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False
@@ -437,3 +437,66 @@ def test_sketch_builds_with_avr_gcc(tmp_path):
     result = subprocess.run(command, capture_output=True, text=True, timeout=600)
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
     assert "warning" not in (result.stdout + result.stderr).lower()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="для интеграции нужны POSIX псевдотерминалы")
+def test_direct_slider_api_reaches_real_firmware_sim_over_serial(simulator, kiosk_client, tmp_path):
+    """JSON → MasterSource → четыре USB → именно Servo.write в скетче, без калибровки."""
+    from robot_control import slam
+
+    base = tmp_path / "wheel"
+    process = subprocess.Popen([str(simulator), "pty", str(base)], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+    source = None
+
+    def wait_for(predicate, timeout=5.0, tick=None):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if predicate():
+                return True
+            if tick:
+                tick()
+            time.sleep(0.07)
+        return bool(predicate())
+
+    try:
+        ports = {m: f"{base}-{m}" for m in MODULE_IDS}
+        assert wait_for(lambda: all(Path(p).exists() for p in ports.values())), process.stderr.read() if process.poll() is not None else "нет pty"
+        backend = slam.load_backend()
+        source = backend.MasterSource(list(ports.values()), module_ports=ports)
+        kiosk_client.application.extensions["rc_slam"].source = source
+        assert wait_for(lambda: source.servo_drive_status()["canDrive"], timeout=8), source.read()
+        assert not source.drive_status()["canDrive"]  # руль ещё не обнуляли
+
+        def send(value, module=None):
+            body = {"value": value}
+            if module:
+                body["module"] = module
+            reply = kiosk_client.post("/api/kiosk_drive", json=body, headers={"X-Robot-Control": "drive"})
+            assert reply.status_code == 200 and reply.json["value"] == value, reply.json
+
+        def servo_values():
+            return {m["id"]: m["driveServoValue"] for m in source.read()["motors"]}
+
+        # Обновлять heartbeat во время ожидания телеметрии: watchdog платы 650 мс.
+        for value in (1, 40, 150):
+            send(value, "FL")
+            assert wait_for(lambda: servo_values()["FL"] == value, tick=lambda: send(value, "FL")), source.read()
+            assert all(servo_values()[m] == 0 for m in ("FR", "RL", "RR"))
+        send(0, "FL")
+        assert wait_for(lambda: servo_values()["FL"] == 0), source.read()
+
+        # Общий ползунок адресует все четыре порта, не масштабируя число.
+        send(75)
+        assert wait_for(lambda: all(v == 75 for v in servo_values().values()), tick=lambda: send(75)), source.read()
+        send(0)
+        assert wait_for(lambda: all(v == 0 for v in servo_values().values())), source.read()
+    finally:
+        if source is not None:
+            source._stop = True
+        process.terminate()
+        try:
+            process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()

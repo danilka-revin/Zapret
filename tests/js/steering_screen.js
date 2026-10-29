@@ -192,7 +192,7 @@ global.confirm = () => payload.confirm !== false;
 
 /* ------------------------------------------------------- сеть (как в экране) */
 const sent = [];      // команды руления: {module, angle}
-const drives = [];    // команды тяги: {percent}
+const drives = [];    // команды тяги: {value} или прежний {percent}
 const emptyJournal = { ok: true, data: { entries: [], count: 0, shown: 0, dropped: 0, limit: 400,
                                          levels: {}, uptimeSec: 0, source: null, demo: false, journal: 'robot' } };
 
@@ -217,6 +217,8 @@ const maneuversSent = [];
  * и не всегда там, куда его послали. ``motorFrames`` позволяет показать экрану
  * именно эту последовательность, а не один застывший снимок. */
 let frameIndex = 0;
+let heldDriveResolve = null;
+let heldOneDrive = false;
 function nextState() {
   const frames = payload.motorFrames;
   if (!Array.isArray(frames) || frames.length === 0) return payload;
@@ -270,9 +272,16 @@ global.fetch = async (url, init) => {
     return jsonResponse({ ok: true, maneuver: { state: 'steering' } }, 200);
   }
   if (/kiosk_drive|api\/drive/.test(text)) {
-    drives.push({ percent: body.percent, module: body.module === undefined ? null : body.module });
+    const sent = {module: body.module === undefined ? null : body.module};
+    if (Object.prototype.hasOwnProperty.call(body, 'value')) sent.value = body.value;
+    else sent.percent = body.percent;
+    drives.push(sent);
+    if (payload.deferFirstDrive && !heldOneDrive && Number(body.value) > 0) {
+      heldOneDrive = true;
+      await new Promise((resolve) => { heldDriveResolve = resolve; });
+    }
     if (payload.driveRefuse) return jsonResponse({ ok: false, reason: payload.driveRefuse }, 409);
-    return jsonResponse({ ok: true, percent: body.percent, maxPercent: 20 }, 200);
+    return jsonResponse({ ok: true, value: body.value, percent: body.percent }, 200);
   }
   if (/kiosk_state/.test(text)) return jsonResponse(nextState());
   if (/kiosk_logs/.test(text)) return jsonResponse(payload.logs || emptyJournal);
@@ -429,29 +438,41 @@ function findPreset(id) {
       if (action.send !== false) slider.fire('change');
       await flush(action.rounds || 4);
     } else if (action.type === 'drive') {
-      const button = byId(action.direction < 0 ? 'drive-back' : 'drive-forward');
-      button.fire('pointerdown', { pointerId: 1 });
-      await flush(1);
-      global.dispatchEvent({ type: 'pointerup' });
-      await flush(action.rounds || 3);
-    } else if (action.type === 'wheel-drive') {
-      // Удержание «вперёд/назад» в карточке колеса, как у руления: нажали,
-      // подождали heartbeat, отпустили.
-      const id = String(action.id || 'FL');
-      if (action.percent !== undefined) {
-        const speed = byId('drive-module-' + id);
-        speed.fire('pointerdown', { pointerId: 1 });
-        speed.value = String(action.percent);
-        speed.fire('input');
-        await flush(1);
-      }
-      const button = byId('drive-module-' + (action.direction < 0 ? 'back-' : 'forward-') + id);
-      button.fire('pointerdown', { pointerId: 1 });
+      const slider = byId('drive-speed');
+      slider.value = String(action.value === undefined ? 8 : action.value);
+      slider.fire('input');
       await flush(action.rounds || 2);
-      if (action.keep !== true) {
-        global.dispatchEvent({ type: 'pointerup' });
-        await flush(action.rounds || 3);
-      }
+      if (action.release !== false) global.dispatchEvent({type: 'pointerup'});
+      await flush(2);
+    } else if (action.type === 'wheel-drive') {
+      const id = String(action.id || 'FL');
+      const slider = byId('drive-module-' + id);
+      slider.value = String(action.value === undefined ? (action.percent === undefined ? 8 : action.percent) : action.value);
+      slider.fire('input');
+      await flush(action.rounds || 2);
+      if (action.release !== false) global.dispatchEvent({type: 'pointerup'});
+      await flush(2);
+    } else if (action.type === 'blur') {
+      global.dispatchEvent({type: 'blur'});
+      await flush(action.rounds || 3);
+    } else if (action.type === 'finish-drive') {
+      if (heldDriveResolve) heldDriveResolve();
+      heldDriveResolve = null;
+      await flush(action.rounds || 4);
+    } else if (action.type === 'servo-offline') {
+      const state = payload.data.drive.servo;
+      state.perModule[action.id].canDrive = false;
+      state.perModule[action.id].reason = 'module_offline';
+      state.canDrive = false;
+      state.reason = 'module_offline';
+      await flush(action.rounds || 4);
+    } else if (action.type === 'servo-online') {
+      const state = payload.data.drive.servo;
+      state.perModule[action.id].canDrive = true;
+      state.perModule[action.id].reason = null;
+      state.canDrive = Object.values(state.perModule).every(item => item.canDrive);
+      state.reason = null;
+      await flush(action.rounds || 4);
     } else if (action.type === 'wheel-stop') {
       byId('drive-module-stop-' + String(action.id || 'FL')).fire('click');
       await flush(3);
@@ -504,12 +525,17 @@ function findPreset(id) {
     dataChip: byId('data-chip').textContent,
     driveStatus: byId('drive-status').textContent,
     driveSpeedMax: byId('drive-speed').max,
+    driveSpeedMin: byId('drive-speed').min,
+    driveSpeedValue: byId('drive-speed').value,
+    driveSpeedDisabled: !!byId('drive-speed').disabled,
     rpmText: ['FL', 'FR', 'RL', 'RR'].map((id) => byId('rpm-' + id).textContent),
     wheelDrive: ['FL', 'FR', 'RL', 'RR'].map((id) => ({
       id,
       state: byId('drive-module-state-' + id).textContent,
       output: byId('drive-module-output-' + id).textContent,
       sliderMax: byId('drive-module-' + id).max,
+      sliderMin: byId('drive-module-' + id).min,
+      sliderValue: byId('drive-module-' + id).value,
       sliderDisabled: !!byId('drive-module-' + id).disabled,
       backDisabled: !!byId('drive-module-back-' + id).disabled,
       forwardDisabled: !!byId('drive-module-forward-' + id).disabled,

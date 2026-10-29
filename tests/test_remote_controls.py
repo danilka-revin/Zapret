@@ -54,6 +54,10 @@ class Motors:
         self.calls.append(('drive', module, percent))
         return {'ok': True, 'queued': True, 'module': module, 'percent': round(percent)}
 
+    def drive_servo(self, value, module=None):
+        self.calls.append(('servo', module, value))
+        return {'ok': True, 'queued': True, 'value': value}
+
     def start_maneuver(self, name):
         self.calls.append(('maneuver', 'start', name))
         return {'ok': True, 'maneuver': {'name': name, 'state': 'steering'}}
@@ -109,10 +113,12 @@ def test_controls_page_reuses_full_motor_ui(client, operator):
     page = client.get('/controls')
     assert page.status_code == 200
     for name in ('swipe-motors-view', 'steer-slider-FL', 'steer-preset-grid',
-                 'drive-forward', 'drive-back', 'drive-stop', 'wheel-port-settings', 'remote-estop'):
+                 'drive-forward', 'drive-back', 'drive-module-forward-FR',
+                 'drive-module-back-FR', 'remote-drive-stop', 'wheel-port-settings', 'remote-estop'):
         assert f'id="{name}"' in page.text
-    assert page.text.index('web_controls.js') < page.text.index('src="robot.js"')
+    assert page.text.index('web_controls.js') < page.text.index('web_drive.js') < page.text.index('src="robot.js"')
     assert client.get('/web_controls.js').status_code == 200
+    assert client.get('/web_drive.js').status_code == 200
 
 
 @pytest.mark.parametrize('operation,body,marker,expected', [
@@ -132,6 +138,9 @@ def test_controls_page_reuses_full_motor_ui(client, operator):
     ('drive', {'module': 'FL', 'percent': 6}, 'drive', ('drive', 'FL', 6)),
     ('drive', {'module': 'fr', 'percent': -3}, 'drive', ('drive', 'FR', -3)),
     ('drive', {'module': 'RL', 'percent': 0}, 'drive', ('drive', 'RL', 0)),
+    ('drive', {'value': 150}, 'drive', ('servo', None, 150)),
+    ('drive', {'module': 'fr', 'value': 40}, 'drive', ('servo', 'FR', 40)),
+    ('drive', {'value': 0}, 'drive', ('servo', None, 0)),
 ])
 def test_all_commands_reach_onboard_owner(client, operator, transport, operation, body, marker, expected):
     login(client)
@@ -175,6 +184,18 @@ def test_expired_remote_heartbeat_cannot_start_drive(kiosk_client, transport):
     assert response.status_code == 408 and response.json['reason'] == 'command_expired'
     assert transport[0].calls == []
     assert kiosk_client.post('/api/kiosk_drive', json={'percent': 0}, headers=hdr).status_code == 200
+
+
+def test_remote_legacy_direction_controls_are_isolated_and_safe():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('node needed for remote direction controls test')
+    result = subprocess.run([node, str(Path(__file__).parent / 'js/web_drive.js')],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_browser_transport_and_unload_stop():
