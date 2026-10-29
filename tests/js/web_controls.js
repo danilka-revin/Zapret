@@ -35,6 +35,13 @@ for (const name of ['slam_auth.js', 'web_controls.js']) {
   assert.equal(drive.headers['x-csrf-token'], 'signed-csrf');
   assert.equal(drive.headers['x-robot-control'], 'drive');
   assert.equal(drive.body.percent, 8);
+  await context.window.fetch('api/kiosk_drive', {method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Robot-Control': 'drive'},
+    body: JSON.stringify({module: 'FR', value: 150})});
+  const direct = calls.at(-1);
+  assert.equal(new URL(direct.url).pathname, '/api/control/drive');
+  assert.equal(direct.headers['x-csrf-token'], 'signed-csrf');
+  assert.deepEqual(direct.body, {module: 'FR', value: 150});
   // Настройки привода больше нет: запрос «api/kiosk_drive_config» уходит как
   // есть (маршрута в таблице нет), то есть бортовой сервер ответит 404.
   await context.window.fetch('api/kiosk_drive_config', {method: 'POST',

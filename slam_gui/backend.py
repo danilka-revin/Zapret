@@ -59,6 +59,7 @@ import sys
 import threading
 import time
 import webbrowser
+from contextlib import nullcontext
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -93,6 +94,9 @@ MAX_DRIVE_PERCENT = 100
 #: Жёсткий потолок сервера: выше него тягу не пропустит ни экран, ни API, даже
 #: если плата разрешила себе больше. 100 % — верх шкалы прошивки (значение 180).
 DRIVE_ABS_MAX_PERCENT = 100
+#: Прямое управление с бортового экрана (команда v, Servo.write без пересчёта).
+DRIVE_DIRECT_MAX_VALUE = 150
+DRIVE_DIRECT_FIRMWARE = 14
 #: Разброс углов, при котором экран называет колёса ровными. Тягу он больше не
 #: блокирует: ездить можно на любом угле (0° — прямо, 45° — краб, 90° — боком),
 #: число осталось только для подсказки «колёса стоят ровно / под углом».
@@ -336,6 +340,7 @@ def parse_master_line(line, module=None):
         try:
             drive_max = int(fields["dmax"]) if "dmax" in fields else None
             drive_duty = int(fields["duty"]) if "duty" in fields else None
+            drive_servo = int(fields["sv"]) if "sv" in fields else None
             tach_ppr = int(fields["ppr"]) if "ppr" in fields else None
             tach_hz = int(fields["hz"]) if "hz" in fields else None
         except ValueError:
@@ -354,6 +359,7 @@ def parse_master_line(line, module=None):
                 (drive_max is not None and not 1 <= drive_max <= 100) or
                 (drive_duty is not None and
                  not DRIVE_DUTY_MIN_PERMILLE <= drive_duty <= DRIVE_DUTY_MAX_PERMILLE) or
+                (drive_servo is not None and not 0 <= drive_servo <= 180) or
                 (tach_ppr is not None and not 1 <= tach_ppr <= TACH_PPR_MAX) or
                 (tach_hz is not None and not 0 <= tach_hz <= TACH_HZ_MAX)):
             return None
@@ -386,6 +392,7 @@ def parse_master_line(line, module=None):
             "tach": tach,
             "driveMaxPercent": drive_max,
             "driveDutyPermille": drive_duty,
+            "driveServoValue": drive_servo,
             "tachPpr": tach_ppr,
             # Сколько переходов «SC» приходит в секунду. При вращении ровно один
             # оборот в секунду это и есть число импульсов на оборот: по нему
@@ -451,7 +458,7 @@ class MasterSource:
     #: источника (тесты, режим без шасси) их просто нет.
     maneuvers = None
     maneuver_core = None
-    _maneuver_driving = False
+    _maneuver_context = threading.local()
     STALE_S = 1.0
     DRIVE_STALE_S = 0.75
     MAX_STEER_DEG = STEER_LIMIT_DEG
@@ -502,11 +509,18 @@ class MasterSource:
         #: Пусто, пока едет «вся телега» общей командой t N.
         self.drive_modules = {}
         self.drive_last_command = 0.0
+        # Значения прямой команды и время последнего heartbeat (монотонные часы).
+        self.servo_commands = {}
+        # Останов и раздача очереди не должны обгонять друг друга.
+        self._commands_lock = threading.RLock()
         #: Манёвры тяги («метр вперёд», «90° на месте»). Раннер тикает в потоке
         #: порта, сам держит heartbeat и сам гасит тягу на цели; его настройки
         #: (метры, градусы, процент, геометрия шасси) лежат в data/maneuvers.json.
         self.maneuver_core = _load_maneuvers()
-        self._maneuver_driving = False
+        # Сам манёвр не отменяет себя, но ручная команда из другого потока
+        # обязана дождаться текущего тика и остановить его.
+        self._maneuver_context = threading.local()
+        self._manual_motion_lock = threading.RLock()
         self.maneuvers = (self.maneuver_core.ManeuverRunner(
             self.maneuver_core.load_config(), brake=self._brake_all)
             if self.maneuver_core is not None else None)
@@ -662,7 +676,7 @@ class MasterSource:
         except Exception:                     # noqa: BLE001 — битые байты не команда
             return None
         parts = text.split()
-        if len(parts) >= 2 and parts[0].lower() in ("w", "t", "m"):
+        if len(parts) >= 2 and parts[0].lower() in ("w", "t", "v", "b", "m"):
             token = parts[1].upper()
             if token in MODULE_TITLES:
                 return token
@@ -673,9 +687,24 @@ class MasterSource:
         if self.drive_percent != 0:
             return True
         values = getattr(self, "drive_modules", None) or {}
-        if module is None:
-            return any(percent != 0 for percent in values.values())
-        return values.get(module, 0) != 0
+        if module is None and any(percent != 0 for percent in values.values()):
+            return True
+        if module is not None and values.get(module, 0) != 0:
+            return True
+        # После потери heartbeat плата сама гасит выход через 650 мс; не держим
+        # другие операции заблокированными из-за старой команды экрана.
+        now = time.monotonic()
+        direct = getattr(self, "servo_commands", None) or {}
+        targets = direct.values() if module is None else [direct.get(module, (0, 0.0))]
+        return any(value != 0 and now - sent < 0.65 for value, sent in targets)
+
+    def _brake_for_lost_module(self, module):
+        """Сохранить fail-closed старой тяги, не связывая одиночный Servo с соседями."""
+        with self.lock:
+            legacy = self.drive_percent != 0 or any(
+                percent != 0 for percent in (getattr(self, "drive_modules", None) or {}).values())
+            affected = self._module_drive_active(module)
+        return legacy or affected
 
     def set_pot_mode(self, action, now=None):
         """Режим потенциометра всех четырёх плат: pm 0/1 или калибровка q."""
@@ -832,6 +861,29 @@ class MasterSource:
         limit = min(limits) if limits else MAX_DRIVE_PERCENT
         return max(1, min(int(limit), MAX_DRIVE_PERCENT))
 
+    def servo_drive_status(self, now=None):
+        """Только связь и версия платы; руль и тахометр не управляют командой v."""
+        now = time.time() if now is None else now
+        with self.lock:
+            frames = dict(self.frames)
+        ready = self.serial_ready.is_set()
+        per_module = {}
+        for module in MODULE_TITLES:
+            entry = frames.get(module)
+            if not ready:
+                reason = "serial_unavailable"
+            elif entry is None or now - entry[1] >= self.DRIVE_STALE_S:
+                reason = "module_offline"
+            elif (entry[0].get("firmware") or 0) < DRIVE_DIRECT_FIRMWARE:
+                reason = "servo_firmware_required"
+            else:
+                reason = None
+            per_module[module] = {"canDrive": reason is None, "reason": reason}
+        reason = next((per_module[m]["reason"] for m in MODULE_TITLES
+                       if per_module[m]["reason"]), None)
+        return {"maxValue": DRIVE_DIRECT_MAX_VALUE, "canDrive": reason is None,
+                "reason": reason, "perModule": per_module}
+
     def drive_status(self, now=None):
         """Готовность тяги: общей (все колёса) и каждого колеса по отдельности.
 
@@ -847,6 +899,9 @@ class MasterSource:
             frames = dict(self.frames)
             commanded = self.drive_percent
             commanded_modules = dict(getattr(self, "drive_modules", None) or {})
+            direct_commands = dict(getattr(self, "servo_commands", None) or {})
+        direct_active = any(value and time.monotonic() - sent < 0.65
+                            for value, sent in direct_commands.values())
         motors = {}
         reason = ""
         fresh_frames = {}
@@ -918,7 +973,8 @@ class MasterSource:
             "commandedModules": commanded_modules,
             "individual": bool(getattr(self, "supports_individual_drive", False)),
             "perModule": per_module,
-            "active": any(value not in (None, 0) for value in motors.values()),
+            "servo": self.servo_drive_status(now),
+            "active": any(value not in (None, 0) for value in motors.values()) or direct_active,
             "reportedPercent": motors,
             "reportedDuty": {module: frame.get("driveDutyPermille")
                               for module, frame in fresh_frames.items()},
@@ -952,26 +1008,27 @@ class MasterSource:
                 return {"ok": False, "reason": status["reason"] or "drive_not_ready"}
             # «t» — тяга; «d» в прошивке — поворот на угол, как в проверенном скетче.
             command = ("t %d\n" % target).encode("ascii")
-        if target == 0:
-            # STOP always jumps ahead of queued steering/heartbeat commands,
-            # not only when the bounded queue is already full.
-            self._discard_pending_commands()
-        try:
-            self.commands.put_nowait(command)
-        except queue.Full:
-            if target != 0:
-                return {"ok": False, "reason": "command_queue_full"}
-            self._discard_pending_commands()
+        with getattr(self, "_commands_lock", nullcontext()):
+            if target == 0:
+                # STOP jumps ahead of queued steering/heartbeat commands.
+                self._discard_pending_commands()
             try:
                 self.commands.put_nowait(command)
             except queue.Full:
-                return {"ok": False, "reason": "command_queue_full"}
-        with self.lock:
-            self.drive_percent = target
-            # Общая команда адресована всем колёсам: прежние одиночные
-            # значения больше ничего не значат.
-            self.drive_modules = {}
-            self.drive_last_command = now
+                if target != 0:
+                    return {"ok": False, "reason": "command_queue_full"}
+                self._discard_pending_commands()
+                try:
+                    self.commands.put_nowait(command)
+                except queue.Full:
+                    return {"ok": False, "reason": "command_queue_full"}
+            with self.lock:
+                self.drive_percent = target
+                # Общая команда адресована всем колёсам: прежние одиночные
+                # значения больше ничего не значат.
+                self.drive_modules = {}
+                self.servo_commands = {}
+                self.drive_last_command = now
         return {"ok": True, "queued": True, "percent": target,
                 "maxPercent": limit}
 
@@ -1016,17 +1073,93 @@ class MasterSource:
         # Имя колеса в команде: прошивка берёт только своё (чужое молча
         # пропускает), а сервер всё равно шлёт её лишь на этот порт.
         command = ("t %s %d\n" % (module, target)).encode("ascii")
-        try:
-            self.commands.put_nowait(command)
-        except queue.Full:
-            return {"ok": False, "reason": "command_queue_full"}
-        with self.lock:
-            modules = dict(getattr(self, "drive_modules", None) or {})
-            modules[module] = target
-            self.drive_modules = modules
-            self.drive_last_command = now
+        with getattr(self, "_commands_lock", nullcontext()):
+            try:
+                self.commands.put_nowait(command)
+            except queue.Full:
+                return {"ok": False, "reason": "command_queue_full"}
+            with self.lock:
+                modules = dict(getattr(self, "drive_modules", None) or {})
+                modules[module] = target
+                self.drive_modules = modules
+                direct = dict(getattr(self, "servo_commands", None) or {})
+                direct.pop(module, None)
+                self.servo_commands = direct
+                self.drive_last_command = now
         return {"ok": True, "queued": True, "module": module,
                 "percent": target, "maxPercent": limit}
+
+    def drive_servo(self, value, module=None, now=None):
+        """Отправить целое значение прямо в Servo.write одного или всех колёс.
+
+        Здесь нет пересчёта процентов и зависимостей от нуля руля или SC.
+        Для ненулевой команды проверяются лишь связь и поддержка команды v.
+        """
+        with getattr(self, "_manual_motion_lock", nullcontext()):
+            return self._drive_servo(value, module, now)
+
+    def _drive_servo(self, value, module=None, now=None):
+        if type(value) is not int or not 0 <= value <= DRIVE_DIRECT_MAX_VALUE:
+            return {"ok": False, "reason": "invalid_drive"}
+        if module is not None:
+            module = str(module).upper()
+            if module not in MODULE_TITLES:
+                return {"ok": False, "reason": "invalid_module"}
+        if not self.serial_ready.is_set():
+            return {"ok": False, "reason": "serial_unavailable"}
+        if value:
+            status = self.servo_drive_status(now)
+            selected = status["perModule"][module] if module else status
+            if not selected["canDrive"]:
+                return {"ok": False, "reason": selected["reason"]}
+
+        # Ручная команда не должна конкурировать с уже запущенным манёвром.
+        self._cancel_maneuver()
+        if not value and module is None:
+            stopped = self.drive(0, now)
+            if not stopped.get("ok"):
+                return stopped
+        else:
+            # b работает и на старых платах, даже когда их телеметрия пропала.
+            command = (("v %s %d\n" % (module, value)) if module and value else
+                       ("b %s\n" % module) if module else
+                       ("v %d\n" % value)).encode("ascii")
+            with getattr(self, "_commands_lock", nullcontext()):
+                if not value:
+                    self._discard_pending_drive_for(module)
+                try:
+                    self.commands.put_nowait(command)
+                except queue.Full:
+                    if value:
+                        return {"ok": False, "reason": "command_queue_full"}
+                    # При переполнении останов важнее ожидающих команд.
+                    self._discard_pending_commands()
+                    try:
+                        self.commands.put_nowait(command)
+                    except queue.Full:
+                        return {"ok": False, "reason": "command_queue_full"}
+                with self.lock:
+                    direct = dict(getattr(self, "servo_commands", None) or {})
+                    if module is None:
+                        direct = {mid: (value, time.monotonic()) for mid in MODULE_TITLES}
+                        self.drive_percent = 0
+                        self.drive_modules = {}
+                    elif value:
+                        direct[module] = (value, time.monotonic())
+                        modules = dict(getattr(self, "drive_modules", None) or {})
+                        modules.pop(module, None)
+                        self.drive_modules = modules
+                    else:
+                        direct.pop(module, None)
+                        modules = dict(getattr(self, "drive_modules", None) or {})
+                        modules.pop(module, None)
+                        self.drive_modules = modules
+                    self.servo_commands = direct
+        result = {"ok": True, "queued": True, "value": value,
+                  "maxValue": DRIVE_DIRECT_MAX_VALUE}
+        if module is not None:
+            result["module"] = module
+        return result
 
     def stop_drive(self, now=None):
         return self.drive(0, now)
@@ -1066,6 +1199,10 @@ class MasterSource:
 
     def start_maneuver(self, name, now=None):
         """Запустить манёвр: колёса встанут в углы, дальше сервер ведёт сам."""
+        with getattr(self, "_manual_motion_lock", nullcontext()):
+            return self._start_maneuver(name, now)
+
+    def _start_maneuver(self, name, now=None):
         if self.maneuvers is None:
             return {"ok": False, "reason": "control_not_supported"}
         if not self.serial_ready.is_set():
@@ -1100,12 +1237,12 @@ class MasterSource:
         with self.lock:
             frames = {module: entry[0] for module, entry in self.frames.items()
                       if entry is not None and wall - entry[1] < self.STALE_S}
-        self._maneuver_driving = True
+        self._maneuver_context.driving = True
         try:
             runner.tick(time.monotonic(), frames, self._maneuver_steer,
                         self._maneuver_drive)
         finally:
-            self._maneuver_driving = False
+            self._maneuver_context.driving = False
         status = runner.status()
         if status["learned"] and status["state"] == runner.DONE:
             # Измеренная скорость — в файл: следующий прогон без тахометра
@@ -1132,7 +1269,7 @@ class MasterSource:
 
     def _cancel_maneuver(self, reason="manual"):
         """Ручная тяга, СТОП или потеря колеса отменяют манёвр."""
-        if self.maneuvers is None or self._maneuver_driving:
+        if self.maneuvers is None or getattr(self._maneuver_context, "driving", False):
             return
         if self.maneuvers.status()["active"]:
             self.maneuvers.cancel(reason=reason)
@@ -1153,22 +1290,66 @@ class MasterSource:
                     link.commands.get_nowait()
                 except queue.Empty:
                     break
+                else:
+                    link.commands.task_done()
 
-    def _brake_all(self):
-        """Тормоз на все открытые порты: один пропавший порт гасит всю тягу."""
+    @staticmethod
+    def _filter_queue(pending, keep):
+        """Удалить устаревшие команды, не теряя остальные элементы очереди."""
+        with pending.mutex:
+            old = list(pending.queue)
+            kept = [command for command in old if keep(command)]
+            removed = len(old) - len(kept)
+            if not removed:
+                return
+            pending.queue.clear()
+            pending.queue.extend(kept)
+            pending.unfinished_tasks -= removed
+            if pending.unfinished_tasks == 0:
+                pending.all_tasks_done.notify_all()
+            pending.not_full.notify_all()
+
+    def _discard_pending_drive_for(self, module):
+        """Ноль одного колеса вытесняет его старые команды, но не соседей."""
+        def is_drive(command):
+            return bytes(command).split()[:1] in ([b"v"], [b"t"], [b"b"])
+
+        def keep_global(command):
+            if not is_drive(command):
+                return True
+            target = self._command_module(command)
+            # Общая тяга затронула бы и останавливаемое колесо.
+            return target is not None and target != module
+
+        self._filter_queue(self.commands, keep_global)
         with self.lock:
             links = list((getattr(self, "links", None) or {}).values())
-            self.drive_percent = 0
-            self.drive_modules = {}
-            self.drive_last_command = 0.0
         for link in links:
-            try:
-                link.commands.put_nowait(b"b\n")
-            except queue.Full:
-                pass
+            if link.module == module:
+                self._filter_queue(link.commands, lambda command: not is_drive(command))
+
+    def _brake_all(self):
+        """Тормоз на все порты; старый heartbeat не должен идти после СТОП."""
+        with getattr(self, "_commands_lock", nullcontext()):
+            self._discard_pending_commands()
+            with self.lock:
+                links = list((getattr(self, "links", None) or {}).values())
+                self.drive_percent = 0
+                self.drive_modules = {}
+                self.servo_commands = {}
+                self.drive_last_command = 0.0
+            for link in links:
+                try:
+                    link.commands.put_nowait(b"b\n")
+                except queue.Full:
+                    pass
 
     def _fanout_commands(self):
         """Раздать команды из общей очереди по открытым портам."""
+        with getattr(self, "_commands_lock", nullcontext()):
+            self._fanout_commands_locked()
+
+    def _fanout_commands_locked(self):
         while True:
             try:
                 command = self.commands.get_nowait()
@@ -1444,10 +1625,10 @@ class MasterSource:
                 self._tag(link.path, on=False)
             if lost_module and not self._stop:
                 self._note_status("warn", "колесо %s: порт %s пропал" % (lost_module, link.path))
-                # Fail closed: потеря колеса в движении гасит тягу везде —
-                # и общую, и одиночную (колесо могло ехать одно).
+                # Общая/процентная тяга и потеря активного Servo — fail closed.
+                # Прямое вращение другого одиночного колеса не зависит от этого порта.
                 self._cancel_maneuver("module_offline")
-                if self._module_drive_active():
+                if self._brake_for_lost_module(lost_module):
                     self._brake_all()
 
     def _reader(self):
@@ -1500,6 +1681,7 @@ class MasterSource:
                                "tach": frame.get("tach"),
                                "driveMaxPercent": frame.get("driveMaxPercent"),
                                "driveDutyPermille": frame.get("driveDutyPermille"),
+                               "driveServoValue": frame.get("driveServoValue"),
                                "tachHz": frame.get("tachHz"),
                                "online": True, "fault": None,
                                "moving": frame["moving"], "calibrating": frame["calib"],
@@ -1509,7 +1691,7 @@ class MasterSource:
                                "targetAngle": None, "rpm": None, "temp": None,
                                "drivePercent": None, "homed": None, "online": False, "fault": None,
                                "pot": None, "tach": None, "driveMaxPercent": None,
-                               "driveDutyPermille": None, "tachHz": None,
+                               "driveDutyPermille": None, "driveServoValue": None, "tachHz": None,
                                "moving": False, "calibrating": False})
         out = NoSource().read()              # АКБ и маршрут пока не передаются
         out["motors"] = motors

@@ -604,6 +604,9 @@ class NavigationService:
         # Сериализуем heartbeat автономии и команду STOP: после возврата из
         # cancel() поток навигации уже не сможет отправить ещё один импульс.
         self._motion_lock = threading.RLock()
+        # Старт автономии и ручная команда не могут одновременно захватить
+        # тягу после одной и той же проверки «моторы стоят».
+        self._operator_motion_lock = threading.RLock()
         self._cancel = threading.Event()
         self._worker: Optional[threading.Thread] = None
         self._bridge: Optional[MasterBridge] = None
@@ -879,31 +882,54 @@ class NavigationService:
                                   409)
         if not hasattr(self.source, "drive_status"):
             raise NavigationError("drive_unavailable", "Нет подтверждения готовности тяги", 409)
-        with self._lock:
-            if self.active:
-                raise NavigationError("navigation_active", "Навигация уже выполняется", 409)
-            if self._plan is not preview:
-                raise NavigationError("plan_changed", "План был изменён параллельно; проверьте текущую траекторию ещё раз", 409)
-            self._cancel = threading.Event()
-            self._plan = plan
-            self._goal = dict(plan["goal"])
-            self._state = {
-                "phase": "starting",
-                "message": "Запуск: повторная проверка скана, локализации и шасси.",
-                "progress": 0.0,
-                "waypoint": 0,
-                "totalWaypoints": plan["waypoints"],
-                "updatedAt": self.clock(),
-            }
-            worker_goal = dict(plan["goal"])
-            worker_goal["requested"] = dict(plan["goalRequested"])
-            worker = threading.Thread(
-                target=self._run, args=(worker_goal, self._cancel, plan),
-                name="robot-navigation", daemon=True,
-            )
-            self._worker = worker
-            worker.start()
+        with self._operator_motion_lock:
+            # За время построения маршрута мог начаться ручной ввод.
+            ready, reason, _details = self._preflight(self._snapshot())
+            if not ready:
+                raise NavigationError("not_ready", reason, 409)
+            with self._lock:
+                if self.active:
+                    raise NavigationError("navigation_active", "Навигация уже выполняется", 409)
+                if self._plan is not preview:
+                    raise NavigationError("plan_changed", "План был изменён параллельно; проверьте текущую траекторию ещё раз", 409)
+                self._cancel = threading.Event()
+                self._plan = plan
+                self._goal = dict(plan["goal"])
+                self._state = {
+                    "phase": "starting",
+                    "message": "Запуск: повторная проверка скана, локализации и шасси.",
+                    "progress": 0.0,
+                    "waypoint": 0,
+                    "totalWaypoints": plan["waypoints"],
+                    "updatedAt": self.clock(),
+                }
+                worker_goal = dict(plan["goal"])
+                worker_goal["requested"] = dict(plan["goalRequested"])
+                worker = threading.Thread(
+                    target=self._run, args=(worker_goal, self._cancel, plan),
+                    name="robot-navigation", daemon=True,
+                )
+                self._worker = worker
+                worker.start()
         return {"ok": True, "status": self.status()}, 202
+
+    def manual_override(self, send, *, wait_for_exit: bool = True):
+        """Отдать тягу оператору после завершения автономного STOP.
+
+        В обычном ручном режиме не опрашивает карту/лидар. Если старый worker
+        ещё не завершился, ненулевая команда не идёт вслед за его будущим
+        тормозом; оператор может повторить её после остановки навигации.
+        """
+        with self._operator_motion_lock:
+            with self._lock:
+                worker = self._worker
+            if worker and worker.is_alive():
+                self.cancel("Ручная тяга — автономный маршрут остановлен.")
+                if wait_for_exit and worker is not threading.current_thread():
+                    worker.join(timeout=0.35)
+                    if worker.is_alive():
+                        return None
+            return send()
 
     def cancel(self, reason: str = "Отменено оператором") -> dict:
         with self._lock:

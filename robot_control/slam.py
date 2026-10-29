@@ -134,6 +134,9 @@ def note_pin_result(result, *, where="киоск"):
 #: Последняя записанная ступень тяги: heartbeat ручки не должен забивать журнал.
 _last_drive_percent: float | None = None
 _last_drive_lock = threading.Lock()
+# E-STOP не должен обгонять уже принятую ручную команду, после которой та
+# могла бы оказаться в очереди заново. Защищает один бортовой процесс.
+_motion_dispatch_lock = threading.RLock()
 
 
 def note_drive_command(percent: float, module: str = "") -> None:
@@ -183,6 +186,7 @@ COMMAND_REASON_TEXT = {
     "estop": "E-STOP: движение заблокировано, снимите защёлку с PIN",
     "control_not_supported": "источник данных не умеет адресное управление",
     "drive_firmware_required": "прошивка плат не умеет тягу (нет поля drive=)",
+    "servo_firmware_required": "прошивка платы не умеет прямую команду Servo (нужна v14)",
     "module_offline": "модуль не на связи",
     "serial_unavailable": "нет связи по UART",
     "command_queue_full": "очередь команд занята",
@@ -601,6 +605,11 @@ def engage_estop(source):
     Защёлка работает даже если источник не ответил: тогда все команды тяги и
     руления отклоняются, а нулевая тяга повторяется при следующем нажатии.
     """
+    with _motion_dispatch_lock:
+        return _engage_estop(source)
+
+
+def _engage_estop(source):
     info = estop_latch.latch("E-STOP")
     drive = getattr(source, "drive", None)
     stopped = False
@@ -629,12 +638,53 @@ def dispatch_drive_command(source, body):
 
     Одна и та же ручка работает для всех колёс (``{"percent": 8}``) и для
     одного колеса (``{"module": "FL", "percent": 8}``): второй вариант —
-    адресная команда, как ``/api/kiosk_steer`` для руля.
+    адресная команда, как ``/api/kiosk_steer`` для руля. ``value`` — прямое
+    целое число Servo.write, без пересчёта процентов.
     """
-    result, status = _drive_command(source, body)
+    with _motion_dispatch_lock:
+        return _dispatch_drive_command(source, body)
+
+
+def _dispatch_drive_command(source, body):
+    if isinstance(body, dict) and "value" in body:
+        result, status = _servo_drive_command(source, body)
+    else:
+        result, status = _drive_command(source, body)
     if not result.get("ok"):
         note_command_rejected("тяга", str(result.get("reason", "")))
     return result, status
+
+
+def _servo_drive_command(source, body):
+    """Число ползунка 0…150 без пересчёта передаётся одной плате или всем."""
+    if set(body) not in ({"value"}, {"module", "value"}):
+        return {"ok": False, "reason": "payload"}, 400
+    module = body.get("module")
+    if "module" in body:
+        if not isinstance(module, str) or module.upper() not in {"FL", "FR", "RL", "RR"}:
+            return {"ok": False, "reason": "invalid_module"}, 400
+        module = module.upper()
+    value = body.get("value")
+    if type(value) is not int:
+        return {"ok": False, "reason": "invalid_drive"}, 400
+    if not 0 <= value <= 150:
+        return {"ok": False, "reason": "drive_limit", "limit": 150}, 400
+    if value != 0 and estop_latch.latched() is not None:
+        return {"ok": False, "reason": "estop"}, 409
+    command = getattr(source, "drive_servo", None)
+    if not callable(command) or not getattr(source, "supports_drive", False):
+        return {"ok": False, "reason": "control_not_supported"}, 409
+    result = command(value, module=module)
+    if result.get("ok"):
+        answer = {"ok": True, "queued": True, "value": value, "maxValue": 150}
+        if module is not None:
+            answer["module"] = module
+        return answer, 200
+    reason = result.get("reason", "command_failed")
+    status = (503 if reason in {"serial_unavailable", "module_offline"} else
+              429 if reason == "command_queue_full" else
+              400 if reason in {"invalid_drive", "invalid_module", "drive_limit"} else 409)
+    return {"ok": False, "reason": reason}, status
 
 
 def _drive_command(source, body):
@@ -730,6 +780,7 @@ ASSETS = {
     "steering.js": "steering_js",
     "wheel_settings.js": "wheel_settings_js",
     "web_controls.js": "web_controls_js",
+    "web_drive.js": "web_drive_js",
     # общие пресеты руления: одни и те же углы на киоске и веб-пульте
     "steer_presets.js": "steer_presets_js",
     "pot_mode.js": "pot_mode_js",
@@ -1062,8 +1113,8 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     bp.add_url_rule("/main.html", endpoint="main_page", view_func=guard(main_screen))
 
     def remote_screen(view):
-        # Reuse the onboard controls, including hold-to-drive and loss-of-focus
-        # braking. No second copy of motor limits, presets or USB ownership.
+        # Reuse the onboard steering and USB owner. The remote page retains
+        # its separate hold-to-drive direction controls and loss-of-focus brake.
         html = (GUI_DIR / KIOSK_PAGE).read_text(encoding="utf-8")
         title = 'АКБ · веб-пульт' if view == 'battery' else 'Руление и тяга · веб-пульт'
         html = html.replace('<title>Экран робота</title>', f'<title>{title}</title>')
@@ -1088,7 +1139,7 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
             '<p id="remote-control-message" role="status"></p>')
         html = html.replace('<script src="robot.js"></script>',
             '<script src="/slam_auth.js"></script><script src="/web_controls.js"></script>'
-            '<script src="robot.js"></script>')
+            '<script src="/web_drive.js"></script><script src="robot.js"></script>')
         return Response(html, mimetype="text/html", headers={"Cache-Control": "no-store"})
 
     @bp.get("/controls")

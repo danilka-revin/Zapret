@@ -957,15 +957,26 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
         deadline = request.headers.get("X-Robot-Command-Deadline")
         body = request.get_json(silent=True)
-        if deadline is not None and isinstance(body, dict) and body.get("percent") != 0:
+        is_stop = isinstance(body, dict) and (body.get("value") == 0 or body.get("percent") == 0)
+        expires = None
+        if deadline is not None and isinstance(body, dict) and not is_stop:
             try:
                 expires = float(deadline)
                 if not math.isfinite(expires) or time.time() > expires:
                     raise ValueError("expired")
             except (TypeError, ValueError):
                 return jsonify(ok=False, reason="command_expired"), 408
-        navigation.cancel("Ручная тяга — автономный маршрут остановлен.")
-        result, status = dispatch_drive_command(state.source, request.get_json(silent=True))
+
+        def send_manual():
+            # Время могло истечь, пока завершался автономный worker.
+            if expires is not None and time.time() > expires:
+                return {"ok": False, "reason": "command_expired"}, 408
+            return dispatch_drive_command(state.source, body)
+
+        sent = navigation.manual_override(send_manual, wait_for_exit=not is_stop)
+        if sent is None:
+            return jsonify(ok=False, reason="navigation_stopping"), 409
+        result, status = sent
         return jsonify(result), status
 
     # ------------------------- Настройки лидара ------------------------- #

@@ -1644,7 +1644,7 @@ body.swipe-open .kiosk {
 .traction-speed { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; color: var(--muted); font-size: 12px; }
 .traction-speed b { color: var(--text); font-size: 14px; font-variant-numeric: tabular-nums; }
 .traction-speed input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
-.traction-actions { display: grid; grid-template-columns: 1fr 1fr .72fr; gap: 7px; }
+.traction-actions { display: grid; grid-template-columns: 1fr; gap: 7px; }
 .traction-actions button {
   min-height: 42px;
   padding: 8px;
@@ -1779,7 +1779,7 @@ body.swipe-open .kiosk {
 .steer-drive[data-active="true"] { border-top-color: var(--accent); }
 .steer-drive-speed { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 11px; font-weight: 800; }
 .steer-drive-speed b { color: var(--text); font-size: 13px; }
-.steer-drive-actions { grid-template-columns: repeat(2, minmax(0, 1fr)) auto; }
+.steer-drive-actions { grid-template-columns: 1fr; }
 .steer-actions button.steer-drive-fwd,
 .steer-actions button.steer-drive-back { min-height: 40px; font-size: 13px; }
 .steer-actions button.steer-drive-fwd { border-color: rgba(120, 200, 140, .55); background: rgba(120, 200, 140, .10); }
@@ -2102,3 +2102,12 @@ a.k-ctrl-btn, a.swipe-close { text-decoration:none; }
 .log-group .log-ts,.log-group .log-lvl { font-size:11px; }
 .log-group .log-msg { min-width:0; overflow-wrap:anywhere; }
 .log-empty { color:var(--muted); font-size:14px; }
+
+/* Старые кнопки направления существуют только на удалённом пульте. Бортовой
+   экран не зависит от них и показывает прямые Servo-ползунки. */
+.remote-legacy-drive { display: none; }
+body[data-remote-view="motors"] .remote-legacy-drive { display: block; }
+body[data-remote-view="motors"] .direct-servo-control { display: none !important; }
+body[data-remote-view="motors"] .remote-drive-panel { grid-column: 1 / -1; }
+body[data-remote-view="motors"] .remote-drive-actions { grid-template-columns: repeat(3, 1fr); margin-top: 8px; }
+body[data-remote-view="motors"] .remote-drive-panel small { display: block; margin-top: 8px; color: var(--muted); }

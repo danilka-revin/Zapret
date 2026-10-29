@@ -26,19 +26,17 @@
   // авторизация руления/тяги остаётся отдельной настройкой веб-пульта.
   let steeringAuthorized = true;
   let stateFetchPending = false;
+  // Ползунки передают целые значения прямо в Servo.write, отдельно на колесо.
+  const SERVO_IDS = ['FL', 'FR', 'RL', 'RR'];
+  const SERVO_MAX = 150;
+  const servoTargets = { FL: 0, FR: 0, RL: 0, RR: 0 };
+  const servoPending = new Map();
+  const moduleDriveNote = Object.create(null);
   let driveTimer = null;
-  let driveDirection = 0;
-  let driveQueued = null;
+  let driveLastTick = 0;
   let driveSending = false;
   let driveFlush = Promise.resolve();
-  // Тяга отдельных колёс: у каждого свой heartbeat и своё удержание, как у
-  // руления — своя команда на своё колесо.
-  const moduleDrive = Object.create(null);          // модуль → направление (-1/0/1)
-  const moduleDrivePending = Object.create(null);   // модуль → процент в очереди
-  const moduleDriveNote = Object.create(null);      // модуль → {text, until}: отказ платы
-  let moduleDriveTimer = null;
-  let moduleDriveSending = false;
-  let moduleDriveFlush = Promise.resolve();
+  let driveMessage = null;
   const pendingSteer = Object.create(null);
   const pendingZero = Object.create(null);
   const pendingCalib = Object.create(null);
@@ -92,16 +90,28 @@
       const j = await r.json();
       if (j && j.ok && j.data) {
         lastData = j.data;
-        if (window.RCRemoteControls && (!j.data.linkOk || !(j.data.drive || {}).canDrive)) releaseDrive();
+        if (window.RCRemoteControls && window.RCRemoteLegacyState) window.RCRemoteLegacyState(j.data);
+        // Потеря платы или E-STOP не должны автоматически перезапустить её
+        // после восстановления связи. Калибровка руля и тахометр здесь ни при чём.
+        if (hasServoTargets() && !servoLinksReady(j.data)) releaseDrive();
         if (window.RCRobotModel) window.RCRobotModel.update(j.data);
         setLive(true);
       } else {
         setLive(false);
+        if (window.RCRemoteControls) {
+          releaseDrive();
+          if (window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
+          lastData = null;
+        }
       }
     } catch (e) {
       // AbortError или сеть — не сразу гасим весь экран, даём grace-период
       setLive(false);
-      if (window.RCRemoteControls) { releaseDrive(); lastData = null; }
+      if (window.RCRemoteControls) {
+        releaseDrive();
+        if (window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
+        lastData = null;
+      }
     } finally {
       clearTimeout(t);
       stateFetchPending = false;
@@ -2411,7 +2421,7 @@
     steerPresetBusy = false;
     scheduleSteerPreviewLive();
     steerPresetMessage = {
-      text: '«' + label + '»: ' + steerModeText(targets.FL) + '. Движение — кнопками в самом низу экрана, удерживайте.',
+      text: '«' + label + '»: ' + steerModeText(targets.FL) + '. Ползунок движения — в самом низу экрана.',
       error: false, until: Date.now() + 10000
     };
     renderSteeringControls(lastData || {});
@@ -2736,9 +2746,12 @@
 
   const DRIVE_REASON_TEXT = {
     command_expired: 'Команда устарела в сети. Повторите после восстановления связи.',
+    navigation_stopping: 'Маршрут останавливается. Повторите после остановки.',
     serial_unavailable: 'Нет связи с USB-мастером.',
     module_offline: 'Нет свежей телеметрии всех четырёх модулей.',
     drive_firmware_required: 'Обновите прошивку всех четырёх плат для тяги и watchdog.',
+    servo_firmware_required: 'Прошейте плату актуальным motor_wheel.ino (v14).',
+    estop: 'Включён E-STOP: тяга заблокирована.',
     not_homed: 'Сначала откалибруйте колёса по датчику (или задайте 0° вручную).',
     module_busy: 'Дождитесь остановки рулевых модулей.',
     // Старый сервер ещё мог запирать тягу по углам — текст оставлен, чтобы
@@ -2749,18 +2762,8 @@
     pin_required: 'PIN истёк; плата остановится по watchdog.'
   };
 
-  /* ================ Тяга: драйвер ZS-Z11H, настроек нет ================
-   * Драйвер колеса — RioRand ZS-Z11H с датчиками Холла. Вход «P» ведёт штатная
-   * библиотека Servo (50 Гц): значение write 0…180 — это 0…100 % шкалы тяги,
-   * 0 % мотор не тянет, 100 % полный ход. Процент команды переводится в значение
-   * один в один (1 % = 1,8) — как в проверенном скетче с сервоприводом
-   * постоянного вращения. Контура нет: обороты прошивка не задаёт, а измеряет
-   * тахометром «SC» (90 переходов на оборот) — для телеметрии и страховки
-   * «значение на «P» есть, а колесо стоит». Всё это свойства драйвера, а не
-   * настройки: экран только показывает, что стоит на входе «P» и какие об/мин
-   * у колеса сейчас. Зеркальные колёса (FR и RR) прошивка узнаёт по имени,
-   * сторон вращения настраивать не нужно.
-   */
+  /* Тяга: вход «P» драйвера ZS-Z11H ведёт Servo на D3. Бортовой экран
+   * отправляет целое значение 0…150 без пересчёта. Обороты — только показание. */
 
   /* --------------------------------------------------------------- манёвры
    * Пресет здесь — цель, а не время: «метр» и «90°» сервер меряет по
@@ -2982,13 +2985,36 @@
   }
 
   /** Подпись про углы колёс: «выровнены» или «под углом N°» — без запретов. */
-  function driveAngleText(drive) {
-    const spread = Number((drive || {}).spreadDeg);
-    if ((drive || {}).aligned === false && Number.isFinite(spread)) {
-      const degrees = spread.toFixed(1).replace('.', ',');
-      return ' · колёса под углом (разброс ' + degrees + '°) — поедет под этим углом';
-    }
-    return ' · колёса выровнены';
+  /* Прямое управление тягой: ползунок → {value} → v → Servo.write(value).
+   * Heartbeat нужен только страховочному watchdog платы; тахометр и руль не
+   * вычисляют и не меняют это значение. */
+  function hasServoTargets() {
+    return SERVO_IDS.some((id) => servoTargets[id] !== 0);
+  }
+
+  function servoLinksReady(data) {
+    const drive = (data || {}).drive || {};
+    const servo = drive.servo || {};
+    const states = servo.perModule || {};
+    return !data.estop && !!drive.available && SERVO_IDS.every((id) =>
+      !servoTargets[id] || !!(states[id] && states[id].canDrive));
+  }
+
+  function syncServoSliders() {
+    SERVO_IDS.forEach((id) => {
+      const slider = $('drive-module-' + id);
+      if (slider) slider.value = String(servoTargets[id]);
+      setText($('drive-module-value-' + id), String(servoTargets[id]));
+    });
+    const common = $('drive-speed');
+    const same = SERVO_IDS.every((id) => servoTargets[id] === servoTargets.FL);
+    if (common && same) common.value = String(servoTargets.FL);
+    setText($('drive-speed-value'), same ? String(servoTargets.FL) : 'разные');
+  }
+
+  function setDriveMessage(text) {
+    driveMessage = {text: text, until: Date.now() + 6000};
+    setText($('drive-status'), text);
   }
 
   function renderDriveControls(data) {
@@ -2997,326 +3023,198 @@
     if (!status || !speed) return;
     const d = data || {};
     const drive = d.drive || {};
-    const supported = !!(d.steeringControl && d.steeringControl.available);
-    // Предел приходит из телеметрии плат (dmax=): он задан прошивкой (100 %,
-    // то есть 500 об/мин) и не настраивается. Сервер выше своего потолка всё
-    // равно не пустит.
-    const max = Math.max(1, Math.min(100, Number(drive.maxPercent) || 100));
-    speed.max = String(max);
-    // Процент — это обороты: полная шкала прошивки 100 % = 500 об/мин, то есть
-    // 5 об/мин на процент.
-    const rpmPerPercent = 500 / 100;
-    const targetText = speed.value + '% = ' + Math.round(Number(speed.value) * rpmPerPercent) + ' об/мин';
-    if (Number(speed.value) > max) speed.value = String(max);
-    setText($('drive-speed-value'), String(speed.value));
-    const enabled = supported && steeringAuthorized && !!drive.available;
-    speed.disabled = !enabled;
-    const back = $('drive-back');
-    const forward = $('drive-forward');
+    const servo = drive.servo || null;
+    const enabled = !!servo && !!drive.available && steeringAuthorized;
+    const canDrive = enabled && !!servo.canDrive && !d.estop;
+    speed.max = String(SERVO_MAX);
+    speed.disabled = !canDrive;
     const stop = $('drive-stop');
-    if (back) back.disabled = !enabled || !drive.canDrive;
-    if (forward) forward.disabled = !enabled || !drive.canDrive;
-    if (stop) stop.disabled = !enabled;
-    const reason = drive.reason && DRIVE_REASON_TEXT[drive.reason];
-    // Угол колёс тягу не запирает: ехать можно на любом (краб, боком). Экран
-    // лишь говорит, что робот поедет под углом, а не прямо.
-    const angleText = driveAngleText(drive);
-    if (!supported && String((d.steeringControl || {}).source || '') === 'master-peer') status.textContent = 'Тяга — только на бортовом экране (порт 8090).';
-    else if (!supported) status.textContent = 'Тяга доступна при RC_SLAM_SOURCE=master.';
+    if (stop) stop.disabled = !drive.available || !steeringAuthorized;
+    const message = driveMessage && driveMessage.until > Date.now() ? driveMessage.text : '';
+    if (message) status.textContent = message;
+    else if (!servo) status.textContent = 'Прямая тяга доступна при RC_SLAM_SOURCE=master.';
+    else if (d.estop) status.textContent = DRIVE_REASON_TEXT.estop;
     else if (!steeringAuthorized) status.textContent = 'Управление временно недоступно.';
-    else if (reason) status.textContent = reason;
-    else if (drive.active) status.textContent = 'Движение включено · ' + targetText + ' · отпустите кнопку для торможения.';
-    else status.textContent = 'Готово · ' + targetText + ' · модули на связи' + angleText + '.';
-    status.dataset.ready = String(!!drive.canDrive && enabled);
-    // Тяга каждого колеса: своя готовность и свои кнопки в карточке.
-    ['FL', 'FR', 'RL', 'RR'].forEach((id) => renderModuleDriveCard(id, d, supported));
+    else if (!servo.canDrive) status.textContent = DRIVE_REASON_TEXT[servo.reason] || 'Нет связи с платами.';
+    else if (hasServoTargets()) status.textContent = 'Тяга включена · значение Servo.write указано на ползунке.';
+    else status.textContent = 'Готово · передвиньте ползунок от 0 до 150.';
+    status.dataset.ready = String(!!canDrive);
+    syncServoSliders();
+    SERVO_IDS.forEach((id) => renderModuleDriveCard(id, d, !!servo));
     renderManeuvers(d);
   }
 
-  function startDrive(direction) {
-    if (!steeringAuthorized) {
-      if (window._openSteeringAuth) window._openSteeringAuth();
-      return;
-    }
-    const drive = (lastData && lastData.drive) || {};
-    if (!drive.canDrive) {
-      renderDriveControls(lastData || {});
-      return;
-    }
-    driveDirection = direction;
-    if (driveTimer) clearInterval(driveTimer);
-    const heartbeat = () => {
-      if (driveDirection) void queueDrive(driveDirection * Number(($('drive-speed') || {}).value || 8));
-    };
-    heartbeat();
-    driveTimer = setInterval(heartbeat, 200);
-  }
-
-  function releaseDrive() {
-    const wasDriving = driveDirection !== 0 || driveTimer !== null;
-    driveDirection = 0;
-    if (driveTimer) clearInterval(driveTimer);
-    driveTimer = null;
-    if (wasDriving && steeringAuthorized) void queueDrive(0);
-  }
-
-  async function stopDrive() {
-    driveDirection = 0;
-    if (driveTimer) clearInterval(driveTimer);
-    driveTimer = null;
-    // «СТОП» — это стоп всего: гасим и одиночные тяги, которые держали в
-    // карточках колёс (общая команда ниже остановит все платы).
-    releaseModuleDrive();
-    if (!steeringAuthorized) {
-      setText($('drive-status'), 'PIN истёк — аппаратный watchdog остановит моторы.');
-      return;
-    }
-    await queueDrive(0);
-    setText($('drive-status'), 'Стоп отправлен · PWM 0 · тормоз включён.');
-  }
-
-  function queueDrive(percent) {
-    driveQueued = percent;
-    if (driveSending) return driveFlush;
-    driveSending = true;
-    driveFlush = (async () => {
-      while (driveQueued !== null) {
-        const target = driveQueued;
-        driveQueued = null;
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 1200);
-        try {
-          const response = await fetch('api/kiosk_drive', {
-            method: 'POST', cache: 'no-store', signal: controller.signal,
-            headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'drive' },
-            body: JSON.stringify({ percent: target })
-          });
-          const body = await response.json().catch(() => ({}));
-          if (!response.ok || !body.ok) {
-            const reason = body.reason || (response.status === 401 ? 'pin_required' : 'command_failed');
-            setText($('drive-status'), DRIVE_REASON_TEXT[reason] || 'Команда тяги отклонена.');
-            if (response.status === 401 || reason === 'pin_required') steeringAuthorized = false;
-            if (target !== 0) {
-              driveDirection = 0;
-              if (driveTimer) clearInterval(driveTimer);
-              driveTimer = null;
-              driveQueued = 0;
-            }
-          } else if (target === 0) {
-            setText($('drive-status'), 'PWM 0 · тормоз включён.');
-          } else {
-            setText($('drive-status'), 'Тяга ' + body.percent + '% · удерживайте кнопку.');
-          }
-        } catch (error) {
-          setText($('drive-status'), 'Связь потеряна · watchdog остановит моторы не позднее 650 мс.');
-          if (target !== 0) {
-            driveDirection = 0;
-            if (driveTimer) clearInterval(driveTimer);
-            driveTimer = null;
-            driveQueued = 0;
-          }
-        } finally {
-          clearTimeout(timeout);
-        }
-      }
-    })().finally(() => { driveSending = false; });
-    return driveFlush;
-  }
-
-  /* ------------------- тяга каждого колеса отдельно ------------------- */
-  /* Команда уходит на сервер как {module, percent} — это адресная тяга, как
-   * {module, angle} у руления. Прошивка получает «t FL 8» и берёт только своё
-   * имя, поэтому одно колесо можно крутить, пока остальные стоят. */
-  function driveModulesInfo(d) {
-    const drive = (d || {}).drive || {};
-    const perModule = drive.perModule || {};
-    return { drive: drive, perModule: perModule };
-  }
-
-  function moduleDrivePercent(id) {
-    const slider = $('drive-module-' + id);
-    const value = Math.abs(Math.round(Number(slider && slider.value) || 8));
-    return Math.max(1, value);
-  }
-
-  function moduleDriveCanDrive(id) {
-    if (!steeringAuthorized) return false;
-    const info = driveModulesInfo(lastData || {});
-    const state = info.perModule[id];
-    return !!(state && state.canDrive);
-  }
-
-  function moduleDriveHeartbeat() {
-    const ids = Object.keys(moduleDrive);
-    if (!ids.length) {
-      if (moduleDriveTimer) clearInterval(moduleDriveTimer);
-      moduleDriveTimer = null;
-      return;
-    }
-    ids.forEach((id) => {
-      void queueModuleDrive(id, moduleDrive[id] * moduleDrivePercent(id));
-    });
-  }
-
-  function startModuleDrive(id, direction) {
-    if (!steeringAuthorized) {
-      if (window._openSteeringAuth) window._openSteeringAuth();
-      return;
-    }
-    if (!moduleDriveCanDrive(id)) {
-      renderDriveControls(lastData || {});
-      return;
-    }
-    moduleDrive[id] = direction;
-    if (!moduleDriveTimer) moduleDriveTimer = setInterval(moduleDriveHeartbeat, 200);
-    moduleDriveHeartbeat();
-  }
-
-  function releaseModuleDrive() {
-    const ids = Object.keys(moduleDrive);
-    if (!ids.length) return;
-    if (moduleDriveTimer) clearInterval(moduleDriveTimer);
-    moduleDriveTimer = null;
-    ids.forEach((id) => {
-      delete moduleDrive[id];
-      if (steeringAuthorized) void queueModuleDrive(id, 0);
-    });
-  }
-
-  function stopModuleDrive(id) {
-    delete moduleDrive[id];
-    if (steeringAuthorized) void queueModuleDrive(id, 0);
-    if (!Object.keys(moduleDrive).length && moduleDriveTimer) {
-      clearInterval(moduleDriveTimer);
-      moduleDriveTimer = null;
-    }
-  }
-
-  /* Команды уходят по одной на колесо, но между собой не смешиваются:
-   * отпустили FL — его 0 не отменяет heartbeat FR. */
-  function queueModuleDrive(id, percent) {
-    moduleDrivePending[id] = percent;
-    if (moduleDriveSending) return moduleDriveFlush;
-    moduleDriveSending = true;
-    moduleDriveFlush = (async () => {
-      while (Object.keys(moduleDrivePending).length) {
-        const module = Object.keys(moduleDrivePending)[0];
-        const target = moduleDrivePending[module];
-        delete moduleDrivePending[module];
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 1200);
-        try {
-          const response = await fetch('api/kiosk_drive', {
-            method: 'POST', cache: 'no-store', signal: controller.signal,
-            headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'drive' },
-            body: JSON.stringify({ module: module, percent: target })
-          });
-          const body = await response.json().catch(() => ({}));
-          if (!response.ok || !body.ok) {
-            const reason = body.reason || (response.status === 401 ? 'pin_required' : 'command_failed');
-            if (response.status === 401 || reason === 'pin_required') steeringAuthorized = false;
-            noteModuleDrive(module, DRIVE_REASON_TEXT[reason] || ('Отказ плат: ' + reason));
-            if (target !== 0) {
-              // Не держим heartbeat колеса, которому сервер отказал: иначе
-              // экран будет повторять отказ пять раз в секунду.
-              delete moduleDrive[module];
-              if (!Object.keys(moduleDrive).length && moduleDriveTimer) {
-                clearInterval(moduleDriveTimer);
-                moduleDriveTimer = null;
-              }
-            }
-          }
-        } catch (error) {
-          noteModuleDrive(module, 'Связь потеряна · плата остановит это колесо по watchdog.');
-          if (target !== 0) {
-            delete moduleDrive[module];
-            if (!Object.keys(moduleDrive).length && moduleDriveTimer) {
-              clearInterval(moduleDriveTimer);
-              moduleDriveTimer = null;
-            }
-          }
-        } finally {
-          clearTimeout(timeout);
-        }
-      }
-    })().finally(() => { moduleDriveSending = false; });
-    return moduleDriveFlush;
-  }
-
-  /* Отказ по колесу держим несколько секунд: следующий опрос телеметрии
-   * перерисовал бы «стоит», и оператор не узнал бы, почему не поехало. */
-  function noteModuleDrive(id, text) {
-    moduleDriveNote[id] = { text: text, until: Date.now() + 6000 };
-    renderDriveControls(lastData || {});
-  }
-
-  /* Карточка колеса: своя тяга, свои кнопки. Серые кнопки объясняют причину —
-   * «нет связи», «нужна калибровка», «PIN». */
-  function renderModuleDriveCard(id, d, support) {
+  function renderModuleDriveCard(id, data, supported) {
     const stateEl = $('drive-module-state-' + id);
     const outputEl = $('drive-module-output-' + id);
     const slider = $('drive-module-' + id);
-    const valueEl = $('drive-module-value-' + id);
-    const back = $('drive-module-back-' + id);
-    const forward = $('drive-module-forward-' + id);
     const stop = $('drive-module-stop-' + id);
     if (!stateEl && !slider) return;
-    const info = driveModulesInfo(d);
-    const state = info.perModule[id] || null;
-    const motor = ((d.motors || []).find((m) => m && m.id === id)) || null;
-    const max = Math.max(1, Math.min(100, Number(info.drive.maxPercent) || 100));
+    const drive = data.drive || {};
+    const servo = drive.servo || {};
+    const state = (servo.perModule || {})[id] || null;
+    const motor = ((data.motors || []).find((m) => m && m.id === id)) || null;
+    const reported = motor && motor.driveServoValue != null ? Number(motor.driveServoValue) : null;
     if (slider) {
-      slider.max = String(max);
-      if (Number(slider.value) > max) slider.value = String(max);
-      if (valueEl) valueEl.textContent = String(slider.value);
+      slider.max = String(SERVO_MAX);
+      slider.disabled = !supported || !drive.available || !steeringAuthorized ||
+        !!data.estop || !state || !state.canDrive;
     }
-    const enabled = support && steeringAuthorized && !!state && !!info.drive.available;
-    const canDrive = enabled && !!state.canDrive;
-    const holding = moduleDrive[id] || 0;
-    const percent = motor && motor.drivePercent != null ? Number(motor.drivePercent) : null;
-    // Что стоит на входе «P» — фактическое, а не «сколько мы попросили»:
-    // по нему видно, что прошивка действительно дала тягу (0 % — мотор не
-    // тянет, 100 % — полный ход шкалы).
-    const dutyPermille = motor && motor.driveDutyPermille != null
-      ? Number(motor.driveDutyPermille) : null;
-    const tach = motor ? motor.tach : null;
-    const rpm = motor && motor.rpm != null ? Number(motor.rpm) : null;
-    // Переходов «SC» в секунду: при одном обороте в секунду это и есть число
-    // импульсов на оборот. Экран показывает их рядом с оборотами — по этому
-    // числу видно, что провод тахометра на D19 и что прошивка считает верно.
-    const tachHz = motor && motor.tachHz != null ? Number(motor.tachHz) : null;
-    if (slider) slider.disabled = !canDrive;
-    if (back) back.disabled = !canDrive;
-    if (forward) forward.disabled = !canDrive;
-    if (stop) stop.disabled = !enabled;
+    if (stop) stop.disabled = !drive.available || !steeringAuthorized;
     const card = stateEl && stateEl.closest ? stateEl.closest('.steer-drive') : null;
-    if (card) card.dataset.active = String(!!holding || (percent != null && percent !== 0));
-
-    // Отказ платы (если он был только что) важнее текущего состояния.
+    if (card) card.dataset.active = String(!!servoTargets[id] || !!reported);
     const note = moduleDriveNote[id];
     if (note && note.until <= Date.now()) delete moduleDriveNote[id];
-    const noteText = note && note.until > Date.now() ? note.text : '';
     let text;
-    if (noteText) text = noteText;
-    else if (!support) text = 'нет тяги на этом экране';
-    else if (!steeringAuthorized) text = 'нужен PIN';
+    if (note && note.until > Date.now()) text = note.text;
+    else if (!supported) text = 'прямая тяга недоступна';
+    else if (data.estop) text = DRIVE_REASON_TEXT.estop;
+    else if (!steeringAuthorized) text = 'управление недоступно';
     else if (!state) text = 'нет телеметрии';
     else if (!state.canDrive) text = DRIVE_REASON_TEXT[state.reason] || 'не готово';
-    else if (percent != null && percent !== 0) {
-      text = (percent > 0 ? 'вперёд ' : 'назад ') + Math.abs(percent) + '%';
-    } else text = 'стоит';
+    else text = reported ? 'Servo.write(' + reported + ')' : 'стоит';
     if (stateEl) stateEl.textContent = text;
     if (outputEl) {
       const parts = [];
-      if (dutyPermille != null) {
-        // Значение на входе «P» драйвера в процентах шкалы: 0 — мотор не тянет.
-        parts.push('на «P» ' + (dutyPermille / 10).toFixed(1).replace('.', ',') + ' %');
-      }
-      if (tach === false) parts.push('обороты недостоверны — проверьте провод SC');
-      else if (rpm != null) parts.push(Math.round(rpm) + ' об/мин');
-      if (tachHz != null) parts.push(tachHz + ' имп/с');
+      if (reported != null && Number.isFinite(reported)) parts.push('Servo.write(' + reported + ')');
+      // Обороты только показываем; на команду они не влияют.
+      if (motor && motor.tach === false) parts.push('тахометр недостоверен');
+      else if (motor && motor.rpm != null) parts.push(Math.round(Number(motor.rpm)) + ' об/мин');
+      if (motor && motor.tachHz != null) parts.push(Number(motor.tachHz) + ' имп/с');
       outputEl.textContent = parts.length ? parts.join(' · ') : '—';
     }
+  }
+
+  function startServoHeartbeat() {
+    if (!hasServoTargets()) {
+      if (driveTimer) clearInterval(driveTimer);
+      driveTimer = null;
+      return;
+    }
+    if (driveTimer) return;
+    driveLastTick = Date.now();
+    driveTimer = setInterval(() => {
+      const now = Date.now();
+      if (now - driveLastTick > 600) {
+        // Проснувшаяся после долгой паузы вкладка не должна снова включать мотор.
+        void stopDrive();
+        setDriveMessage('Связь прервалась · тяга остановлена. Задайте значение заново.');
+        return;
+      }
+      driveLastTick = now;
+      const same = SERVO_IDS.every((id) => servoTargets[id] === servoTargets.FL);
+      if (same && servoTargets.FL) void queueServo('ALL', servoTargets.FL);
+      else SERVO_IDS.forEach((id) => {
+        if (servoTargets[id]) void queueServo(id, servoTargets[id]);
+      });
+    }, 200);
+  }
+
+  function setServoTarget(id, value) {
+    if (!Number.isInteger(value) || value < 0 || value > SERVO_MAX) return;
+    driveMessage = null;
+    if (id === 'ALL') {
+      SERVO_IDS.forEach((wheel) => { servoTargets[wheel] = value; });
+    } else {
+      servoTargets[id] = value;
+      delete moduleDriveNote[id];
+    }
+    syncServoSliders();
+    void queueServo(id, value);
+    startServoHeartbeat();
+  }
+
+  function releaseDrive() {
+    if (hasServoTargets() || driveTimer) void stopDrive();
+  }
+
+  async function stopDrive(force) {
+    if (window.RCRemoteControls && window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
+    const wasDriving = hasServoTargets() || !!driveTimer;
+    SERVO_IDS.forEach((id) => { servoTargets[id] = 0; });
+    if (driveTimer) clearInterval(driveTimer);
+    driveTimer = null;
+    syncServoSliders();
+    if (!wasDriving && !force) return;
+    // Ноль вытесняет ожидающие ненулевые команды, а b принимают и старые платы.
+    await queueServo('ALL', 0);
+  }
+
+  function stopModuleDrive(id) {
+    setServoTarget(id, 0);
+  }
+
+  function queueServo(id, value) {
+    if (id === 'ALL') {
+      servoPending.clear();
+      servoPending.set(id, value);
+    } else {
+      // Если общая команда ещё не ушла, развернуть её в актуальные цели по
+      // колёсам, чтобы новое значение одного колеса не перезаписалось ею.
+      if (servoPending.has('ALL')) {
+        servoPending.delete('ALL');
+        SERVO_IDS.forEach((wheel) => servoPending.set(wheel, servoTargets[wheel]));
+      }
+      servoPending.delete(id);
+      if (value === 0) {
+        const rest = Array.from(servoPending.entries());
+        servoPending.clear();
+        servoPending.set(id, 0);
+        rest.forEach(([wheel, target]) => servoPending.set(wheel, target));
+      } else servoPending.set(id, value);
+    }
+    return flushServoQueue();
+  }
+
+  function flushServoQueue() {
+    if (driveSending) return driveFlush;
+    driveSending = true;
+    driveFlush = (async () => {
+      while (servoPending.size) {
+        const [id, value] = servoPending.entries().next().value;
+        servoPending.delete(id);
+        const payload = id === 'ALL' ? {value: value} : {module: id, value: value};
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 550);
+        try {
+          const response = await fetch('api/kiosk_drive', {
+            method: 'POST', cache: 'no-store', signal: controller.signal,
+            headers: {'Content-Type': 'application/json', 'X-Robot-Control': 'drive'},
+            body: JSON.stringify(payload)
+          });
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok || !body.ok) {
+            const reason = body.reason || (response.status === 401 ? 'pin_required' : 'command_failed');
+            if (response.status === 401 || reason === 'pin_required') steeringAuthorized = false;
+            failServoCommand(id, value, DRIVE_REASON_TEXT[reason] || 'Команда тяги отклонена.');
+          }
+        } catch (error) {
+          failServoCommand(id, value, 'Связь потеряна · watchdog остановит колесо.');
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+    })().finally(() => {
+      driveSending = false;
+      if (servoPending.size) void flushServoQueue();
+    });
+    return driveFlush;
+  }
+
+  function failServoCommand(id, value, text) {
+    if (id === 'ALL') setDriveMessage(text);
+    else moduleDriveNote[id] = {text: text, until: Date.now() + 6000};
+    if (value !== 0) {
+      if (id === 'ALL') {
+        SERVO_IDS.forEach((wheel) => { servoTargets[wheel] = 0; });
+      } else servoTargets[id] = 0;
+      // Попытаться остановить именно те колёса, которым отказали; watchdog
+      // остаётся страховкой, если соединение уже потеряно.
+      void queueServo(id, 0);
+      syncServoSliders();
+      startServoHeartbeat();
+    }
+    renderDriveControls(lastData || {});
   }
 
   function initSteeringControls() {
@@ -3325,65 +3223,33 @@
     const ids = ['FL', 'FR', 'RL', 'RR'];
     const driveSpeed = $('drive-speed');
     if (driveSpeed) driveSpeed.addEventListener('input', () => {
-      setText($('drive-speed-value'), String(driveSpeed.value));
-      if (driveDirection) void queueDrive(driveDirection * Number(driveSpeed.value));
+      if (!driveSpeed.disabled) setServoTarget('ALL', Number(driveSpeed.value));
     });
-    const bindHoldButton = (id, direction) => {
-      const button = $(id);
-      if (!button) return;
-      button.addEventListener('pointerdown', (event) => {
-        event.preventDefault();
-        startDrive(direction);
-        try { button.setPointerCapture(event.pointerId); } catch (error) {}
-      });
-      button.addEventListener('click', (event) => event.preventDefault());
-      button.addEventListener('contextmenu', (event) => event.preventDefault());
-    };
-    bindHoldButton('drive-back', -1);
-    bindHoldButton('drive-forward', 1);
     const driveStopButton = $('drive-stop');
-    if (driveStopButton) driveStopButton.addEventListener('click', () => { void stopDrive(); });
+    if (driveStopButton) driveStopButton.addEventListener('click', () => { void stopDrive(true); });
 
-    // Тяга каждого колеса: удержание кнопки в карточке, свой предел скорости
-    // и свой стоп — ровно как «Повернуть» у руля, только удерживаем.
+    // Свой ползунок посылает значение только на выбранную плату.
     ids.forEach((id) => {
-      const speed = $('drive-module-' + id);
-      if (speed) {
-        speed.addEventListener('input', () => {
-          setText($('drive-module-value-' + id), String(speed.value));
-          if (moduleDrive[id]) void queueModuleDrive(id, moduleDrive[id] * moduleDrivePercent(id));
-        });
-      }
-      const bindHold = (buttonId, direction) => {
-        const button = $(buttonId);
-        if (!button) return;
-        button.addEventListener('pointerdown', (event) => {
-          event.preventDefault();
-          startModuleDrive(id, direction);
-          try { button.setPointerCapture(event.pointerId); } catch (error) {}
-        });
-        button.addEventListener('click', (event) => event.preventDefault());
-        button.addEventListener('contextmenu', (event) => event.preventDefault());
-      };
-      bindHold('drive-module-back-' + id, -1);
-      bindHold('drive-module-forward-' + id, 1);
+      const slider = $('drive-module-' + id);
+      if (slider) slider.addEventListener('input', () => {
+        if (!slider.disabled) setServoTarget(id, Number(slider.value));
+      });
       const stopButton = $('drive-module-stop-' + id);
       if (stopButton) stopButton.addEventListener('click', () => stopModuleDrive(id));
     });
 
-    // Манёвры: «Ехать» в строке и общий СТОП манёвра.
+    // Манёвры остаются отдельными от прямого управления Servo.
     MANEUVER_ORDER.forEach((id) => {
       const button = $('maneuver-' + id);
       if (button) button.addEventListener('click', () => { void startManeuver(id); });
     });
     const maneuverStop = $('maneuver-stop');
     if (maneuverStop) maneuverStop.addEventListener('click', () => { void stopManeuver(); });
-    const releaseAll = () => { releaseDrive(); releaseModuleDrive(); };
-    window.addEventListener('pointerup', releaseAll);
-    window.addEventListener('pointercancel', releaseAll);
-    window.addEventListener('blur', releaseAll);
-    window.addEventListener('pagehide', releaseAll);
-    document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+    // Отпускание ползунка сохраняет его значение. Уход со страницы и потеря
+    // фокуса, наоборот, снимают тягу; watchdog страхует обрыв связи.
+    window.addEventListener('blur', releaseDrive);
+    window.addEventListener('pagehide', releaseDrive);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) releaseDrive(); });
 
     // Не даём горизонтальному движению по слайдеру закрыть swipe-панель.
     ['pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mouseup'].forEach((name) => {
