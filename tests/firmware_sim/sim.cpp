@@ -703,6 +703,52 @@ static void scenario_direct_servo() {
   CHECK(drive_idle(board_fr), "b выключает прямую тягу");
 }
 
+static std::vector<sim::Board*> all_boards();
+
+// Число ползунка должно оставаться тем же для каждого направления и платы.
+static void scenario_direct_directions() {
+  boot(all_boards());
+  for (sim::Board* board : all_boards()) {
+    CHECK(board->servo_pin == 3 && board->servo_running(), "%s: Servo на D3", board->name);
+    CHECK(board->tach_fn == nullptr, "%s: SC не считывается", board->name);
+  }
+  for (const char direction : {'f', 'b'}) {
+    for (int value = 0; value <= 150; ++value) {
+      char command[20];
+      std::snprintf(command, sizeof(command), "v %d %c", value, direction);
+      for (sim::Board* board : all_boards()) board->serial.send(command);
+      sim::run_for_ms(2);
+      for (sim::Board* board : all_boards()) {
+        CHECK(servo_value(*board) == value,
+              "%s %s: Servo.write(%d), получено %d", board->name, command, value, servo_value(*board));
+        CHECK(value == 0 ? drive_idle(*board) : thrust_on(*board),
+              "%s %s: уровни STOP/BRAKE", board->name, command);
+      }
+      if (value) {
+        const uint8_t left = direction == 'f' ? HIGH : LOW;
+        const uint8_t right = direction == 'f' ? LOW : HIGH;
+        CHECK(board_fl.level[4] == left && board_rl.level[4] == left &&
+              board_fr.level[4] == right && board_rr.level[4] == right,
+              "%s: правильное направление с учётом зеркальных колёс", command);
+      }
+    }
+  }
+  board_fl.serial.send("v FR 40 f");
+  board_fr.serial.send("v FR 40 f");
+  sim::run_for_ms(5);
+  CHECK(servo_value(board_fl) == 150 && servo_value(board_fr) == 40,
+        "адресная команда меняет только FR и сохраняет число");
+  board_fr.serial.send("v FR 40 b");
+  sim::run_for_ms(5);
+  CHECK(servo_value(board_fr) == 40 && board_fr.level[4] == HIGH,
+        "реверс FR меняет DIR, но не число 40");
+  for (const char* invalid : {"v 40 x", "v 40 f extra", "v FR 40 b extra", "v -40 b"}) {
+    board_fr.serial.send(invalid);
+    sim::run_for_ms(2);
+    CHECK(drive_idle(board_fr), "%s: неверное направление или значение останавливает", invalid);
+  }
+}
+
 static void scenario_serial_garbage() {
   boot({&board_fl, &board_fr, &board_rl, &board_rr});
   for (const char* chunk : {"@TLM deg=0.00 tgt=0.00 mov", "\x07\xff#"}) {
@@ -788,7 +834,7 @@ static void scenario_system_calibrate_all() {
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=14"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=15"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -905,7 +951,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v14"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v15"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -1131,13 +1177,13 @@ static void scenario_drive_hardware() {
   board_fr.serial.send("z");
   sim::run_for_ms(2);
 
-  // Тахометр SC подключён всегда: он и есть датчик оборотов.
-  CHECK(board_fr.tach_fn != nullptr, "тахометр включён при старте");
+  // SC временно не считывается и не объявляется измеренным нулём.
+  CHECK(board_fr.tach_fn == nullptr, "прерывание тахометра не подключено");
   sim::run_for_ms(300);
-  CHECK(has(board_fr, "tach=1"), "в @TLM тахометр включён: %s",
+  CHECK(has(board_fr, "tach=0"), "в @TLM измерение тахометра отключено: %s",
         board_fr.serial.output.c_str());
-  CHECK(has(board_fr, "ppr=90"), "в @TLM 90 переходов на оборот: %s",
-        board_fr.serial.output.c_str());
+  CHECK(!has(board_fr, "rpm=") && !has(board_fr, "hz=") && !has(board_fr, "ppr="),
+        "несуществующие измерения SC не передаются");
   CHECK(has(board_fr, "duty=0 "), "в @TLM нулевая скважность покоя: %s",
         board_fr.serial.output.c_str());
   CHECK(has(board_fr, "dmax=100"), "в @TLM предел тяги 100 %: %s",
@@ -1149,12 +1195,6 @@ static void scenario_drive_hardware() {
         (unsigned)wheel_fr::DRIVE_SERVO_MAX_VALUE);
   CHECK((int)wheel_fr::DRIVE_SERVO_TENTHS_PER_PERCENT == 18, "1 %% = 1,8 значения: %u",
         (unsigned)wheel_fr::DRIVE_SERVO_TENTHS_PER_PERCENT);
-  // Потолок правдоподобия выше физического максимума мотора (≈578 об/мин),
-  // иначе прошивка ругалась бы «помеха» на полном ходу.
-  CHECK((int)wheel_fr::DRIVE_TACH_MAX_RPM_X10 > 5780,
-        "обороты выше 578 об/мин не считаются помехой: %u",
-        (unsigned)wheel_fr::DRIVE_TACH_MAX_RPM_X10);
-
   // Сигнал выдаёт библиотека Servo на D3 — вход «P» драйвера.
   CHECK(board_fr.mode[3] == OUTPUT && board_fr.servo_running() && board_fr.servo_pin == 3,
         "Servo работает на D3: mode=%u pin=%u", (unsigned)board_fr.mode[3],
@@ -1337,8 +1377,7 @@ static void scenario_drive_speed() {
   drive_hold(plant, 100, 3.0);
   const double top = plant_rpm(plant, before, 3000.0);
   CHECK(top > 500.0 && top < 620.0, "100 %% — полный ход колеса: %.1f об/мин", top);
-  CHECK(wheel_fr::rpm_x10 > 5000 && wheel_fr::rpm_x10 < 6200,
-        "прошивка видит те же обороты: rpm_x10=%lu", (unsigned long)wheel_fr::rpm_x10);
+
 
   // Половина шкалы — половина значения: 90. Никакого «медленнее не могу»:
   // прошивка делает ровно то, что попросили.
@@ -1355,18 +1394,15 @@ static void scenario_drive_speed() {
   CHECK(count(board_fr, "медленнее не могу") == 0,
         "оговорок про «медленнее не могу» больше нет: %s", board_fr.serial.output.c_str());
 
-  // Тахометр молчит, а тяга есть: колесо не крутится. Прошивка не держит такую
-  // команду дольше 3 с — снимает тягу и говорит, что смотреть. Сервер продолжает
-  // слать heartbeat, поэтому попытка повторяется и снова обрывается.
+  // SC не считывается: даже при молчании более 3 с команда t не обрывается.
   plant.tach_alive = false;
   for (int i = 0; i < 40; ++i) {
     board_fr.serial.send("t 100");
     plant_run(plant, 200);
+    CHECK(servo_value(board_fr) == 180 && thrust_on(board_fr),
+          "SC не влияет на старую команду, тик %d", i);
   }
-  CHECK(count(board_fr, "тахометр SC молчит") >= 2,
-        "без оборотов тяга снимается через 3 с и каждый раз сообщает причину: %s",
-        board_fr.serial.output.c_str());
-  plant.tach_alive = true;
+  CHECK(board_fr.tach_fn == nullptr, "SC физически не считывается");
   board_fr.serial.send("b");
   sim::run_for_ms(2);
 }
@@ -1475,63 +1511,21 @@ struct Scenario {
 // Заодно это защита от главной жалобы «показывает 3600, а по факту 60»:
 // невозможно частые переходы (помеха, дребезг) больше не превращаются в
 // выдуманные обороты — прошивка честно говорит «нет».
-static void scenario_tach() {
+static void scenario_tach_disabled() {
   boot({&board_fr});
-  board_fr.serial.send("z");
-  sim::run_for_ms(2);
-  CHECK(FR::DRIVE_TACH_PPR == 90, "90 переходов на оборот: %u",
-        (unsigned)FR::DRIVE_TACH_PPR);
-  CHECK(FR::DRIVE_TACH_MIN_EDGE_US == 150, "дребезг ближе 150 мкс отбрасывается: %u",
-        (unsigned)FR::DRIVE_TACH_MIN_EDGE_US);
-
-  // Один оборот в секунду — это 60 об/мин. Переходы идут через 11,1 мс.
-  spin_tach(&board_fr, 90, 1000);
-  CHECK(FR::rpm_x10 >= 550 && FR::rpm_x10 <= 650,
-        "оборот за секунду — 60 об/мин, а не 3600: rpm_x10=%lu",
-        (unsigned long)FR::rpm_x10);
-  CHECK(FR::tach_hz >= 80 && FR::tach_hz <= 100,
-        "переходов в секунду ≈90 (это и есть число импульсов на оборот): %lu",
-        (unsigned long)FR::tach_hz);
-  CHECK(FR::tach_trusted, "нормальный сигнал — обороты достоверны");
-
-  // Два оборота в секунду — ровно вдвое больше оборотов.
-  spin_tach(&board_fr, 180, 1000);
-  CHECK(FR::rpm_x10 >= 1100 && FR::rpm_x10 <= 1300,
-        "два оборота за секунду — ~120 об/мин: rpm_x10=%lu",
-        (unsigned long)FR::rpm_x10);
-
-  // Нет переходов — нет оборотов (колесо стоит), а не «шум».
-  sim::run_for_ms(1100);
-  CHECK(FR::rpm_x10 == 0, "без переходов обороты нулевые: %lu",
-        (unsigned long)FR::rpm_x10);
-  CHECK(has(board_fr, "rpm=0.0"), "нулевые обороты в @TLM: %s",
-        board_fr.serial.output.c_str());
-
-  // Помеха на линии «SC»: 4000 переходов за 0,3 с — больше 10 000 имп/с, колесо
-  // так не крутится (на полном ходу драйвера — 700). Прошивка не показывает
-  // выдуманные тысячи, а честно говорит «нет» и подсказывает, что смотреть.
-  // На тягу это не влияет: импульс идёт прямо из процента команды.
-  board_fr.serial.send("t 30");
-  spin_tach(&board_fr, 4000, 300);
-  CHECK(!FR::tach_trusted, "помеха не считается оборотами");
-  CHECK(FR::rpm_x10 == 0, "у помехи оборотов нет: %lu", (unsigned long)FR::rpm_x10);
-  CHECK(has(board_fr, "tach=0"), "в телеметрии честное tach=0: %s",
-        board_fr.serial.output.c_str());
-  CHECK(has(board_fr, "Проверьте провод SC"),
-        "журнал подсказывает проверить провод SC: %s",
-        board_fr.serial.output.c_str());
-  // Помеха не меняет команду: значение на «P» ровно то, что попросили (30 % = 54).
-  // Контура, который реагировал бы на мусор в линии, больше нет.
-  CHECK(servo_value(board_fr) == 54,
-        "помеха на тахометре не трогает значение на «P»: %d", servo_value(board_fr));
+  CHECK(board_fr.tach_fn == nullptr, "на D19 не подключено прерывание SC");
+  board_fr.serial.send("v 75 b");
+  for (int i = 0; i < 20; ++i) {
+    board_fr.serial.send("v 75 b");
+    spin_tach(&board_fr, 30, 200);
+    CHECK(servo_value(board_fr) == 75 && thrust_on(board_fr),
+          "сигнал SC не влияет на Servo.write, тик %d", i);
+  }
+  CHECK(has(board_fr, "tach=0") && !has(board_fr, "rpm=") &&
+        !has(board_fr, "hz=") && !has(board_fr, "ppr="),
+        "обороты и импульсы не считываются и не передаются");
   board_fr.serial.send("b");
-  sim::run_for_ms(520);
-
-  // Сигнал вернулся — обороты снова считаются, порог тяги ни при чём.
-  spin_tach(&board_fr, 90, 1000);
-  CHECK(FR::tach_trusted, "после помехи нормальный сигнал снова достоверен");
-  CHECK(FR::rpm_x10 >= 550 && FR::rpm_x10 <= 650,
-        "и снова 60 об/мин: %lu", (unsigned long)FR::rpm_x10);
+  sim::run_for_ms(2);
 }
 
 static const Scenario SCENARIOS[] = {
@@ -1560,6 +1554,7 @@ static const Scenario SCENARIOS[] = {
     {"zero_manual", scenario_zero_manual},
     {"drive", scenario_drive},
     {"direct_servo", scenario_direct_servo},
+    {"direct_directions", scenario_direct_directions},
     {"serial_garbage", scenario_serial_garbage},
     {"system_calibrate_all", scenario_system_calibrate_all},
     {"system_server_commands", scenario_system_server_commands},
@@ -1574,7 +1569,7 @@ static const Scenario SCENARIOS[] = {
     {"drive_one_wheel", scenario_drive_one_wheel},
     {"drive_speed", scenario_drive_speed},
     {"mirrored_wheels", scenario_mirrored_wheels},
-    {"tach", scenario_tach},
+    {"tach_disabled", scenario_tach_disabled},
 };
 
 static int run_one(const Scenario& scenario) {

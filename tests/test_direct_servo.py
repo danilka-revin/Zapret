@@ -21,8 +21,8 @@ class RecordingServo:
     def __init__(self):
         self.calls = []
 
-    def drive_servo(self, value, module=None):
-        self.calls.append((module, value))
+    def drive_servo(self, value, module=None, direction=None):
+        self.calls.append((module, value, direction) if direction is not None else (module, value))
         return {"ok": True}
 
     def drive(self, percent):
@@ -42,6 +42,30 @@ def test_kiosk_transmits_exact_integers(kiosk_client, value):
     all_wheels = kiosk_client.post("/api/kiosk_drive", json={"value": value}, headers=HEADER)
     assert all_wheels.status_code == 200 and all_wheels.json["value"] == value
     assert source.calls[-1] == (None, value)
+
+
+@pytest.mark.parametrize("direction", ["forward", "backward"])
+@pytest.mark.parametrize("value", [1, 40, 75, 150])
+@pytest.mark.parametrize("module", [None, "FL", "FR", "RL", "RR"])
+def test_kiosk_transmits_value_unchanged_with_separate_direction(kiosk_client, direction, value, module):
+    source = RecordingServo()
+    kiosk_client.application.extensions["rc_slam"].source = source
+    body = {"value": value, "direction": direction}
+    if module:
+        body["module"] = module
+    reply = kiosk_client.post("/api/kiosk_drive", json=body, headers=HEADER)
+    assert reply.status_code == 200, reply.json
+    assert reply.json["value"] == value and reply.json["direction"] == direction
+    assert source.calls == [(module, value, direction)]
+
+
+@pytest.mark.parametrize("direction", [None, True, 1, "f", "reverse", "BACKWARD", [], {}])
+def test_kiosk_rejects_invalid_directions(kiosk_client, direction):
+    source = RecordingServo()
+    kiosk_client.application.extensions["rc_slam"].source = source
+    reply = kiosk_client.post("/api/kiosk_drive", json={"value": 40, "direction": direction}, headers=HEADER)
+    assert reply.status_code == 400 and reply.json["reason"] == "invalid_direction"
+    assert source.calls == []
 
 
 @pytest.mark.parametrize("value", [-1, 151, True, None, 40.5, 40.0, "40", float("nan")])
@@ -101,7 +125,7 @@ def bare_source():
     return backend, source
 
 
-def frame(module, *, fw=14, cal=0, moving=1, calib=1, tach=0, sv=0):
+def frame(module, *, fw=15, cal=0, moving=1, calib=1, tach=0, sv=0):
     return (f"@TLM mod={module} deg=0 tgt=0 moving={moving} cal={cal} cycle=0 calib={calib} "
             f"rpm=0 drive=0 fw={fw} tach={tach} dmax=100 sv={sv} duty=0 ppr=90 hz=0 t=1")
 
@@ -124,9 +148,27 @@ def test_source_routes_direct_values_without_calibration_or_tachometer():
     assert backend.DRIVE_DIRECT_MAX_VALUE == 150
 
 
+@pytest.mark.parametrize("direction", ["forward", "backward"])
+@pytest.mark.parametrize("value", [1, 40, 75, 150])
+def test_source_routes_exact_value_and_direction_to_each_arduino(direction, value):
+    _, source = bare_source()
+    for module in MODULES:
+        source.feed(frame(module), now=100.0)
+    assert source.drive_servo(value, direction=direction, now=100.1)["ok"]
+    source._fanout_commands()
+    expected = f"v {value}{' b' if direction == 'backward' else ''}\n".encode()
+    for module in MODULES:
+        assert source.links[f"/dev/test-{module}"].commands.get_nowait() == expected
+    assert source.drive_servo(value, module="FR", direction=direction, now=100.1)["ok"]
+    source._fanout_commands()
+    assert source.links["/dev/test-FR"].commands.get_nowait() == expected
+    assert all(source.links[f"/dev/test-{m}"].commands.empty() for m in ("FL", "RL", "RR"))
+    assert source.drive_servo(value, direction="invalid", now=100.1)["reason"] == "invalid_direction"
+
+
 def test_source_requires_new_firmware_and_fresh_port_but_always_allows_stop():
     _, source = bare_source()
-    source.feed(frame("FL", fw=13), now=100.0)
+    source.feed(frame("FL", fw=14), now=100.0)
     source.feed(frame("FR"), now=100.0)
     assert source.drive_servo(40, module="FL", now=100.1)["reason"] == "servo_firmware_required"
     assert source.drive_servo(40, module="RL", now=100.1)["reason"] == "module_offline"
@@ -214,7 +256,7 @@ def test_direct_command_waits_for_maneuver_tick_then_cancels_queued_thrust():
         worker.join(timeout=2)
     assert not operator.is_alive() and not worker.is_alive()
     assert manual_result == [{"ok": True, "queued": True, "value": 40,
-                              "maxValue": 150, "module": "FL"}]
+                              "direction": "forward", "maxValue": 150, "module": "FL"}]
     assert runner.status()["state"] == "cancelled"
     assert list(source.commands.queue) == [b"v FL 40\n"]  # t 15 удалён
     source._fanout_commands()

@@ -657,8 +657,12 @@ def _dispatch_drive_command(source, body):
 
 def _servo_drive_command(source, body):
     """Число ползунка 0…150 без пересчёта передаётся одной плате или всем."""
-    if set(body) not in ({"value"}, {"module", "value"}):
+    if set(body) not in ({"value"}, {"module", "value"},
+                         {"value", "direction"}, {"module", "value", "direction"}):
         return {"ok": False, "reason": "payload"}, 400
+    direction = body.get("direction", "forward")
+    if direction not in ("forward", "backward"):
+        return {"ok": False, "reason": "invalid_direction"}, 400
     module = body.get("module")
     if "module" in body:
         if not isinstance(module, str) or module.upper() not in {"FL", "FR", "RL", "RR"}:
@@ -674,9 +678,13 @@ def _servo_drive_command(source, body):
     command = getattr(source, "drive_servo", None)
     if not callable(command) or not getattr(source, "supports_drive", False):
         return {"ok": False, "reason": "control_not_supported"}, 409
-    result = command(value, module=module)
+    # Старые клиенты без direction по-прежнему означают движение вперёд.
+    result = (command(value, module=module, direction=direction) if "direction" in body
+              else command(value, module=module))
     if result.get("ok"):
         answer = {"ok": True, "queued": True, "value": value, "maxValue": 150}
+        if "direction" in body:
+            answer["direction"] = direction
         if module is not None:
             answer["module"] = module
         return answer, 200
