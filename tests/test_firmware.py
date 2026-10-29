@@ -147,14 +147,11 @@ def test_drive_uses_hardware_pwm_and_a_full_scale_of_five_hundred_rpm():
                  "DRIVE_SEEK_STEP", "DRIVE_MAX_RPM_X10"):
         assert gone not in code, gone
     assert "void updateDriveSpeed()" not in code
-    # Потолок правдоподобия выше физического максимума мотора: иначе прошивка
-    # ругалась бы «помеха» на полном ходу.
-    assert int(_const(text, "DRIVE_TACH_MAX_RPM_X10")) > 5780
-    # Тахометр остался телеметрией и страховкой «тяга есть, а колесо стоит».
-    assert "void updateDriveFeedback()" in code
-    assert "updateDriveFeedback();" in code
-    assert "DRIVE_FEEDBACK_TIMEOUT_MS" in code
-    assert "тахометр SC молчит" in text
+    # SC сейчас не считывается и не снимает тягу ни для v, ни для legacy t.
+    for gone in ("TACH_PIN", "tachometerISR", "attachInterrupt(", "updateRpm()",
+                 "updateDriveFeedback()", "DRIVE_FEEDBACK_TIMEOUT_MS"):
+        assert gone not in code, gone
+    assert "tach=0" in text
 
     # Уровни драйвера: STOP HIGH — выходы включены, LOW — выбег; BRAKE HIGH — тормоз.
     assert _const(text, "BLDC_STOP_ENABLE_LEVEL") == "HIGH"
@@ -178,8 +175,8 @@ def test_firmware_has_no_usb_role_discovery():
     # Legacy addressed monitor commands remain compatible; the application
     # sends local commands to the manually selected port.
     assert 'classifyModuleToken' in text
-    # v14 добавляет прямую команду v 0…150, не меняя ручного назначения USB.
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '14'
+    # v15 добавляет направление к прямой команде v, не меняя назначения USB.
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '15'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
@@ -189,13 +186,11 @@ def test_telemetry_period_and_safety_fields_are_present():
     assert "if (txFree() >= 210) appendTelemetry();" in text
     # Строка @TLM несёт все поля, которые ждёт сервер (parse_master_line).
     for field in ("deg=", "tgt=", "moving=", "cal=", "cycle=", "calib=",
-                  "opto=", "home=", "err=", "rpm=", "drive=", "fw=", "pot=", "pm=", "t=",
-                  # тяга драйвера ZS-Z11H: тахометр, предел прошивки,
-                  # фактическая скважность ШИМ в промилле и переходов «SC» на
-                  # оборот, hz= — сколько переходов «SC» приходит в секунду: при
-                  # одном обороте в секунду это и есть число импульсов на оборот.
-                  "tach=", "dmax=", "duty=", "ppr=", "hz="):
+                  "opto=", "home=", "err=", "drive=", "fw=", "pot=", "pm=", "t=",
+                  "tach=0", "dmax=", "sv=", "duty="):
         assert field in text, field
+    telemetry = re.search(r'PSTR\("(@TLM [^"\n]+)', text).group(1)
+    assert all(field not in telemetry for field in ("rpm=", "hz=", "ppr="))
 
 
 def test_monitor_commands_of_the_tested_sketch():
@@ -357,8 +352,9 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 14 and frame["calibError"] == 0
-        assert frame["drivePercent"] == 0 and frame["rpm"] == 0.0
+        assert frame["firmware"] == 15 and frame["calibError"] == 0
+        assert frame["drivePercent"] == 0 and frame["rpm"] is None
+        assert frame["tach"] is False and frame["tachHz"] is None
         assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False
     assert any("FR: Калибровка ЗАВЕРШЕНА!" in line for line in messages)
@@ -468,29 +464,44 @@ def test_direct_slider_api_reaches_real_firmware_sim_over_serial(simulator, kios
         assert wait_for(lambda: source.servo_drive_status()["canDrive"], timeout=8), source.read()
         assert not source.drive_status()["canDrive"]  # руль ещё не обнуляли
 
-        def send(value, module=None):
+        def send(value, module=None, direction=None):
             body = {"value": value}
             if module:
                 body["module"] = module
+            if direction:
+                body["direction"] = direction
             reply = kiosk_client.post("/api/kiosk_drive", json=body, headers={"X-Robot-Control": "drive"})
             assert reply.status_code == 200 and reply.json["value"] == value, reply.json
 
+        def motors():
+            return {m["id"]: m for m in source.read()["motors"]}
+
         def servo_values():
-            return {m["id"]: m["driveServoValue"] for m in source.read()["motors"]}
+            return {module: frame["driveServoValue"] for module, frame in motors().items()}
 
-        # Обновлять heartbeat во время ожидания телеметрии: watchdog платы 650 мс.
-        for value in (1, 40, 150):
-            send(value, "FL")
-            assert wait_for(lambda: servo_values()["FL"] == value, tick=lambda: send(value, "FL")), source.read()
-            assert all(servo_values()[m] == 0 for m in ("FR", "RL", "RR"))
-        send(0, "FL")
-        assert wait_for(lambda: servo_values()["FL"] == 0), source.read()
+        # Каждая плата получает точное число и отдельное направление; ноль
+        # руления не задан, прерывания тахометра не подключены.
+        for module in MODULE_IDS:
+            for direction, sign in (("forward", 1), ("backward", -1)):
+                send(40, module, direction)
+                assert wait_for(lambda: (motors()[module]["driveServoValue"] == 40 and
+                                         motors()[module]["drivePercent"] * sign > 0),
+                                tick=lambda: send(40, module, direction)), source.read()
+                assert all(servo_values()[other] == 0 for other in MODULE_IDS if other != module)
+                send(0, module)
+                assert wait_for(lambda: servo_values()[module] == 0), source.read()
 
-        # Общий ползунок адресует все четыре порта, не масштабируя число.
-        send(75)
-        assert wait_for(lambda: all(v == 75 for v in servo_values().values()), tick=lambda: send(75)), source.read()
-        send(0)
-        assert wait_for(lambda: all(v == 0 for v in servo_values().values())), source.read()
+        # Общая команда адресует все четыре порта в обе стороны без масштаба.
+        for direction, sign in (("forward", 1), ("backward", -1)):
+            for value in (1, 75, 150):
+                send(value, direction=direction)
+                assert wait_for(lambda: all(frame["driveServoValue"] == value and
+                                            frame["drivePercent"] * sign > 0
+                                            for frame in motors().values()),
+                                tick=lambda: send(value, direction=direction)), source.read()
+            send(0)
+            assert wait_for(lambda: all(v == 0 for v in servo_values().values())), source.read()
+        assert all(motor["rpm"] is None and motor["tach"] is False for motor in motors().values())
     finally:
         if source is not None:
             source._stop = True

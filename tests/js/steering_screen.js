@@ -275,6 +275,7 @@ global.fetch = async (url, init) => {
     const sent = {module: body.module === undefined ? null : body.module};
     if (Object.prototype.hasOwnProperty.call(body, 'value')) sent.value = body.value;
     else sent.percent = body.percent;
+    if (Object.prototype.hasOwnProperty.call(body, 'direction')) sent.direction = body.direction;
     drives.push(sent);
     if (payload.deferFirstDrive && !heldOneDrive && Number(body.value) > 0) {
       heldOneDrive = true;
@@ -437,21 +438,40 @@ function findPreset(id) {
       await flush(1);
       if (action.send !== false) slider.fire('change');
       await flush(action.rounds || 4);
-    } else if (action.type === 'drive') {
-      const slider = byId('drive-speed');
+    } else if (action.type === 'speed' || action.type === 'drive' || action.type === 'wheel-drive') {
+      const id = action.type === 'wheel-drive' || action.id ? String(action.id || 'FL') : 'ALL';
+      const slider = byId(id === 'ALL' ? 'drive-speed' : 'drive-module-' + id);
       slider.value = String(action.value === undefined ? 8 : action.value);
       slider.fire('input');
       await flush(action.rounds || 2);
-      if (action.release !== false) global.dispatchEvent({type: 'pointerup'});
-      await flush(2);
-    } else if (action.type === 'wheel-drive') {
-      const id = String(action.id || 'FL');
-      const slider = byId('drive-module-' + id);
-      slider.value = String(action.value === undefined ? (action.percent === undefined ? 8 : action.percent) : action.value);
-      slider.fire('input');
-      await flush(action.rounds || 2);
-      if (action.release !== false) global.dispatchEvent({type: 'pointerup'});
-      await flush(2);
+      if (action.type !== 'speed') {
+        const direction = action.direction === 'backward' ? 'back' : 'forward';
+        const pointerId = action.pointerId || (id === 'ALL' ? 1 : ['FL', 'FR', 'RL', 'RR'].indexOf(id) + 2);
+        const button = byId('direct-drive-' + direction + '-' + id);
+        button.fire('pointerdown', {button: 0, pointerId});
+        await flush(action.rounds || 2);
+        if (action.release === true) {
+          button.fire('pointerup', {pointerId});
+          await flush(2);
+        }
+      }
+    } else if (action.type === 'press') {
+      const id = String(action.id || 'ALL');
+      const direction = action.direction === 'backward' ? 'back' : 'forward';
+      const pointerId = action.pointerId || (id === 'ALL' ? 1 : ['FL', 'FR', 'RL', 'RR'].indexOf(id) + 2);
+      byId('direct-drive-' + direction + '-' + id).fire('pointerdown', {button: 0, pointerId});
+      await flush(action.rounds || 3);
+    } else if (action.type === 'release') {
+      const id = String(action.id || 'ALL');
+      const direction = action.direction === 'backward' ? 'back' : 'forward';
+      const pointerId = action.pointerId || (id === 'ALL' ? 1 : ['FL', 'FR', 'RL', 'RR'].indexOf(id) + 2);
+      byId('direct-drive-' + direction + '-' + id).fire(action.cancel ? 'pointercancel' : 'pointerup', {pointerId});
+      await flush(action.rounds || 3);
+    } else if (action.type === 'key') {
+      const id = String(action.id || 'ALL');
+      const direction = action.direction === 'backward' ? 'back' : 'forward';
+      byId('direct-drive-' + direction + '-' + id).fire(action.event || 'keydown', {key: action.key || 'Enter'});
+      await flush(action.rounds || 3);
     } else if (action.type === 'blur') {
       global.dispatchEvent({type: 'blur'});
       await flush(action.rounds || 3);
@@ -528,6 +548,8 @@ function findPreset(id) {
     driveSpeedMin: byId('drive-speed').min,
     driveSpeedValue: byId('drive-speed').value,
     driveSpeedDisabled: !!byId('drive-speed').disabled,
+    driveBackDisabled: !!byId('direct-drive-back-ALL').disabled,
+    driveForwardDisabled: !!byId('direct-drive-forward-ALL').disabled,
     rpmText: ['FL', 'FR', 'RL', 'RR'].map((id) => byId('rpm-' + id).textContent),
     wheelDrive: ['FL', 'FR', 'RL', 'RR'].map((id) => ({
       id,
@@ -537,8 +559,8 @@ function findPreset(id) {
       sliderMin: byId('drive-module-' + id).min,
       sliderValue: byId('drive-module-' + id).value,
       sliderDisabled: !!byId('drive-module-' + id).disabled,
-      backDisabled: !!byId('drive-module-back-' + id).disabled,
-      forwardDisabled: !!byId('drive-module-forward-' + id).disabled,
+      backDisabled: !!byId('direct-drive-back-' + id).disabled,
+      forwardDisabled: !!byId('direct-drive-forward-' + id).disabled,
       stopDisabled: !!byId('drive-module-stop-' + id).disabled,
     })),
     maneuvers: {

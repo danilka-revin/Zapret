@@ -96,7 +96,7 @@ MAX_DRIVE_PERCENT = 100
 DRIVE_ABS_MAX_PERCENT = 100
 #: Прямое управление с бортового экрана (команда v, Servo.write без пересчёта).
 DRIVE_DIRECT_MAX_VALUE = 150
-DRIVE_DIRECT_FIRMWARE = 14
+DRIVE_DIRECT_FIRMWARE = 15
 #: Разброс углов, при котором экран называет колёса ровными. Тягу он больше не
 #: блокирует: ездить можно на любом угле (0° — прямо, 45° — краб, 90° — боком),
 #: число осталось только для подсказки «колёса стоят ровно / под углом».
@@ -329,13 +329,9 @@ def parse_master_line(line, module=None):
         firmware = int(fields["fw"]) if "fw" in fields else None
         calib_error = int(fields["err"]) if "err" in fields else None
         home = fields.get("home")
-        # Тяга: tach=1 — тахометр SC включён, dmax= — предел прошивки в процентах,
-        # sv= — значение Servo.write на входе «P» (0…180), duty= — оно же в
-        # промилле шкалы (100 — 10 %, 1000 — полный ход),
-        # ppr= — сколько переходов SC приходится на оборот колеса, hz= —
-        # сколько их приходит в секунду (диагностика провода тахометра). Всё это
-        # свойства драйвера ZS-Z11H: настраивать тут нечего, экран только
-        # показывает.
+        # Тяга: sv= — значение Servo.write на входе «P», dmax/duty — поля
+        # прежнего процентного режима. В fw15 tach=0 и rpm/ppr/hz отсутствуют:
+        # обороты временно не считываются. Старые кадры тоже принимаем.
         tach = {"0": False, "1": True}.get(fields.get("tach")) if "tach" in fields else None
         try:
             drive_max = int(fields["dmax"]) if "dmax" in fields else None
@@ -1089,18 +1085,16 @@ class MasterSource:
         return {"ok": True, "queued": True, "module": module,
                 "percent": target, "maxPercent": limit}
 
-    def drive_servo(self, value, module=None, now=None):
-        """Отправить целое значение прямо в Servo.write одного или всех колёс.
-
-        Здесь нет пересчёта процентов и зависимостей от нуля руля или SC.
-        Для ненулевой команды проверяются лишь связь и поддержка команды v.
-        """
+    def drive_servo(self, value, module=None, now=None, direction="forward"):
+        """Точное Servo.write; направление выбирается отдельно, без процентов/SC."""
         with getattr(self, "_manual_motion_lock", nullcontext()):
-            return self._drive_servo(value, module, now)
+            return self._drive_servo(value, module, now, direction)
 
-    def _drive_servo(self, value, module=None, now=None):
+    def _drive_servo(self, value, module=None, now=None, direction="forward"):
         if type(value) is not int or not 0 <= value <= DRIVE_DIRECT_MAX_VALUE:
             return {"ok": False, "reason": "invalid_drive"}
+        if direction not in ("forward", "backward"):
+            return {"ok": False, "reason": "invalid_direction"}
         if module is not None:
             module = str(module).upper()
             if module not in MODULE_TITLES:
@@ -1120,10 +1114,11 @@ class MasterSource:
             if not stopped.get("ok"):
                 return stopped
         else:
-            # b работает и на старых платах, даже когда их телеметрия пропала.
-            command = (("v %s %d\n" % (module, value)) if module and value else
-                       ("b %s\n" % module) if module else
-                       ("v %d\n" % value)).encode("ascii")
+            # b работает и на старых платах; для v знак и число не смешиваются.
+            direct = ("v %s %d" % (module, value)) if module else ("v %d" % value)
+            if direction == "backward":
+                direct += " b"
+            command = ((direct + "\n") if value else ("b %s\n" % module)).encode("ascii")
             with getattr(self, "_commands_lock", nullcontext()):
                 if not value:
                     self._discard_pending_drive_for(module)
@@ -1156,7 +1151,7 @@ class MasterSource:
                         self.drive_modules = modules
                     self.servo_commands = direct
         result = {"ok": True, "queued": True, "value": value,
-                  "maxValue": DRIVE_DIRECT_MAX_VALUE}
+                  "direction": direction, "maxValue": DRIVE_DIRECT_MAX_VALUE}
         if module is not None:
             result["module"] = module
         return result
@@ -1675,9 +1670,8 @@ class MasterSource:
                                "firmware": frame.get("firmware"),
                                "pot": frame.get("pot", False),
                                "potMode": frame.get("potMode"),
-                               # Тяга своей платы: тахометр «SC» включён всегда,
-                               # скважность — фактическая (промилле), предел — из
-                               # прошивки. Настраивать здесь нечего.
+                               # Значение Servo и признак SC из телеметрии платы;
+                               # в fw15 SC отключён и rpm отсутствует.
                                "tach": frame.get("tach"),
                                "driveMaxPercent": frame.get("driveMaxPercent"),
                                "driveDutyPermille": frame.get("driveDutyPermille"),

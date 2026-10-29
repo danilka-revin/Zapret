@@ -1645,6 +1645,7 @@ body.swipe-open .kiosk {
 .traction-speed b { color: var(--text); font-size: 14px; font-variant-numeric: tabular-nums; }
 .traction-speed input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
 .traction-actions { display: grid; grid-template-columns: 1fr; gap: 7px; }
+.traction-actions.direct-servo-control { grid-template-columns: repeat(3, 1fr); }
 .traction-actions button {
   min-height: 42px;
   padding: 8px;
@@ -1659,14 +1660,14 @@ body.swipe-open .kiosk {
   touch-action: none;
   user-select: none;
 }
-.traction-actions button:active:not(:disabled) { transform: translateY(1px); background: var(--panel-2); }
+.traction-actions button:active:not(:disabled),
+.traction-actions button.is-active { transform: translateY(1px); background: var(--panel-2); }
 .traction-actions .traction-stop { border-color: rgba(192, 80, 90, .7); background: rgba(192, 80, 90, .22); color: var(--text); }
 .traction-actions button:disabled { opacity: .38; cursor: not-allowed; }
 .traction-warning { grid-column: 1 / -1; line-height: 1.45; }
 
-/* Ящик тяги: подсказка про драйвер. Настроек привода нет — драйвер ZS-Z11H
-   задаёт их сам, а экран только показывает «серво»-импульс и обороты. Кнопки
-   прошивки плат нет: прошивают вручную, из Arduino IDE. */
+/* Ящик тяги: подсказка про драйвер. SC временно не считывается;
+   значение Servo и направление задаются с экрана. Прошивка плат — вручную. */
 .drive-setup {
   grid-column: 1 / -1;
   border: 1px solid var(--line-2);
@@ -1780,8 +1781,9 @@ body.swipe-open .kiosk {
 .steer-drive-speed { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 11px; font-weight: 800; }
 .steer-drive-speed b { color: var(--text); font-size: 13px; }
 .steer-drive-actions { grid-template-columns: 1fr; }
+.steer-drive-actions.direct-servo-control { grid-template-columns: repeat(3, 1fr); }
 .steer-actions button.steer-drive-fwd,
-.steer-actions button.steer-drive-back { min-height: 40px; font-size: 13px; }
+.steer-actions button.steer-drive-back { min-height: 40px; font-size: 13px; touch-action: none; user-select: none; }
 .steer-actions button.steer-drive-fwd { border-color: rgba(120, 200, 140, .55); background: rgba(120, 200, 140, .10); }
 .steer-actions button.steer-drive-stop { border-color: rgba(192, 80, 90, .55); color: var(--accent-strong); background: rgba(192, 80, 90, .12); }
 .steer-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: -4px; font-size: 11px; font-weight: 800; color: var(--muted); }
@@ -2103,8 +2105,8 @@ a.k-ctrl-btn, a.swipe-close { text-decoration:none; }
 .log-group .log-msg { min-width:0; overflow-wrap:anywhere; }
 .log-empty { color:var(--muted); font-size:14px; }
 
-/* Старые кнопки направления существуют только на удалённом пульте. Бортовой
-   экран не зависит от них и показывает прямые Servo-ползунки. */
+/* Удалённый пульт сохраняет старый процентный режим; бортовой экран
+   использует отдельные кнопки с прямым значением Servo. */
 .remote-legacy-drive { display: none; }
 body[data-remote-view="motors"] .remote-legacy-drive { display: block; }
 body[data-remote-view="motors"] .direct-servo-control { display: none !important; }

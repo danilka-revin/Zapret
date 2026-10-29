@@ -26,10 +26,14 @@
   // авторизация руления/тяги остаётся отдельной настройкой веб-пульта.
   let steeringAuthorized = true;
   let stateFetchPending = false;
-  // Ползунки передают целые значения прямо в Servo.write, отдельно на колесо.
+  // Ползунок задаёт число, удерживаемая кнопка — направление движения.
   const SERVO_IDS = ['FL', 'FR', 'RL', 'RR'];
   const SERVO_MAX = 150;
+  let servoCommonSpeed = 0;
+  const servoSpeeds = { FL: 0, FR: 0, RL: 0, RR: 0 };
   const servoTargets = { FL: 0, FR: 0, RL: 0, RR: 0 };
+  const servoDirections = { FL: 'forward', FR: 'forward', RL: 'forward', RR: 'forward' };
+  const servoHolds = new Map();
   const servoPending = new Map();
   const moduleDriveNote = Object.create(null);
   let driveTimer = null;
@@ -93,7 +97,7 @@
         if (window.RCRemoteControls && window.RCRemoteLegacyState) window.RCRemoteLegacyState(j.data);
         // Потеря платы или E-STOP не должны автоматически перезапустить её
         // после восстановления связи. Калибровка руля и тахометр здесь ни при чём.
-        if (hasServoTargets() && !servoLinksReady(j.data)) releaseDrive();
+        if ((servoHolds.size || hasServoTargets()) && !servoLinksReady(j.data)) releaseDrive();
         if (window.RCRobotModel) window.RCRobotModel.update(j.data);
         setLive(true);
       } else {
@@ -2750,7 +2754,7 @@
     serial_unavailable: 'Нет связи с USB-мастером.',
     module_offline: 'Нет свежей телеметрии всех четырёх модулей.',
     drive_firmware_required: 'Обновите прошивку всех четырёх плат для тяги и watchdog.',
-    servo_firmware_required: 'Прошейте плату актуальным motor_wheel.ino (v14).',
+    servo_firmware_required: 'Прошейте плату актуальным motor_wheel.ino (v15).',
     estop: 'Включён E-STOP: тяга заблокирована.',
     not_homed: 'Сначала откалибруйте колёса по датчику (или задайте 0° вручную).',
     module_busy: 'Дождитесь остановки рулевых модулей.',
@@ -2984,10 +2988,8 @@
     renderManeuvers(lastData || {});
   }
 
-  /** Подпись про углы колёс: «выровнены» или «под углом N°» — без запретов. */
-  /* Прямое управление тягой: ползунок → {value} → v → Servo.write(value).
-   * Heartbeat нужен только страховочному watchdog платы; тахометр и руль не
-   * вычисляют и не меняют это значение. */
+  /* Ползунок задаёт число; пока удерживается направление, то же число без
+   * пересчёта отправляется в Servo.write. Heartbeat нужен только watchdog. */
   function hasServoTargets() {
     return SERVO_IDS.some((id) => servoTargets[id] !== 0);
   }
@@ -2997,24 +2999,37 @@
     const servo = drive.servo || {};
     const states = servo.perModule || {};
     return !data.estop && !!drive.available && SERVO_IDS.every((id) =>
-      !servoTargets[id] || !!(states[id] && states[id].canDrive));
+      !(servoHolds.has('ALL') || servoHolds.has(id) || servoTargets[id]) ||
+      !!(states[id] && states[id].canDrive));
   }
 
   function syncServoSliders() {
     SERVO_IDS.forEach((id) => {
       const slider = $('drive-module-' + id);
-      if (slider) slider.value = String(servoTargets[id]);
-      setText($('drive-module-value-' + id), String(servoTargets[id]));
+      if (slider) slider.value = String(servoSpeeds[id]);
+      setText($('drive-module-value-' + id), String(servoSpeeds[id]));
     });
     const common = $('drive-speed');
-    const same = SERVO_IDS.every((id) => servoTargets[id] === servoTargets.FL);
-    if (common && same) common.value = String(servoTargets.FL);
-    setText($('drive-speed-value'), same ? String(servoTargets.FL) : 'разные');
+    if (common) common.value = String(servoCommonSpeed);
+    setText($('drive-speed-value'), String(servoCommonSpeed));
   }
 
   function setDriveMessage(text) {
     driveMessage = {text: text, until: Date.now() + 6000};
     setText($('drive-status'), text);
+  }
+
+  function renderServoButtons(id, enabled) {
+    const hold = servoHolds.get(id);
+    const incompatible = id === 'ALL' ? servoHolds.size > 0 && !hold : servoHolds.has('ALL');
+    ['backward', 'forward'].forEach((direction) => {
+      const button = $('direct-drive-' + (direction === 'forward' ? 'forward' : 'back') + '-' + id);
+      if (!button) return;
+      const pressed = !!hold && hold.direction === direction;
+      button.disabled = !enabled || incompatible || (!!hold && !pressed);
+      button.classList.toggle('is-active', pressed);
+      button.setAttribute('aria-pressed', String(pressed));
+    });
   }
 
   function renderDriveControls(data) {
@@ -3027,17 +3042,20 @@
     const enabled = !!servo && !!drive.available && steeringAuthorized;
     const canDrive = enabled && !!servo.canDrive && !d.estop;
     speed.max = String(SERVO_MAX);
-    speed.disabled = !canDrive;
+    speed.disabled = !canDrive || (servoHolds.size > 0 && !servoHolds.has('ALL'));
+    renderServoButtons('ALL', !!canDrive);
     const stop = $('drive-stop');
     if (stop) stop.disabled = !drive.available || !steeringAuthorized;
     const message = driveMessage && driveMessage.until > Date.now() ? driveMessage.text : '';
+    const hold = servoHolds.get('ALL');
     if (message) status.textContent = message;
     else if (!servo) status.textContent = 'Прямая тяга доступна при RC_SLAM_SOURCE=master.';
     else if (d.estop) status.textContent = DRIVE_REASON_TEXT.estop;
     else if (!steeringAuthorized) status.textContent = 'Управление временно недоступно.';
     else if (!servo.canDrive) status.textContent = DRIVE_REASON_TEXT[servo.reason] || 'Нет связи с платами.';
-    else if (hasServoTargets()) status.textContent = 'Тяга включена · значение Servo.write указано на ползунке.';
-    else status.textContent = 'Готово · передвиньте ползунок от 0 до 150.';
+    else if (hold) status.textContent = (hold.direction === 'forward' ? 'Вперёд' : 'Назад') + ' · удерживайте кнопку.';
+    else if (servoHolds.size) status.textContent = 'Отдельные колёса · удерживайте кнопки.';
+    else status.textContent = 'Задайте скорость и удерживайте «Вперёд» или «Назад».';
     status.dataset.ready = String(!!canDrive);
     syncServoSliders();
     SERVO_IDS.forEach((id) => renderModuleDriveCard(id, d, !!servo));
@@ -3055,16 +3073,19 @@
     const state = (servo.perModule || {})[id] || null;
     const motor = ((data.motors || []).find((m) => m && m.id === id)) || null;
     const reported = motor && motor.driveServoValue != null ? Number(motor.driveServoValue) : null;
+    const canDrive = supported && !!drive.available && steeringAuthorized &&
+      !data.estop && !!state && !!state.canDrive;
     if (slider) {
       slider.max = String(SERVO_MAX);
-      slider.disabled = !supported || !drive.available || !steeringAuthorized ||
-        !!data.estop || !state || !state.canDrive;
+      slider.disabled = !canDrive || servoHolds.has('ALL');
     }
+    renderServoButtons(id, !!canDrive);
     if (stop) stop.disabled = !drive.available || !steeringAuthorized;
     const card = stateEl && stateEl.closest ? stateEl.closest('.steer-drive') : null;
     if (card) card.dataset.active = String(!!servoTargets[id] || !!reported);
     const note = moduleDriveNote[id];
     if (note && note.until <= Date.now()) delete moduleDriveNote[id];
+    const hold = servoHolds.get(id) || servoHolds.get('ALL');
     let text;
     if (note && note.until > Date.now()) text = note.text;
     else if (!supported) text = 'прямая тяга недоступна';
@@ -3072,16 +3093,12 @@
     else if (!steeringAuthorized) text = 'управление недоступно';
     else if (!state) text = 'нет телеметрии';
     else if (!state.canDrive) text = DRIVE_REASON_TEXT[state.reason] || 'не готово';
+    else if (hold) text = (hold.direction === 'forward' ? 'Вперёд' : 'Назад') + ' · удерживайте';
     else text = reported ? 'Servo.write(' + reported + ')' : 'стоит';
     if (stateEl) stateEl.textContent = text;
     if (outputEl) {
-      const parts = [];
-      if (reported != null && Number.isFinite(reported)) parts.push('Servo.write(' + reported + ')');
-      // Обороты только показываем; на команду они не влияют.
-      if (motor && motor.tach === false) parts.push('тахометр недостоверен');
-      else if (motor && motor.rpm != null) parts.push(Math.round(Number(motor.rpm)) + ' об/мин');
-      if (motor && motor.tachHz != null) parts.push(Number(motor.tachHz) + ' имп/с');
-      outputEl.textContent = parts.length ? parts.join(' · ') : '—';
+      outputEl.textContent = reported != null && Number.isFinite(reported)
+        ? 'Servo.write(' + reported + ')' : '—';
     }
   }
 
@@ -3096,72 +3113,106 @@
     driveTimer = setInterval(() => {
       const now = Date.now();
       if (now - driveLastTick > 600) {
-        // Проснувшаяся после долгой паузы вкладка не должна снова включать мотор.
         void stopDrive();
-        setDriveMessage('Связь прервалась · тяга остановлена. Задайте значение заново.');
+        setDriveMessage('Связь прервалась · нажмите кнопку заново.');
         return;
       }
       driveLastTick = now;
-      const same = SERVO_IDS.every((id) => servoTargets[id] === servoTargets.FL);
-      if (same && servoTargets.FL) void queueServo('ALL', servoTargets.FL);
-      else SERVO_IDS.forEach((id) => {
-        if (servoTargets[id]) void queueServo(id, servoTargets[id]);
+      servoHolds.forEach((hold, id) => {
+        const value = id === 'ALL' ? servoCommonSpeed : servoSpeeds[id];
+        if (value) void queueServo(id, value, hold.direction);
       });
     }, 200);
   }
 
-  function setServoTarget(id, value) {
-    if (!Number.isInteger(value) || value < 0 || value > SERVO_MAX) return;
-    driveMessage = null;
-    if (id === 'ALL') {
-      SERVO_IDS.forEach((wheel) => { servoTargets[wheel] = value; });
-    } else {
-      servoTargets[id] = value;
-      delete moduleDriveNote[id];
-    }
-    syncServoSliders();
-    void queueServo(id, value);
+  function setServoTarget(id, value, direction) {
+    const wheels = id === 'ALL' ? SERVO_IDS : [id];
+    wheels.forEach((wheel) => {
+      servoTargets[wheel] = value;
+      servoDirections[wheel] = direction;
+    });
+    void queueServo(id, value, direction);
     startServoHeartbeat();
   }
 
+  function setServoSpeed(id, value) {
+    if (!Number.isInteger(value) || value < 0 || value > SERVO_MAX) return;
+    driveMessage = null;
+    const wheels = id === 'ALL' ? SERVO_IDS : [id];
+    if (id === 'ALL') servoCommonSpeed = value;
+    wheels.forEach((wheel) => { servoSpeeds[wheel] = value; delete moduleDriveNote[wheel]; });
+    const hold = servoHolds.get(id);
+    if (hold) setServoTarget(id, value, hold.direction);
+    syncServoSliders();
+    renderDriveControls(lastData || {});
+  }
+
+  function startServoHold(id, direction, trigger) {
+    const data = lastData || {};
+    const drive = data.drive || {};
+    const servo = drive.servo || {};
+    const state = id === 'ALL' ? servo : (servo.perModule || {})[id];
+    if (!steeringAuthorized || data.estop || !drive.available || !state || !state.canDrive || servoHolds.has(id)) return;
+    if ((id === 'ALL' && servoHolds.size) || (id !== 'ALL' && servoHolds.has('ALL'))) return;
+    driveMessage = null;
+    if (id === 'ALL') SERVO_IDS.forEach((wheel) => { servoSpeeds[wheel] = servoCommonSpeed; });
+    servoHolds.set(id, {direction: direction, ...trigger});
+    setServoTarget(id, id === 'ALL' ? servoCommonSpeed : servoSpeeds[id], direction);
+    renderDriveControls(data);
+  }
+
+  function stopServoHold(id, force) {
+    // При общей кнопке останов любого отдельного колеса безопасно гасит все.
+    if (id !== 'ALL' && servoHolds.has('ALL')) { void stopDrive(true); return; }
+    const hold = servoHolds.get(id);
+    if (!hold && !force) return;
+    servoHolds.delete(id);
+    setServoTarget(id, 0, hold ? hold.direction : 'forward');
+    renderDriveControls(lastData || {});
+  }
+
   function releaseDrive() {
-    if (hasServoTargets() || driveTimer) void stopDrive();
+    if (servoHolds.size || hasServoTargets() || driveTimer) void stopDrive();
   }
 
   async function stopDrive(force) {
     if (window.RCRemoteControls && window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
-    const wasDriving = hasServoTargets() || !!driveTimer;
+    const wasDriving = servoHolds.size || hasServoTargets() || !!driveTimer;
+    servoHolds.clear();
     SERVO_IDS.forEach((id) => { servoTargets[id] = 0; });
     if (driveTimer) clearInterval(driveTimer);
     driveTimer = null;
     syncServoSliders();
+    renderDriveControls(lastData || {});
     if (!wasDriving && !force) return;
     // Ноль вытесняет ожидающие ненулевые команды, а b принимают и старые платы.
-    await queueServo('ALL', 0);
+    await queueServo('ALL', 0, 'forward');
   }
 
   function stopModuleDrive(id) {
-    setServoTarget(id, 0);
+    stopServoHold(id, true);
   }
 
-  function queueServo(id, value) {
+  function queueServo(id, value, direction) {
+    const target = {value: value, direction: direction || 'forward'};
     if (id === 'ALL') {
       servoPending.clear();
-      servoPending.set(id, value);
+      servoPending.set(id, target);
     } else {
-      // Если общая команда ещё не ушла, развернуть её в актуальные цели по
-      // колёсам, чтобы новое значение одного колеса не перезаписалось ею.
+      // Не дать ожидающей общей команде перезаписать новое состояние колеса.
       if (servoPending.has('ALL')) {
         servoPending.delete('ALL');
-        SERVO_IDS.forEach((wheel) => servoPending.set(wheel, servoTargets[wheel]));
+        SERVO_IDS.forEach((wheel) => servoPending.set(wheel, {
+          value: servoTargets[wheel], direction: servoDirections[wheel]
+        }));
       }
       servoPending.delete(id);
       if (value === 0) {
         const rest = Array.from(servoPending.entries());
         servoPending.clear();
-        servoPending.set(id, 0);
-        rest.forEach(([wheel, target]) => servoPending.set(wheel, target));
-      } else servoPending.set(id, value);
+        servoPending.set(id, target);
+        rest.forEach(([wheel, pending]) => servoPending.set(wheel, pending));
+      } else servoPending.set(id, target);
     }
     return flushServoQueue();
   }
@@ -3171,9 +3222,10 @@
     driveSending = true;
     driveFlush = (async () => {
       while (servoPending.size) {
-        const [id, value] = servoPending.entries().next().value;
+        const [id, target] = servoPending.entries().next().value;
         servoPending.delete(id);
-        const payload = id === 'ALL' ? {value: value} : {module: id, value: value};
+        const payload = id === 'ALL' ? {value: target.value} : {module: id, value: target.value};
+        if (target.value) payload.direction = target.direction;
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 550);
         try {
@@ -3186,10 +3238,10 @@
           if (!response.ok || !body.ok) {
             const reason = body.reason || (response.status === 401 ? 'pin_required' : 'command_failed');
             if (response.status === 401 || reason === 'pin_required') steeringAuthorized = false;
-            failServoCommand(id, value, DRIVE_REASON_TEXT[reason] || 'Команда тяги отклонена.');
+            failServoCommand(id, target.value, DRIVE_REASON_TEXT[reason] || 'Команда тяги отклонена.');
           }
         } catch (error) {
-          failServoCommand(id, value, 'Связь потеряна · watchdog остановит колесо.');
+          failServoCommand(id, target.value, 'Связь потеряна · watchdog остановит колесо.');
         } finally {
           clearTimeout(timeout);
         }
@@ -3205,16 +3257,52 @@
     if (id === 'ALL') setDriveMessage(text);
     else moduleDriveNote[id] = {text: text, until: Date.now() + 6000};
     if (value !== 0) {
-      if (id === 'ALL') {
+      const stopAll = id === 'ALL' || servoHolds.has('ALL');
+      if (stopAll) {
+        servoHolds.clear();
         SERVO_IDS.forEach((wheel) => { servoTargets[wheel] = 0; });
-      } else servoTargets[id] = 0;
-      // Попытаться остановить именно те колёса, которым отказали; watchdog
-      // остаётся страховкой, если соединение уже потеряно.
-      void queueServo(id, 0);
+      } else {
+        servoHolds.delete(id);
+        servoTargets[id] = 0;
+      }
+      void queueServo(stopAll ? 'ALL' : id, 0, 'forward');
       syncServoSliders();
       startServoHeartbeat();
     }
     renderDriveControls(lastData || {});
+  }
+
+  function bindServoButton(id, direction) {
+    const button = $('direct-drive-' + (direction === 'forward' ? 'forward' : 'back') + '-' + id);
+    if (!button) return;
+    button.addEventListener('pointerdown', (event) => {
+      if (button.disabled || (event.button != null && event.button !== 0)) return;
+      event.preventDefault();
+      startServoHold(id, direction, {pointerId: event.pointerId, button: button});
+      if (servoHolds.get(id) && button.setPointerCapture && event.pointerId != null) {
+        try { button.setPointerCapture(event.pointerId); } catch (error) { /* window pointerup is a fallback */ }
+      }
+    });
+    const releasePointer = (event) => {
+      const hold = servoHolds.get(id);
+      if (hold && hold.button === button && hold.pointerId === event.pointerId) stopServoHold(id);
+    };
+    button.addEventListener('pointerup', releasePointer);
+    button.addEventListener('pointercancel', releasePointer);
+    button.addEventListener('lostpointercapture', releasePointer);
+    button.addEventListener('keydown', (event) => {
+      if (!button.disabled && (event.key === ' ' || event.key === 'Enter') && !event.repeat) {
+        event.preventDefault();
+        startServoHold(id, direction, {key: event.key, button: button});
+      }
+    });
+    button.addEventListener('keyup', (event) => {
+      const hold = servoHolds.get(id);
+      if (hold && hold.button === button && hold.key === event.key) {
+        event.preventDefault();
+        stopServoHold(id);
+      }
+    });
   }
 
   function initSteeringControls() {
@@ -3223,17 +3311,21 @@
     const ids = ['FL', 'FR', 'RL', 'RR'];
     const driveSpeed = $('drive-speed');
     if (driveSpeed) driveSpeed.addEventListener('input', () => {
-      if (!driveSpeed.disabled) setServoTarget('ALL', Number(driveSpeed.value));
+      if (!driveSpeed.disabled) setServoSpeed('ALL', Number(driveSpeed.value));
     });
+    bindServoButton('ALL', 'forward');
+    bindServoButton('ALL', 'backward');
     const driveStopButton = $('drive-stop');
     if (driveStopButton) driveStopButton.addEventListener('click', () => { void stopDrive(true); });
 
-    // Свой ползунок посылает значение только на выбранную плату.
+    // У каждого колеса свои скорость и удерживаемые кнопки направления.
     ids.forEach((id) => {
       const slider = $('drive-module-' + id);
       if (slider) slider.addEventListener('input', () => {
-        if (!slider.disabled) setServoTarget(id, Number(slider.value));
+        if (!slider.disabled) setServoSpeed(id, Number(slider.value));
       });
+      bindServoButton(id, 'forward');
+      bindServoButton(id, 'backward');
       const stopButton = $('drive-module-stop-' + id);
       if (stopButton) stopButton.addEventListener('click', () => stopModuleDrive(id));
     });
@@ -3245,8 +3337,13 @@
     });
     const maneuverStop = $('maneuver-stop');
     if (maneuverStop) maneuverStop.addEventListener('click', () => { void stopManeuver(); });
-    // Отпускание ползунка сохраняет его значение. Уход со страницы и потеря
-    // фокуса, наоборот, снимают тягу; watchdog страхует обрыв связи.
+    // Отпускание кнопки, уход со страницы и потеря фокуса снимают тягу;
+    // настройка ползунка сохраняется. Watchdog страхует обрыв связи.
+    ['pointerup', 'pointercancel'].forEach((name) => window.addEventListener(name, (event) => {
+      Array.from(servoHolds.entries()).forEach(([id, hold]) => {
+        if (hold.pointerId != null && hold.pointerId === event.pointerId) stopServoHold(id);
+      });
+    }));
     window.addEventListener('blur', releaseDrive);
     window.addEventListener('pagehide', releaseDrive);
     document.addEventListener('visibilitychange', () => { if (document.hidden) releaseDrive(); });
