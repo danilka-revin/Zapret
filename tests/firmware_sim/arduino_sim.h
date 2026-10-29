@@ -73,10 +73,6 @@ typedef bool boolean;
 // симуляция.
 inline uint8_t TCCR2A = 0, TCCR2B = 0, TIMSK2 = 0, OCR2A = 0, TCNT2 = 0;
 constexpr int WGM21 = 1, CS21 = 1, OCIE2A = 1;
-// Timer3 — аппаратный ШИМ на входе «P» драйвера (D3, OC3C). Скважность прошивка
-// задаёт регистром сравнения OCR3C, период — OCR3A. У каждой платы свои, поэтому
-// в board_prelude.h имена регистров — макросы на поля sim::Board.
-constexpr int COM3C1 = 1, WGM31 = 1, WGM30 = 1, WGM32 = 1, WGM33 = 1, CS31 = 1;
 inline uint8_t SREG = 0;
 inline void cli() {}
 inline void sei() {}
@@ -128,21 +124,24 @@ struct Board {
   void (*isr_fn)() = nullptr;
   void (*tach_fn)() = nullptr;
 
-  // Аппаратный ШИМ на входе «P» (D3 = OC3C): регистры Timer3 этой платы.
-  // Скважность = OCR3C / (OCR3A + 1); прошивка пишет их напрямую (макросы в
-  // board_prelude.h), а здесь мы это читаем и проверяем.
-  uint8_t pwm_tccr_a = 0, pwm_tccr_b = 0;
-  uint16_t pwm_top = 0, pwm_compare = 0, pwm_counter = 0;
-  // Скважность в шагах ШИМ и в промилле (0…1000).
-  int duty_steps() const { return pwm_top ? (int)pwm_compare : 0; }
+  // Вход «P» драйвера — сигнал сервопривода 50 Гц из штатной библиотеки Servo.
+  // Прошивка делает attach(D3) и write(0…180); заглушка Servo пишет сюда же.
+  bool servo_attached = false;
+  uint8_t servo_pin = 0;
+  int servo_value = 0;
+  int servo_min_us = 544;
+  int servo_max_us = 2400;
+  // Положение ручки в промилле шкалы: 0 — мотор не тянет, 1000 — полный ход.
   int duty_permille() const {
-    if (!pwm_top) return 0;
-    return (int)((uint32_t)pwm_compare * 1000UL / ((uint32_t)pwm_top + 1));
+    if (servo_value <= 0) return 0;
+    return (int)((uint32_t)servo_value * 1000UL / 180UL);
   }
-  // ШИМ настроен и выдаёт импульсы: включён выход OC3C и есть тактирование.
-  bool pwm_running() const {
-    return (pwm_tccr_a & (1 << COM3C1)) && (pwm_tccr_b & (1 << CS31));
+  // Импульс на «P» в микросекундах: у Servo значение 0…180 — это 544…2400 мкс.
+  int servo_pulse_us() const {
+    return servo_min_us + servo_value * (servo_max_us - servo_min_us) / 180;
   }
+  // Библиотека подключена к выводу и выдаёт импульсы.
+  bool servo_running() const { return servo_attached; }
 
   // Модель руля: phys — где колесо на самом деле, в шагах от «прямо».
   long phys = 0;

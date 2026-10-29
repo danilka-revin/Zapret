@@ -12,10 +12,16 @@
 //   b — тормоз; p — состояние; ? — справка.
 //
 // Выход на регулятор скорости — «PWM» драйвера RioRand ZS-Z11H (hoverboard,
-// разбор входов: mad-ee.com/easy-inexpensive-hoverboard-motor-controller):
-//   * P (PWM) — настоящая скважность: 0 % мотор не тянет (свободный выбег),
-//     100 % — полный ход; частота по паспорту 50 Гц…20 кГц. Прошивка держит
-//     1 кГц аппаратным ШИМ Timer3 на D3 (OC3C) с шагом скважности 0,05 %;
+// разбор входов: mad-ee.com/easy-inexpensive-hoverboard-motor-controller).
+// Вход «P» управляется как обычный сервопривод постоянного вращения, и это
+// проверено на железе рабочим скетчем оператора:
+//     #include <Servo.h>
+//     Servo mk1;   void setup(){ mk1.attach(9); }   void loop(){ mk1.write(40); }
+// Такой скетч дал ровные, адекватные обороты без всякого контура, поэтому
+// прошивка v13 повторяет его один в один (вход «P» — это D3):
+//   * P (D3) — сигнал Servo, 50 Гц: 0…180 значения — вся шкала тяги. 0 — мотор
+//     не тянет (≈0,54 мс импульса), 180 — полный ход (≈2,4 мс). Процент
+//     команды переводится в значение напрямую: 1 % = 1,8, 100 % = 180;
 //   * DIR — уровень: для этого колеса «вперёд» (у FR и RR он перевёрнут —
 //     колёса стоят зеркально), инверсия — назад;
 //   * BRAKE — 1 = тормоз включён, 0 = отпущен;
@@ -33,6 +39,7 @@
 // DIR (D4), BRAKE (D5), STOP (D2), SPEED/ШИМ (D3) и общая земля.
 // ШИМ на D3 — аппаратный, Timer3 в режиме Fast PWM (ни одной библиотеки).
 // Тахометр BLDC — отдельным проводом на D19 (внешнее прерывание INT2).
+#include <Servo.h>
 #include <avr/eeprom.h>
 #include <avr/interrupt.h>
 #include <avr/pgmspace.h>
@@ -158,69 +165,34 @@ const uint16_t EEPROM_POT_SLOPE_SLOT = 3;   // 4 байта, float, little-endia
 const uint8_t EEPROM_POT_MAGIC = 0x51;      // «q» — наклон измерен
 
 // ---- тяга BLDC: драйвер RioRand ZS-Z11H (hoverboard-мотор) ----
-// Вход «P» (PWM): частота 50 Гц…20 кГц, управляет СКВАЖНОСТЬЮ — 0 % мотор не
-// тянет (свободный выбег), 100 % полный ход. Прошивка подаёт на него настоящий
-// аппаратный ШИМ 1 кГц (Timer3, D3 = OC3C): 2000 шагов на период, то есть шаг
-// скважности 0,05 %. Драйвер отзывается очень резко (вывешенное колесо даёт
-// ≈65 об/мин на 1 % скважности), поэтому процент команды — это ЗАКАЗАННЫЕ
-// ОБОРОТЫ, а скважность прошивка подбирает сама по тахометру «SC»: контур
-// замкнут. Полная шкала — 100 % = 500 об/мин (5 об/мин на процент).
+// Драйвер отзывается на «P» как сервопривод постоянного вращения: штатная
+// библиотека Servo (сигнал 50 Гц) — ровно то, что нужно, и никакого таймера с
+// регистрами вручную. Значение write() — это ШКАЛА, а не обороты: 0 — мотор
+// не тянет, 180 — полный ход. Как и в проверенном скетче, контура нет: сколько
+// попросили процентов, столько и стоит на входе «P».
+const uint8_t DRIVE_SERVO_MAX_VALUE = 180;      // верх шкалы Servo.write
+// 1 % = 1,8 значения шкалы (180 / 100). В целых десятых, чтобы не тащить float
+// в горячую часть: 18 десятых на процент.
+const uint16_t DRIVE_SERVO_TENTHS_PER_PERCENT = 18;
+// Тахометр остаётся только для телеметрии и одной страховки: если значение на
+// «P» есть, а переходов «SC» нет дольше этого срока, тяга снимается.
 // Тахометр — выход SC: 90 переходов на оборот колеса (по одному на каждую смену
 // сигнала трёх датчиков Холла). Это свойство драйвера, а не настройка.
 const uint8_t DRIVE_TACH_PPR = 90;             // переходов SC на оборот колеса
 const uint16_t RPM_SAMPLE_PERIOD_MS = 500;
-// Дребезг и наводки. На полном ходу драйвера (≈18 км/ч) интервал между
-// переходами SC — 1,15 мс, на малых процентах — десятки миллисекунд. Два перехода ближе 150 мкс
-// физически невозможны: это помеха на проводе, а не вращение, и в расчёт
-// оборотов она не идёт.
+// Дребезг и наводки. На полном ходу драйвера интервал между переходами SC —
+// порядка миллисекунды, на малых процентах — десятки миллисекунд. Два перехода
+// ближе 150 мкс физически невозможны: это помеха на проводе, а не вращение.
 const uint16_t DRIVE_TACH_MIN_EDGE_US = 150;
 // Потолок правдоподобия: если насчитанные обороты выше 700 об/мин, то это не
-// скорость, а шум на линии «SC». Вывешенное колесо на полном ходу драйвера даёт
-// ≈578 об/мин (замер MAD-EE: интервал 1,15 мс, 90 переходов на оборот), поэтому
-// 700 — с запасом на разгон и помехи, но всё ещё далеко от «3600 об/мин» из
-// мусора на проводе. Прошивка честно говорит «обороты недостоверны».
+// скорость, а шум на линии «SC». Прошивка честно говорит «обороты недостоверны».
 const uint32_t DRIVE_TACH_MAX_RPM_X10 = 7000;
-// Предел тяги прошивки — 100 % шкалы, то есть 500 об/мин. Процент — это
-// заказанные обороты, а не скважность: 100 % = 500 об/мин, 1 % = 5 об/мин.
-// Пятьсот оборотов на колесе 216 мм — это ≈20 км/ч, а сам мотор без нагрузки
-// выдаёт ≈578 об/мин (замер MAD-EE), так что 500 — почти его предел. Выше
-// прошивка не пускает: 100 % шкалы — это и есть потолок железа.
-// Константа прошивки, а не настройка.
+// Предел тяги прошивки — вся шкала, 100 %. Процент — это положение ручки
+// Servo, а не обороты: 100 % = значение 180, 1 % = 1,8. Константа прошивки.
 const uint8_t DRIVE_MAX_PERCENT = 100;
-// Полная шкала (100 %) — 500 об/мин: 5 об/мин на процент.
-const uint16_t DRIVE_MAX_RPM_X10 = 5000;
-const uint16_t DRIVE_RPM_X10_PER_PERCENT = DRIVE_MAX_RPM_X10 / DRIVE_MAX_PERCENT;
-const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → скважность 0 и тормоз
-// Аппаратный ШИМ на D3: Timer3, Fast PWM с TOP = OCR3A. 16 МГц / 8 = 2 МГц,
-// TOP = 1999 → ровно 1 кГц (в паспортном диапазоне 50 Гц…20 кГц) и 2000 шагов
-// скважности, то есть 0,05 % на шаг. Скважность 0 % — постоянный низкий уровень:
-// драйвер мотор не тянет и катится свободно.
-const uint16_t DRIVE_PWM_HZ = 1000;
-const uint16_t DRIVE_PWM_TOP = 1999;             // 2 МГц / 1 кГц − 1
-const uint16_t DRIVE_DUTY_FULL = DRIVE_PWM_TOP + 1;  // 2000 шагов = 100 %
-// Драйвер отзывается резко, поэтому вверх прошивка идёт только по обратной
-// связи: если обороты уже больше заказанных, скважность не растёт. Абсолютный
-// потолок — 50 % скважности. Без нагрузки 500 об/мин выходят уже на ~8 %, но под
-// грузом мотору нужно заметно больше: 50 % — запас на вес тележки, а не рабочий
-// режим. Выше скважность не поднимается ни при каких оборотах.
-const uint16_t DRIVE_DUTY_CEILING = DRIVE_DUTY_FULL / 2;
-// Момент трогания заранее неизвестен: у каждого драйвера, колеса и груза он
-// свой. Прошивка находит его сама, поднимая скважность мелкими шагами.
-const uint16_t DRIVE_SEEK_PERIOD_MS = 100;
-const uint16_t DRIVE_SEEK_STEP = 8;              // 8 шагов = 0,4 % скважности
-const uint16_t DRIVE_SEEK_MAX_DUTY = 400;        // первый раз не выше 20 %
-const uint16_t DRIVE_SEEK_MARGIN = 20;           // дальше: найденная точка + 1 %
-// Пока колесо не поехало, шаг поиска растёт вместе со скважностью: внизу, где
-// мотор только-только трогается, он мелкий, а выше — крупнее, чтобы не искать
-// момент трогания полминуты. Скважность на «P» при этом растёт не быстрее
-// 0,4…1,2 % за 100 мс — это и есть плавный старт.
-const uint16_t DRIVE_SEEK_STEP_GROWTH = 50;      // +1 шаг на каждые 50 шагов
-// Как часто регулятор правит скважность и сколько он терпит молчание тахометра,
-// прежде чем снять тягу: без оборотов регулировать нечего.
-const uint16_t DRIVE_SPEED_PERIOD_MS = 500;
+const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → значение 0 и тормоз
+// Страховка «колесо не крутится, а тяга есть»: столько терпим молчание «SC».
 const uint16_t DRIVE_FEEDBACK_TIMEOUT_MS = 3000;
-// Ниже этой скважности драйвер не отвечает вовсе — искать там нечего.
-const uint16_t DRIVE_DUTY_MIN = 1;
 // Зеркальные колёса. Корпус симметричный, поэтому правое колесо при том же
 // уровне DIR крутится в другую сторону относительно робота. По умолчанию
 // прошивка сама понимает это по имени колеса: FR и RR — зеркальные.
@@ -229,13 +201,13 @@ const uint16_t DRIVE_DUTY_MIN = 1;
 #define DRIVE_MIRRORED -1
 #endif
 
-// v12: тяга — настоящий аппаратный ШИМ 1 кГц на входе «P» (Timer3, D3 = OC3C,
-// скважность 0…50 %), обороты держит регулятор по тахометру SC (90 переходов на
-// оборот). Шкала процентов — обороты: 100 % = 500 об/мин, 1 % = 5 об/мин
-// (в v11 было 30 % = 60 об/мин). Момент трогания прошивка находит сама,
-// зеркальные FR/RR. Настроек тяги нет: все числа — свойство железа, EEPROM для
-// тяги не используется.
-const uint8_t FIRMWARE_PROTOCOL = 12;          // поле fw= в @TLM
+// v13: тяга — как в проверенном на железе скетче с сервоприводом постоянного
+// вращения: штатная библиотека Servo, 50 Гц на входе «P» (D3), значение
+// write(0…180) = 0…100 % шкалы, 1 % = 1,8. Контура оборотов больше нет — сколько
+// попросили, столько и стоит на входе драйвера (в v12 был ШИМ с регулятором по
+// тахометру, 100 % = 500 об/мин). Тахометр SC остался для телеметрии и
+// страховки «тяга есть, а колесо стоит». Зеркальные FR/RR. Настроек тяги нет.
+const uint8_t FIRMWARE_PROTOCOL = 13;          // поле fw= в @TLM
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -326,19 +298,11 @@ uint32_t last_rpm_ms = 0;
 uint32_t tach_hz = 0;                  // переходов SC в секунду — диагностика
 bool tach_trusted = true;               // обороты правдоподобны (нет помехи)
 
-// Тяга: какие проценты просили и какая скважность сейчас на входе «P».
-// Скважность — в шагах ШИМ: 0…DRIVE_DUTY_FULL-1 (2000 шагов = 100 %).
-uint16_t drive_duty = 0;           // что реально стоит в OCR3C
-uint16_t drive_cmd_duty = 0;       // уровень регулятора
+// Тяга: какие проценты просили и какое значение сейчас на входе «P».
+// Значение — шкала Servo.write: 0…DRIVE_SERVO_MAX_VALUE (0 — мотор не тянет).
+uint8_t drive_servo_value = 0;     // что реально написано в Servo.write
 bool drive_mirrored = false;       // это колесо стоит зеркально
-uint32_t drive_feedback_ms = 0;
-uint32_t drive_speed_ms = 0;
-bool drive_seeking = false;        // ещё ищем момент трогания (переходов SC нет)
-uint32_t drive_seek_ms = 0;
-uint16_t drive_start_duty = 0;     // скважность, на которой колесо поехало (0 — неизв.)
-uint16_t drive_good_duty = 0;      // последняя скважность, на которой колесо ехало
-uint16_t drive_step_cap = 40;      // предел шага контура в шагах ШИМ (40 = 2 %)
-bool drive_floor_noted = false;    // «медленнее не могу» уже сказано в журнал
+uint32_t drive_feedback_ms = 0;    // когда последний раз видели переходы «SC»
 
 char tx_buf[TX_BUFFER_SIZE];
 uint16_t tx_length = 0;
@@ -439,7 +403,8 @@ bool parseLongToken(const char* text, long* out) {
 
 // ---------------------------------------------------------------------------
 // Шаги: Timer2 в режиме CTC, 16 МГц / 8 / 100 = 20 кГц, тик 50 мкс.
-// Timer3 занят ШИМ тяги (D3 = OC3C), Timer1/4/5 свободны.
+// Тяга идёт через библиотеку Servo (на Mega она берёт Timer5), руль — Timer2:
+// таймеры не пересекаются.
 void tachometerISR() {
   const uint32_t now = micros();
   ++tach_raw_edges;
@@ -1306,39 +1271,37 @@ uint8_t driveForwardLevel() {
   return flip ? (BLDC_DIR_FORWARD_LEVEL == HIGH ? LOW : HIGH) : BLDC_DIR_FORWARD_LEVEL;
 }
 
-// ШИМ на D3 — Timer3, режим 15: Fast PWM, TOP = OCR3A, выход OC3C (D3).
-// 16 МГц / 8 = 2 МГц; TOP = 1999 → ровно 1 кГц и 2000 шагов скважности.
-// Никаких библиотек: Timer3 свободен, шаги руля по-прежнему на Timer2.
-void setupDrivePwm() {
+// Вход «P» — обычный сервопривод постоянного вращения: библиотека Servo даёт
+// сигнал 50 Гц на D3. Ровно тот же приём, что в проверенном на железе скетче
+// (Servo mk1; mk1.attach(9); mk1.write(40)), только вывод — D3 драйвера.
+Servo drive_servo;
+
+void setupDriveServo() {
   drive_mirrored = driveMirrorByModule();
-  pinMode(BLDC_SPEED_PIN, OUTPUT);
-  const uint8_t saved = SREG;
-  cli();
-  TCCR3A = (1 << COM3C1) | (1 << WGM31) | (1 << WGM30);  // OC3C: сброс по совпадению
-  TCCR3B = (1 << WGM33) | (1 << WGM32) | (1 << CS31);    // Fast PWM, TOP=OCR3A, /8
-  OCR3A = DRIVE_PWM_TOP;
-  OCR3C = 0;                                             // скважность 0 % — не тянет
-  TCNT3 = 0;
-  SREG = saved;
-  drive_duty = 0;
-  drive_cmd_duty = 0;
-  drive_seeking = false;
-  drive_start_duty = 0;
-  drive_good_duty = 0;
-  drive_step_cap = 40;
-  drive_floor_noted = false;
+  drive_servo.attach(BLDC_SPEED_PIN);   // «P» драйвера, D3
+  drive_servo.write(0);                 // 0 — мотор не тянет, свободный выбег
+  drive_servo_value = 0;
+  drive_feedback_ms = millis();
 }
 
-// Скважность на «P» в шагах ШИМ: 0 — мотор не тянет, 2000 — полный ход.
-void driveWriteDuty(uint16_t steps) {
-  if (steps > DRIVE_DUTY_CEILING) steps = DRIVE_DUTY_CEILING;
-  // OCR3C — 16-битный регистр: пишем его целиком, иначе прерывание между
-  // байтами оставит на выходе случайную скважность на один период ШИМ.
-  const uint8_t saved = SREG;
-  cli();
-  OCR3C = steps;
-  SREG = saved;
-  drive_duty = steps;
+// Значение на «P»: 0 — мотор не тянет, DRIVE_SERVO_MAX_VALUE — полный ход.
+void driveWriteServo(uint8_t value) {
+  if (value > DRIVE_SERVO_MAX_VALUE) value = DRIVE_SERVO_MAX_VALUE;
+  drive_servo.write(value);
+  drive_servo_value = value;
+}
+
+// Процент команды → значение шкалы Servo: 1 % = 1,8, 100 % = 180.
+uint8_t driveValueForPercent(int8_t percent) {
+  const uint32_t magnitude = (uint32_t)abs((int)percent);
+  uint32_t value = (magnitude * DRIVE_SERVO_TENTHS_PER_PERCENT + 5) / 10;
+  if (value > DRIVE_SERVO_MAX_VALUE) value = DRIVE_SERVO_MAX_VALUE;
+  return (uint8_t)value;
+}
+
+// Значение шкалы в промилле — для телеметрии (duty=) и журнала.
+uint16_t driveValuePermille() {
+  return (uint16_t)((uint32_t)drive_servo_value * 1000UL / DRIVE_SERVO_MAX_VALUE);
 }
 
 // Тормоз: BRAKE = 1 включает тормоз драйвера, 0 — отпускает.
@@ -1377,10 +1340,9 @@ void driveTachApply() {
 void printDriveInfo() {
   // Строка должна влезть в буфер строки (176 байт с кириллицей по 2 байта):
   // поэтому проценты словами, без «%%» — они и так висят на экране.
-  note(PSTR("Двигатель: ШИМ %u Гц · скважность %u %% · %u %% = %u об/мин · %s"),
-       (unsigned)DRIVE_PWM_HZ, (unsigned)((uint32_t)drive_duty * 1000UL / DRIVE_DUTY_FULL) / 10,
-       (unsigned)DRIVE_MAX_PERCENT, (unsigned)(DRIVE_MAX_RPM_X10 / 10),
-       drive_mirrored ? "зеркальное" : "прямое");
+  note(PSTR("Двигатель: Servo D3 50 Гц · значение %u из %u · тяга до %u %% · %s"),
+       (unsigned)drive_servo_value, (unsigned)DRIVE_SERVO_MAX_VALUE,
+       (unsigned)DRIVE_MAX_PERCENT, drive_mirrored ? "зеркальное" : "прямое");
 }
 
 // ---------------------------------------------------------------------------
@@ -1400,40 +1362,34 @@ void applyDriveCommand(int8_t percent) {
   if (!drive_active || reversing) {
     // Сначала снимаем тягу и тормозим, потом меняем DIR — иначе смена
     // направления приходится на вращающийся мотор (у драйвера это рывок).
-    driveWriteDuty(0);
+    driveWriteServo(0);
     driveSetBrake(true);
     driveSetStop(true);
     digitalWrite(BLDC_DIR_PIN, direction);
     delayMicroseconds(100);
-    // Скважность начинается с нуля и дальше поднимается сама, по оборотам:
-    // колесо трогается плавно, а не прыжком в пол-оборота.
-    drive_cmd_duty = 0;
-    driveWriteDuty(0);
-    drive_seeking = true;
-    drive_good_duty = 0;
-    drive_step_cap = 40;
-    drive_floor_noted = false;
-    drive_seek_ms = millis();
     drive_feedback_ms = millis();
-    drive_speed_ms = millis();
   }
   digitalWrite(BLDC_DIR_PIN, direction);
   driveSetBrake(false);                       // тормоз отпущен
   driveSetStop(false);                        // драйвер разрешён на время тяги
+  // Как в проверенном скетче: значение на «P» пишется сразу, без разгона и без
+  // контура. Плавность набора даёт сам драйвер — ему этот вход привычен.
+  driveWriteServo(driveValueForPercent(percent));
   drive_percent = percent;
   drive_active = percent != 0;
   last_drive_command_ms = millis();
+  if (!drive_active) {                // «t 0» — сразу снять тягу и затормозить
+    driveSetBrake(true);
+    driveSetStop(true);
+  }
 }
 
 void stopDriveLocal() {
-  driveWriteDuty(0);                 // скважность 0 % — драйвер мотор не тянет
+  driveWriteServo(0);                // значение 0 — драйвер мотор не тянет
   driveSetBrake(true);               // тормоз: колесо не катится
   driveSetStop(true);                // выходы драйвера выключены
   drive_percent = 0;
   drive_active = false;
-  drive_cmd_duty = 0;
-  drive_seeking = false;
-  drive_floor_noted = false;
 }
 
 bool applyLocalDrive(int8_t percent) {
@@ -1506,120 +1462,22 @@ void updateRpm() {
   rpm_x10 = rpm;
 }
 
-// Регулятор оборотов. Команда задаёт заказанные об/мин (процент × 2), а
-// скважность на входе «P» прошивка подбирает сама по тахометру «SC».
-//
-// Входом «P» управляет скважность: 0 % — мотор не тянет, дальше скорость растёт.
-// Поэтому:
-//   1) пока переходов «SC» нет, колесо стоит — скважность прибавляется шагами
-//      по 0,2 %, пока оно не поедет (момент трогания у каждого экземпляра свой);
-//   2) как только поехало — обычный контур по оборотам: шаг пропорционален
-//      ошибке, но не больше выученного (2 % → вдвое меньше после каждой
-//      остановки, минимум 0,05 %);
-//   3) ниже найденного момента трогания прошивка не опускается: там колесо
-//      просто встанет, а не поедет медленнее. Если заказано медленнее, чем
-//      получается, она честно пишет это в журнал один раз за поездку.
-void updateDriveSpeed() {
+// Страховка «тяга есть, а колесо стоит». Контура оборотов больше нет: значение
+// на «P» пишется напрямую, как в проверенном скетче. Но если значение есть, а
+// переходов «SC» нет дольше DRIVE_FEEDBACK_TIMEOUT_MS, значит тяга не доходит
+// до мотора (провод, драйвер, питание) — тогда честно снимаем тягу и пишем это.
+void updateDriveFeedback() {
   const uint32_t now = millis();
   if (!drive_active) {
-    drive_cmd_duty = 0;
-    drive_seeking = false;
+    drive_feedback_ms = now;
     return;
   }
-  const uint32_t target = (uint32_t)abs((int)drive_percent) * DRIVE_RPM_X10_PER_PERCENT;
-
-  // Поиск момента трогания: колесо ещё не выдало ни одного перехода «SC».
-  if (drive_seeking) {
-    if ((uint32_t)(now - drive_seek_ms) < DRIVE_SEEK_PERIOD_MS) return;
-    drive_seek_ms = now;
-    if (tach_trusted && tach_hz > 0) {
-      // Поехало: запоминаем, на какой скважности это случилось, и дальше держим
-      // обороты контуром. Следующий старт начнётся от этой точки.
-      drive_seeking = false;
-      drive_start_duty = drive_cmd_duty;
-      drive_feedback_ms = now;
-      drive_speed_ms = now;
-      return;
-    }
-    uint16_t seek_limit = DRIVE_SEEK_MAX_DUTY;
-    if (drive_start_duty != 0) {
-      const uint32_t known = (uint32_t)drive_start_duty + DRIVE_SEEK_MARGIN;
-      seek_limit = (known > DRIVE_DUTY_CEILING) ? DRIVE_DUTY_CEILING : (uint16_t)known;
-    }
-    if (drive_cmd_duty >= seek_limit) {
-      stopDriveLocal();
-      note(PSTR("тяга: колесо не трогается до %u %% — проверьте тахометр SC на D19"),
-           (unsigned)(drive_cmd_duty / 20));
-      return;
-    }
-    uint32_t step = DRIVE_SEEK_STEP + (uint32_t)drive_cmd_duty / DRIVE_SEEK_STEP_GROWTH;
-    uint32_t next = (uint32_t)drive_cmd_duty + step;
-    drive_cmd_duty = (next > seek_limit) ? seek_limit : (uint16_t)next;
-    driveWriteDuty(drive_cmd_duty);
-    return;
-  }
-
-  if ((uint32_t)(now - drive_speed_ms) < DRIVE_SPEED_PERIOD_MS) return;
-  drive_speed_ms = now;
-  // Обратная связь: без правдоподобных оборотов крутить вслепую нельзя. Если
-  // тахометр молчит или врёт (нет переходов SC, помеха) дольше
-  // DRIVE_FEEDBACK_TIMEOUT_MS, тяга снимается целиком — это fail closed.
   if (tach_trusted && tach_hz > 0) {
     drive_feedback_ms = now;
   } else if ((uint32_t)(now - drive_feedback_ms) > DRIVE_FEEDBACK_TIMEOUT_MS) {
     stopDriveLocal();
-    note(PSTR("тяга: обороты не измерить (тахометр SC молчит) — тяга снята"));
-    return;
+    note(PSTR("тяга: значение на «P» есть, а колесо стоит (тахометр SC молчит) — тяга снята"));
   }
-  if (target == 0) return;
-
-  // Колесо стоит. Значит, скважность ниже момента трогания: поднимаем её мелким
-  // шагом и ждём, пока оно поедет. На каждой такой остановке шаг контура вдвое
-  // меньше — так прошивка сама узнаёт цену одного шага у этого драйвера.
-  if (rpm_x10 == 0) {
-    const uint16_t nudge = (drive_step_cap > 1) ? (drive_step_cap / 2) : 1;
-    if (drive_step_cap > 1) drive_step_cap /= 2;
-    uint32_t next = drive_cmd_duty + 1;
-    if (drive_good_duty > DRIVE_DUTY_MIN) {
-      // Возвращаемся на рабочую точку, но чуть выше и мельче: ниже неё колесо
-      // останавливается.
-      next = (uint32_t)drive_good_duty + nudge;
-      drive_start_duty = drive_good_duty;
-    }
-    drive_cmd_duty = (next > DRIVE_DUTY_CEILING) ? DRIVE_DUTY_CEILING : (uint16_t)next;
-    driveWriteDuty(drive_cmd_duty);
-    return;
-  }
-
-  drive_good_duty = drive_cmd_duty;   // на этой скважности колесо едет
-  const int32_t err = (int32_t)target - (int32_t)rpm_x10;
-  // Мёртвая зона — 5 % цели плюс 2 об/мин: на 500 об/мин это ±27, на 20 — ±3.
-  // При 12,5 % (как было на шкале «30 % = 60 об/мин») у верхнего края шкалы
-  // допуск вырос бы до ±60 об/мин, и колесо недобирало бы скорость.
-  const int32_t deadband = (int32_t)(target / 20) + 20;
-  if (err > deadband || err < -deadband) {
-    // Ошибка вдвое больше цели — колесо явно не там: шагаем шире, иначе
-    // подбирались бы к цели минуту. Предел шага — выученный.
-    int32_t step = err / 100;
-    if (step > (int32_t)drive_step_cap) step = (int32_t)drive_step_cap;
-    if (step < -(int32_t)drive_step_cap) step = -(int32_t)drive_step_cap;
-    if (step == 0) step = (err > 0) ? 1 : -1;
-    int32_t next = (int32_t)drive_cmd_duty + step;
-    if (next < DRIVE_DUTY_MIN) next = DRIVE_DUTY_MIN;
-    if (next > DRIVE_DUTY_CEILING) next = DRIVE_DUTY_CEILING;
-    drive_cmd_duty = (uint16_t)next;
-  }
-  // «Медленнее не могу»: скважность уже на минимуме (найденный момент трогания
-  // или самый низ шкалы), а колесо всё равно быстрее заказанного.
-  const int32_t floor_duty = (drive_start_duty != 0) ? (int32_t)drive_start_duty
-                                                     : (int32_t)DRIVE_DUTY_MIN;
-  if (!drive_floor_noted && (int32_t)drive_cmd_duty <= floor_duty &&
-      (int32_t)rpm_x10 > (int32_t)target + 100) {
-    drive_floor_noted = true;
-    note(PSTR("тяга: медленнее не могу — на минимальной скважности уже %u об/мин"),
-         (unsigned)(rpm_x10 / 10));
-  }
-  driveWriteDuty(drive_cmd_duty);
 }
 
 // ---------------------------------------------------------------------------
@@ -1835,8 +1693,8 @@ void steeringSetup() {
   pinMode(BLDC_DIR_PIN, OUTPUT);
   pinMode(BLDC_BRAKE_PIN, OUTPUT);
   pinMode(BLDC_STOP_PIN, OUTPUT);
-  // Вход «P» драйвера — ШИМ с нулевой скважностью: мотор не тянет.
-  setupDrivePwm();
+  // Вход «P» драйвера — сигнал Servo со значением 0: мотор не тянет.
+  setupDriveServo();
   driveSetBrake(true);
   driveSetStop(true);
 
@@ -1860,6 +1718,7 @@ void steeringLoop() {
   updateDriveWatchdog();
   updatePot();
   updateRpm();
+  updateDriveFeedback();   // тяга есть, а колесо стоит — снять и сказать
 
   updateCalibration();
   updatePotCalibration();
@@ -1904,9 +1763,9 @@ uint8_t classifyModuleToken(const char* token) {
 void printHelp() {
   note(PSTR("команды: k, q, c [°], c c, d [°] [f/b], h, s, g, z, p, ?"));
   note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: t [FL] %%, b (своё колесо)"));
-  note(PSTR("двигатель: ШИМ D3 %u Гц (0…%u %%), тяга до %u %%, тах SC: %u/об"),
-       (unsigned)DRIVE_PWM_HZ, (unsigned)(DRIVE_DUTY_CEILING / 20),
-       (unsigned)DRIVE_MAX_PERCENT, (unsigned)DRIVE_TACH_PPR);
+  note(PSTR("двигатель: Servo D3 50 Гц (0…%u = 0…%u %%), тах SC: %u/об"),
+       (unsigned)DRIVE_SERVO_MAX_VALUE, (unsigned)DRIVE_MAX_PERCENT,
+       (unsigned)DRIVE_TACH_PPR);
 }
 
 // tach=1 — обороты с тахометра можно считать правдой; tach=0 — сигнала нет или
@@ -1927,18 +1786,19 @@ void appendTelemetry() {
   formatFixed((long)rpm_x10, 1, rpm, sizeof(rpm));
   const char* home = !(status & STATUS_ZERO) ? "none"
       : ((status & STATUS_HOME_OPTO) ? "opto" : "manual");
-  // dmax — предел тяги прошивки (100 %, то есть 500 об/мин), duty — скважность на входе
-  // «P» в промилле (25 — это 2,5 %), ppr — переходов тахометра на оборот
-  // (свойство драйвера: 90), hz — сколько переходов «SC» приходит в секунду.
+  // dmax — предел тяги прошивки (100 % шкалы), sv — значение Servo.write на входе
+  // «P» (0…180), duty — то же значение в промилле шкалы (1000 — полный ход),
+  // ppr — переходов тахометра на оборот (свойство драйвера: 90), hz — сколько
+  // переходов «SC» приходит в секунду.
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u rpm=%s drive=%d fw=%u pot=%d pm=%d tach=%d dmax=%u duty=%u ppr=%u hz=%lu t=%lu\r\n"),
+      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u rpm=%s drive=%d fw=%u pot=%d pm=%d tach=%d dmax=%u sv=%u duty=%u ppr=%u hz=%lu t=%lu\r\n"),
       deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
       (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
       home, (unsigned)((status >> 8) & 0x0F), rpm, (int)drive_percent, (unsigned)FIRMWARE_PROTOCOL,
       (status & STATUS_POT) ? 1 : 0,
       (status & STATUS_POT_MODE_SUPPORTED) ? ((status & STATUS_POT_MODE) ? 1 : 0) : -1,
-      tachTrustedFlag(), (unsigned)DRIVE_MAX_PERCENT,
-      (unsigned)((uint32_t)drive_duty * 1000UL / DRIVE_DUTY_FULL),
+      tachTrustedFlag(), (unsigned)DRIVE_MAX_PERCENT, (unsigned)drive_servo_value,
+      (unsigned)driveValuePermille(),
       (unsigned)DRIVE_TACH_PPR, (unsigned long)tach_hz, (unsigned long)millis());
   if (n <= 0 || n >= (int)sizeof(line)) return;
   txAppend(line, (uint16_t)n);
@@ -2067,7 +1927,6 @@ void setup() {
 void loop() {
   readSerialLines();
   steeringLoop();
-  updateDriveSpeed();   // обороты: процент команды → скважность на «P»
   const uint32_t now = millis();
   if ((uint32_t)(now - last_telemetry_ms) >= TELEMETRY_PERIOD_MS) {
     last_telemetry_ms = now;

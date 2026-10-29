@@ -90,99 +90,81 @@ def test_pins_levels_and_speeds_match_the_tested_sketch():
 
 
 def test_step_timer_does_not_fight_the_drive_pwm():
-    """Шаги на Timer2, ШИМ тяги на Timer3 — таймеры не делят.
+    """Шаги на Timer2, тяга — библиотекой Servo: таймеры не делят.
 
-    Библиотеки Servo в прошивке больше нет: она занимала на Mega Timer5, Timer1,
-    Timer3 и Timer4 целиком, и настоящую скважность 0…100 % через неё было не
-    получить (ровно 50 Гц, то есть 5…10 %). Теперь ШИМ аппаратный, на Timer3
-    (D3 = OC3C), а шаги остались на Timer2: он 8-битный, 16 МГц / 8 / 100 =
-    20 кГц — те же 50 мкс. Своих ISR у Timer1/4/5 нет, поэтому линковка чистая.
+    Имя теста осталось от версии с аппаратным ШИМ (v12). В v13 тяга снова идёт
+    через штатную библиотеку Servo — ровно как в проверенном на железе скетче
+    оператора («Servo mk1; mk1.attach(9); mk1.write(40)»). На Mega библиотека
+    занимает свои таймеры сама, а шаги по-прежнему на Timer2: 16 МГц / 8 / 100 =
+    20 кГц, тик 50 мкс. Своих ISR Timer1/3/4/5 в скетче нет — линковка чистая.
     """
     text = _text(WHEEL)
+    code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
     assert "ISR(TIMER2_COMPA_vect)" in text
     assert "TCCR2B = (1 << CS21)" in text and "OCR2A = 99" in text
     assert "TIMSK2 |= (1 << OCIE2A)" in text
     for vector in ("TIMER1_COMPA_vect", "TIMER3_COMPA_vect",
                    "TIMER4_COMPA_vect", "TIMER5_COMPA_vect"):
         assert "ISR(%s)" % vector not in text, vector
-    # Библиотека Servo не подключается: скважность задают регистры Timer3.
-    assert "#include <Servo.h>" not in text
-    assert "Servo " not in text.replace("Servo на", "")
-    # Timer2 в Arduino делится только с tone() и analogWrite на D9/D10 — ни того,
-    # ни другого в коде нет (скорость — аппаратный ШИМ на D3).
-    code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
-    assert "analogWrite(" not in code
-    assert "tone(" not in code
+    # Тяга — библиотека Servo, и вывод у неё тот же: вход «P» драйвера (D3).
+    assert "#include <Servo.h>" in text
+    assert "Servo drive_servo;" in code
+    assert "drive_servo.attach(BLDC_SPEED_PIN);" in code
+    assert int(_const(text, "BLDC_SPEED_PIN")) == 3
+    # Регистры Timer3 прошивка больше не трогает: этим занята библиотека.
+    for gone in ("TCCR3A", "TCCR3B", "OCR3A", "OCR3C", "TCNT3"):
+        assert gone not in code, gone
+    code2 = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
+    assert "analogWrite(" not in code2
+    assert "tone(" not in code2
 
 
 def test_drive_uses_hardware_pwm_and_a_full_scale_of_five_hundred_rpm():
-    """ШИМ на входе «P» — аппаратный, а процент команды — об/мин.
+    """Шкала тяги — 0…100 %, но выдаётся сигналом Servo, а не скважностью.
 
-    Драйвер RioRand ZS-Z11H понимает на «P» ШИМ 50 Гц…20 кГц и управляется
-    СКВАЖНОСТЬЮ: 0 % — мотор не тянет, 100 % — полный ход. Прошивка держит
-    1 кГц на Timer3 (D3 = OC3C) с 2000 шагами на период. Отзывается драйвер
-    резко, поэтому процент означает ЗАКАЗАННЫЕ ОБОРОТЫ: 100 % = 500 об/мин,
-    5 об/мин на процент, а скважность прошивка подбирает по тахометру «SC».
+    Имя теста историческое (v12: аппаратный ШИМ и «100 % = 500 об/мин»). В v13
+    оператор получил ровные обороты простым скетчем «сервопривод постоянного
+    вращения», и прошивка делает то же самое: штатная библиотека Servo, 50 Гц на
+    вход «P» (D3), значение write 0…180 — вся шкала. Процент переводится в
+    значение один в один: 1 % = 1,8, 100 % = 180. Контура оборотов нет.
     """
     text = _text(WHEEL)
     code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
-    # ШИМ регистрами Timer3, без библиотек: вывод OC3C, Fast PWM, TOP = OCR3A.
-    assert "#include <Servo.h>" not in text
-    assert "driveServo" not in code
+    assert "#include <Servo.h>" in text
     assert int(_const(text, "BLDC_SPEED_PIN")) == 3
-    assert "TCCR3A = (1 << COM3C1)" in code
-    assert "TCCR3B = (1 << WGM33) | (1 << WGM32) | (1 << CS31)" in code
-    assert "OCR3A = DRIVE_PWM_TOP;" in code and "OCR3C = steps;" in code
-    # 1 кГц — в паспортных 50 Гц…20 кГц; 2000 шагов на период — шаг 0,05 %.
-    assert int(_const(text, "DRIVE_PWM_HZ")) == 1000
-    assert int(_const(text, "DRIVE_PWM_TOP")) == 1999
-    assert _const(text, "DRIVE_DUTY_FULL") == "DRIVE_PWM_TOP + 1"
-    # Потолок скважности — половина, полный ход драйвера тележке не нужен.
-    assert _const(text, "DRIVE_DUTY_CEILING") == "DRIVE_DUTY_FULL / 2"
-    for gone in ("DRIVE_NEUTRAL_US", "DRIVE_SERVO_HZ", "DRIVE_MIN_PULSE_US",
-                 "DRIVE_FULL_US", "driveServo.writeMicroseconds"):
-        assert gone not in code, gone
-
-    # Шкала — 100 % = 500 об/мин: 5 об/мин на процент. Сам мотор без нагрузки
-    # выдаёт ≈578 об/мин (замер MAD-EE), поэтому 500 — это почти его предел.
+    # Шкала Servo: 0 — мотор не тянет, 180 — полный ход, 1 % = 1,8 значения.
+    assert int(_const(text, "DRIVE_SERVO_MAX_VALUE")) == 180
+    assert int(_const(text, "DRIVE_SERVO_TENTHS_PER_PERCENT")) == 18
     assert int(_const(text, "DRIVE_MAX_PERCENT")) == 100
-    assert int(_const(text, "DRIVE_MAX_RPM_X10")) == 5000
-    assert _const(text, "DRIVE_RPM_X10_PER_PERCENT") == "DRIVE_MAX_RPM_X10 / DRIVE_MAX_PERCENT"
-    assert 5000 // 100 == 50                            # 1 % = 5 об/мин
+    assert "drive_servo.write(0);" in code
+    assert "drive_servo.write(value);" in code
+    assert "driveWriteServo(driveValueForPercent(percent));" in code
+    # Никаких микросекунд с руки и никаких регуляторов: значение — это и есть
+    # положение ручки, ровно как в проверенном скетче.
+    for gone in ("writeMicroseconds", "DRIVE_NEUTRAL_US", "DRIVE_MIN_PULSE_US",
+                 "DRIVE_FULL_US", "DRIVE_PWM_HZ", "DRIVE_DUTY_CEILING",
+                 "DRIVE_SEEK_STEP", "DRIVE_MAX_RPM_X10"):
+        assert gone not in code, gone
+    assert "void updateDriveSpeed()" not in code
     # Потолок правдоподобия выше физического максимума мотора: иначе прошивка
     # ругалась бы «помеха» на полном ходу.
     assert int(_const(text, "DRIVE_TACH_MAX_RPM_X10")) > 5780
-
-    # Момент трогания прошивка находит сама: шаги по 0,4 % от нуля (и крупнее с
-    # ростом скважности), первый раз не выше 20 %, дальше — найденная точка +
-    # 1 %. Иначе обрыв провода «SC» выглядел бы как «колесо стоит», и прошивка
-    # разгоняла бы его до потолка.
-    assert int(_const(text, "DRIVE_SEEK_STEP")) == 8
-    assert int(_const(text, "DRIVE_SEEK_MAX_DUTY")) == 400
-    assert int(_const(text, "DRIVE_SEEK_MARGIN")) == 20
-    assert "drive_start_duty" in code and "drive_seeking" in code
-    # Ниже найденной точки не опускается, а шаг контура уменьшает на каждой
-    # остановке — иначе у резкого драйвера получались бы рывки.
-    assert "drive_step_cap" in code and "drive_good_duty" in code
-
-    # Контур замкнут на тахометр: регулятор правит скважность по оборотам.
-    assert "void updateDriveSpeed()" in code
-    assert "updateDriveSpeed();" in code
+    # Тахометр остался телеметрией и страховкой «тяга есть, а колесо стоит».
+    assert "void updateDriveFeedback()" in code
+    assert "updateDriveFeedback();" in code
     assert "DRIVE_FEEDBACK_TIMEOUT_MS" in code
-    # Без правдоподобных оборотов тяга снимается, а не крутится вслепую.
-    assert "обороты не измерить" in text
+    assert "тахометр SC молчит" in text
 
     # Уровни драйвера: STOP HIGH — выходы включены, LOW — выбег; BRAKE HIGH — тормоз.
     assert _const(text, "BLDC_STOP_ENABLE_LEVEL") == "HIGH"
     assert _const(text, "BLDC_STOP_DISABLE_LEVEL") == "LOW"
     assert _const(text, "BLDC_BRAKE_ACTIVE_LEVEL") == "HIGH"
-    # Python-зеркало того же: предел тяги и тахометр.
+    # Python-зеркало того же: предел тяги и телеметрия.
     mirror = _text(ROOT / "slam_gui" / "backend.py")
-    # Оба потолка — 100 % = 500 об/мин, как DRIVE_MAX_PERCENT в прошивке.
     assert re.search(r"^MAX_DRIVE_PERCENT = 100$", mirror, re.M)
     assert re.search(r"^DRIVE_ABS_MAX_PERCENT = 100$", mirror, re.M)
     assert "DRIVE_MAX_KMH_X10" not in mirror
-    # Скважность в телеметрии — в промилле (0…1000), а не в микросекундах.
+    # Значение ручки в телеметрии — в промилле шкалы (0…1000).
     assert re.search(r"^DRIVE_DUTY_MAX_PERMILLE = 1000$", mirror, re.M)
 
 
@@ -195,9 +177,9 @@ def test_firmware_has_no_usb_role_discovery():
     # Legacy addressed monitor commands remain compatible; the application
     # sends local commands to the manually selected port.
     assert 'classifyModuleToken' in text
-    # v11 — драйвер ZS-Z11H: аппаратный ШИМ на D3 (вход «P», управляет
-    # скважностью), линия STOP на D2, тахометр «SC» на D19, регулятор оборотов.
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '12'
+    # v13 — драйвер ZS-Z11H: вход «P» (D3) ведёт библиотека Servo, значение
+    # 0…180 = 0…100 % тяги; линия STOP на D2, тахометр «SC» на D19.
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '13'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
@@ -375,7 +357,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 12 and frame["calibError"] == 0
+        assert frame["firmware"] == 13 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] == 0.0
         assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False
