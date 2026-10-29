@@ -8,14 +8,6 @@ inline int digitalRead(uint8_t pin) { return sim_board.digital_read(pin); }
 inline int analogRead(uint8_t pin) { return sim_board.analog_read(pin); }
 inline void analogReference(uint8_t) {}
 inline void analogWrite(uint8_t pin, int value) { sim_board.analog[pin] = value; }
-// Аппаратный ШИМ на D3 (Timer3, выход OC3C): регистры — поля своей Board.
-// На железе у каждой платы свой таймер и свой вывод, поэтому и здесь запись
-// OCR3C/OCR3A идёт в свою Board, а не в общий глобальный регистр.
-#define TCCR3A sim_board.pwm_tccr_a
-#define TCCR3B sim_board.pwm_tccr_b
-#define OCR3A sim_board.pwm_top
-#define OCR3C sim_board.pwm_compare
-#define TCNT3 sim_board.pwm_counter
 // На Mega внешние прерывания: D2 (INT4), D3 (INT5), D18 (INT3), D19 (INT2),
 // D20 (INT1), D21 (INT0). Тахометр переехал на D19 — прерывание есть и там.
 inline uint8_t digitalPinToInterrupt(uint8_t pin) {

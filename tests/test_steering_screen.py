@@ -207,13 +207,13 @@ def test_wheel_drive_refusal_stops_the_heartbeat_and_is_shown(tmp_path):
 
 
 def test_wheel_drive_shows_reported_output_and_honest_rpm(tmp_path):
-    """В карточке видна фактическая скважность ШИМ и обороты по «SC»."""
+    """В карточке видно, что стоит на входе «P», и обороты по «SC»."""
     motors = [motor(m) for m in MODULES]
     motors[0] = dict(motors[0], drivePercent=6, driveDutyPermille=13, tach=True, rpm=95.0)
     report = run_screen(tmp_path, payload(motors=motors, actions=[
         {"type": "wheel-drive", "id": "FL", "direction": 1}]))
     cards = {item["id"]: item for item in report["wheelDrive"]}
-    assert "скважность 1,3 %" in cards["FL"]["output"], cards["FL"]["output"]
+    assert "на «P» 1,3 %" in cards["FL"]["output"], cards["FL"]["output"]
     assert "об/мин" in cards["FL"]["output"]
     assert cards["FL"]["state"].startswith("вперёд")
 
