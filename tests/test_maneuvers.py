@@ -606,3 +606,22 @@ def test_maneuver_missing_brake_ack_fails_closed():
     runner.tick(0.05, frames, world.steer, world.drive)
     assert runner.status()["reason"] == "brake_firmware_required"
     assert not world.commands and world.brakes == 1
+
+
+def test_v19_recent_sc_keeps_maneuver_braked_until_edges_stop():
+    world = World()
+    runner = runner_for(world)
+    frames = world.frames()
+    for frame in frames.values():
+        frame.update(firmware=19, scRecent=False)
+    frames["FR"]["scRecent"] = True  # RPM has not caught up yet
+    assert runner.start("forward", 0.0)["ok"]
+    runner.tick(0.05, frames, world.steer, world.drive)
+    assert runner.status()["state"] == runner.STEERING and not world.commands
+    frames["FR"]["scRecent"] = False
+    runner.tick(0.10, frames, world.steer, world.drive)
+    assert runner.status()["state"] == runner.DRIVING
+
+    invalid = dict(frames["FL"], scRecent=None)
+    frames["FL"] = invalid
+    assert m.odometry_error(frames) == "sc_invalid"

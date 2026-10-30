@@ -55,7 +55,7 @@ try:
 except ImportError:  # pragma: no cover - не-POSIX платформы
     fcntl = None  # type: ignore[assignment]
 
-from flask import Flask, Response, jsonify, redirect, request
+from flask import Flask, Response, g, jsonify, redirect, request
 from werkzeug.serving import make_server
 
 from robot_control import estop as estop_latch
@@ -66,6 +66,7 @@ from robot_control.config import PROJECT_ROOT, Config
 from robot_control.lidar import LidarManager, set_self_port
 from robot_control.lidar_settings import apply_lidar_settings, settings_payload
 from robot_control.keyboard import KeyboardControl
+from robot_control.neutral import NeutralControl
 from robot_control.slam import (
     GUI_DIR,
     KIOSK_PAGE,
@@ -601,6 +602,68 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     keyboard = KeyboardControl(lambda: getattr(state, "source", None), dispatch_drive_command,
                                dispatch_steering_command, estop_latch.latched)
     app.extensions["rc_keyboard"] = keyboard
+    neutral = NeutralControl(lambda: getattr(state, "source", None), estop_latch.latched,
+                             lambda: navigation.active, interrupt_keyboard=keyboard.interrupt)
+    app.extensions["rc_neutral"] = neutral
+    motion_gate = threading.RLock()
+    motion_routes = {
+        "/api/kiosk_neutral", "/api/kiosk_drive", "/api/kiosk_keyboard", "/api/kiosk_steer",
+        "/api/kiosk_zero", "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_maneuver",
+        "/api/kiosk_maneuver_config", "/api/navigation/start", "/api/navigation/cancel",
+        "/api/navigation/estop", "/api/estop", "/api/estop/release", "/api/wheels/settings",
+        "/api/system/stop",
+    }
+
+    @app.before_request
+    def guard_neutral_motion():
+        # A request that passed the interlock must finish before neutral can
+        # reserve the ports; requests arriving later cannot queue motion.
+        if request.method != "POST" or request.path not in motion_routes:
+            return None
+        arrival_epoch, arrival_locked = neutral.ticket()
+        body = request.get_json(silent=True)
+        body = body if isinstance(body, dict) else {}
+        if request.path == "/api/kiosk_drive":
+            value = body.get("value") if "value" in body else body.get("percent")
+            is_stop = type(value) in (int, float) and value == 0
+        elif request.path in {"/api/kiosk_keyboard", "/api/kiosk_maneuver"}:
+            action = body.get("action")
+            is_stop = isinstance(action, str) and action in {"stop", "end"}
+        else:
+            is_stop = request.path in {"/api/estop", "/api/navigation/cancel", "/api/navigation/estop", "/api/system/stop"}
+        # STOP gets an immediate best-effort brake even if an earlier HTTP
+        # motion request is still finishing. The normal STOP runs again under
+        # the gate so that this in-flight request cannot overtake the final b.
+        marker = ("steering" if request.path == "/api/kiosk_maneuver" else
+                  "navigation" if request.path.startswith("/api/navigation/") else
+                  STOP_COMMAND_HEADER_VALUE if request.path == "/api/system/stop" else "drive")
+        global_stop = (request.path != "/api/kiosk_drive" or body.get("module") in (None, "ALL", "all")
+                       or arrival_locked)
+        if is_stop and global_stop and request.headers.get(STEERING_COMMAND_HEADER) == marker:
+            brake = getattr(getattr(state, "source", None), "_brake_all", None)
+            if callable(brake):
+                try:
+                    brake()
+                except Exception:  # noqa: BLE001 — firmware watchdog is the backstop
+                    pass
+        motion_gate.acquire()
+        g.neutral_motion_gate = True
+        if request.path == "/api/kiosk_neutral":
+            return None
+        current = neutral.status()
+        if is_stop:
+            if current["locked"]:
+                neutral.interrupt()
+            return None
+        if current["locked"] or arrival_locked or arrival_epoch != neutral.ticket()[0]:
+            return jsonify(ok=False, reason="neutral_locked"), 409
+        return None
+
+    @app.teardown_request
+    def release_neutral_motion_gate(_error):
+        if getattr(g, "neutral_motion_gate", False):
+            g.neutral_motion_gate = False
+            motion_gate.release()
 
     @app.before_request
     def interrupt_keyboard_on_other_motion():
@@ -610,8 +673,13 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "/api/kiosk_drive", "/api/kiosk_steer", "/api/kiosk_zero",
             "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_maneuver",
             "/api/estop", "/api/navigation/start", "/api/navigation/cancel", "/api/navigation/estop",
+            "/api/system/stop",
         }:
-            keyboard.interrupt()
+            # A global system STOP must retire live steering under the motion
+            # gate too; the early best-effort brake alone can be overtaken by
+            # an HTTP heartbeat that was already executing.
+            if request.path != "/api/system/stop" or request.headers.get(STEERING_COMMAND_HEADER) == STOP_COMMAND_HEADER_VALUE:
+                keyboard.interrupt()
 
     def _map_worker(stop_event: threading.Event) -> None:
         """Фоновая нить карты: впитывает сканы и перезаписывает файл карты.
@@ -750,6 +818,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "wheelSpeedMps": snap.get("wheelSpeedMps"),
             "powerKw": snap.get("powerKw"),
             "estop": estop_info,
+            "neutral": neutral.status(),
             "mode": snap.get("mode"),
             "linkOk": snap.get("linkOk"),
             "ts": snap.get("ts"),
@@ -762,6 +831,24 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             # Последние сообщения прошивки мастера («# FR: Калибровка ЗАВЕРШЕНА!»).
             "masterMessages": snap.get("masterMessages") or [],
         }})
+
+    @app.get("/api/kiosk_wheel_state")
+    def api_kiosk_wheel_state():
+        """Small, current wheel snapshot for active WASD; no lidar/map payload."""
+        if state is None:
+            return jsonify(ok=False, error="no source"), 503
+        source = getattr(state, "source", None)
+        try:
+            snap = source.read()
+        except Exception:  # noqa: BLE001 — fail closed on a broken source
+            return jsonify(ok=False, error="wheel source unavailable"), 503
+        if not isinstance(snap, dict):
+            return jsonify(ok=False, error="wheel source unavailable"), 503
+        return jsonify(ok=True, data={
+            "motors": snap.get("motors"), "drive": snap.get("drive"),
+            "linkOk": snap.get("linkOk"), "estop": estop_latch.latched(),
+            "neutral": neutral.status(), "steeringControl": steering_control_info(source),
+        }), 200, {"Cache-Control": "no-store"}
 
     @app.get("/api/lidar")
     @app.get("/api/scan")
@@ -965,6 +1052,38 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "reason": result.get("reason", "pin")}), 403
         return jsonify(release_estop())
 
+    @app.post("/api/kiosk_neutral")
+    def api_kiosk_neutral():
+        if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
+            return jsonify(ok=False, reason="request_header_required"), 400
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify(ok=False, reason="payload"), 400
+        action = body.get("action")
+        if not isinstance(action, str):
+            return jsonify(ok=False, reason="payload"), 400
+        expires = None
+        if action in {"begin", "heartbeat"}:
+            try:
+                deadline = float(request.headers.get("X-Robot-Command-Deadline", ""))
+                now = time.time()
+                if not math.isfinite(deadline) or deadline < now or deadline > now + 0.75:
+                    raise ValueError("expired")
+                expires = time.monotonic() + (deadline - now)
+            except (TypeError, ValueError):
+                if action == "heartbeat":
+                    neutral.interrupt("command_expired")
+                return jsonify(ok=False, reason="command_expired"), 408
+        if action == "begin" and set(body) == {"action"}:
+            result, status = neutral.begin(expires)
+        elif action == "heartbeat":
+            result, status = neutral.heartbeat(body, expires)
+        elif action == "restore" and set(body) == {"action"}:
+            result, status = neutral.restore()
+        else:
+            return jsonify(ok=False, reason="payload"), 400
+        return jsonify(result), status
+
     @app.post("/api/kiosk_keyboard")
     def api_kiosk_keyboard():
         if state is None:
@@ -973,6 +1092,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
         body = request.get_json(silent=True)
         action = body.get("action") if isinstance(body, dict) else None
+        if not isinstance(action, str):
+            return jsonify(ok=False, reason="payload"), 400
         expires = None
         if action not in {"stop", "end"}:
             try:
@@ -989,7 +1110,9 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             if expires is not None and time.time() > expires:
                 keyboard.interrupt()
                 return {"ok": False, "reason": "command_expired"}, 408
-            return keyboard.handle(body)
+            deadline = (time.monotonic() + max(0.0, expires - time.time())
+                        if expires is not None else None)
+            return keyboard.handle(body, deadline=deadline)
 
         # Сервер навигации освобождает тягу прежде чем разрешить WASD.
         sent = navigation.manual_override(send_keyboard, wait_for_exit=action not in {"stop", "end"})
@@ -1215,7 +1338,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         })
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
-    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js", "robot.css", "robot.js", "keyboard.js", "battery.js", "lidar_settings.css",
+    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js", "robot.css", "robot.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "map_view.js",
                      "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):

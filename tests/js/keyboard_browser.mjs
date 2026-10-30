@@ -1,16 +1,16 @@
-/* Full-stack simulation: real browser -> kiosk -> four PTY firmware boards.
- * The simulator's SC pulses follow a fake motor model, not physical motors. */
+/* Real browser -> kiosk -> four PTY firmware boards. Physics is simulated. */
 import assert from 'node:assert/strict';
 import {pathToFileURL} from 'node:url';
 const {chromium} = await import(pathToFileURL(process.env.RC_TEST_PLAYWRIGHT_CORE).href);
 const origin = process.argv[2];
 const browser = await chromium.launch({executablePath: process.env.RC_TEST_CHROMIUM,
   args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], headless: true});
-const context = await browser.newContext({viewport: {width: 1200, height: 900}});
-const page = await context.newPage();
+const page = await browser.newPage({viewport: {width: 1200, height: 900}});
 const errors = [], actions = [];
+let fastPolls = 0;
 page.on('pageerror', error => errors.push(String(error)));
 page.on('request', request => {
+  if (request.url().includes('/api/kiosk_wheel_state')) ++fastPolls;
   if (request.url().includes('/api/kiosk_keyboard') && request.postData()) {
     try { actions.push(JSON.parse(request.postData())); } catch (_) {}
   }
@@ -21,102 +21,128 @@ const poll = async (predicate, timeout = 12000) => {
   while (Date.now() < end) {
     data = (await (await fetch(origin + '/api/kiosk_state')).json()).data;
     if (predicate(data)) return data;
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(35);
   }
   throw new Error('telemetry timeout: ' + JSON.stringify({motors: data && data.motors,
     status: await page.locator('#keyboard-status').textContent(), actions: actions.slice(-12)}));
 };
-const waitWheels = async (angles, sign) => poll(data => Object.entries(angles).every(([id, angle]) => {
+const all = angle => ({FL: angle, FR: angle, RL: angle, RR: angle});
+const waitWheels = (angles, sign) => poll(data => Object.entries(angles).every(([id, angle]) => {
   const m = data.motors.find(item => item.id === id);
   return m && m.online && !m.moving && Math.abs(m.angle - angle) <= 1.5 &&
     (sign === 0 ? m.drivePercent === 0 : Math.sign(m.drivePercent) === sign);
 }));
-const all = angle => ({FL: angle, FR: angle, RL: angle, RR: angle});
-const stopped = async () => poll(data => data.motors.length === 4 &&
+const stopped = () => poll(data => data.motors.length === 4 &&
   data.motors.every(m => m.online && m.drivePercent === 0), 6000);
 const enable = async () => {
   await page.locator('#keyboard-enable').click();
   await page.waitForFunction(() => document.getElementById('keyboard-enable').getAttribute('aria-pressed') === 'true', null, {timeout: 10000});
   await page.locator('#keyboard-enable').focus();
 };
-
 try {
   await page.goto(origin + '/main.html', {waitUntil: 'domcontentloaded'});
   await page.waitForFunction(() => typeof window._showSteeringPage === 'function');
   await page.evaluate(() => window._showSteeringPage());
-  await poll(data => data.motors.length === 4 && data.motors.every(m => m.online && m.homed && m.firmware === 17), 10000);
+  await poll(data => data.motors.length === 4 && data.motors.every(m => m.online && m.homed && m.firmware >= 20));
   await enable();
+  assert.equal(await page.locator('#keyboard-speed').inputValue(), '20');
 
-  // Краб: D действительно едет вправо боком на +90°.
-  await page.keyboard.down('d');
-  await waitWheels(all(90), 1);
-  await page.waitForTimeout(500);
-  await page.keyboard.up('d');
+  // WASD without an arrow only positions steering. Arrow is hold-to-run.
+  await page.keyboard.down('w');
+  await waitWheels(all(0), 0);
+  await page.keyboard.down('ArrowUp');
+  await waitWheels(all(0), 1);
+  await page.keyboard.up('ArrowUp');
   await stopped();
-  await page.waitForTimeout(800);
-  await stopped();
+  await page.keyboard.up('w');
+  await waitWheels(all(0), 0);
 
-  // Обычное руление: передние колёса поворачиваются, задние прямо.
+  // Four-wheel normal steering while driving: D turns fronts right, rears
+  // left, and releasing D centres all four without a STOP or loss of thrust.
   await page.locator('#keyboard-mode').selectOption('normal');
   await page.locator('#keyboard-enable').focus();
-  await page.keyboard.down('w');
+  await page.keyboard.down('ArrowUp');
   await waitWheels(all(0), 1);
-  const actionStart = actions.length;
+  const start = actions.length;
   await page.keyboard.down('d');
-  await waitWheels({FL: 25, FR: 25, RL: 0, RR: 0}, 1);
-  const changed = actions.slice(actionStart);
-  const stopIndex = changed.findIndex(a => a.action === 'stop');
-  const steerIndex = changed.findIndex(a => a.action === 'steer');
-  const armIndex = changed.findIndex(a => a.action === 'arm');
-  const driveIndex = changed.findIndex(a => a.action === 'drive');
-  assert.ok(stopIndex >= 0 && stopIndex < steerIndex && steerIndex < armIndex && armIndex < driveIndex,
-    JSON.stringify(changed));
+  await poll(data => data.motors.some(m => m.moving) && data.motors.every(m => m.drivePercent === 20));
+  await waitWheels({FL: 25, FR: 25, RL: -25, RR: -25}, 1);
   await page.keyboard.up('d');
-  await waitWheels(all(0), 1);  // W ещё удерживается, после подтверждения руля продолжаем
-  await page.keyboard.up('w');
+  await poll(data => data.motors.some(m => m.moving) && data.motors.every(m => m.drivePercent === 20));
+  await waitWheels(all(0), 1);
+  const turns = actions.slice(start);
+  assert.ok(turns.some(a => a.action === 'live' && a.angles.FL === 25 && a.angles.RL === -25), JSON.stringify(turns));
+  assert.ok(turns.some(a => a.action === 'live' && a.angles.FL === 0 && a.angles.RL === 0), JSON.stringify(turns));
+  assert.ok(!turns.some(a => a.action === 'stop'), 'turn or self-centre stopped traction');
+  // The key can also be released before the stepper reaches its target.
+  const quickStart = actions.length;
+  await page.keyboard.down('d');
+  await poll(data => data.motors.some(m => m.moving) && data.motors.every(m => m.drivePercent === 20));
+  await page.keyboard.up('d');
+  await waitWheels(all(0), 1);
+  assert.ok(!actions.slice(quickStart).some(a => a.action === 'stop'), 'quick release braked');
+  await page.keyboard.up('ArrowUp');
   await stopped();
 
-  // A без W/S только рулит, моторы не запускаются.
-  await page.keyboard.down('a');
-  await waitWheels({FL: -25, FR: -25, RL: 0, RR: 0}, 0);
-  await page.keyboard.up('a');
-  await stopped();
+  // While stopped, releasing D must also cancel an unfinished turn and centre.
+  await page.keyboard.down('d');
+  await page.waitForTimeout(120);
+  await page.keyboard.up('d');
+  await waitWheels(all(0), 0);
 
-  // Отпускание во время поворота инвалидирует все старые асинхронные задачи.
+  // Crab left and right use the SAME +90° axis and opposite motor directions.
   await page.locator('#keyboard-mode').selectOption('crab');
   await page.locator('#keyboard-enable').focus();
   await page.keyboard.down('d');
-  await page.waitForTimeout(100);
+  await waitWheels(all(90), 0);
+  await page.keyboard.down('ArrowUp');
+  await waitWheels(all(90), 1);
+  // Reversing the crab side while the arrow is held must brake first, then
+  // reuse +90° with negative traction; no -90° command is ever sent.
+  const crabStart = actions.length;
   await page.keyboard.up('d');
-  await page.waitForTimeout(2200);
+  await page.keyboard.down('a');
+  await waitWheels(all(90), -1);
+  const crabActions = actions.slice(crabStart);
+  const brakeAt = crabActions.findIndex(a => a.action === 'stop');
+  const reverseAt = crabActions.findIndex(a => a.action === 'live' && a.percent < 0 && a.angles.FL === 90);
+  assert.ok(brakeAt >= 0 && reverseAt > brakeAt, JSON.stringify(crabActions));
+  assert.ok(!crabActions.some(a => a.angles && Object.values(a.angles).includes(-90)), 'crab rotated to -90°');
+  await page.keyboard.up('ArrowUp');
+  await page.keyboard.up('a');
   await stopped();
+  await waitWheels(all(0), 0);
 
-  // Отрицательное направление и потеря фокуса: ни одного самопроизвольного рестарта.
-  await page.keyboard.down('s');
-  await waitWheels(all(0), -1);
-  // Headless Chromium не всегда меняет focus при открытии второй вкладки;
-  // явно доставляем такое же событие, как при потере фокуса окна.
+  // Releasing during a turn must cancel old asynchronous plans/heartbeats.
+  await page.keyboard.down('d');
+  await page.waitForTimeout(80);
+  await page.keyboard.up('d');
+  await page.waitForTimeout(1800);
+  await waitWheels(all(0), 0);
+  await page.keyboard.down('ArrowUp');
+  await waitWheels(all(0), 1);
   await page.evaluate(() => window.dispatchEvent(new Event('blur')));
-  await page.waitForTimeout(900);
   await stopped();
   assert.equal(await page.locator('#keyboard-enable').getAttribute('aria-pressed'), 'false');
   await page.waitForTimeout(800);
   await stopped();
-  await page.keyboard.up('s');
+  await page.keyboard.up('ArrowUp');
 
-  // Потеря телеметрии при удержании: отключить режим и не возобновлять его.
-  await enable();
-  await page.keyboard.down('w');
-  await waitWheels(all(0), 1);
-  await page.route('**/api/kiosk_state', route => route.abort());
-  await page.waitForFunction(() => document.getElementById('keyboard-enable').getAttribute('aria-pressed') === 'false', null, {timeout: 4000});
-  await page.unroute('**/api/kiosk_state');
-  await stopped();
-  await page.waitForTimeout(900);
-  await stopped();
-  await page.keyboard.up('w');
+  // Loss of only the fast telemetry, or of the ordinary state, stops and
+  // revokes the lease even while the arrow remains held.
+  for (const endpoint of ['kiosk_wheel_state', 'kiosk_state']) {
+    await enable();
+    await page.keyboard.down('ArrowUp');
+    await waitWheels(all(0), 1);
+    assert.ok(fastPolls > 0);
+    await page.route('**/api/' + endpoint, route => route.abort());
+    await page.waitForFunction(() => document.getElementById('keyboard-enable').getAttribute('aria-pressed') === 'false', null, {timeout: 4000});
+    await page.unroute('**/api/' + endpoint);
+    await stopped();
+    await page.waitForTimeout(800);
+    await stopped();
+    await page.keyboard.up('ArrowUp');
+  }
   assert.deepEqual(errors, []);
   console.log('WASD browser + kiosk + four simulated USB boards: OK');
-} finally {
-  await browser.close();
-}
+} finally { await browser.close(); }

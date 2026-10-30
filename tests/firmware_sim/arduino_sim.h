@@ -334,8 +334,9 @@ inline void run_for_ms(double ms) {
 
 }  // namespace sim
 
-inline unsigned long millis() { return (unsigned long)(sim::now_us / 1000); }
-inline unsigned long micros() { return (unsigned long)sim::now_us; }
+// Arduino unsigned long is 32-bit even when this host compiler uses 64-bit long.
+inline unsigned long millis() { return (uint32_t)(sim::now_us / 1000); }
+inline unsigned long micros() { return (uint32_t)sim::now_us; }
 inline void delayMicroseconds(unsigned int us) { sim::advance(us); }
 inline void delay(unsigned long ms) { sim::advance((int64_t)ms * 1000); }
 inline void noInterrupts() {}

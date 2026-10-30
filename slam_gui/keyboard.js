@@ -8,21 +8,28 @@
   'use strict';
   const IDS = ['FL', 'FR', 'RL', 'RR'];
 
-  // +angle is right. Reverse diagonal uses the opposite steering angle:
-  // reverse at -45° moves backward AND right, not backward and left.
+  // WASD selects the wheel direction; arrows separately enable traction.
+  // In crab, +90° with negative traction goes left without turning to -90°.
+  // With no WASD key held the selected direction is straight ahead.
   function plan(keys, mode) {
     const has = (k) => keys.has(k);
-    const forward = Number(has('KeyW')) - Number(has('KeyS'));
-    const right = Number(has('KeyD')) - Number(has('KeyA'));
-    if (!forward && !right) return null;
+    const up = has('ArrowUp'), down = has('ArrowDown');
+    const w = has('KeyW'), s = has('KeyS'), a = has('KeyA'), d = has('KeyD');
+    if ((w && s) || (a && d) || (up && down)) {
+      return {angles: {FL: 0, FR: 0, RL: 0, RR: 0}, direction: 0};
+    }
+    const arrow = Number(up) - Number(down);
+    const right = Number(d) - Number(a);
+    const forward = w || s ? Number(w) - Number(s) : (right ? 0 : 1);
     if (mode === 'normal') {
       const angle = right * 25;
-      return {angles: {FL: angle, FR: angle, RL: 0, RR: 0}, direction: forward};
+      const longitudinal = s ? -1 : 1;
+      return {angles: {FL: angle, FR: angle, RL: -angle || 0, RR: -angle || 0},
+        direction: arrow * longitudinal || 0};
     }
-    let angle, direction;
-    if (!forward) { angle = right * 90; direction = 1; }
-    else { direction = forward; angle = right * 45 * forward; }
-    return {angles: {FL: angle, FR: angle, RL: angle, RR: angle}, direction};
+    const angle = (forward ? right * 45 * forward : 90) || 0;
+    const selectedDirection = forward || right;
+    return {angles: {FL: angle, FR: angle, RL: angle, RR: angle}, direction: arrow * selectedDirection || 0};
   }
 
   function create(options) {
@@ -49,7 +56,10 @@
       module_busy: 'Сначала остановите тягу и рулевые модули.',
       steering_changed: 'Углы руля не подтверждены; тяга снята.',
       brake_firmware_required: 'На всех платах нужна прошивка с подтверждением тормоза.',
+      live_firmware_required: 'Для руления на ходу нужна fw20 или новее на всех четырёх платах.',
+      live_unconfirmed: 'Не все платы подтвердили управление; тяга снята.',
       brake_unconfirmed: 'Тормоз не подтверждён всеми платами.',
+      neutral_locked: 'Сначала верните тормоз после нейтрали.',
       sc_invalid: 'Нет корректных показаний SC.',
       sc_changed: 'Счётчик SC или плата изменились; тяга снята.',
       sc_stalled: 'Нет переходов SC на одном из колёс; тяга снята.',
@@ -69,7 +79,7 @@
     }
     function valid(gen) { return state.enabled && gen === state.generation && !!state.token; }
     function speedValue() {
-      return Math.max(1, Math.min(100, Math.round(Number(speed && speed.value) || 8)));
+      return Math.max(1, Math.min(100, Math.round(Number(speed && speed.value) || 20)));
     }
     async function post(body, keepalive) {
       const controller = new AbortController();
@@ -86,7 +96,11 @@
           headers, body: JSON.stringify(body)
         });
         const result = await response.json().catch(() => ({}));
-        if (!response.ok || !result.ok) throw new Error(result.reason || 'command_failed');
+        if (!response.ok || !result.ok) {
+          const error = new Error(result.reason || 'command_failed');
+          error.retryable = result.retryable === true;
+          throw error;
+        }
         return result;
       } finally { clearTimeout(timeout); }
     }
@@ -127,6 +141,7 @@
     function snapshotError(data) {
       if (!data || Date.now() - options.freshAt() > 850 || data.linkOk === false) return 'module_offline';
       if (data.estop) return 'estop';
+      if (data.neutral && data.neutral.locked) return 'neutral_locked';
       if (!data.steeringControl || !data.steeringControl.available || !data.drive || !data.drive.available) return 'serial_unavailable';
       const motors = motorMap(data);
       for (const id of IDS) {
@@ -134,7 +149,11 @@
         if (!m || m.online !== true || typeof m.telemetryAgeS !== 'number' || m.telemetryAgeS >= 0.75) return 'module_offline';
         if (m.homed !== true) return 'not_homed';
         if (m.calibrating || m.cycling) return 'module_busy';
-        if (typeof m.scRpm !== 'number' || !Number.isFinite(m.scRpm) || m.scRpm < 0) return 'sc_invalid';
+        if (typeof m.scRpm !== 'number' || !Number.isFinite(m.scRpm) || m.scRpm < 0 ||
+            (m.firmware >= 19 && typeof m.scRecent !== 'boolean')) return 'sc_invalid';
+        if (!Number.isInteger(m.firmware) || m.firmware < 20 ||
+            !Number.isInteger(m.liveId) || m.liveId < 0 || m.liveId >= 2147483647 ||
+            !Number.isInteger(m.liveSeq) || m.liveSeq < 0 || m.liveSeq >= 2147483647) return 'live_firmware_required';
         if (!Number.isInteger(m.brakeId) || m.brakeId < 0 || m.brakeId > 2147483647) return 'brake_firmware_required';
         if (typeof m.angle !== 'number' || !Number.isFinite(m.angle) || !Number.isInteger(m.drivePercent)) return 'module_offline';
       }
@@ -142,7 +161,8 @@
     }
     function stopped(data) {
       const motors = motorMap(data);
-      return !data.drive.active && IDS.every((id) => !motors[id].moving && motors[id].drivePercent === 0 && motors[id].scRpm <= 1);
+      return !data.drive.active && IDS.every((id) => !motors[id].moving && motors[id].drivePercent === 0 &&
+        motors[id].scRpm <= 1 && motors[id].scRecent !== true);
     }
     function arrived(data, angles) {
       const motors = motorMap(data);
@@ -157,7 +177,21 @@
         if (error) throw new Error(error);
         if (predicate(data)) return data;
         if (Date.now() > end) throw new Error('steering_changed');
-        await delay(80);
+        await delay(25);
+      }
+      return null;
+    }
+    async function sendWhenStopped(gen, action, values) {
+      const end = Date.now() + 6000;
+      while (valid(gen)) {
+        try { return await send(action, values); }
+        catch (error) {
+          // The server may have a newer SC sample than the browser. Keep the
+          // brakes on and retry only the explicit, safe coasting response.
+          if (!error.retryable || error.message !== 'wheel_moving' || Date.now() > end) throw error;
+          show('Колёса ещё вращаются · ждём остановки…');
+          await delay(50);
+        }
       }
       return null;
     }
@@ -166,10 +200,14 @@
       state.drivePending = true;
       state.lastDrive = Date.now();
       try {
-        await send('drive', {percent: current.direction * speedValue(), angles: current.angles, permit: permit || ''});
+        await send('live', {percent: current.direction * speedValue(), angles: current.angles, permit: permit || ''});
       } catch (error) {
         if (valid(gen)) fail(error);
-      } finally { state.drivePending = false; }
+      } finally {
+        state.drivePending = false;
+        // Coalesce fast key changes while one HTTP heartbeat is in flight.
+        if (valid(gen) && state.running && state.running !== current) void heartbeat(gen, state.running, '');
+      }
     }
     function tick() {
       if (!state.enabled) return;
@@ -182,7 +220,8 @@
       const data = options.getState(), error = snapshotError(data);
       if (error) { fail(new Error(error)); return; }
       if (state.running) {
-        if (!arrived(data, state.running.angles)) { fail(new Error('steering_changed')); return; }
+        // The onboard lease checks each board's sequence and steering progress;
+        // being between the old and new target is expected during a live turn.
         if (!state.drivePending && now - state.lastDrive >= 180) void heartbeat(gen, state.running, '');
       } else if (!state.planning && !state.pingPending && now - state.lastPing >= 1000) {
         state.pingPending = true;
@@ -208,6 +247,7 @@
         state.sequence = 0;
         state.enabled = true;
         state.enabling = false;
+        if (options.onReady) options.onReady();
         state.lastTick = state.lastPing = Date.now();
         state.timer = setInterval(tick, 150);
         updateButton();
@@ -218,8 +258,17 @@
     }
     function replan() {
       if (!state.enabled) return;
-      const gen = ++state.generation;
       const desired = plan(state.keys, mode ? mode.value : 'crab');
+      if (state.running && desired.direction && desired.direction === state.running.direction) {
+        const changed = IDS.some((id) => desired.angles[id] !== state.running.angles[id]);
+        if (changed) {
+          state.running = desired;
+          show('Рулим на ходу · удерживайте стрелку.');
+          if (!state.drivePending) void heartbeat(state.generation, desired, '');
+        }
+        return;
+      }
+      const gen = ++state.generation;
       state.running = null;
       state.planning = true;
       show(desired ? 'Остановка перед изменением углов…' : 'Останавливаемся…');
@@ -236,14 +285,9 @@
         let data = await waitFor(gen, (current) => stopped(current) &&
           IDS.every((id) => motorMap(current)[id].brakeId === brakeId), 6000);
         if (!data || !valid(gen)) return;
-        let sentSteer = false;
-        for (const id of IDS) {
-          if (!valid(gen)) return;
-          const motor = motorMap(data)[id], angle = desired.angles[id];
-          if (Math.abs(motor.angle - angle) <= 1.0) continue;
-          await send('steer', {module: id, angle});
-          sentSteer = true;
-        }
+        const sentSteer = IDS.some((id) => Math.abs(motorMap(data)[id].angle - desired.angles[id]) > 1.0);
+        if (sentSteer) await sendWhenStopped(gen, 'steer_all', {angles: desired.angles});
+        if (!valid(gen)) return;
         const sentAt = Date.now();
         show('Ждём подтверждения углов всех колёс…');
         data = await waitFor(gen, (current) => (!sentSteer || options.freshAt() > sentAt) && arrived(current, desired.angles), 6000);
@@ -258,8 +302,8 @@
         while (valid(gen) && state.drivePending) await delay(30);
         if (!valid(gen)) return;
         // A server-issued short-lived permit bounds delayed FIRST drive packets.
-        const arm = await send('arm', {direction: desired.direction, angles: desired.angles});
-        if (!valid(gen)) return;
+        const arm = await sendWhenStopped(gen, 'arm', {direction: desired.direction, angles: desired.angles});
+        if (!valid(gen) || !arm) return;
         state.running = desired;
         state.planning = false;
         state.lastTick = Date.now();
@@ -268,7 +312,8 @@
       }).catch((error) => { if (valid(gen)) fail(error); });
     }
     function keyCode(event) {
-      if (['KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(event.code)) return event.code;
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown'].includes(event.code)) return event.code;
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') return event.key;
       const key = String(event.key || '').toUpperCase();
       return ['W', 'A', 'S', 'D'].includes(key) ? 'Key' + key : '';
     }
@@ -308,6 +353,7 @@
     document.addEventListener('visibilitychange', () => { if (document.hidden && (state.enabled || state.enabling)) disable('Вкладка скрыта · WASD выключено.', true); });
     updateButton();
     return {disable, isActive: () => state.enabled || state.enabling,
+      session: () => state.token,
       stateChanged: () => { if (state.enabled) { const error = snapshotError(options.getState()); if (error) fail(new Error(error)); } }};
   }
   return {plan, create};

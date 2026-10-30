@@ -85,6 +85,7 @@ def proxy_estop(origin: str, release: bool = False):
 # Routes are fixed: the browser cannot pick an upstream URL or serial port.
 CONTROL_ROUTES = {
     'state': ('/api/kiosk_state', {'GET'}, ''),
+    'wheel_state': ('/api/kiosk_wheel_state', {'GET'}, ''),
     'logs': ('/api/kiosk_logs', {'GET'}, ''),
     'battery': ('/api/battery', {'GET'}, ''),
     'lock': ('/api/kiosk_lock', {'GET'}, ''),
@@ -98,6 +99,7 @@ CONTROL_ROUTES = {
     'maneuver': ('/api/kiosk_maneuver', {'POST'}, 'steering'),
     'maneuver_config': ('/api/kiosk_maneuver_config', {'POST'}, 'steering'),
     'keyboard': ('/api/kiosk_keyboard', {'POST'}, 'drive'),
+    'neutral': ('/api/kiosk_neutral', {'POST'}, 'drive'),
     'drive': ('/api/kiosk_drive', {'POST'}, 'drive'),
     'estop': ('/api/estop', {'POST'}, 'drive'),
     'estop/release': ('/api/estop/release', {'POST'}, 'drive'),
@@ -119,7 +121,7 @@ def proxy_control(origin: str, operation: str):
         # Web and onboard servers run on the robot. Do not execute a heartbeat
         # that sat in a server/network queue after the operator released it.
         extra = {'X-Robot-Command-Deadline': str(time.time() + 0.5)}
-    elif operation == 'keyboard':
+    elif operation in {'keyboard', 'neutral'}:
         import math
         import time
         # Only the known deadline is forwarded, never arbitrary client headers.
@@ -136,7 +138,7 @@ def proxy_control(origin: str, operation: str):
                 deadline = 'invalid'
             extra = {'X-Robot-Command-Deadline': deadline}
     return _forward_json(origin, path, methods=methods, limit=MAX_NAV_REPLY_BYTES,
-                         timeout=0.6 if operation in {'drive', 'keyboard'} else 1.0,
+                         timeout=0.6 if operation in {'drive', 'keyboard', 'neutral'} else 1.0,
                          control_header=marker, extra_headers=extra)
 
 

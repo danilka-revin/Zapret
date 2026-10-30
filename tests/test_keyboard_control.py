@@ -78,7 +78,7 @@ def begin(control):
 
 
 def send(control, token, seq, action, **values):
-    if action == "drive":
+    if action in {"drive", "live"}:
         values.setdefault("permit", "")
     return control.handle({"action": action, "session": token, "sequence": seq, **values})
 
@@ -353,3 +353,307 @@ def test_kiosk_estop_revokes_keyboard_without_restart(kiosk_client):
     drive['sequence'] = 3
     assert kiosk_client.post('/api/kiosk_keyboard', json=drive, headers=headers).json['reason'] == 'keyboard_session'
     assert source.commanded == 0
+
+
+def test_batch_steering_is_one_sequenced_request_and_still_needs_confirmed_angles():
+    source, clock = Wheels(), Clock()
+    ctl = controller(source, clock)
+    token = begin(ctl)
+    target = {"FL": 45, "FR": 45, "RL": 45, "RR": 45}
+    source.motors["RR"]["brakeId"] = 0  # one board has not acknowledged this STOP
+    result, _ = send(ctl, token, 1, "steer_all", angles=target)
+    assert result["reason"] == "brake_unconfirmed"
+    assert not any(call[0] == "steer" for call in source.calls)
+
+    token = begin(ctl)
+    previous = len(source.calls)
+    result, status = send(ctl, token, 1, "steer_all", angles=target)
+    assert status == 200 and result["sent"] == list(MODULES)
+    assert source.calls[previous:] == [("steer", module, 45) for module in MODULES]
+    source.motors["RR"]["angle"] = 0  # server must not arm on an unconfirmed wheel
+    result, _ = send(ctl, token, 2, "arm", direction=1, angles=target)
+    assert result["reason"] == "steering_changed"
+    assert source.commanded == 0
+
+
+def test_fast_wasd_retries_coasting_only_without_steering_or_traction():
+    for action in ("steer_all", "arm"):
+        source, clock = Wheels(), Clock()
+        ctl = controller(source, clock)
+        token = begin(ctl)
+        source.motors["FL"]["scRpm"] = 10
+        payload = ({"angles": {m: 25 for m in MODULES}} if action == "steer_all"
+                   else {"direction": 1, "angles": straight()})
+        before = list(source.calls)
+        result, status = send(ctl, token, 1, action, **payload)
+        assert status == 409 and result == {"ok": False, "reason": "wheel_moving", "retryable": True}
+        assert source.calls == before and source.commanded == 0
+        # Still the same lease and a *new* sequence, with no permit issued early.
+        assert send(ctl, token, 1, action, **payload)[0]["reason"] == "stale_command"
+        source.motors["FL"]["scRpm"] = 0
+        result, status = send(ctl, token, 2, action, **payload)
+        assert status == 200 and result["ok"] and source.commanded == 0
+
+
+def test_retryable_coasting_does_not_survive_manual_stop():
+    source, clock = Wheels(), Clock()
+    ctl = controller(source, clock)
+    token = begin(ctl)
+    source.motors["RR"]["scRpm"] = 15
+    assert send(ctl, token, 1, "arm", direction=1, angles=straight())[0]["retryable"]
+    ctl.interrupt()
+    source.motors["RR"]["scRpm"] = 0
+    assert send(ctl, token, 2, "arm", direction=1, angles=straight())[0]["reason"] == "keyboard_session"
+    assert source.commanded == 0
+
+
+def test_v19_recent_sc_prevents_start_even_when_averaged_rpm_is_zero():
+    source, clock = Wheels(), Clock()
+    for motor in source.motors.values():
+        motor.update(firmware=19, scRecent=False)
+    ctl = controller(source, clock)
+    token = begin(ctl)
+    source.motors["FR"]["scRecent"] = True
+    result, status = send(ctl, token, 1, "arm", direction=1, angles=straight())
+    assert status == 409 and result["reason"] == "wheel_moving" and result["retryable"]
+    assert source.commanded == 0
+    source.motors["FR"]["scRecent"] = False
+    assert send(ctl, token, 2, "arm", direction=1, angles=straight())[0]["ok"]
+    # Missing field from a v19 board is unknown, never a stopped wheel.
+    source.motors["FR"]["scRecent"] = None
+    result, _ = send(ctl, token, 3, "arm", direction=1, angles=straight())
+    assert result["reason"] == "sc_invalid" and source.commanded == 0
+
+
+def test_fast_wheel_state_is_current_and_omits_lidar_payload(kiosk_client):
+    from robot_control import estop
+    source = Wheels()
+    kiosk_client.application.extensions["rc_slam"].source = source
+    response = kiosk_client.get("/api/kiosk_wheel_state")
+    assert response.status_code == 200 and response.headers["Cache-Control"] == "no-store"
+    data = response.json["data"]
+    assert set(data) == {"motors", "drive", "linkOk", "estop", "neutral", "steeringControl"}
+    assert "lidar" not in data and len(data["motors"]) == 4
+    assert data["estop"] is None and data["neutral"]["phase"] == "idle"
+    estop.latch("fast-state-test")
+    try:
+        assert kiosk_client.get("/api/kiosk_wheel_state").json["data"]["estop"] is not None
+    finally:
+        estop.release()
+
+
+class LiveWheels(Wheels):
+    """Fake v20 boards, with optional missed ACK or stalled steering."""
+    def __init__(self):
+        super().__init__()
+        self.quiet_ack = set()
+        self.stuck_steering = set()
+        for motor in self.motors.values():
+            motor.update(firmware=20, scRecent=False, liveId=0, liveSeq=0)
+
+    def drive(self, percent):
+        result = super().drive(percent)
+        if percent == 0:
+            for motor in self.motors.values():
+                motor.update(liveId=0, liveSeq=0, moving=False)
+        return result
+
+    def keyboard_live(self, brake_id, sequence, percent, angles, deadline):
+        assert deadline > time.monotonic()
+        self.commanded = percent
+        self.calls.append(("live", brake_id, sequence, percent, dict(angles)))
+        for module, motor in self.motors.items():
+            if module not in self.quiet_ack:
+                motor.update(liveId=brake_id, liveSeq=sequence, drivePercent=percent)
+            if module in self.stuck_steering:
+                motor["moving"] = True
+            else:
+                motor.update(angle=angles[module], moving=False)
+        return {"ok": True, "percent": percent}
+
+
+def start_live(control, token, seq=1, percent=20, angles=None):
+    angles = angles or straight()
+    result, status = send(control, token, seq, "arm", direction=1 if percent > 0 else -1, angles=angles)
+    assert status == 200 and result["ok"], result
+    return send(control, token, seq + 1, "live", percent=percent, angles=angles, permit=result["permit"])
+
+
+def test_v20_live_turn_and_center_without_braking_or_reversing():
+    source, clock = LiveWheels(), Clock()
+    ctl = controller(source, clock)
+    token = begin(ctl)
+    assert start_live(ctl, token)[0]["ok"]
+    before = len(source.calls)
+    clock.now += 0.2
+    source.pulses()
+    turn = {"FL": 25, "FR": 25, "RL": -25, "RR": -25}
+    assert send(ctl, token, 3, "live", percent=20, angles=turn)[0]["ok"]
+    clock.now += 0.2
+    source.pulses()
+    assert send(ctl, token, 4, "live", percent=20, angles=straight())[0]["ok"]
+    assert [call[0] for call in source.calls[before:]] == ["live", "live"]
+    assert source.commanded == 20 and all(m["angle"] == 0 for m in source.motors.values())
+
+
+def test_live_requires_v20_permit_and_never_accepts_a_running_reverse():
+    source, clock = LiveWheels(), Clock()
+    ctl = controller(source, clock)
+    token = begin(ctl)
+    result, _ = send(ctl, token, 1, "live", percent=20, angles=straight())
+    assert result["reason"] == "keyboard_expired" and source.commanded == 0
+    token = begin(ctl)
+    source.motors["FR"]["firmware"] = 19
+    arm, _ = send(ctl, token, 1, "arm", direction=1, angles=straight())
+    result, _ = send(ctl, token, 2, "live", percent=20, angles=straight(), permit=arm["permit"])
+    assert result["reason"] == "live_firmware_required" and source.commanded == 0
+    source.motors["FR"]["firmware"] = 20
+    token = begin(ctl)
+    assert start_live(ctl, token)[0]["ok"]
+    result, _ = send(ctl, token, 3, "live", percent=-20, angles=straight())
+    assert result["reason"] == "module_busy" and source.commanded == 0
+    assert send(ctl, token, 4, "live", percent=20, angles=straight())[0]["reason"] == "keyboard_session"
+
+
+def test_live_unconfirmed_board_or_stalled_steering_brakes_everything():
+    for problem in ("no_ack", "stalled"):
+        source, clock = LiveWheels(), Clock()
+        ctl = controller(source, clock)
+        token = begin(ctl)
+        assert start_live(ctl, token)[0]["ok"]
+        if problem == "no_ack":
+            source.quiet_ack.add("FR")
+        else:
+            source.stuck_steering.add("FR")
+        target = {"FL": 25, "FR": 25, "RL": -25, "RR": -25}
+        for sequence in range(3, 50):
+            clock.now += 0.2
+            source.pulses()
+            result, _ = send(ctl, token, sequence, "live", percent=20, angles=target)
+            if not result["ok"]:
+                break
+        assert result["reason"] == ("live_unconfirmed" if problem == "no_ack" else "steering_changed")
+        assert source.commanded == 0
+
+
+def test_live_timeout_stop_bad_telemetry_and_manual_override_cannot_restart():
+    for fault, expected in [("timeout", "keyboard_expired"), ("sc", "sc_invalid"),
+                            ("identity", "live_firmware_required"), ("manual", "manual_override")]:
+        source, clock = LiveWheels(), Clock()
+        ctl = controller(source, clock)
+        token = begin(ctl)
+        assert start_live(ctl, token)[0]["ok"]
+        if fault == "timeout":
+            clock.now += 0.61
+        elif fault == "sc":
+            source.motors["FL"]["scRecent"] = None
+        elif fault == "identity":
+            source.motors["FL"]["liveSeq"] = None
+        else:
+            source.commanded = 12
+        result, _ = send(ctl, token, 3, "live", percent=20, angles=straight())
+        assert result["reason"] == expected and source.commanded == 0
+        assert send(ctl, token, 4, "live", percent=20, angles=straight())[0]["reason"] == "keyboard_session"
+
+    source, clock = LiveWheels(), Clock()
+    ctl = controller(source, clock)
+    token = begin(ctl)
+    assert start_live(ctl, token)[0]["ok"]
+    assert send(ctl, token, 5, "stop")[0]["ok"]
+    assert send(ctl, token, 4, "live", percent=20, angles=straight())[0]["reason"] == "stale_command"
+    assert source.commanded == 0
+
+
+def test_estop_revokes_a_live_session_on_the_real_kiosk_route(kiosk_client):
+    source = LiveWheels()
+    kiosk_client.application.extensions['rc_slam'].source = source
+    headers = {'X-Robot-Control': 'drive', 'X-Robot-Command-Deadline': str(time.time() + 0.5)}
+    token = kiosk_client.post('/api/kiosk_keyboard', json={'action': 'begin'}, headers=headers).json['session']
+    arm = {'action': 'arm', 'session': token, 'sequence': 1, 'direction': 1, 'angles': straight()}
+    permit = kiosk_client.post('/api/kiosk_keyboard', json=arm, headers=headers).json['permit']
+    live = {'action': 'live', 'session': token, 'sequence': 2, 'percent': 20,
+            'angles': straight(), 'permit': permit}
+    assert kiosk_client.post('/api/kiosk_keyboard', json=live, headers=headers).json['ok']
+    assert source.commanded == 20
+    assert kiosk_client.post('/api/estop', json={}, headers=headers).json['ok']
+    assert source.commanded == 0
+    live['sequence'] = 3
+    assert kiosk_client.post('/api/kiosk_keyboard', json=live, headers=headers).json['reason'] == 'keyboard_session'
+    assert source.commanded == 0
+
+
+def test_global_system_stop_retires_live_session_even_when_shutdown_fails(kiosk_client, monkeypatch):
+    from robot_control import shutdown
+    source = LiveWheels()
+    kiosk_client.application.extensions['rc_slam'].source = source
+    monkeypatch.setattr(shutdown, 'stop_all', lambda _path: {'ok': False, 'error': 'test'})
+    headers = {'X-Robot-Control': 'drive', 'X-Robot-Command-Deadline': str(time.time() + 0.5)}
+    token = kiosk_client.post('/api/kiosk_keyboard', json={'action': 'begin'}, headers=headers).json['session']
+    permit = kiosk_client.post('/api/kiosk_keyboard', headers=headers, json={
+        'action': 'arm', 'session': token, 'sequence': 1, 'direction': 1, 'angles': straight()}).json['permit']
+    packet = {'action': 'live', 'session': token, 'sequence': 2, 'percent': 20,
+              'angles': straight(), 'permit': permit}
+    assert kiosk_client.post('/api/kiosk_keyboard', headers=headers, json=packet).json['ok']
+    assert source.commanded == 20
+    assert kiosk_client.post('/api/system/stop', headers={'X-Robot-Control': 'stop'}, json={}).status_code == 500
+    assert source.commanded == 0
+    packet['sequence'] = 3
+    assert kiosk_client.post('/api/kiosk_keyboard', headers=headers, json=packet).json['reason'] == 'keyboard_session'
+
+
+def test_global_stop_finishes_after_an_inflight_live_request(kiosk_client, monkeypatch):
+    import threading
+    from robot_control import shutdown
+
+    class RacingWheels(LiveWheels):
+        def __init__(self):
+            super().__init__()
+            self.in_live = threading.Event()
+            self.release_live = threading.Event()
+            self.early_brake = threading.Event()
+
+        def keyboard_live(self, *args, **kwargs):
+            self.in_live.set()
+            assert self.release_live.wait(2)
+            return super().keyboard_live(*args, **kwargs)
+
+        def _brake_all(self):
+            self.commanded = 0
+            self.early_brake.set()
+
+    app = kiosk_client.application
+    source = RacingWheels()
+    app.extensions['rc_slam'].source = source
+    monkeypatch.setattr(shutdown, 'stop_all', lambda _path: {'ok': False, 'error': 'test'})
+    headers = {'X-Robot-Control': 'drive', 'X-Robot-Command-Deadline': str(time.time() + 0.5)}
+    token = kiosk_client.post('/api/kiosk_keyboard', json={'action': 'begin'}, headers=headers).json['session']
+    permit = kiosk_client.post('/api/kiosk_keyboard', headers=headers, json={
+        'action': 'arm', 'session': token, 'sequence': 1, 'direction': 1, 'angles': straight()}).json['permit']
+    results = {}
+
+    def live_request():
+        with app.test_client() as client:
+            results['live'] = client.post('/api/kiosk_keyboard', headers=headers, json={
+                'action': 'live', 'session': token, 'sequence': 2, 'percent': 20,
+                'angles': straight(), 'permit': permit}).json
+
+    def stop_request():
+        with app.test_client() as client:
+            results['stop'] = client.post('/api/system/stop', headers={'X-Robot-Control': 'stop'}, json={}).status_code
+
+    live_thread = threading.Thread(target=live_request)
+    stop_thread = threading.Thread(target=stop_request)
+    live_thread.start()
+    try:
+        assert source.in_live.wait(1)
+        stop_thread.start()
+        assert source.early_brake.wait(1), 'STOP must not wait for an in-flight request'
+    finally:
+        source.release_live.set()
+        live_thread.join(2)
+        if stop_thread.ident is not None:
+            stop_thread.join(2)
+    assert not live_thread.is_alive() and not stop_thread.is_alive()
+    assert results['live']['ok'] and results['stop'] == 500
+    assert source.commanded == 0, 'final STOP under the gate must follow the in-flight live packet'
+    assert app.extensions['rc_keyboard']._token is None

@@ -306,12 +306,65 @@ CALIB_ERRORS = {
 }
 
 
+def _valid_telemetry_crc(payload, checksum):
+    if not re.fullmatch(r"[0-9A-F]{4}", checksum):
+        return False
+    try:
+        return crc16(payload.encode("ascii")) == int(checksum, 16)
+    except UnicodeEncodeError:
+        return False
+
+
+def parse_fast_wheel_line(line, module):
+    """fw21 compact complete snapshot; a bad or partial frame changes nothing."""
+    if module not in MODULE_TITLES or len(line) > 160 or not line.startswith("@F "):
+        return None
+    payload, sep, checksum = line.rpartition(" ")
+    if not sep or not _valid_telemetry_crc(payload, checksum):
+        return None
+    parts = payload.split(" ")
+    if len(parts) != 19 or parts[0] != "@F" or any(
+            not re.fullmatch(r"-?[0-9]+", part) for part in parts[1:]):
+        return None
+    try:
+        (firmware, deg, tgt, status, drive, drive_max, servo, rpm10, hz, ppr,
+         edges, recent, brake, neutral, neutral_lock, live_id, live_seq, uptime) = map(int, parts[1:])
+    except ValueError:
+        return None
+    if not (21 <= firmware <= 255 and -(2**31) <= deg < 2**31 and -(2**31) <= tgt < 2**31
+            and 0 <= status <= 0xFFFF and status & 0x40 and status & 0x2000
+            and 1 <= drive_max <= 100 and -drive_max <= drive <= drive_max
+            and 0 <= servo <= 180 and 0 <= rpm10 <= 0xFFFFFFFF and 0 <= hz <= 0xFFFF
+            and 1 <= ppr <= TACH_PPR_MAX and 0 <= edges <= 0xFFFFFFFF and recent in (0, 1)
+            and 0 <= brake <= 0x7FFFFFFF and 0 <= neutral < 0x7FFFFFFF
+            and neutral_lock in (0, 1) and 0 <= live_id < 0x7FFFFFFF
+            and 0 <= live_seq < 0x7FFFFFFF and 0 <= uptime <= 0xFFFFFFFF):
+        return None
+    zeroed = bool(status & 0x02)
+    home = "opto" if zeroed and status & 0x20 else ("manual" if zeroed else "none")
+    return {
+        "mod": module, "deg": deg / 100.0, "tgt": tgt / 100.0,
+        "moving": bool(status & 0x01), "cal": zeroed, "home": home,
+        "manualZero": zeroed and home == "manual", "rpm": None, "drivePercent": drive,
+        "cycle": bool(status & 0x10), "calib": bool(status & 0x04), "opto": bool(status & 0x08),
+        "calibError": (status >> 8) & 0x0F, "firmware": firmware,
+        "pot": bool(status & 0x80), "potMode": bool(status & 0x1000), "tach": False,
+        "driveMaxPercent": drive_max, "driveDutyPermille": servo * 1000 // 180,
+        "driveServoValue": servo, "tachPpr": None, "tachHz": None,
+        "scRpm": rpm10 / 10.0, "scHz": hz if hz <= TACH_HZ_MAX else None, "scPpr": ppr,
+        "scCount": edges, "scRecent": bool(recent), "uptimeMs": uptime, "brakeId": brake,
+        "neutralId": neutral, "neutralLocked": bool(neutral_lock), "liveId": live_id, "liveSeq": live_seq,
+    }
+
+
 def parse_master_line(line, module=None):
     """Строка монитора мастера "@TLM mod=FL deg=-9.25 moving=1 ..." → dict.
 
     Остальные строки монитора (текст для человека) возвращают None.
     """
     line = (line or "").strip()
+    if line.startswith("@F "):
+        return parse_fast_wheel_line(line, module)
     if not line.startswith(TLM_PREFIX):
         return None
     fields = {}
@@ -324,6 +377,12 @@ def parse_master_line(line, module=None):
         angle = float(fields["deg"])
         target = float(fields.get("tgt", "0"))
         firmware = int(fields["fw"]) if "fw" in fields else None
+        # v21 full frames are also checked. An older board without a CRC stays
+        # supported; if a CRC field exists it must be correct at any version.
+        if (firmware is not None and firmware >= 21) or "crc" in fields:
+            payload, sep, checksum = line.rpartition(" crc=")
+            if not sep or " crc=" in payload or not _valid_telemetry_crc(payload, checksum):
+                return None
         separate_sc = firmware is not None and firmware >= SC_SEPARATE_FIELDS_FIRMWARE
         # SC v16+ не подменяет исторические rpm/tach. Одометрия v17 явно
         # использует scCount/scPpr, поэтому старые потребители не активируются.
@@ -358,10 +417,20 @@ def parse_master_line(line, module=None):
         # не принимаем, даже если кто-то добавил его к строке вручную.
         sc_count = (display_field("sc_count", int, lambda value: 0 <= value <= 0xFFFFFFFF)
                     if firmware is not None and firmware >= 17 else None)
+        sc_recent = (display_field("sc_recent", int, lambda value: value in (0, 1))
+                     if firmware is not None and firmware >= 19 else None)
         uptime_ms = (display_field("t", int, lambda value: 0 <= value <= 0xFFFFFFFF)
                      if firmware is not None and firmware >= 17 else None)
         brake_id = (display_field("brake_id", int, lambda value: 0 <= value <= 0x7FFFFFFF)
                     if firmware is not None and firmware >= 17 else None)
+        neutral_id = (display_field("neutral_id", int, lambda value: 0 <= value <= 0x7FFFFFFE)
+                      if firmware is not None and firmware >= 18 else None)
+        neutral_lock = (display_field("neutral_lock", int, lambda value: value in (0, 1))
+                        if firmware is not None and firmware >= 18 else None)
+        live_id = (display_field("live_id", int, lambda value: 0 <= value < 0x7FFFFFFF)
+                   if firmware is not None and firmware >= 20 else None)
+        live_seq = (display_field("live_seq", int, lambda value: 0 <= value < 0x7FFFFFFF)
+                    if firmware is not None and firmware >= 20 else None)
         for key, value in (("tach", tach),):
             if key in fields and value is None:
                 return None
@@ -421,8 +490,13 @@ def parse_master_line(line, module=None):
             "scHz": sc_hz,
             "scPpr": sc_ppr,
             "scCount": sc_count,
+            "scRecent": bool(sc_recent) if sc_recent is not None else None,
             "uptimeMs": uptime_ms,
             "brakeId": brake_id,
+            "neutralId": neutral_id,
+            "neutralLocked": bool(neutral_lock) if neutral_lock is not None else None,
+            "liveId": live_id,
+            "liveSeq": live_seq,
         }
     except (KeyError, ValueError):
         return None
@@ -442,6 +516,26 @@ def _load_maneuvers():
     return core
 
 
+class _ExpiringCommand(bytes):
+    """A queued neutral heartbeat must not be written after its browser lease."""
+    def __new__(cls, payload, deadline):
+        command = super().__new__(cls, payload)
+        command.deadline = deadline
+        return command
+
+
+class _WakeQueue(queue.Queue):
+    """Wake the dispatcher when work arrives, instead of polling for commands."""
+
+    def __init__(self, event, maxsize=0):
+        super().__init__(maxsize=maxsize)
+        self._event = event
+
+    def put(self, item, block=True, timeout=None):
+        super().put(item, block=block, timeout=timeout)
+        self._event.set()
+
+
 class _WheelLink:
     """Открытый USB-порт колеса: очередь команд и привязанное имя модуля."""
 
@@ -452,6 +546,10 @@ class _WheelLink:
         self.rx_discard = False
         self.module = None               # опознанное колесо (FL/FR/RL/RR)
         self.commands = queue.Queue(maxsize=16)
+        # One dedicated writer waits on this queue while the reader blocks on
+        # telemetry. Disconnecting the reader stops the writer before reopening.
+        self.writer_stop = threading.Event()
+        self.writer_error = None
         #: Открытый pyserial-порт. Нужен, чтобы освободить USB перед
         #: прошивкой платы (avrdude не может работать с занятым портом).
         self.serial = None
@@ -538,6 +636,9 @@ class MasterSource:
         self.servo_commands = {}
         # Останов и раздача очереди не должны обгонять друг друга.
         self._commands_lock = threading.RLock()
+        # Резервирование нейтрали запрещает отправку всех команд движения до
+        # подтверждённого возврата тормоза на четырёх платах.
+        self._neutral_inhibit = False
         # Random starting point avoids treating telemetry from a previous
         # server process as acknowledgement of its first STOP.
         self._brake_id = secrets.randbelow(0x7FFFFFFE) + 1
@@ -552,7 +653,8 @@ class MasterSource:
         self.maneuvers = (self.maneuver_core.ManeuverRunner(
             self.maneuver_core.load_config(), brake=self._brake_all)
             if self.maneuver_core is not None else None)
-        self.commands = queue.Queue(maxsize=16)
+        self._dispatch_wakeup = threading.Event()
+        self.commands = _WakeQueue(self._dispatch_wakeup, maxsize=16)
         self.serial_ready = threading.Event()
         self.messages = []               # строки «# FL: …» прошивки: (время, текст)
         self.on_message = on_message     # их же — в журнал экрана
@@ -710,6 +812,27 @@ class MasterSource:
                 return token
         return None
 
+    def observed_neutral(self):
+        """Даже после перезапуска сервера не управлять платой на нейтрали."""
+        with self.lock:
+            return any(entry and (entry[0].get("firmware") or 0) >= 18 and
+                       (entry[0].get("neutralId") != 0 or entry[0].get("neutralLocked") is not False)
+                       for entry in (getattr(self, "frames", None) or {}).values())
+
+    def _neutral_blocks_motion(self):
+        return bool(getattr(self, "_neutral_inhibit", False) or self.observed_neutral())
+
+    def _queue_motion(self, command):
+        """Проверка нейтрали и постановка в очередь атомарны с её включением."""
+        with getattr(self, "_commands_lock", nullcontext()):
+            if self._neutral_blocks_motion():
+                return {"ok": False, "reason": "neutral_locked"}
+            try:
+                self.commands.put_nowait(command)
+            except queue.Full:
+                return {"ok": False, "reason": "command_queue_full"}
+        return {"ok": True}
+
     def _module_drive_active(self, module=None):
         """Идёт ли тяга: общая (все колёса) или конкретного колеса."""
         if self.drive_percent != 0:
@@ -754,11 +877,8 @@ class MasterSource:
         command = {"on": b"pm 1\n", "off": b"pm 0\n", "calibrate": b"q\n"}.get(action)
         if command is None:
             return {"ok": False, "reason": "invalid_action"}
-        try:
-            self.commands.put_nowait(command)
-        except queue.Full:
-            return {"ok": False, "reason": "command_queue_full"}
-        return {"ok": True, "queued": True}
+        result = self._queue_motion(command)
+        return {"ok": True, "queued": True} if result["ok"] else result
 
     def calibrate_module(self, module, now=None):
         """Калибровка по оптодатчику одного модуля (FL/FR/RL/RR) или всех (ALL).
@@ -790,10 +910,9 @@ class MasterSource:
                or (frame.get("drivePercent") or 0) != 0 for frame in fresh.values()):
             return {"ok": False, "reason": "module_busy"}
         command = b"k\n" if module == "ALL" else ("w %s calib\n" % module).encode("ascii")
-        try:
-            self.commands.put_nowait(command)
-        except queue.Full:
-            return {"ok": False, "reason": "command_queue_full"}
+        result = self._queue_motion(command)
+        if not result["ok"]:
+            return result
         return {"ok": True, "queued": True, "module": module,
                 "offline": sorted(set(targets) - set(fresh))}
 
@@ -832,15 +951,16 @@ class MasterSource:
             return {"ok": False, "reason": "not_homed"}
         if frame.get("moving") or frame.get("calib") or frame.get("cycle"):
             return {"ok": False, "reason": "module_busy"}
-        if isinstance(frame.get("scRpm"), (int, float)) and frame["scRpm"] > 1.0:
+        if (frame.get("firmware") or 0) >= 19 and type(frame.get("scRecent")) is not bool:
+            return {"ok": False, "reason": "sc_invalid"}
+        if frame.get("scRecent") is True or (isinstance(frame.get("scRpm"), (int, float)) and frame["scRpm"] > 1.0):
             return {"ok": False, "reason": "wheel_moving"}
 
         # Отдельная команда поворота одного модуля, без команды тяги.
         command = ("w %s %.1f\n" % (module, angle)).encode("ascii")
-        try:
-            self.commands.put_nowait(command)
-        except queue.Full:
-            return {"ok": False, "reason": "command_queue_full"}
+        result = self._queue_motion(command)
+        if not result["ok"]:
+            return result
         return {"ok": True, "queued": True, "module": module, "angle": round(angle, 1)}
 
     def zero_module(self, module, now=None):
@@ -866,10 +986,9 @@ class MasterSource:
 
         # Прошивка принимает zero только на стоящем модуле. Оператор сначала
         # механически выставляет колесо прямо; сервер не запускает калибровочный ход.
-        try:
-            self.commands.put_nowait(("w %s zero\n" % module).encode("ascii"))
-        except queue.Full:
-            return {"ok": False, "reason": "command_queue_full"}
+        result = self._queue_motion(("w %s zero\n" % module).encode("ascii"))
+        if not result["ok"]:
+            return result
         return {"ok": True, "queued": True, "module": module}
 
     def drive_limit_percent(self, now=None):
@@ -1046,6 +1165,8 @@ class MasterSource:
             # «t» — тяга; «d» в прошивке — поворот на угол, как в проверенном скетче.
             command = ("t %d\n" % target).encode("ascii")
         with getattr(self, "_commands_lock", nullcontext()):
+            if target != 0 and self._neutral_blocks_motion():
+                return {"ok": False, "reason": "neutral_locked"}
             if target == 0:
                 # STOP jumps ahead of queued steering/heartbeat commands.
                 self._discard_pending_commands()
@@ -1111,6 +1232,8 @@ class MasterSource:
         # пропускает), а сервер всё равно шлёт её лишь на этот порт.
         command = ("t %s %d\n" % (module, target)).encode("ascii")
         with getattr(self, "_commands_lock", nullcontext()):
+            if target != 0 and self._neutral_blocks_motion():
+                return {"ok": False, "reason": "neutral_locked"}
             try:
                 self.commands.put_nowait(command)
             except queue.Full:
@@ -1161,6 +1284,8 @@ class MasterSource:
                 direct += " b"
             command = ((direct + "\n") if value else ("b %s\n" % module)).encode("ascii")
             with getattr(self, "_commands_lock", nullcontext()):
+                if value and self._neutral_blocks_motion():
+                    return {"ok": False, "reason": "neutral_locked"}
                 if value:
                     # При быстром движении ползунка важна последняя команда,
                     # а не очередь из десятков промежуточных значений.
@@ -1240,6 +1365,8 @@ class MasterSource:
     def start_maneuver(self, name, now=None):
         """Запустить манёвр: колёса встанут в углы, дальше сервер ведёт сам."""
         with getattr(self, "_manual_motion_lock", nullcontext()):
+            if self._neutral_blocks_motion():
+                return {"ok": False, "reason": "neutral_locked"}
             return self._start_maneuver(name, now)
 
     def _start_maneuver(self, name, now=None):
@@ -1407,6 +1534,138 @@ class MasterSource:
             if link.module == module:
                 self._filter_queue(link.commands, lambda command: not is_drive(command))
 
+    def inhibit_neutral_fault(self):
+        """Неизвестная нейтраль после рестарта: блокировать движение и тормозить."""
+        # Serialize with a maneuver that began just before the orphaned
+        # telemetry arrived; it must not wake up after the interlock is cleared.
+        with getattr(self, "_manual_motion_lock", nullcontext()):
+            self._cancel_maneuver("neutral_fault")
+            with getattr(self, "_commands_lock", nullcontext()):
+                self._neutral_inhibit = True
+                self._brake_all()
+
+    def reserve_neutral(self):
+        """Атомарно запретить движение и запросить подтверждённый STOP."""
+        with getattr(self, "_manual_motion_lock", nullcontext()):
+            if self.maneuvers is not None and self.maneuvers.status()["active"]:
+                return {"ok": False, "reason": "maneuver_busy"}
+            with getattr(self, "_commands_lock", nullcontext()):
+                if getattr(self, "_neutral_inhibit", False):
+                    return {"ok": False, "reason": "neutral_locked"}
+                if not self.serial_ready.is_set():
+                    return {"ok": False, "reason": "serial_unavailable"}
+                self._neutral_inhibit = True
+                result = self.brake_for_control()
+                if not result.get("ok"):
+                    self._neutral_inhibit = False
+                return result
+
+    def neutral_heartbeat(self, brake_id, deadline):
+        """Раздать свежий n всем портам; задержавшийся в очереди n выбросить."""
+        if type(brake_id) is not int or not 0 < brake_id < 0x7FFFFFFF:
+            return {"ok": False, "reason": "payload"}
+        if not isinstance(deadline, (int, float)) or not math.isfinite(deadline) or deadline <= time.monotonic():
+            return {"ok": False, "reason": "command_expired"}
+        with getattr(self, "_commands_lock", nullcontext()):
+            if not getattr(self, "_neutral_inhibit", False) or not self.serial_ready.is_set():
+                return {"ok": False, "reason": "serial_unavailable"}
+            with self.lock:
+                links = [link for link in (getattr(self, "links", None) or {}).values() if link.module]
+            if len(links) != len(MODULE_TITLES) or {link.module for link in links} != set(MODULE_TITLES):
+                self._brake_all()
+                return {"ok": False, "reason": "module_offline"}
+            command = _ExpiringCommand(("n %d\n" % brake_id).encode("ascii"), deadline)
+            for link in links:
+                self._filter_queue(link.commands, lambda queued: bytes(queued).split()[:1] != [b"n"])
+                try:
+                    link.commands.put_nowait(command)
+                except queue.Full:
+                    self._brake_all()
+                    return {"ok": False, "reason": "command_queue_full"}
+        return {"ok": True}
+
+    def keyboard_live(self, brake_id, sequence, percent, angles, deadline):
+        """Queue an expiring live-steering heartbeat to each identified v20 board.
+
+        Only the keyboard lease calls this; ordinary steering and traction keep
+        their existing interlocks. A partial queue failure immediately brakes all.
+        """
+        if (type(brake_id) is not int or not 0 < brake_id < 0x7FFFFFFF or
+                type(sequence) is not int or not 0 < sequence < 0x7FFFFFFF or
+                type(percent) is not int or percent == 0 or abs(percent) > self.drive_limit_percent() or
+                not isinstance(angles, dict) or set(angles) != set(MODULE_TITLES) or
+                any(isinstance(a, bool) or not isinstance(a, (int, float)) or
+                    not math.isfinite(a) or abs(a) > self.MAX_STEER_DEG for a in angles.values())):
+            return {"ok": False, "reason": "payload"}
+        if not isinstance(deadline, (int, float)) or not math.isfinite(deadline) or deadline <= time.monotonic():
+            return {"ok": False, "reason": "command_expired"}
+        with getattr(self, "_commands_lock", nullcontext()):
+            if deadline <= time.monotonic():
+                return {"ok": False, "reason": "command_expired"}
+            if self._neutral_blocks_motion():
+                return {"ok": False, "reason": "neutral_locked"}
+            if not self.serial_ready.is_set():
+                return {"ok": False, "reason": "serial_unavailable"}
+            now = time.time()
+            with self.lock:
+                links = {link.module: link for link in (getattr(self, "links", None) or {}).values() if link.module}
+                frames = dict(self.frames)
+            if set(links) != set(MODULE_TITLES):
+                self._brake_all()
+                return {"ok": False, "reason": "module_offline"}
+            if any(m not in frames or now - frames[m][1] >= self.DRIVE_STALE_S for m in MODULE_TITLES):
+                self._brake_all()
+                return {"ok": False, "reason": "module_offline"}
+            if any((frames[m][0].get("firmware") or 0) < 20 or
+                   type(frames[m][0].get("liveId")) is not int or
+                   type(frames[m][0].get("liveSeq")) is not int for m in MODULE_TITLES):
+                self._brake_all()
+                return {"ok": False, "reason": "live_firmware_required"}
+            for module in MODULE_TITLES:
+                command = ("j %d %d %d %.1f\n" % (brake_id, sequence, percent, angles[module])).encode("ascii")
+                try:
+                    links[module].commands.put_nowait(_ExpiringCommand(command, deadline))
+                except queue.Full:
+                    self._brake_all()
+                    return {"ok": False, "reason": "command_queue_full"}
+            with self.lock:
+                self.drive_percent = percent
+                self.drive_modules = {}
+                self.servo_commands = {}
+                self.drive_last_command = now
+        return {"ok": True, "queued": True, "percent": percent}
+
+    def finish_neutral(self):
+        """Вызывается только после подтверждения b на всех платах."""
+        with getattr(self, "_commands_lock", nullcontext()):
+            self._neutral_inhibit = False
+
+    def brake_for_keyboard(self):
+        """Cancel steering as well as traction before replanning keyboard input."""
+        if not self.serial_ready.is_set():
+            self._brake_all()
+            return {"ok": False, "reason": "serial_unavailable"}
+        with getattr(self, "_commands_lock", nullcontext()):
+            self._discard_pending_commands()
+            with self.lock:
+                links = [link for link in (getattr(self, "links", None) or {}).values() if link.module]
+                self.drive_percent = 0
+                self.drive_modules = {}
+                self.servo_commands = {}
+                self.drive_last_command = 0.0
+            self._brake_id = (getattr(self, "_brake_id", 0) % 0x7FFFFFFE) + 1
+            brake_id = self._brake_id
+            # One small write preserves the protocol order. fw21 suppresses
+            # the routine pause log for 's q'; fw20 accepts it as ordinary 's'.
+            command = ("s q\nb %d\n" % brake_id).encode("ascii")
+            for link in links:
+                try:
+                    link.commands.put_nowait(command)
+                except queue.Full:
+                    self._brake_all()
+                    return {"ok": False, "reason": "command_queue_full"}
+        return {"ok": True, "brakeId": brake_id}
+
     def brake_for_control(self):
         """Queue a uniquely identified brake and return the ID to be confirmed.
 
@@ -1427,7 +1686,9 @@ class MasterSource:
         with getattr(self, "_commands_lock", nullcontext()):
             self._discard_pending_commands()
             with self.lock:
-                links = list((getattr(self, "links", None) or {}).values())
+                # A configured port can still be unidentified (or be a lidar).
+                # Even emergency commands must not be written to that port.
+                links = [link for link in (getattr(self, "links", None) or {}).values() if link.module]
                 self.drive_percent = 0
                 self.drive_modules = {}
                 self.servo_commands = {}
@@ -1488,17 +1749,49 @@ class MasterSource:
                         % (link.module, bytes(command).decode("ascii", "ignore").strip()),
                         time.time())
 
+    @staticmethod
+    def _write_link_command(dev, command):
+        deadline = getattr(command, "deadline", None)
+        if deadline is not None and time.monotonic() > deadline:
+            return
+        # There is exactly one writer per port. Serial writes preserve their
+        # order; tcdrain()/flush() after every short command only adds a
+        # blocking round trip and cannot confirm that the board applied it.
+        written = dev.write(command)
+        if written != len(command):
+            raise OSError("неполная запись команды в USB")
+
     def _link_write(self, link, dev):
+        """Drain pending commands; also used by focused queue tests."""
         while True:
             try:
                 command = link.commands.get_nowait()
             except queue.Empty:
                 return
             try:
-                dev.write(command)
-                dev.flush()
+                self._write_link_command(dev, command)
             finally:
                 link.commands.task_done()
+
+    def _link_writer(self, link, dev):
+        """Send immediately, independently of the blocking telemetry reader."""
+        try:
+            while not link.writer_stop.is_set() and not self._stop:
+                try:
+                    command = link.commands.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                try:
+                    if not link.writer_stop.is_set() and not self._stop:
+                        self._write_link_command(dev, command)
+                finally:
+                    link.commands.task_done()
+        except Exception as exc:  # noqa: BLE001 — reader will close and reconnect
+            link.writer_error = exc
+            try:
+                dev.cancel_read()
+            except Exception:  # noqa: BLE001 — read timeout still wakes the reader
+                pass
 
     def _assigned_module(self, path):
         real = os.path.realpath(path)
@@ -1523,6 +1816,12 @@ class MasterSource:
         if fresh:
             self._note_status("ok", "мастер на связи: %s · колесо %s (ручной порт)" % (link.path, module))
         return True
+
+    @staticmethod
+    def _read_link_chunk(dev):
+        # readline() calls pyserial.read(1) for every byte. Drain the currently
+        # available chunk instead; if idle, block for the first byte only.
+        return dev.read(max(1, min(1024, dev.in_waiting)))
 
     def _link_bytes(self, link, raw):
         """UART timeouts may split a line; only a newline completes a frame.
@@ -1651,6 +1950,8 @@ class MasterSource:
         """Читать только назначенный порт; готовность — по свежей @TLM."""
         serial = self._serial
         dev = None
+        writer = None
+        failure = None
         token = self._claim(link.path)
         identified = False
         try:
@@ -1662,20 +1963,26 @@ class MasterSource:
                 return
             # exclusive: второй процесс не может открыть тот же UART и читать
             # его вперемешку (строки телеметрии рвутся, команды теряются).
-            dev = serial.Serial(link.path, self.baud, timeout=0.2, exclusive=True)
+            # Bound a stalled write so that a broken USB device cannot leave
+            # its writer blocked forever; firmware watchdog remains active.
+            dev = serial.Serial(link.path, self.baud, timeout=0.2, write_timeout=0.2, exclusive=True)
             link.serial = dev
             with self.lock:
                 self.links[link.path] = link
             # Ждём свежую телеметрию после возможного сброса при открытии.
             deadline = time.monotonic() + self.PROBE_S
             while not self._stop and link.module is None and time.monotonic() < deadline:
-                raw = dev.readline()
+                raw = self._read_link_chunk(dev)
                 if raw:
                     self._link_bytes(link, raw)
             if link.module is None:
                 self._note_status("warn", "порт %s: нет @TLM — проверю снова; проверьте питание USB и прошивку" % link.path)
                 return
             identified = True
+            # Do not make outbound commands wait for the next @TLM (or the
+            # read timeout). No writer is started before valid telemetry.
+            writer = threading.Thread(target=self._link_writer, args=(link, dev), daemon=True)
+            writer.start()
             # Отметка «здесь колесо»: лидар такой порт не перебирает — его
             # открытие сбрасывает плату и рвёт телеметрию.
             self._tag(link.path)
@@ -1685,26 +1992,28 @@ class MasterSource:
             last_telemetry = time.monotonic()
             next_tag = last_telemetry + self.TAG_REFRESH_S
             while not self._stop:
-                raw = dev.readline()
+                raw = self._read_link_chunk(dev)
+                if link.writer_error is not None:
+                    raise OSError("ошибка записи USB: %s" % link.writer_error)
                 if raw and self._link_bytes(link, raw):
                     last_telemetry = time.monotonic()
                 if time.monotonic() - last_telemetry >= self.TELEMETRY_TIMEOUT_S:
                     raise TimeoutError(
                         "нет телеметрии @TLM %.0f с; переподключаю USB — проверьте питание разветвителя, кабель и прошивку"
                         % self.TELEMETRY_TIMEOUT_S)
-                self._link_write(link, dev)
                 if time.monotonic() >= next_tag:
                     self._tag(link.path)
                     next_tag = time.monotonic() + self.TAG_REFRESH_S
         except Exception as exc:          # noqa: BLE001 — порт может пропасть
+            failure = exc
             self.last_error = str(exc)
-            if not self._stop:
-                self._note_status(
-                    "warn",
-                    "колесо %s (%s): %s%s — жду переподключения"
-                    % (link.module or "не опознано", link.path, exc, self._port_error_hint(exc)))
         finally:
+            link.writer_stop.set()
             if dev is not None:
+                try:
+                    dev.cancel_write()
+                except Exception:         # noqa: BLE001 — уже закрыт или не поддерживается
+                    pass
                 try:
                     dev.close()
                 except Exception:         # noqa: BLE001 — порт уже мёртв
@@ -1721,18 +2030,26 @@ class MasterSource:
                 if not self.modules:
                     self.serial_ready.clear()
                     self.port = None
+            if lost_module and not self._stop:
+                # Clear stale telemetry and brake the other wheels immediately;
+                # do not wait for the stopped writer or diagnostic callbacks.
+                self._cancel_maneuver("module_offline")
+                if self._brake_for_lost_module(lost_module):
+                    self._brake_all()
+            if writer is not None:
+                writer.join(timeout=0.5)
             self._unclaim(token)
+            if failure is not None and not self._stop:
+                self._note_status(
+                    "warn",
+                    "колесо %s (%s): %s%s — жду переподключения"
+                    % (link.module or "не опознано", link.path, failure, self._port_error_hint(failure)))
             if identified and not self._stop:
                 # Порт потерян: снимаем отметку, иначе лидар считал бы его чужим,
                 # даже если на место колеса воткнули лидар.
                 self._tag(link.path, on=False)
             if lost_module and not self._stop:
                 self._note_status("warn", "колесо %s: порт %s пропал" % (lost_module, link.path))
-                # Общая/процентная тяга и потеря активного Servo — fail closed.
-                # Прямое вращение другого одиночного колеса не зависит от этого порта.
-                self._cancel_maneuver("module_offline")
-                if self._brake_for_lost_module(lost_module):
-                    self._brake_all()
 
     def _reader(self):
         try:
@@ -1742,15 +2059,29 @@ class MasterSource:
             self._note_status("error", "мастер: pyserial не установлен — порты колёс выключены")
             return
         self._serial = serial
-        next_scan = 0.0
+        next_scan = next_maneuver = 0.0
         while not self._stop:
-            if time.monotonic() >= next_scan:
-                next_scan = time.monotonic() + self.RESCAN_S
+            # Clear BEFORE draining: a concurrent put after the drain remains
+            # visible to wait(), so no command can miss its wakeup.
+            self._dispatch_wakeup.clear()
+            now = time.monotonic()
+            if now >= next_scan:
+                next_scan = now + self.RESCAN_S
                 if not self._hold_ports:      # прошивка: USB занят avrdude
                     self._open_new_links()
             self._fanout_commands()
-            self._maneuver_tick()
-            time.sleep(0.05 if (self.links or self._spawning) else self.RETRY_S)
+            now = time.monotonic()
+            if now >= next_maneuver:
+                self._maneuver_tick()
+                # Keep the maneuver's 50 ms cadence: extra command wakeups must
+                # not speed up its ramp or change its odometry integration.
+                next_maneuver = time.monotonic() + 0.05
+            now = time.monotonic()
+            if self.links or self._spawning:
+                delay = max(0.0, min(next_maneuver, next_scan) - now)
+            else:
+                delay = max(0.0, min(self.RETRY_S, next_scan - now))
+            self._dispatch_wakeup.wait(delay)
 
     # -------------------------------------------------------------- телеметрия #
     def read(self, now=None):
@@ -1786,7 +2117,10 @@ class MasterSource:
                                "tachHz": frame.get("tachHz"),
                                "scRpm": frame.get("scRpm"), "scHz": frame.get("scHz"),
                                "scPpr": frame.get("scPpr"), "scCount": frame.get("scCount"),
-                               "brakeId": frame.get("brakeId"),
+                               "scRecent": frame.get("scRecent"),
+                               "brakeId": frame.get("brakeId"), "neutralId": frame.get("neutralId"),
+                               "neutralLocked": frame.get("neutralLocked"),
+                               "liveId": frame.get("liveId"), "liveSeq": frame.get("liveSeq"),
                                "telemetryAgeS": round(max(0.0, now - entry[1]), 3),
                                "online": True, "fault": None,
                                "moving": frame["moving"], "calibrating": frame["calib"],
@@ -1797,8 +2131,10 @@ class MasterSource:
                                "drivePercent": None, "homed": None, "online": False, "fault": None,
                                "pot": None, "tach": None, "driveMaxPercent": None,
                                "driveDutyPermille": None, "driveServoValue": None, "tachHz": None,
-                               "scRpm": None, "scHz": None, "scPpr": None, "scCount": None,
-                               "brakeId": None, "telemetryAgeS": None, "moving": False, "calibrating": False})
+                               "scRpm": None, "scHz": None, "scPpr": None, "scCount": None, "scRecent": None,
+                               "brakeId": None, "neutralId": None, "neutralLocked": None,
+                               "liveId": None, "liveSeq": None,
+                               "telemetryAgeS": None, "moving": False, "calibrating": False})
         out = NoSource().read()              # АКБ и маршрут пока не передаются
         out["motors"] = motors
         out["drive"] = self.drive_status(now)

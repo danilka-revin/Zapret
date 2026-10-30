@@ -169,6 +169,8 @@ def odometry_error(frames):
             return "sc_firmware_required"
         count, ppr, uptime, rpm = (frame.get("scCount"), frame.get("scPpr"),
                                    frame.get("uptimeMs"), frame.get("scRpm"))
+        if frame["firmware"] >= 19 and type(frame.get("scRecent")) is not bool:
+            return "sc_invalid"
         if (type(count) is not int or not 0 <= count <= 0xFFFFFFFF or
                 type(ppr) is not int or not 1 <= ppr <= 1000 or
                 type(uptime) is not int or not 0 <= uptime <= 0xFFFFFFFF or
@@ -525,7 +527,7 @@ class ManeuverRunner:
             return
         # Нельзя рулить, пока SC ещё показывает выбег. Ноль SC сам по себе
         # не подтверждает провод: это контролируется при движении.
-        if any(frames[m]["scRpm"] > 1.0 for m in MODULES):
+        if any(frames[m]["scRpm"] > 1.0 or frames[m].get("scRecent") is True for m in MODULES):
             return
         arrived = all(_angle_error(frames[m].get("deg") or 0.0, targets[m])
                       <= self.STEER_TOLERANCE_DEG and not frames[m].get("moving")
