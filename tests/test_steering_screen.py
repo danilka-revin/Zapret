@@ -218,6 +218,47 @@ def test_common_panel_does_not_label_stale_values_as_fresh(tmp_path):
     assert "FL: 150 · FR: — · RL: 150" in report["driveReported"]
 
 
+def test_sc_rpm_is_shown_on_chassis_common_and_wheel_cards_only(tmp_path):
+    motors = [dict(motor(module), firmware=16, rpm=None, tach=False, scRpm=value)
+              for module, value in zip(MODULES, [60.2, 120.0, 0.0, 15.5])]
+    report = run_screen(tmp_path, payload(motors=motors))
+    assert report["rpmText"] == ["60.2", "120.0", "0.0", "15.5"]
+    assert report["driveRpmReported"] == (
+        "Обороты SC, об/мин: FL: 60.2 · FR: 120.0 · RL: 0.0 · RR: 15.5")
+    assert [card["rpm"] for card in report["wheelDrive"]] == report["rpmText"]
+    assert report["drives"] == [], "показания не запускают моторы"
+    assert not report["driveSpeedDisabled"]
+
+
+def test_rpm_readout_hides_stale_and_missing_values_without_disabling_drive(tmp_path):
+    motors = [dict(motor(module), firmware=16, rpm=None, tach=False, scRpm=70.0)
+              for module in MODULES]
+    motors[1]["online"] = False
+    motors[2]["scRpm"] = None
+    motors[3]["scRpm"] = "bad"
+    report = run_screen(tmp_path, payload(motors=motors, actions=[{"type": "drive", "value": 40}]))
+    assert report["rpmText"] == ["70.0", "—", "—", "—"]
+    assert [card["rpm"] for card in report["wheelDrive"]] == report["rpmText"]
+    assert report["drives"][0] == {"module": None, "value": 40, "direction": "forward"}
+
+
+def test_rpm_readouts_do_not_remain_frozen_when_server_is_unreachable(tmp_path):
+    motors = [dict(motor(module), firmware=16, rpm=None, tach=False, scRpm=70.0)
+              for module in MODULES]
+    body = payload(motors=motors, virtualClock=True,
+                   actions=[{"type": "server-offline", "rounds": 20}])
+    report = run_screen(tmp_path, body)
+    assert report["dataChip"] == "НЕТ СВЯЗИ С СЕРВЕРОМ"
+    assert report["rpmText"] == ["—"] * 4
+    assert [card["rpm"] for card in report["wheelDrive"]] == ["—"] * 4
+    assert report["driveRpmReported"] == "Обороты SC, об/мин: FL: — · FR: — · RL: — · RR: —"
+
+    body["actions"].append({"type": "server-online", "rounds": 4})
+    restored = run_screen(tmp_path, body)
+    assert restored["dataChip"] == "в реальном времени"
+    assert restored["rpmText"] == ["70.0"] * 4
+
+
 def test_wheel_drive_shows_actual_servo_value_without_rpm(tmp_path):
     motors = [motor(m) for m in MODULES]
     motors[0] = dict(motors[0], driveServoValue=40, tach=True, rpm=95.0)

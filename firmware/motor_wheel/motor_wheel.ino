@@ -18,8 +18,8 @@
 // штатная Servo: экран передаёт целое 0…150 напрямую в Servo.write() на D3.
 // При стандартных настройках Servo импульс 544…2400 мкс повторяется каждые
 // ~20 мс: это лишь 2,7…12 % скважности, не весь диапазон входа P. Значение 0
-// выключает тягу линиями BRAKE/STOP, а не нулевым импульсом. Фактические
-// обороты не измеряются. Прежняя t оставлена старым пультам и манёврам.
+// выключает тягу линиями BRAKE/STOP, а не нулевым импульсом. Прежняя t
+// оставлена старым пультам и манёврам.
 //   * P (D3) — сигнал Servo, около 50 Гц; при команде 0 драйвер выключен;
 //   * DIR — уровень: для этого колеса «вперёд» (у FR и RR он перевёрнут —
 //     колёса стоят зеркально), инверсия — назад;
@@ -29,14 +29,13 @@
 // Если конкретное колесо крутится не в ту сторону — поменяйте местами два
 // фазных провода мотора или константы уровней ниже.
 //
-// Считывание тахометра SC пока отключено: обороты не измеряются и не влияют
-// на тягу. Для проверки мотора нужен независимый физический аварийный выключатель.
+// SC на D19 считывается только для показа оборотов. Они не влияют на тягу,
+// тормоз, watchdog или манёвры. Для проверки нужен независимый физический E-STOP.
 //
 // На каждой плате: свой TB6600 (шаговый руль), оптодатчик нуля на D18,
 // потенциометр положения колеса на A0 и интерфейс BLDC-тяги:
-// DIR (D4), BRAKE (D5), STOP (D2), SPEED/ШИМ (D3) и общая земля.
+// DIR (D4), BRAKE (D5), STOP (D2), SPEED/ШИМ (D3), SC (D19) и общая земля.
 // Сигнал на D3 формирует штатная библиотека Servo.
-// D19 (SC) сейчас не считывается и не настраивается как прерывание.
 #include <Servo.h>
 #include <avr/eeprom.h>
 #include <avr/interrupt.h>
@@ -74,7 +73,8 @@
 //     таймаут и отмена командой s.
 
 // ---- распиновка (одинакова на всех четырёх платах) ----
-// STOP — выход на драйвер. Вход тахометра SC на D19 временно не используется.
+// STOP — отдельный выход на драйвер; SC — вход внешнего прерывания INT2.
+const uint8_t TACH_PIN = 19;         // BLDC SC — оба перехода, только индикация
 const uint8_t BLDC_STOP_PIN = 2;     // BLDC STOP — вход «разрешить» драйвера
 const uint8_t BLDC_SPEED_PIN = 3;    // сигнал Servo на вход «P» драйвера
 const uint8_t BLDC_DIR_PIN = 4;      // BLDC DIR
@@ -171,6 +171,15 @@ const uint16_t DRIVE_SERVO_TENTHS_PER_PERCENT = 18;
 // 100 % = значение write(180), 1 % ≈ write(1,8). Константа прошивки.
 const uint8_t DRIVE_MAX_PERCENT = 100;
 const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → значение 0 и тормоз
+
+// Число изменений SC на оборот конкретного колеса. Для типичного hoverboard
+// с 15 парами полюсов — 90; проверить по одному обороту на реальном моторе.
+const uint16_t TACH_EDGES_PER_REV = 90;
+static_assert(TACH_EDGES_PER_REV >= 1 && TACH_EDGES_PER_REV <= 1000, "SC edges per revolution must be 1..1000");
+const uint16_t TACH_SAMPLE_PERIOD_MS = 500;
+const uint16_t TACH_MIN_EDGE_US = 150;     // отсев очень коротких помех на SC
+const uint32_t TACH_MAX_SILENCE_US = 1500000UL; // после паузы показываем 0
+const uint32_t TACH_MIN_SILENCE_US = 300000UL;
 // Зеркальные колёса. Корпус симметричный, поэтому правое колесо при том же
 // уровне DIR крутится в другую сторону относительно робота. По умолчанию
 // прошивка сама понимает это по имени колеса: FR и RR — зеркальные.
@@ -179,9 +188,9 @@ const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → знач�
 #define DRIVE_MIRRORED -1
 #endif
 
-// v15: v принимает направление и точное значение 0…150; SC не считывается.
-// t остаётся совместимой со старыми пультами и манёврами.
-const uint8_t FIRMWARE_PROTOCOL = 15;          // поле fw= в @TLM
+// v16: v и t как в v15, плюс отдельная телеметрия SC только для показа.
+// Поля старого тахометра для управления остаются отключёнными.
+const uint8_t FIRMWARE_PROTOCOL = 16;          // поле fw= в @TLM
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -191,6 +200,17 @@ volatile bool pulse_high = false;
 volatile int8_t step_dir = 1;
 volatile uint8_t half_period_ticks = 1;
 volatile uint8_t tick_count = 0;
+
+// Только измерение: прерывание складывает интервалы; loop атомарно забирает
+// их для обновления показания. Никакой управляющий код этих полей не читает.
+volatile uint32_t tach_last_edge_us = 0;
+volatile uint32_t tach_last_period_us = 0;
+volatile uint32_t tach_interval_sum_us = 0;
+volatile uint16_t tach_interval_count = 0;
+volatile bool tach_has_edge = false;
+uint32_t tach_last_sample_ms = 0;
+uint32_t tach_display_rpm_x10 = 0;
+uint16_t tach_display_hz = 0;
 
 const uint8_t OPTO_WATCH_NONE = 0;
 const uint8_t OPTO_WATCH_ACTIVE = 1;   // остановиться, когда датчик сработает
@@ -357,6 +377,77 @@ bool parseLongToken(const char* text, long* out) {
   if (end == text || *end != '\0') return false;
   *out = value;
   return true;
+}
+
+// Тахометр SC: считаем оба фронта (CHANGE), иначе 90 переходов превратятся
+// в 45 и показание будет вдвое меньше. Прерывание ничего не меняет в приводе.
+void tachometerISR() {
+  const uint32_t now = (uint32_t)micros();
+  if (!tach_has_edge) {
+    tach_has_edge = true;
+    tach_last_edge_us = now;
+    return;
+  }
+  const uint32_t interval = now - tach_last_edge_us;  // корректно при переполнении micros()
+  if (interval < TACH_MIN_EDGE_US) return;
+  tach_last_edge_us = now;
+  if (interval > TACH_MAX_SILENCE_US) {
+    // После долгой паузы первый фронт — новая точка отсчёта, не интервал.
+    tach_last_period_us = 0;
+    tach_interval_sum_us = 0;
+    tach_interval_count = 0;
+    return;
+  }
+  tach_last_period_us = interval;
+  if (tach_interval_count < UINT16_MAX && tach_interval_sum_us <= UINT32_MAX - interval) {
+    tach_interval_sum_us += interval;
+    ++tach_interval_count;
+  }
+}
+
+void updateTachDisplay() {
+  const uint32_t now_ms = millis();
+  if ((uint32_t)(now_ms - tach_last_sample_ms) < TACH_SAMPLE_PERIOD_MS) return;
+  tach_last_sample_ms = now_ms;
+
+  // На 8-битной Mega четырёхбайтовые значения из ISR читаются атомарно.
+  const uint8_t saved_sreg = SREG;
+  cli();
+  const uint32_t sum = tach_interval_sum_us;
+  const uint16_t count = tach_interval_count;
+  const uint32_t last = tach_last_edge_us;
+  const uint32_t period = tach_last_period_us;
+  const bool seen = tach_has_edge;
+  tach_interval_sum_us = 0;
+  tach_interval_count = 0;
+  SREG = saved_sreg;
+
+  if (count && sum) {
+    // RPM × 10 = 600 000 000 / (переходов на оборот × средний интервал, мкс).
+    const uint64_t denominator = (uint64_t)TACH_EDGES_PER_REV * sum;
+    tach_display_rpm_x10 = (uint32_t)(((uint64_t)600000000UL * count + denominator / 2) / denominator);
+  }
+  uint32_t silence = period >= TACH_MAX_SILENCE_US / 3 ? TACH_MAX_SILENCE_US : period * 3;
+  if (silence < TACH_MIN_SILENCE_US) silence = TACH_MIN_SILENCE_US;
+  const uint32_t age = (uint32_t)((uint32_t)micros() - last);
+  if (!seen || !period || age > silence) {
+    // Нет переходов: колесо может стоять, но обрыв SC выглядит точно так же.
+    tach_display_rpm_x10 = 0;
+  }
+  // Забываем старую точку после паузы: иначе через полный оборот micros()
+  // (примерно 71 минута) первый фронт ошибочно выглядел бы коротким интервалом.
+  // Первому фронту без периода даём до 1,5 с дождаться второго. Повторно
+  // проверяем метку под защитой — ISR мог получить новый фронт после снимка.
+  if (seen && age > (period ? silence : TACH_MAX_SILENCE_US)) {
+    const uint8_t reset_sreg = SREG;
+    cli();
+    if (tach_has_edge && tach_last_edge_us == last) {
+      tach_has_edge = false;
+      tach_last_period_us = 0;
+    }
+    SREG = reset_sreg;
+  }
+  tach_display_hz = (uint16_t)((tach_display_rpm_x10 * TACH_EDGES_PER_REV + 300UL) / 600UL);
 }
 
 // ---------------------------------------------------------------------------
@@ -1261,6 +1352,9 @@ void printDriveInfo() {
   note(PSTR("Двигатель: Servo D3 50 Гц · значение %u из %u · тяга до %u %% · %s"),
        (unsigned)drive_servo_value, (unsigned)DRIVE_SERVO_MAX_VALUE,
        (unsigned)DRIVE_MAX_PERCENT, drive_mirrored ? "зеркальное" : "прямое");
+  note(PSTR("SC D19: %lu.%lu об/мин · %u переходов/с (только показ)"),
+       (unsigned long)(tach_display_rpm_x10 / 10), (unsigned long)(tach_display_rpm_x10 % 10),
+       (unsigned)tach_display_hz);
 }
 
 // ---------------------------------------------------------------------------
@@ -1584,6 +1678,9 @@ void steeringSetup() {
   driveSetStop(true);
 
   pinMode(OPTO_PIN, INPUT_PULLUP);
+  pinMode(TACH_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(TACH_PIN), tachometerISR, CHANGE);
+  tach_last_sample_ms = millis();
   pinMode(POT_PIN, INPUT);          // без подтяжки: потенциометр — делитель 5 В/GND
   analogReference(DEFAULT);         // опора АЦП = 5 В платы, как питание потенциометра
   digitalWrite(STEP_PUL_PIN, LOW);
@@ -1601,6 +1698,7 @@ void steeringSetup() {
 void steeringLoop() {
   updateDriveWatchdog();
   updatePot();
+  updateTachDisplay();  // только телеметрия, не управление тягой
 
   updateCalibration();
   updatePotCalibration();
@@ -1623,6 +1721,9 @@ uint32_t serial_last_char_ms = 0;
 // выбрасываем, иначе он склеится со следующей командой и «съест» её.
 const uint16_t SERIAL_LINE_TIMEOUT_MS = 1000;
 const uint16_t TELEMETRY_PERIOD_MS = 250;   // как часто печатаем @TLM
+// Одна и та же ёмкость для локальной строки и запаса места в TX.
+const uint16_t TELEMETRY_LINE_CAPACITY = 240;
+static_assert(TX_BUFFER_SIZE >= TELEMETRY_LINE_CAPACITY, "TX buffer too small for telemetry");
 uint32_t last_telemetry_ms = 0;
 
 // Имя модуля в команде «w <имя> …»: своё колесо, ALL, чужое колесо или не имя.
@@ -1646,7 +1747,7 @@ void printHelp() {
   note(PSTR("команды: k, q, c [°], c c, d [°] [f/b], h, s, g, z, p, ?"));
   note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: v [FL] 0…%u [f/b], b"),
        (unsigned)DRIVE_DIRECT_MAX_VALUE);
-  note(PSTR("Servo D3 50 Гц; t [FL] %% — прежняя команда; SC не считывается"));
+  note(PSTR("Servo D3; SC D19: %u переходов/об, только показ"), (unsigned)TACH_EDGES_PER_REV);
 }
 
 // Телеметрия не содержит роли колеса: порт назначает оператор в программе.
@@ -1654,22 +1755,24 @@ void appendTelemetry() {
   const uint16_t status = moduleStatus();
   char deg[16];
   char tgt[16];
-  char line[240];
+  char line[TELEMETRY_LINE_CAPACITY];
   formatDegrees(stepNow(), deg, sizeof(deg));
   formatDegrees(targetNow(), tgt, sizeof(tgt));
   const char* home = !(status & STATUS_ZERO) ? "none"
       : ((status & STATUS_HOME_OPTO) ? "opto" : "manual");
-  // sv — точное значение Servo.write; tach=0 обозначает отключённое измерение.
-  // rpm и частоту SC не отправляем: ноль означал бы измеренную остановку.
+  // Отдельные sc_* предназначены ТОЛЬКО для экрана. Старые rpm/tach не
+  // включаются: сервер прежней версии не должен использовать SC для манёвров.
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u drive=%d fw=%u pot=%d pm=%d tach=0 dmax=%u sv=%u duty=%u t=%lu\r\n"),
+      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u drive=%d fw=%u pot=%d pm=%d tach=0 dmax=%u sv=%u duty=%u sc_rpm=%lu.%lu sc_hz=%u sc_ppr=%u t=%lu\r\n"),
       deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
       (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
       home, (unsigned)((status >> 8) & 0x0F), (int)drive_percent, (unsigned)FIRMWARE_PROTOCOL,
       (status & STATUS_POT) ? 1 : 0,
       (status & STATUS_POT_MODE_SUPPORTED) ? ((status & STATUS_POT_MODE) ? 1 : 0) : -1,
       (unsigned)DRIVE_MAX_PERCENT, (unsigned)drive_servo_value,
-      (unsigned)driveValuePermille(), (unsigned long)millis());
+      (unsigned)driveValuePermille(), (unsigned long)(tach_display_rpm_x10 / 10),
+      (unsigned long)(tach_display_rpm_x10 % 10), (unsigned)tach_display_hz,
+      (unsigned)TACH_EDGES_PER_REV, (unsigned long)millis());
   if (n <= 0 || n >= (int)sizeof(line)) return;
   txAppend(line, (uint16_t)n);
 }
@@ -1826,7 +1929,7 @@ void loop() {
   if ((uint32_t)(now - last_telemetry_ms) >= TELEMETRY_PERIOD_MS) {
     last_telemetry_ms = now;
     // Блок @TLM должен уйти целиком: обрезанный — сервер не разберёт.
-    if (txFree() >= 210) appendTelemetry();
+    if (txFree() >= TELEMETRY_LINE_CAPACITY) appendTelemetry();
   }
   txPump();
 }

@@ -101,11 +101,13 @@ DRIVE_DIRECT_FIRMWARE = 15
 #: блокирует: ездить можно на любом угле (0° — прямо, 45° — краб, 90° — боком),
 #: число осталось только для подсказки «колёса стоят ровно / под углом».
 DRIVE_ANGLE_ALIGNMENT_DEG = 2.5
-#: Драйвер колеса — RioRand ZS-Z11H. В v15 вход «P» ведёт штатная Servo
-#: (около 50 Гц); 0…180 — шкала write, а не физическая скважность или обороты.
-#: SC временно не считывается. Константа оставлена для совместимости с
-#: телеметрией старых прошивок, но защита по оборотам в v15 отсутствует.
+#: Драйвер колеса — RioRand ZS-Z11H. Servo на P задаётся напрямую; v16 читает
+#: SC отдельно, только для показа. 90 переходов/оборот — типовое значение,
+#: зависящее от мотора; проверять по фактическому колесу.
 DRIVE_TACH_PPR = 90
+#: В этой и следующих прошивках новые значения SC нельзя применять для
+#: автоматического управления или старой одометрии — только показывать.
+SC_DISPLAY_ONLY_FIRMWARE = 16
 #: Границы значения Servo в промилле шкалы write: 0…180 отображается как
 #: 0…1000. Поле duty в fw15 не измеряет физическую скважность на входе P;
 #: вне диапазона — испорченный кадр телеметрии.
@@ -321,15 +323,18 @@ def parse_master_line(line, module=None):
         module = module or fields["mod"].upper()
         angle = float(fields["deg"])
         target = float(fields.get("tgt", "0"))
-        rpm = float(fields["rpm"]) if "rpm" in fields else None
-        drive_percent = int(fields["drive"]) if "drive" in fields else None
         firmware = int(fields["fw"]) if "fw" in fields else None
+        display_only = firmware is not None and firmware >= SC_DISPLAY_ONLY_FIRMWARE
+        # v16+ изолирует SC от обратной связи: даже неожиданные старые поля
+        # rpm/tach не должны включить одометрию или изменить управление.
+        rpm = None if display_only else (float(fields["rpm"]) if "rpm" in fields else None)
+        drive_percent = int(fields["drive"]) if "drive" in fields else None
         calib_error = int(fields["err"]) if "err" in fields else None
         home = fields.get("home")
-        # Тяга: sv= — значение Servo.write на входе «P», dmax/duty — поля
-        # прежнего процентного режима. В fw15 tach=0 и rpm/ppr/hz отсутствуют:
-        # обороты временно не считываются. Старые кадры тоже принимаем.
-        tach = {"0": False, "1": True}.get(fields.get("tach")) if "tach" in fields else None
+        # Старое поле tach служило разрешением для одометрии; для v16+ оно
+        # всегда выключено. Показания SC приходят по отдельным полям sc_*.
+        tach = (False if display_only else
+                ({"0": False, "1": True}.get(fields.get("tach")) if "tach" in fields else None))
         try:
             drive_max = int(fields["dmax"]) if "dmax" in fields else None
             drive_duty = int(fields["duty"]) if "duty" in fields else None
@@ -338,6 +343,18 @@ def parse_master_line(line, module=None):
             tach_hz = int(fields["hz"]) if "hz" in fields else None
         except ValueError:
             return None
+        # Неисправная диагностическая величина не должна обрывать основной
+        # кадр и тем самым выключать тягу по таймауту телеметрии.
+        def display_field(key, convert, valid):
+            try:
+                value = convert(fields[key])
+                return value if valid(value) else None
+            except (KeyError, ValueError, OverflowError):
+                return None
+
+        sc_rpm = display_field("sc_rpm", float, lambda value: math.isfinite(value) and value >= 0)
+        sc_hz = display_field("sc_hz", int, lambda value: 0 <= value <= TACH_HZ_MAX)
+        sc_ppr = display_field("sc_ppr", int, lambda value: 1 <= value <= TACH_PPR_MAX)
         for key, value in (("tach", tach),):
             if key in fields and value is None:
                 return None
@@ -391,6 +408,10 @@ def parse_master_line(line, module=None):
             # оборот в секунду это и есть число импульсов на оборот: по нему
             # видно, тот ли провод на D19 и почему обороты не считаются.
             "tachHz": tach_hz,
+            # Изолированный показ SC v16+: его не читают манёвры и защита.
+            "scRpm": sc_rpm,
+            "scHz": sc_hz,
+            "scPpr": sc_ppr,
         }
     except (KeyError, ValueError):
         return None
@@ -949,12 +970,14 @@ class MasterSource:
                 "reason": why or None,
                 "percent": motors.get(module),
                 "commandedPercent": commanded_modules.get(module, 0),
-                # Скважность на входе «P» этого драйвера (промилле) и обороты по «SC».
+                # Значение Servo в промилле шкалы, не физическая скважность.
                 "dutyPermille": frame.get("driveDutyPermille") if frame else None,
                 "rpm": frame.get("rpm") if frame else None,
                 "tach": frame.get("tach") if frame else None,
-                # Переходов «SC» в секунду — диагностика провода тахометра.
                 "tachHz": frame.get("tachHz") if frame else None,
+                # Отдельный read-only канал: не передаётся в логику манёвров.
+                "scRpm": frame.get("scRpm") if frame else None,
+                "scHz": frame.get("scHz") if frame else None,
             }
 
         return {
@@ -1699,13 +1722,15 @@ class MasterSource:
                                "firmware": frame.get("firmware"),
                                "pot": frame.get("pot", False),
                                "potMode": frame.get("potMode"),
-                               # Значение Servo и признак SC из телеметрии платы;
-                               # в fw15 SC отключён и rpm отсутствует.
+                               # scRpm — только для вывода. rpm/tach остаются
+                               # отключёнными для одометрии и управления v16.
                                "tach": frame.get("tach"),
                                "driveMaxPercent": frame.get("driveMaxPercent"),
                                "driveDutyPermille": frame.get("driveDutyPermille"),
                                "driveServoValue": frame.get("driveServoValue"),
                                "tachHz": frame.get("tachHz"),
+                               "scRpm": frame.get("scRpm"), "scHz": frame.get("scHz"),
+                               "scPpr": frame.get("scPpr"),
                                "online": True, "fault": None,
                                "moving": frame["moving"], "calibrating": frame["calib"],
                                "cycling": frame.get("cycle", False)})
@@ -1715,6 +1740,7 @@ class MasterSource:
                                "drivePercent": None, "homed": None, "online": False, "fault": None,
                                "pot": None, "tach": None, "driveMaxPercent": None,
                                "driveDutyPermille": None, "driveServoValue": None, "tachHz": None,
+                               "scRpm": None, "scHz": None, "scPpr": None,
                                "moving": False, "calibrating": False})
         out = NoSource().read()              # АКБ и маршрут пока не передаются
         out["motors"] = motors

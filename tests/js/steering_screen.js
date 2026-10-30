@@ -218,6 +218,7 @@ const maneuversSent = [];
  * и не всегда там, куда его послали. ``motorFrames`` позволяет показать экрану
  * именно эту последовательность, а не один застывший снимок. */
 let frameIndex = 0;
+let kioskStateDown = false;
 let heldDriveResolve = null;
 let heldOneDrive = false;
 function nextState() {
@@ -286,7 +287,10 @@ global.fetch = async (url, init) => {
     if (payload.driveRefuse) return jsonResponse({ ok: false, reason: payload.driveRefuse }, 409);
     return jsonResponse({ ok: true, value: body.value, percent: body.percent }, 200);
   }
-  if (/kiosk_state/.test(text)) return jsonResponse(nextState());
+  if (/kiosk_state/.test(text)) {
+    if (kioskStateDown) throw new Error('simulated connection loss');
+    return jsonResponse(nextState());
+  }
   if (/kiosk_logs/.test(text)) return jsonResponse(payload.logs || emptyJournal);
   if (/camera/.test(text)) return jsonResponse({ ok: true, cameras: [] });
   return jsonResponse({ ok: true });
@@ -496,6 +500,9 @@ function findPreset(id) {
       if (heldDriveResolve) heldDriveResolve();
       heldDriveResolve = null;
       await flush(action.rounds || 4);
+    } else if (action.type === 'server-offline' || action.type === 'server-online') {
+      kioskStateDown = action.type === 'server-offline';
+      await flush(action.rounds || 16);
     } else if (action.type === 'servo-offline') {
       const state = payload.data.drive.servo;
       state.perModule[action.id].canDrive = false;
@@ -562,6 +569,7 @@ function findPreset(id) {
     dataChip: byId('data-chip').textContent,
     driveStatus: byId('drive-status').textContent,
     driveReported: byId('drive-servo-reported').textContent,
+    driveRpmReported: byId('drive-rpm-reported').textContent,
     driveSpeedMax: byId('drive-speed').max,
     driveSpeedMin: byId('drive-speed').min,
     driveSpeedValue: byId('drive-speed').value,
@@ -575,6 +583,7 @@ function findPreset(id) {
       id,
       state: byId('drive-module-state-' + id).textContent,
       output: byId('drive-module-output-' + id).textContent,
+      rpm: byId('drive-module-rpm-' + id).textContent,
       sliderMax: byId('drive-module-' + id).max,
       sliderMin: byId('drive-module-' + id).min,
       sliderValue: byId('drive-module-' + id).value,

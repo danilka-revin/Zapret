@@ -497,7 +497,7 @@ class ManeuverRunner:
         self._speed = 0.0
         self._last_value = 0.0
         self._deadline = now + self._expected_seconds() * 2.5 + 5.0
-        self.message = "Едем." if self.mode == "odometry" else "Едем; тахометр не подключён — считаю по времени."
+        self.message = "Едем." if self.mode == "odometry" else "Едем; путь оценивается по времени, без одометрии."
 
     def _drive_phase(self, now, frames, drive, dt):
         self._elapsed += dt

@@ -39,6 +39,18 @@ const valuesAre = async expected => {
   }, expected, {timeout: 8000, polling: 150});
 };
 
+const scRpmAre = async expected => {
+  await page.waitForFunction(async values => {
+    const reply = await fetch('/api/kiosk_state', {cache: 'no-store'});
+    const state = await reply.json();
+    return state.ok && Object.entries(values).every(([id, rpm]) => {
+      const motor = (state.data.motors || []).find(item => item.id === id);
+      return motor && motor.online && motor.rpm === null && motor.tach === false &&
+        typeof motor.scRpm === 'number' && Math.abs(motor.scRpm - rpm) < 0.6;
+    });
+  }, expected, {timeout: 8000, polling: 150});
+};
+
 const setSpeed = async (value, selector = '#drive-speed') => {
   const slider = page.locator(selector);
   await slider.scrollIntoViewIfNeeded();
@@ -64,6 +76,17 @@ try {
   await page.waitForFunction(() => typeof window._showSteeringPage === 'function');
   await page.evaluate(() => window._showSteeringPage());
   await page.waitForFunction(() => !document.getElementById('drive-speed').disabled, null, {timeout: 10000});
+  // Independent test pulses on D19 must appear in all onboard readouts without
+  // starting the motors or entering the legacy feedback fields.
+  await scRpmAre({FL: 60, FR: 120, RL: 30, RR: 0});
+  await allValuesAre(0);
+  await page.waitForFunction(() => {
+    const near = (id, expected) => Math.abs(Number(document.getElementById(id).textContent) - expected) < 0.6;
+    return near('rpm-FL', 60) && near('rpm-FR', 120) && near('rpm-RL', 30) && near('rpm-RR', 0) &&
+      near('drive-module-rpm-FL', 60) && near('drive-module-rpm-FR', 120) &&
+      near('drive-module-rpm-RL', 30) && near('drive-module-rpm-RR', 0) &&
+      document.getElementById('drive-rpm-reported').textContent.includes('RR: 0.0');
+  }, null, {timeout: 8000});
 
   await setSpeed(2);
   await touch('#direct-drive-forward-ALL');
@@ -77,6 +100,7 @@ try {
 
   await setSpeed(150);
   await allValuesAre(150);
+  await scRpmAre({FL: 60, FR: 120, RL: 30, RR: 0});
   await page.waitForFunction(() => document.getElementById('drive-servo-reported').textContent.includes('RR: 150'));
   await setSpeed(2);
   await allValuesAre(2);

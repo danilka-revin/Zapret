@@ -12,6 +12,20 @@
     return (+v).toFixed(d == null ? 1 : d);
   };
 
+  // SC v16 — отдельное поле только для показа. Старое rpm оставлено для
+  // совместимости с прежними платами; отсутствие данных не выдаём за ноль.
+  function rpmText(motor, decimals = 1) {
+    if (!live || !motor || motor.online === false) return '—';
+    if (typeof motor.scRpm === 'number' && Number.isFinite(motor.scRpm) && motor.scRpm >= 0) {
+      return fmt(motor.scRpm, decimals);
+    }
+    // В v16 tach=false означает отключённую одометрию, а не отсутствие SC.
+    if (motor.firmware >= 16) return '—';
+    if (motor.tach === false) return 'нет';
+    return typeof motor.rpm === 'number' && Number.isFinite(motor.rpm) && motor.rpm >= 0
+      ? fmt(motor.rpm, decimals) : '—';
+  }
+
   function setSteeringAuthorized(on) {
     if (!on) stopDrive();
     steeringAuthorized = !!on;
@@ -227,9 +241,8 @@
       const angle = hasAngle ? Math.max(-90, Math.min(90, +m.angle)) : 0;
       setText($('angle-' + id), hasAngle ? Math.round(angle) + '°' : '—');
       if (wheel) wheel.style.transform = 'rotate(' + angle.toFixed(1) + 'deg)';
-      // Тахометр может быть не подключён (настройка привода): «0 об/мин» тогда
-      // означало бы измеренный ноль, поэтому на карточке честное «нет».
-      setText($('rpm-' + id), m.tach === false ? 'нет' : (m.rpm == null ? '—' : fmt(m.rpm, 0)));
+      // 0: нет достаточных недавних переходов; обрыв и остановка неотличимы.
+      setText($('rpm-' + id), rpmText(m));
       setText($('temp-' + id), m.temp == null ? '—' : fmt(m.temp, 0));
     });
   }
@@ -2770,10 +2783,9 @@
    * отправляет целое значение 0…150 без пересчёта. Обороты — только показание. */
 
   /* --------------------------------------------------------------- манёвры
-   * Пресет здесь — цель, а не время: «метр» и «90°» сервер меряет по
-   * тахометру (обороты колеса × длина окружности), а если тахометра нет —
-   * по времени и честно об этом пишет. Числа правятся прямо в строках и
-   * сохраняются на сервере: следующий запуск возьмёт их.
+   * Пресет здесь — цель, а не время. Старые прошивки с одометрией считают
+   * путь по тахометру; SC v16 используется только для показа, поэтому с ним
+   * сервер оценивает путь по времени. Числа сохраняются на сервере.
    */
   const MANEUVER_ORDER = ['forward', 'backward', 'left', 'right', 'spin_left', 'spin_right'];
   // Заводские значения — только для первой отрисовки, пока не пришёл
@@ -2911,7 +2923,7 @@
       const percent = Math.round((Number(state.progress) || 0) * 100);
       text = 'Манёвр «' + (state.title || state.name || '') + '»: ' + percent + '% · ' +
         maneuverText(state.value, kind) + ' из ' + maneuverText(state.target, kind) +
-        ' · ' + (state.mode === 'time' ? 'по времени (тахометра нет)' : 'по тахометру');
+        ' · ' + (state.mode === 'time' ? 'по времени (без одометрии)' : 'по тахометру');
     } else if (state.state === 'done' || state.state === 'failed' || state.state === 'cancelled') {
       text = (state.message || 'Манёвр завершён.');
     } else {
@@ -3067,6 +3079,11 @@
       return id + ': ' + (fresh && Number.isInteger(value) ? value : '—');
     });
     setText($('drive-servo-reported'), 'Платы сообщили Servo.write: ' + reports.join(' · ') + ' (не обороты)');
+    const rpms = SERVO_IDS.map((id) => {
+      const motor = (d.motors || []).find((item) => item && item.id === id);
+      return id + ': ' + rpmText(motor);
+    });
+    setText($('drive-rpm-reported'), 'Обороты SC, об/мин: ' + rpms.join(' · '));
     SERVO_IDS.forEach((id) => renderModuleDriveCard(id, d, !!servo));
     renderManeuvers(d);
   }
@@ -3082,6 +3099,7 @@
     const state = (servo.perModule || {})[id] || null;
     const motor = ((data.motors || []).find((m) => m && m.id === id)) || null;
     const reported = motor && motor.driveServoValue != null ? Number(motor.driveServoValue) : null;
+    setText($('drive-module-rpm-' + id), rpmText(motor));
     const canDrive = supported && !!drive.available && steeringAuthorized &&
       !data.estop && !!state && !!state.canDrive;
     if (slider) {

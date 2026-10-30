@@ -614,7 +614,7 @@
       statusEl.textContent = 'Манёвр «' + (state.title || state.name || '') + '»: ' +
         Math.round((Number(state.progress) || 0) * 100) + '% · ' +
         format(state.value) + ' из ' + format(state.target) +
-        ' · ' + (state.mode === 'time' ? 'по времени (тахометра нет)' : 'по тахометру');
+        ' · ' + (state.mode === 'time' ? 'по времени (без одометрии)' : 'по тахометру');
     } else if (state.state === 'done' || state.state === 'failed' || state.state === 'cancelled') {
       statusEl.textContent = state.message || 'Манёвр завершён.';
     } else if (!supported) {
