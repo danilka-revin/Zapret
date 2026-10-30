@@ -1307,98 +1307,48 @@ static void spin_tach(sim::Board* board, int edges, double over_ms) {
   }
 }
 
-// Модель колеса для проверки шкалы Servo. Драйвер ZS-Z11H отзывается на
-// значение write почти линейно: 0 — не тянет, 180 — полный ход. Полный ход
-// колеса 216 мм — около 578 об/мин (замер MAD-EE на этой же плате), 90
-// переходов «SC» на оборот. Инерция колеса — экспонента.
-struct WheelPlant {
-  sim::Board* board = nullptr;
-  double rpm = 0.0;
-  double edge_phase = 0.0;
-  long injected = 0;           // сколько переходов «SC» уже выдано
-  bool tach_alive = true;      // провод SC подключён
-  double max_rpm = 578.0;      // полный ход на значении 180
-};
-
-static void plant_run(WheelPlant& plant, double ms) {
-  const int64_t steps = (int64_t)(ms + 0.5);
-  for (int64_t i = 0; i < steps; ++i) {
-    sim::run_for_ms(1.0);
-    const double target = (double)plant.board->servo_value / 180.0 * plant.max_rpm;
-    plant.rpm += (target - plant.rpm) * 0.05;
-    if (plant.rpm < 0.0) plant.rpm = 0.0;
-    plant.edge_phase += plant.rpm / 60.0 * 90.0 * 0.001;
-    while (plant.edge_phase >= 1.0) {
-      plant.edge_phase -= 1.0;
-      ++plant.injected;
-      if (plant.tach_alive && plant.board->tach_fn) plant.board->tach_fn();
-    }
-  }
-}
-
-// Средние обороты колеса за прогон — по числу выданных переходов «SC»:
-// 90 переходов на оборот, поэтому rpm = (переходов в секунду) · 60 / 90.
-static double plant_rpm(const WheelPlant& plant, long injected_before, double ms) {
-  const double per_second = (double)(plant.injected - injected_before) * 1000.0 / ms;
-  return per_second * 60.0 / 90.0;
-}
-
-// Heartbeat + прогон модели колеса: команда раз в 200 мс, как от сервера.
-static void drive_hold(WheelPlant& plant, int percent, double seconds) {
-  char command[12];
-  snprintf(command, sizeof(command), "t %d", percent);
-  const int steps = (int)(seconds * 5.0);
-  for (int i = 0; i < steps; ++i) {
-    plant.board->serial.send(command);
-    plant_run(plant, 200);
-  }
-}
-
-// Шкала тяги: процент команды — это положение ручки Servo.write, а не обороты.
-// 1 % = 1,8 значения, 100 % = 180. Контура нет: прошивка не подбирает ничего по
-// тахометру (в v12 подбирала скважность под заказанные обороты, и это мешало).
-// Тахометр остался телеметрией и страховкой «тяга есть, а колесо стоит».
+// Проверяем команды и номинальную длительность импульса библиотеки Servo,
+// а не выдумываем зависимость оборотов от значения: настоящий драйвер и мотор
+// здесь не моделируются, SC в этой прошивке не считывается.
 static void scenario_drive_speed() {
   boot({&board_fr});
   board_fr.serial.send("z");
   sim::run_for_ms(2);
-  CHECK(wheel_fr::DRIVE_MAX_PERCENT == 100, "верх шкалы — 100 %%, а не %u",
-        (unsigned)wheel_fr::DRIVE_MAX_PERCENT);
-  CHECK((int)wheel_fr::DRIVE_SERVO_MAX_VALUE == 180, "100 %% — это значение 180: %u",
-        (unsigned)wheel_fr::DRIVE_SERVO_MAX_VALUE);
+  CHECK(wheel_fr::DRIVE_MAX_PERCENT == 100, "верх старой шкалы — 100 %%");
+  CHECK((int)wheel_fr::DRIVE_SERVO_MAX_VALUE == 180, "100 %% старой шкалы — write(180)");
 
-  WheelPlant plant{&board_fr};
+  int previous_pulse = 0;
+  for (int percent = 1; percent <= 100; ++percent) {
+    char command[16];
+    std::snprintf(command, sizeof(command), "t %d", percent);
+    board_fr.serial.send(command);
+    sim::run_for_ms(2);
+    const int expected = (percent * 18 + 5) / 10;
+    CHECK(servo_value(board_fr) == expected && thrust_on(board_fr),
+          "t %d → Servo.write(%d), получено %d", percent, expected, servo_value(board_fr));
+    CHECK(board_fr.servo_pulse_us() > previous_pulse,
+          "разные значения Servo дают разные номинальные импульсы");
+    previous_pulse = board_fr.servo_pulse_us();
+  }
 
-  // 100 % — полный ход: значение 180, колесо выходит на свои ~578 об/мин.
-  drive_hold(plant, 100, 3.0);
-  CHECK(wheel_fr::drive_active, "тяга держится всё время");
-  CHECK(servo_value(board_fr) == 180, "на «P» полная шкала: %d", servo_value(board_fr));
-  long before = plant.injected;
-  drive_hold(plant, 100, 3.0);
-  const double top = plant_rpm(plant, before, 3000.0);
-  CHECK(top > 500.0 && top < 620.0, "100 %% — полный ход колеса: %.1f об/мин", top);
+  // Новые значения меняются на лету без остановки и без пересчёта.
+  board_fr.serial.send("v 2 f");
+  sim::run_for_ms(2);
+  CHECK(servo_value(board_fr) == 2 && board_fr.servo_pulse_us() == 564 && thrust_on(board_fr),
+        "write(2) → около 564 мкс на D3");
+  board_fr.serial.send("v 150 f");
+  sim::run_for_ms(2);
+  CHECK(servo_value(board_fr) == 150 && board_fr.servo_pulse_us() == 2090 && thrust_on(board_fr),
+        "write(150) → около 2090 мкс на D3");
+  board_fr.serial.send("v 2 f");
+  sim::run_for_ms(2);
+  CHECK(servo_value(board_fr) == 2 && board_fr.servo_pulse_us() == 564 && thrust_on(board_fr),
+        "write(2) после write(150) → снова около 564 мкс");
 
-
-  // Половина шкалы — половина значения: 90. Никакого «медленнее не могу»:
-  // прошивка делает ровно то, что попросили.
-  drive_hold(plant, 50, 3.0);
-  CHECK(servo_value(board_fr) == 90, "50 %% — значение 90: %d", servo_value(board_fr));
-  before = plant.injected;
-  drive_hold(plant, 50, 3.0);
-  const double half = plant_rpm(plant, before, 3000.0);
-  CHECK(half > 230.0 && half < 350.0, "50 %% — вдвое медленнее полного: %.1f", half);
-
-  // Малый процент — малое значение, а не «бешеные обороты»: 1 % = 2.
-  drive_hold(plant, 1, 1.0);
-  CHECK(servo_value(board_fr) <= 2, "1 %% — у самого низа шкалы: %d", servo_value(board_fr));
-  CHECK(count(board_fr, "медленнее не могу") == 0,
-        "оговорок про «медленнее не могу» больше нет: %s", board_fr.serial.output.c_str());
-
-  // SC не считывается: даже при молчании более 3 с команда t не обрывается.
-  plant.tach_alive = false;
+  // SC не считывается: при молчании более 3 с команда не обрывается.
   for (int i = 0; i < 40; ++i) {
     board_fr.serial.send("t 100");
-    plant_run(plant, 200);
+    sim::run_for_ms(200);
     CHECK(servo_value(board_fr) == 180 && thrust_on(board_fr),
           "SC не влияет на старую команду, тик %d", i);
   }

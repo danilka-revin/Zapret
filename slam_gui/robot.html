@@ -544,7 +544,7 @@
         </div>
       </section>
 
-      <!-- Тяга и руление: пресеты углов, схема колёс и удерживаемое движение. -->
+      <!-- Тяга и руление: пресеты углов, схема колёс и движение до СТОП. -->
       <section id="swipe-motors-view" class="swipe-view steer-panel" hidden aria-label="Тяга и руление">
         <header class="steer-panel-head">
           <div>
@@ -733,11 +733,11 @@
           <ul id="steer-messages" class="steer-messages" aria-label="Сообщения прошивки руля" hidden></ul>
         </details>
 
-        <p class="steer-footnote direct-servo-control">Ползунок в карточке задаёт скорость этого колеса, общий ползунок ниже — всех четырёх. Движение только при удержании «Вперёд» или «Назад». Число 0–150 передаётся в Servo.write без пересчёта. Обороты пока не считываются. Первые испытания — с вывешенными колёсами и физическим аварийным выключателем.</p>
+        <p class="steer-footnote direct-servo-control">Ползунок в карточке задаёт скорость этого колеса, общий ползунок ниже — всех четырёх. Нажмите «Вперёд» или «Назад» один раз; для остановки нажмите СТОП. Ползунок меняет заданное значение и во время движения. Число 0–150 передаётся в Servo.write без пересчёта. Обороты пока не считываются. Первые испытания — с вывешенными колёсами и физическим аварийным выключателем.</p>
 
         <section class="traction-controls" aria-label="Тяговые BLDC-моторы">
           <div class="traction-head">
-            <div><b>Движение</b><span class="direct-servo-control">Скорость Servo.write 0–150 · удерживайте кнопку</span><span class="remote-legacy-drive">Удерживайте кнопку движения</span></div>
+            <div><b>Движение</b><span class="direct-servo-control">Скорость Servo.write 0–150 · нажмите направление, затем СТОП</span><span class="remote-legacy-drive">Удерживайте кнопку движения</span></div>
             <span id="drive-status" class="direct-servo-control" role="status">Проверка связи с платами…</span><span id="remote-drive-status" class="remote-legacy-drive" role="status">Проверка связи с платами…</span>
           </div>
 
@@ -803,6 +803,7 @@
 
           <label class="traction-speed direct-servo-control">Значение Servo.write <b><output id="drive-speed-value">0</output></b>
             <input id="drive-speed" type="range" min="0" max="150" step="1" value="0" aria-label="Servo.write всех колёс, 0–150" disabled></label>
+          <small id="drive-servo-reported" class="traction-warning direct-servo-control">Платы сообщили Servo.write: —</small>
           <div class="traction-actions direct-servo-control">
             <button id="direct-drive-back-ALL" type="button" disabled>Назад</button>
             <button id="direct-drive-forward-ALL" type="button" disabled>Вперёд</button>
@@ -818,7 +819,7 @@
             </div>
             <small>Движение только при удержании. Отпускание и потеря связи останавливают моторы. Первые проверки — с вывешенными колёсами и физическим E-STOP.</small>
           </div>
-          <small class="traction-warning direct-servo-control">Ползунок задаёт значение Servo.write на D3 без пересчёта; сам по себе он мотор не запускает. Удерживайте «Вперёд» или «Назад» для движения: отпускание, 0 или СТОП снимают тягу. Перед сменой направления дождитесь остановки колёс. Обороты пока не считываются. При потере связи watchdog платы снимает тягу через 650 мс. Программный стоп не заменяет физическую аварийную кнопку. Испытывайте с вывешенными колёсами.</small>
+          <small class="traction-warning direct-servo-control">Ползунок задаёт значение Servo.write на D3 без пересчёта и меняет его на ходу. Нажмите «Вперёд» или «Назад» один раз — движение продолжается после отпускания. СТОП или 0 снимает тягу; для повторного запуска снова нажмите направление. Перед сменой направления нажмите СТОП и дождитесь остановки колёс. Потеря фокуса, уход со страницы или связи также останавливают тягу; watchdog платы срабатывает через 650 мс. Обороты пока не считываются. Программный стоп не заменяет физическую аварийную кнопку. Испытывайте с вывешенными колёсами.</small>
         </section>
       </section>
     </div>

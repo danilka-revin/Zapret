@@ -101,17 +101,14 @@ DRIVE_DIRECT_FIRMWARE = 15
 #: блокирует: ездить можно на любом угле (0° — прямо, 45° — краб, 90° — боком),
 #: число осталось только для подсказки «колёса стоят ровно / под углом».
 DRIVE_ANGLE_ALIGNMENT_DEG = 2.5
-#: Драйвер колеса — RioRand ZS-Z11H с датчиками Холла. Вход «P» ведёт штатная
-#: библиотека Servo (50 Гц): значение write 0…180 — это 0…100 % шкалы, контура
-#: оборотов нет. «SC» даёт 90 изменений состояния за оборот колеса, то есть
-#: RPM = 60 / (90 × время между переходами); обороты нужны телеметрии и
-#: страховке «тяга есть, а колесо стоит». Оба числа — свойства драйвера, а не
-#: настройки: экран их только показывает.
+#: Драйвер колеса — RioRand ZS-Z11H. В v15 вход «P» ведёт штатная Servo
+#: (около 50 Гц); 0…180 — шкала write, а не физическая скважность или обороты.
+#: SC временно не считывается. Константа оставлена для совместимости с
+#: телеметрией старых прошивок, но защита по оборотам в v15 отсутствует.
 DRIVE_TACH_PPR = 90
-#: Границы значения на входе «P» драйвера в промилле шкалы: 0 — мотор не тянет,
-#: 1000 — полный ход. Прошивка отдаёт в телеметрию промилле (значение Servo
-#: 0…180, пересчитанное в 0…1000). Всё, что вне диапазона, — испорченный кадр
-#: телеметрии, а не значение.
+#: Границы значения Servo в промилле шкалы write: 0…180 отображается как
+#: 0…1000. Поле duty в fw15 не измеряет физическую скважность на входе P;
+#: вне диапазона — испорченный кадр телеметрии.
 DRIVE_DUTY_MIN_PERMILLE = 0
 DRIVE_DUTY_MAX_PERMILLE = 1000
 #: Сколько импульсов тахометра бывает на оборот колеса — предел команды m ppr.
@@ -1120,7 +1117,11 @@ class MasterSource:
                 direct += " b"
             command = ((direct + "\n") if value else ("b %s\n" % module)).encode("ascii")
             with getattr(self, "_commands_lock", nullcontext()):
-                if not value:
+                if value:
+                    # При быстром движении ползунка важна последняя команда,
+                    # а не очередь из десятков промежуточных значений.
+                    self._discard_pending_servo_values(module)
+                else:
                     self._discard_pending_drive_for(module)
                 try:
                     self.commands.put_nowait(command)
@@ -1304,6 +1305,26 @@ class MasterSource:
                 pending.all_tasks_done.notify_all()
             pending.not_full.notify_all()
 
+    @staticmethod
+    def _is_servo_value(command):
+        """Прямая ненулевая команда Servo, не STOP и не старый протокол t."""
+        return bytes(command).split()[:1] == [b"v"]
+
+    def _discard_pending_servo_values(self, module):
+        """Оставить только новейшее значение, не удаляя тормоз и другие команды.
+
+        Индивидуальная команда не удаляет общий v из общей очереди: он нужен
+        остальным колёсам. На каждом порту устаревшие v также объединяются
+        при раздаче, поэтому новая команда победит и на выбранном колесе.
+        """
+        def keep(command):
+            if not self._is_servo_value(command):
+                return True
+            target = self._command_module(command)
+            return module is not None and target != module
+
+        self._filter_queue(self.commands, keep)
+
     def _discard_pending_drive_for(self, module):
         """Ноль одного колеса вытесняет его старые команды, но не соседей."""
         def is_drive(command):
@@ -1376,9 +1397,17 @@ class MasterSource:
                         # прошивка ждёт «w 12.5» / «t 8» без него.
                         parts = bytes(command).decode("ascii").split()
                         routed = (" ".join([parts[0]] + parts[2:]) + "\n").encode("ascii")
+                    if self._is_servo_value(routed):
+                        # У каждого колеса своя очередь: старая скорость не
+                        # должна задерживать или вытеснять новую. STOP и все
+                        # команды других видов сохраняют свой порядок.
+                        self._filter_queue(link.commands, lambda queued: not self._is_servo_value(queued))
                     link.commands.put_nowait(routed)
                 except queue.Full:
-                    pass
+                    self._note_message(
+                        "%s: очередь USB переполнена, команда «%s» не доставлена"
+                        % (link.module, bytes(command).decode("ascii", "ignore").strip()),
+                        time.time())
 
     def _link_write(self, link, dev):
         while True:

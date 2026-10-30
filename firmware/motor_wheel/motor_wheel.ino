@@ -14,14 +14,13 @@
 //
 // Выход на регулятор скорости — «PWM» драйвера RioRand ZS-Z11H (hoverboard,
 // разбор входов: mad-ee.com/easy-inexpensive-hoverboard-motor-controller).
-// Вход «P» управляется как обычный сервопривод постоянного вращения, и это
-// проверено на железе рабочим скетчем оператора:
-//     #include <Servo.h>
-//     Servo mk1;   void setup(){ mk1.attach(9); }   void loop(){ mk1.write(40); }
-// Такой скетч дал ровные, адекватные обороты без всякого контура. Бортовой
-// экран передаёт целое значение 0…150 непосредственно в Servo.write() (D3).
-// Прежняя команда t с процентами оставлена для старых пультов и манёвров.
-//   * P (D3) — сигнал Servo, 50 Гц; 0 — мотор не тянет;
+// Вход «P» рассчитан на ШИМ по скважности. По требованию оператора используется
+// штатная Servo: экран передаёт целое 0…150 напрямую в Servo.write() на D3.
+// При стандартных настройках Servo импульс 544…2400 мкс повторяется каждые
+// ~20 мс: это лишь 2,7…12 % скважности, не весь диапазон входа P. Значение 0
+// выключает тягу линиями BRAKE/STOP, а не нулевым импульсом. Фактические
+// обороты не измеряются. Прежняя t оставлена старым пультам и манёврам.
+//   * P (D3) — сигнал Servo, около 50 Гц; при команде 0 драйвер выключен;
 //   * DIR — уровень: для этого колеса «вперёд» (у FR и RR он перевёрнут —
 //     колёса стоят зеркально), инверсия — назад;
 //   * BRAKE — 1 = тормоз включён, 0 = отпущен;
@@ -77,7 +76,7 @@
 // ---- распиновка (одинакова на всех четырёх платах) ----
 // STOP — выход на драйвер. Вход тахометра SC на D19 временно не используется.
 const uint8_t BLDC_STOP_PIN = 2;     // BLDC STOP — вход «разрешить» драйвера
-const uint8_t BLDC_SPEED_PIN = 3;    // BLDC PWM — вход «P» драйвера (D3 = OC3C, Timer3)
+const uint8_t BLDC_SPEED_PIN = 3;    // сигнал Servo на вход «P» драйвера
 const uint8_t BLDC_DIR_PIN = 4;      // BLDC DIR
 const uint8_t BLDC_BRAKE_PIN = 5;    // BLDC BRAKE
 const uint8_t STEP_PUL_PIN = 6;      // TB6600 PUL
@@ -160,18 +159,16 @@ const uint16_t EEPROM_POT_SLOPE_SLOT = 3;   // 4 байта, float, little-endia
 const uint8_t EEPROM_POT_MAGIC = 0x51;      // «q» — наклон измерен
 
 // ---- тяга BLDC: драйвер RioRand ZS-Z11H (hoverboard-мотор) ----
-// Драйвер отзывается на «P» как сервопривод постоянного вращения: штатная
-// библиотека Servo (сигнал 50 Гц) — ровно то, что нужно, и никакого таймера с
-// регистрами вручную. Значение write() — это ШКАЛА, а не обороты: 0 — мотор
-// не тянет, 180 — полный ход. Как и в проверенном скетче, контура нет: сколько
-// попросили процентов, столько и стоит на входе «P».
+// Штатная библиотека Servo выдаёт на вход P сигнал около 50 Гц. Значение
+// write() — число из шкалы Servo, а не измеренные обороты и не скважность P.
+// При команде 0 драйвер выключается по BRAKE/STOP; контура оборотов нет.
 const uint8_t DRIVE_SERVO_MAX_VALUE = 180;      // шкала прежней команды t
 const uint8_t DRIVE_DIRECT_MAX_VALUE = 150;     // прямое значение с бортового экрана
 // 1 % = 1,8 значения шкалы (180 / 100). В целых десятых, чтобы не тащить float
 // в горячую часть: 18 десятых на процент.
 const uint16_t DRIVE_SERVO_TENTHS_PER_PERCENT = 18;
-// Предел тяги прошивки — вся шкала, 100 %. Процент — это положение ручки
-// Servo, а не обороты: 100 % = значение 180, 1 % = 1,8. Константа прошивки.
+// Предел прежней команды t — 100 % шкалы Servo, а не скважность и не обороты:
+// 100 % = значение write(180), 1 % ≈ write(1,8). Константа прошивки.
 const uint8_t DRIVE_MAX_PERCENT = 100;
 const uint16_t DRIVE_COMMAND_TIMEOUT_MS = 650; // нет heartbeat → значение 0 и тормоз
 // Зеркальные колёса. Корпус симметричный, поэтому правое колесо при том же
@@ -1214,19 +1211,18 @@ uint8_t driveForwardLevel() {
   return flip ? (BLDC_DIR_FORWARD_LEVEL == HIGH ? LOW : HIGH) : BLDC_DIR_FORWARD_LEVEL;
 }
 
-// Вход «P» — обычный сервопривод постоянного вращения: библиотека Servo даёт
-// сигнал 50 Гц на D3. Ровно тот же приём, что в проверенном на железе скетче
-// (Servo mk1; mk1.attach(9); mk1.write(40)), только вывод — D3 драйвера.
+// Библиотека Servo даёт на D3 сигнал около 50 Гц; драйвер использует его
+// скважность. Выбранное значение передаётся в write() без пересчёта.
 Servo drive_servo;
 
 void setupDriveServo() {
   drive_mirrored = driveMirrorByModule();
   drive_servo.attach(BLDC_SPEED_PIN);   // «P» драйвера, D3
-  drive_servo.write(0);                 // 0 — мотор не тянет, свободный выбег
+  drive_servo.write(0);                 // ещё есть импульсы; выходы отключены отдельно
   drive_servo_value = 0;
 }
 
-// Значение на «P»: 0 — мотор не тянет, DRIVE_SERVO_MAX_VALUE — полный ход.
+// Значение Servo.write, а не скважность на P и не фактические обороты.
 void driveWriteServo(uint8_t value) {
   if (value > DRIVE_SERVO_MAX_VALUE) value = DRIVE_SERVO_MAX_VALUE;
   drive_servo.write(value);
@@ -1306,7 +1302,7 @@ void applyDriveCommand(int8_t percent) {
 }
 
 void stopDriveLocal() {
-  driveWriteServo(0);                // значение 0 — драйвер мотор не тянет
+  driveWriteServo(0);                // Servo продолжает давать короткий импульс
   driveSetBrake(true);               // тормоз: колесо не катится
   driveSetStop(true);                // выходы драйвера выключены
   drive_percent = 0;
@@ -1357,7 +1353,7 @@ bool applyLocalDrive(int8_t percent) {
 void updateDriveWatchdog() {
   if (drive_active && (uint32_t)(millis() - last_drive_command_ms) > DRIVE_COMMAND_TIMEOUT_MS) {
     stopDriveLocal();
-    note(PSTR("тяга: нет команды дольше 650 мс — скважность 0, тормоз"));
+    note(PSTR("тяга: нет команды дольше 650 мс — выходы выключены, тормоз"));
   }
 }
 
@@ -1582,7 +1578,7 @@ void steeringSetup() {
   pinMode(BLDC_DIR_PIN, OUTPUT);
   pinMode(BLDC_BRAKE_PIN, OUTPUT);
   pinMode(BLDC_STOP_PIN, OUTPUT);
-  // Вход «P» драйвера — сигнал Servo со значением 0: мотор не тянет.
+  // Servo работает с 0, а BRAKE/STOP отдельно держат выходы выключенными.
   setupDriveServo();
   driveSetBrake(true);
   driveSetStop(true);

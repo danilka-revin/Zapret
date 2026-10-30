@@ -9,7 +9,8 @@
     а не зашит в разметку — иначе экран разрешает угол, который плата режет;
   * пресет, который железо не тянет, честно недоступен и ничего не отправляет;
   * отказ на одном колесе останавливает пресет, а не доворачивает остальные;
-  * движение — удерживаемое: нажал → тяга, отпустил → 0.
+  * движение с фиксацией: нажал → тяга, отпустил → тяга, СТОП → 0;
+  * изменение ползунка на ходу передаёт новое точное значение.
 """
 from __future__ import annotations
 
@@ -146,13 +147,16 @@ def test_each_wheel_card_has_its_own_direct_slider(tmp_path):
     assert all(item["sliderValue"] == "0" and item["state"] == "стоит" for item in cards.values())
 
 
-def test_single_wheel_button_sends_exact_value_and_release_stops(tmp_path):
+def test_single_wheel_continues_after_button_is_released(tmp_path):
     report = run_screen(tmp_path, payload(actions=[
-        {"type": "wheel-drive", "id": "FL", "value": 40, "release": True}]))
-    assert report["drives"], report["netlog"]
-    assert report["drives"][0] == {"module": "FL", "value": 40, "direction": "forward"}
-    assert report["drives"][-1] == {"module": "FL", "value": 0}
-    assert next(c for c in report["wheelDrive"] if c["id"] == "FL")["sliderValue"] == "40"
+        {"type": "wheel-drive", "id": "FL", "value": 40, "release": True},
+        {"type": "wait", "rounds": 12}]))
+    assert len(report["drives"]) > 1, report["netlog"]
+    assert all(item == {"module": "FL", "value": 40, "direction": "forward"}
+               for item in report["drives"])
+    card = next(c for c in report["wheelDrive"] if c["id"] == "FL")
+    assert card["sliderValue"] == "40" and card["forwardPressed"] == "true"
+    assert card["backDisabled"]
 
 
 def test_two_wheels_have_independent_values_and_global_stop(tmp_path):
@@ -195,6 +199,23 @@ def test_wheel_drive_refusal_stops_heartbeat_and_is_shown(tmp_path):
     assert report["drives"][0] == {"module": "FL", "value": 40, "direction": "forward"}
     assert report["drives"][-1] == {"module": "FL", "value": 0}
     assert sum(item["value"] != 0 for item in report["drives"]) == 1
+
+
+def test_common_panel_shows_each_boards_reported_write_value_not_rpm(tmp_path):
+    motors = [dict(motor(module), driveServoValue=value, rpm=None, tach=False)
+              for module, value in zip(MODULES, [2, 150, 75, 40])]
+    report = run_screen(tmp_path, payload(motors=motors))
+    assert report["driveReported"] == (
+        "Платы сообщили Servo.write: FL: 2 · FR: 150 · RL: 75 · RR: 40 (не обороты)")
+
+
+def test_common_panel_does_not_label_stale_values_as_fresh(tmp_path):
+    motors = [dict(motor(module), driveServoValue=150) for module in MODULES]
+    states = {m: {"canDrive": True, "reason": None} for m in MODULES}
+    states["FR"] = {"canDrive": False, "reason": "module_offline"}
+    servo = {"maxValue": 150, "canDrive": False, "reason": "module_offline", "perModule": states}
+    report = run_screen(tmp_path, payload(motors=motors, servo=servo))
+    assert "FL: 150 · FR: — · RL: 150" in report["driveReported"]
 
 
 def test_wheel_drive_shows_actual_servo_value_without_rpm(tmp_path):
@@ -319,13 +340,16 @@ def test_slider_by_itself_never_starts_motion(tmp_path, module):
 
 
 @pytest.mark.parametrize("direction", ["forward", "backward"])
-@pytest.mark.parametrize("value", [1, 40, 75, 150])
+@pytest.mark.parametrize("value", [1, 2, 40, 75, 150])
 @pytest.mark.parametrize("module", [None, "FL", "FR", "RL", "RR"])
-def test_held_direction_transmits_exact_value_then_stops(tmp_path, direction, value, module):
+def test_clicked_direction_keeps_exact_value_until_stop(tmp_path, direction, value, module):
     kind = "drive" if module is None else "wheel-drive"
+    stop = {"type": "stop"} if module is None else {"type": "wheel-stop", "id": module}
     report = run_screen(tmp_path, payload(actions=[
-        {"type": kind, "id": module, "direction": direction, "value": value, "release": True}]))
+        {"type": kind, "id": module, "direction": direction, "value": value, "release": True},
+        {"type": "wait", "rounds": 12}, stop]))
     expected = {"module": module, "value": value, "direction": direction}
+    assert len(report["drives"]) > 2
     assert report["drives"][0] == expected
     assert report["drives"][-1] == {"module": module, "value": 0}
     assert all(item == expected for item in report["drives"][:-1])
@@ -336,59 +360,93 @@ def test_common_speed_is_not_replaced_by_an_individual_wheel_setting(tmp_path):
         {"type": "speed", "value": 40},
         {"type": "speed", "id": "FL", "value": 150},
         {"type": "press", "direction": "backward"},
-        {"type": "release", "direction": "backward"}]))
+        {"type": "stop"}]))
     assert report["drives"][0] == {"module": None, "value": 40, "direction": "backward"}
     assert report["drives"][-1] == {"module": None, "value": 0}
     assert report["driveSpeedValue"] == "40"
     assert next(w for w in report["wheelDrive"] if w["id"] == "FL")["sliderValue"] == "40"
 
 
-def test_reversing_after_release_uses_the_same_saved_speed(tmp_path):
+def test_reversing_requires_stop_and_uses_the_same_saved_speed(tmp_path):
     report = run_screen(tmp_path, payload(actions=[
         {"type": "speed", "value": 40},
         {"type": "press", "direction": "forward"},
         {"type": "release", "direction": "forward"},
+        {"type": "press", "direction": "backward"},  # отключено до СТОП
+        {"type": "stop"},
         {"type": "press", "direction": "backward"},
-        {"type": "release", "direction": "backward"}]))
+        {"type": "stop"}]))
     assert report["drives"][0] == {"module": None, "value": 40, "direction": "forward"}
-    assert {"module": None, "value": 40, "direction": "backward"} in report["drives"]
+    first_stop = next(i for i, item in enumerate(report["drives"]) if item["value"] == 0)
+    assert all(item.get("direction") == "forward" for item in report["drives"][:first_stop])
+    assert {"module": None, "value": 40, "direction": "backward"} in report["drives"][first_stop + 1:]
     assert sum(item["value"] == 0 for item in report["drives"]) == 2
     assert report["drives"][-1] == {"module": None, "value": 0}
 
 
-def test_slider_updates_exact_value_while_direction_is_held(tmp_path):
+@pytest.mark.parametrize("direction", ["forward", "backward"])
+@pytest.mark.parametrize("module", [None, "FL", "FR", "RL", "RR"])
+def test_slider_updates_exact_value_during_latched_motion(tmp_path, module, direction):
+    kind = "drive" if module is None else "wheel-drive"
+    stop = {"type": "stop"} if module is None else {"type": "wheel-stop", "id": module}
     report = run_screen(tmp_path, payload(actions=[
-        {"type": "drive", "value": 40, "direction": "backward"},
-        {"type": "speed", "value": 150},
-        {"type": "release", "direction": "backward"}]))
-    assert report["drives"][0] == {"module": None, "value": 40, "direction": "backward"}
-    assert {"module": None, "value": 150, "direction": "backward"} in report["drives"]
-    assert report["drives"][-1] == {"module": None, "value": 0}
-    assert report["driveSpeedValue"] == "150"
+        {"type": kind, "id": module, "value": 2, "direction": direction},
+        {"type": "release", "id": module, "direction": direction},
+        {"type": "speed", "id": module, "value": 150},
+        {"type": "speed", "id": module, "value": 2},
+        {"type": "wait", "rounds": 6}, stop]))
+    expected_2 = {"module": module, "value": 2, "direction": direction}
+    expected_150 = {"module": module, "value": 150, "direction": direction}
+    assert report["drives"][0] == expected_2
+    high = report["drives"].index(expected_150)
+    assert expected_2 in report["drives"][high + 1:-1]
+    assert all(item["value"] != 0 for item in report["drives"][:-1])
+    assert report["drives"][-1] == {"module": module, "value": 0}
+    if module is None:
+        assert report["driveSpeedValue"] == "2"
+    else:
+        assert next(card for card in report["wheelDrive"] if card["id"] == module)["sliderValue"] == "2"
 
 
-def test_keyboard_and_pointer_cancel_stop_and_preserve_the_setting(tmp_path):
+def test_keyboard_release_and_pointer_cancel_do_not_stop_a_run(tmp_path):
     report = run_screen(tmp_path, payload(actions=[
         {"type": "speed", "value": 75},
         {"type": "key", "direction": "backward", "event": "keydown"},
         {"type": "key", "direction": "backward", "event": "keyup"},
-        {"type": "drive", "direction": "forward", "value": 75},
-        {"type": "release", "direction": "forward", "cancel": True}]))
-    assert {"module": None, "value": 75, "direction": "backward"} in report["drives"]
-    assert {"module": None, "value": 75, "direction": "forward"} in report["drives"]
-    assert sum(item["value"] == 0 for item in report["drives"]) == 2
+        {"type": "release", "direction": "backward", "cancel": True},
+        {"type": "wait", "rounds": 8}, {"type": "stop"}]))
+    expected = {"module": None, "value": 75, "direction": "backward"}
+    assert len(report["drives"]) > 2
+    assert all(item == expected for item in report["drives"][:-1])
     assert report["drives"][-1] == {"module": None, "value": 0}
     assert report["driveSpeedValue"] == "75"
 
 
-@pytest.mark.parametrize("value", [0, 1, 40, 75, 150])
+@pytest.mark.parametrize("value", [1, 2, 40, 75, 150])
 def test_common_slider_sends_exact_servo_value(tmp_path, value):
     report = run_screen(tmp_path, payload(actions=[{"type": "drive", "value": value}]))
-    expected = {"module": None, "value": value}
-    if value: expected["direction"] = "forward"
+    expected = {"module": None, "value": value, "direction": "forward"}
     assert report["drives"][0] == expected
     assert all(item == expected for item in report["drives"])
     assert report["driveSpeedMin"] == "0" and report["driveSpeedMax"] == "150"
+
+
+def test_zero_speed_does_not_arm_a_direction_or_auto_start(tmp_path):
+    report = run_screen(tmp_path, payload(actions=[
+        {"type": "press", "direction": "forward"},
+        {"type": "speed", "value": 40}, {"type": "wait", "rounds": 6}]))
+    assert report["drives"] == []
+    assert report["driveForwardPressed"] == "false"
+
+
+def test_slider_zero_stops_and_needs_a_new_direction_click(tmp_path):
+    report = run_screen(tmp_path, payload(actions=[
+        {"type": "drive", "value": 40}, {"type": "speed", "value": 0},
+        {"type": "speed", "value": 150}, {"type": "wait", "rounds": 6}]))
+    assert report["drives"][0] == {"module": None, "value": 40, "direction": "forward"}
+    first_zero = next(i for i, item in enumerate(report["drives"]) if item["value"] == 0)
+    assert all(item["value"] == 0 for item in report["drives"][first_zero:])
+    assert report["driveSpeedValue"] == "150" and report["driveForwardPressed"] == "false"
 
 
 def test_common_slider_refuses_old_firmware(tmp_path):
@@ -513,7 +571,7 @@ def test_drive_panel_has_no_settings_at_all(tmp_path):
     assert report["renderErrors"] == []
     # Прямой предел независим от прежнего процентного лимита платы.
     assert report["driveSpeedMax"] == "150"
-    assert "удерживайте" in report["driveStatus"]
+    assert "нажмите" in report["driveStatus"]
     # Пока показывается только значение Servo, а не обороты или импульсы SC.
     cards = {item["id"]: item for item in report["wheelDrive"]}
     assert cards["FL"]["output"] == "Servo.write(0)"
@@ -694,6 +752,14 @@ def test_web_remote_also_drives_at_any_angle():
     assert "spreadDeg" in console and "поедет под этим углом" in console
     # Блокировка кнопок движения смотрит только на готовность привода, не на углы.
     assert "button.disabled = !authorizedForDrive || !drive.canDrive;" in console
+
+
+def test_drive_heartbeats_expire_but_stop_never_expires(tmp_path):
+    report = run_screen(tmp_path, payload(actions=[
+        {"type": "drive", "value": 40}, {"type": "wait", "rounds": 8}, {"type": "stop"}]))
+    assert len(report["driveDeadlines"]) == len(report["drives"])
+    assert all(float(deadline) > 0 for deadline in report["driveDeadlines"][:-1])
+    assert report["driveDeadlines"][-1] is None
 
 
 def test_stop_overtakes_queued_heartbeat_after_delayed_request(tmp_path):

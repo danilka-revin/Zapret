@@ -120,20 +120,17 @@ def test_step_timer_does_not_fight_the_drive_pwm():
     assert "tone(" not in code2
 
 
-def test_drive_uses_hardware_pwm_and_a_full_scale_of_five_hundred_rpm():
-    """Шкала тяги — 0…100 %, но выдаётся сигналом Servo, а не скважностью.
+def test_drive_uses_servo_values_without_tachometer_feedback():
+    """Servo на D3, прямое значение и отсутствие обратной связи по оборотам.
 
-    Имя теста историческое (v12: аппаратный ШИМ и «100 % = 500 об/мин»). В v13
-    оператор получил ровные обороты простым скетчем «сервопривод постоянного
-    вращения», и прошивка делает то же самое: штатная библиотека Servo, 50 Гц на
-    вход «P» (D3), значение write 0…180 — вся шкала. Процент переводится в
-    значение один в один: 1 % = 1,8, 100 % = 180. Контура оборотов нет.
+    Прежняя t-команда масштабирует 1 % в 1,8 единицы write, но эта шкала не
+    обозначает скважность на P и не позволяет судить о фактических оборотах.
     """
     text = _text(WHEEL)
     code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
     assert "#include <Servo.h>" in text
     assert int(_const(text, "BLDC_SPEED_PIN")) == 3
-    # Шкала Servo: 0 — мотор не тянет, 180 — полный ход, 1 % = 1,8 значения.
+    # Шкала Servo: 0 — команда остановки, 180 — верх шкалы write, 1 % ≈ 1,8.
     assert int(_const(text, "DRIVE_SERVO_MAX_VALUE")) == 180
     assert int(_const(text, "DRIVE_SERVO_TENTHS_PER_PERCENT")) == 18
     assert int(_const(text, "DRIVE_MAX_PERCENT")) == 100
@@ -493,7 +490,7 @@ def test_direct_slider_api_reaches_real_firmware_sim_over_serial(simulator, kios
 
         # Общая команда адресует все четыре порта в обе стороны без масштаба.
         for direction, sign in (("forward", 1), ("backward", -1)):
-            for value in (1, 75, 150):
+            for value in (1, 2, 75, 150, 2):
                 send(value, direction=direction)
                 assert wait_for(lambda: all(frame["driveServoValue"] == value and
                                             frame["drivePercent"] * sign > 0
@@ -503,6 +500,62 @@ def test_direct_slider_api_reaches_real_firmware_sim_over_serial(simulator, kios
             assert wait_for(lambda: all(v == 0 for v in servo_values().values())), source.read()
         assert all(motor["rpm"] is None and motor["tach"] is False for motor in motors().values())
     finally:
+        if source is not None:
+            source._stop = True
+        process.terminate()
+        try:
+            process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or not shutil.which("node") or
+    not os.environ.get("RC_TEST_CHROMIUM") or not os.environ.get("RC_TEST_PLAYWRIGHT_CORE"),
+    reason="для браузерной проверки нужны Chromium и playwright-core (RC_TEST_CHROMIUM, RC_TEST_PLAYWRIGHT_CORE)",
+)
+def test_latched_drive_in_real_browser_through_all_four_simulated_usb_boards(simulator, kiosk_client, tmp_path):
+    """Касание → обычный браузер → HTTP → USB → Servo; только симуляция, не моторы."""
+    import threading
+    from werkzeug.serving import make_server
+    from robot_control import slam
+
+    base = tmp_path / "browser-wheel"
+    process = subprocess.Popen([str(simulator), "pty", str(base)], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+    source = server = thread = None
+
+    def wait_for(predicate, timeout=8):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if predicate():
+                return True
+            time.sleep(0.05)
+        return bool(predicate())
+
+    try:
+        ports = {m: f"{base}-{m}" for m in MODULE_IDS}
+        assert wait_for(lambda: all(Path(port).exists() for port in ports.values()))
+        source = slam.load_backend().MasterSource(list(ports.values()), module_ports=ports)
+        kiosk_client.application.extensions["rc_slam"].source = source
+        assert wait_for(lambda: source.servo_drive_status()["canDrive"]), source.read()
+        server = make_server("127.0.0.1", 0, kiosk_client.application, threaded=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        result = subprocess.run(
+            [shutil.which("node"), str(ROOT / "tests/js/latched_drive_browser.mjs"),
+             f"http://127.0.0.1:{server.server_port}"],
+            capture_output=True, text=True, timeout=90,
+        )
+        assert result.returncode == 0, result.stdout + "\n" + result.stderr
+        assert "simulated USB boards: OK" in result.stdout
+    finally:
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if thread is not None:
+            thread.join(timeout=3)
         if source is not None:
             source._stop = True
         process.terminate()
