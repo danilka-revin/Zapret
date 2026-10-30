@@ -176,21 +176,21 @@ def test_firmware_has_no_usb_role_discovery():
     # Legacy addressed monitor commands remain compatible; the application
     # sends local commands to the manually selected port.
     assert 'classifyModuleToken' in text
-    # v16 добавляет отдельные read-only показания SC, не меняя назначения USB.
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '16'
+    # v17 добавляет счётчик SC, не меняя назначения USB.
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '17'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
     text = _text(WHEEL)
     assert int(_const(text, "TELEMETRY_PERIOD_MS")) == 250
     # @TLM выходит целиком: обрезанный блок сервер не разберёт.
-    assert int(_const(text, "TELEMETRY_LINE_CAPACITY")) == 240
+    assert int(_const(text, "TELEMETRY_LINE_CAPACITY")) == 260
     assert "char line[TELEMETRY_LINE_CAPACITY];" in text
     assert "if (txFree() >= TELEMETRY_LINE_CAPACITY) appendTelemetry();" in text
     # Диагностический канал SC отделён от полей старой одометрии.
     for field in ("deg=", "tgt=", "moving=", "cal=", "cycle=", "calib=",
                   "opto=", "home=", "err=", "drive=", "fw=", "pot=", "pm=", "t=",
-                  "tach=0", "dmax=", "sv=", "duty=", "sc_rpm=", "sc_hz=", "sc_ppr="):
+                  "tach=0", "dmax=", "sv=", "duty=", "sc_rpm=", "sc_hz=", "sc_ppr=", "sc_count="):
         assert field in text, field
     telemetry = re.search(r'PSTR\("(@TLM [^"\n]+)', text).group(1)
     assert not any(token.startswith(("rpm=", "hz=", "ppr=")) for token in telemetry.split())
@@ -355,10 +355,11 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 16 and frame["calibError"] == 0
+        assert frame["firmware"] == 17 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] is None
         assert frame["tach"] is False and frame["tachHz"] is None
         assert frame["scRpm"] == 0.0 and frame["scHz"] == 0 and frame["scPpr"] == 90
+        assert frame["scCount"] == 0 and isinstance(frame["uptimeMs"], int)
         assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False
     assert any("FR: Калибровка ЗАВЕРШЕНА!" in line for line in messages)
@@ -566,6 +567,126 @@ def test_latched_drive_in_real_browser_through_all_four_simulated_usb_boards(sim
             server.server_close()
         if thread is not None:
             thread.join(timeout=3)
+        if source is not None:
+            source._stop = True
+        process.terminate()
+        try:
+            process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or not shutil.which("node") or
+    not os.environ.get("RC_TEST_CHROMIUM") or not os.environ.get("RC_TEST_PLAYWRIGHT_CORE"),
+    reason="для WASD нужны Chromium и playwright-core",
+)
+@pytest.mark.parametrize("script,follow,success", [
+    ("keyboard_browser.mjs", True, "four simulated USB boards: OK"),
+    ("keyboard_no_sc_browser.mjs", False, "WASD missing SC: stopped"),
+])
+def test_wasd_in_real_browser_through_all_four_simulated_usb_boards(simulator, kiosk_client, tmp_path,
+                                                                    script, follow, success):
+    """WASD, STOP/руль/тяга, обрыв связи и отсутствие SC через HTTP и четыре PTY."""
+    import threading
+    from werkzeug.serving import make_server
+    from robot_control import slam
+
+    base = tmp_path / "wasd-wheel"
+    env = dict(os.environ)
+    if follow:
+        env["RC_SIM_SC_FOLLOW_DRIVE"] = "1"
+    else:
+        env.pop("RC_SIM_SC_FOLLOW_DRIVE", None)
+    process = subprocess.Popen([str(simulator), "pty", str(base)], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, env=env)
+    source = server = thread = None
+
+    def wait_for(predicate, timeout=10):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if predicate():
+                return True
+            time.sleep(0.05)
+        return bool(predicate())
+
+    try:
+        ports = {m: f"{base}-{m}" for m in MODULE_IDS}
+        assert wait_for(lambda: all(Path(port).exists() for port in ports.values()))
+        source = slam.load_backend().MasterSource(list(ports.values()), module_ports=ports)
+        kiosk_client.application.extensions["rc_slam"].source = source
+        assert wait_for(lambda: source.servo_drive_status()["canDrive"]), source.read()
+        for module in MODULE_IDS:
+            assert source.zero_module(module)["ok"]
+        assert wait_for(lambda: all(m.get("homed") for m in source.read()["motors"])), source.read()
+        server = make_server("127.0.0.1", 0, kiosk_client.application, threaded=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        result = subprocess.run(
+            [shutil.which("node"), str(ROOT / "tests/js" / script),
+             f"http://127.0.0.1:{server.server_port}"],
+            capture_output=True, text=True, timeout=120,
+        )
+        assert result.returncode == 0, result.stdout + "\n" + result.stderr
+        assert success in result.stdout
+    finally:
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if thread is not None:
+            thread.join(timeout=3)
+        if source is not None:
+            source._stop = True
+        process.terminate()
+        try:
+            process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="PTY нужны для симуляции USB")
+def test_sc_maneuver_through_four_simulated_usb_boards(simulator, kiosk_client, tmp_path):
+    """HTTP-манёвр проходит через реальный backend и четыре fw17; SC модель игрушечная."""
+    from robot_control import slam
+
+    base = tmp_path / "maneuver-wheel"
+    process = subprocess.Popen([str(simulator), "pty", str(base)], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True,
+                               env=dict(os.environ, RC_SIM_SC_FOLLOW_DRIVE="1"))
+    source = None
+
+    def wait_for(predicate, timeout=10):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if predicate():
+                return True
+            time.sleep(0.05)
+        return bool(predicate())
+
+    try:
+        ports = {m: f"{base}-{m}" for m in MODULE_IDS}
+        assert wait_for(lambda: all(Path(port).exists() for port in ports.values()))
+        source = slam.load_backend().MasterSource(list(ports.values()), module_ports=ports)
+        kiosk_client.application.extensions["rc_slam"].source = source
+        assert wait_for(lambda: source.servo_drive_status()["canDrive"])
+        for module in MODULE_IDS:
+            assert source.zero_module(module)["ok"]
+        assert wait_for(lambda: all(m.get("homed") for m in source.read()["motors"]))
+        assert source.set_maneuver_config("forward", {"distanceM": 0.2, "percent": 5})["ok"]
+        response = kiosk_client.post('/api/kiosk_maneuver',
+            json={'action': 'start', 'name': 'forward'}, headers={'X-Robot-Control': 'steering'})
+        assert response.status_code == 200, response.json
+        assert wait_for(lambda: source.maneuver_status()["state"] == "driving", 6), source.maneuver_status()
+        assert wait_for(lambda: not source.maneuver_status()["active"], 15), source.maneuver_status()
+        status = source.maneuver_status()
+        assert status['mode'] == 'odometry' and status['sensor'] == 'sc_count'
+        assert status['reason'] in {'reached', 'underrun', 'overshoot'}, status
+        assert status['value'] > 0, status
+        assert wait_for(lambda: all(m["drivePercent"] == 0 for m in source.read()["motors"]))
+        assert all(m["scCount"] > 0 for m in source.read()["motors"])
+    finally:
         if source is not None:
             source._stop = True
         process.terminate()

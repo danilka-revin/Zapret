@@ -97,6 +97,7 @@ CONTROL_ROUTES = {
     # Манёвры тяги: «метр вперёд», «90° на месте» и их настройка.
     'maneuver': ('/api/kiosk_maneuver', {'POST'}, 'steering'),
     'maneuver_config': ('/api/kiosk_maneuver_config', {'POST'}, 'steering'),
+    'keyboard': ('/api/kiosk_keyboard', {'POST'}, 'drive'),
     'drive': ('/api/kiosk_drive', {'POST'}, 'drive'),
     'estop': ('/api/estop', {'POST'}, 'drive'),
     'estop/release': ('/api/estop/release', {'POST'}, 'drive'),
@@ -118,8 +119,24 @@ def proxy_control(origin: str, operation: str):
         # Web and onboard servers run on the robot. Do not execute a heartbeat
         # that sat in a server/network queue after the operator released it.
         extra = {'X-Robot-Command-Deadline': str(time.time() + 0.5)}
+    elif operation == 'keyboard':
+        import math
+        import time
+        # Only the known deadline is forwarded, never arbitrary client headers.
+        # Preserve the browser's earlier deadline and cap it at 0.5 s on board.
+        deadline = request.headers.get('X-Robot-Command-Deadline')
+        if deadline is not None:
+            try:
+                value = float(deadline)
+                now = time.time()
+                if not math.isfinite(value) or value > now + 0.75:
+                    raise ValueError('invalid deadline or clock skew')
+                deadline = str(min(value, now + 0.5))
+            except ValueError:
+                deadline = 'invalid'
+            extra = {'X-Robot-Command-Deadline': deadline}
     return _forward_json(origin, path, methods=methods, limit=MAX_NAV_REPLY_BYTES,
-                         timeout=0.6 if operation == 'drive' else 1.0,
+                         timeout=0.6 if operation in {'drive', 'keyboard'} else 1.0,
                          control_header=marker, extra_headers=extra)
 
 

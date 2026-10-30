@@ -17,49 +17,39 @@ const page = await context.newPage();
 const errors = [];
 page.on('pageerror', error => errors.push(String(error)));
 
-const allValuesAre = async (value) => {
-  await page.waitForFunction(async expected => {
-    const reply = await fetch('/api/kiosk_state', {cache: 'no-store'});
-    const state = await reply.json();
-    return state.ok && ['FL', 'FR', 'RL', 'RR'].every(id => {
-      const motor = (state.data.motors || []).find(item => item.id === id);
-      return motor && motor.online && motor.driveServoValue === expected;
-    });
-  }, value, {timeout: 8000, polling: 150});
+// waitForFunction treats a Promise object as truthy on some Playwright
+// versions. Poll resolved JSON in Node so telemetry assertions really wait.
+const telemetry = async (predicate) => {
+  const deadline = Date.now() + 8000;
+  let state;
+  while (Date.now() < deadline) {
+    state = await (await fetch(origin + '/api/kiosk_state', {cache: 'no-store'})).json();
+    if (state.ok && predicate(state.data.motors || [])) return;
+    await page.waitForTimeout(150);
+  }
+  throw new Error('telemetry timeout: ' + JSON.stringify(state && state.data && state.data.motors));
 };
-
-const valuesAre = async expected => {
-  await page.waitForFunction(async values => {
-    const reply = await fetch('/api/kiosk_state', {cache: 'no-store'});
-    const state = await reply.json();
-    return state.ok && Object.entries(values).every(([id, value]) => {
-      const motor = (state.data.motors || []).find(item => item.id === id);
-      return motor && motor.online && motor.driveServoValue === value;
-    });
-  }, expected, {timeout: 8000, polling: 150});
-};
-
-const scRpmAre = async expected => {
-  await page.waitForFunction(async values => {
-    const reply = await fetch('/api/kiosk_state', {cache: 'no-store'});
-    const state = await reply.json();
-    return state.ok && Object.entries(values).every(([id, rpm]) => {
-      const motor = (state.data.motors || []).find(item => item.id === id);
-      return motor && motor.online && motor.rpm === null && motor.tach === false &&
-        typeof motor.scRpm === 'number' && Math.abs(motor.scRpm - rpm) < 0.6;
-    });
-  }, expected, {timeout: 8000, polling: 150});
-};
+const valuesAre = async expected => telemetry(motors => Object.entries(expected).every(([id, value]) => {
+  const motor = motors.find(item => item.id === id);
+  return motor && motor.online && motor.driveServoValue === value;
+}));
+const allValuesAre = value => valuesAre(Object.fromEntries(['FL', 'FR', 'RL', 'RR'].map(id => [id, value])));
+const scRpmAre = async expected => telemetry(motors => Object.entries(expected).every(([id, rpm]) => {
+  const motor = motors.find(item => item.id === id);
+  return motor && motor.online && motor.rpm === null && motor.tach === false &&
+    typeof motor.scRpm === 'number' && Math.abs(motor.scRpm - rpm) < 0.6;
+}));
 
 const setSpeed = async (value, selector = '#drive-speed') => {
   const slider = page.locator(selector);
   await slider.scrollIntoViewIfNeeded();
   await slider.focus();
-  if (value === 150) await page.keyboard.press('End');
-  else {
-    await page.keyboard.press('Home');
-    for (let i = 0; i < value; i += 1) await page.keyboard.press('ArrowRight');
-  }
+  // Dragging directly 150→2 must not pass through 0: reaching zero
+  // intentionally disarms the latched direction and requires a new click.
+  await slider.evaluate((element, next) => {
+    element.value = String(next);
+    element.dispatchEvent(new Event('input', {bubbles: true}));
+  }, value);
   assert.equal(await slider.inputValue(), String(value));
 };
 
@@ -136,11 +126,9 @@ try {
   await back.focus();
   await page.keyboard.press('Enter');
   await allValuesAre(2);
-  const other = await context.newPage();
-  await other.goto('about:blank');
-  await other.bringToFront();
+  // Headless Chromium may not generate blur when switching tabs.
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
   await page.waitForTimeout(900);
-  await page.bringToFront();
   await allValuesAre(0);
   await page.waitForTimeout(800);
   await allValuesAre(0);

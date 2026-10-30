@@ -6,20 +6,15 @@
 
 1. ставит колёса в нужные углы и ждёт, пока модули доедут;
 2. плавно (рампа) набирает рабочий процент тяги;
-3. считает пройденный путь по тахометру — обороты каждого колеса за тик,
-   умноженные на длину окружности;
+3. считает путь каждого колеса по переходам SC (счётчик прошивки v17);
 4. гасит тягу заранее (тормозной участок) и останавливает моторы на цели.
 
-Длина окружности берётся из диаметра колеса, а угол разворота — из геометрии
-шасси: при вращении вокруг центра каждое колесо проходит дугу
-``R · θ``, где ``R = hypot(база/2, колея/2)``. Поэтому «90°» — это не
-«сколько-то секунд», а измеренный угол.
-
-Гироскопа в шасси нет: единственный датчик движения — тахометр на D19.
-Если его нет (или он молчит), раннер честно переходит в режим **по времени**:
-берёт скорость с прошлого удачного прогона (`learned`), а если прогонов ещё
-не было — осторожную заводскую оценку. В обоих случаях экран пишет, чем
-именно меряли, — «метр» на глазок не выдаётся за метр.
+Путь — переходы / PPR × окружность. Угол разворота оценивается из средней
+дуги колёс и геометрии ``R = hypot(база/2, колея/2)``. Это колёсная
+одометрия, не измерение движения корпуса: SC не показывает направление,
+его предполагаем по команде, а скольжение и инерцию датчик не обнаруживает.
+Все четыре счётчика и свежая телеметрия обязательны. Потеря или молчание
+одного колеса останавливают манёвр; перехода к движению по времени нет.
 
 Модуль ничего не отправляет сам: он получает кадры телеметрии и две функции
 («повернуть колесо», «дать тягу»). Так его можно проверить без железа —
@@ -39,18 +34,17 @@ MODULES = ("FL", "FR", "RL", "RR")
 #: Куда поворачивать колёса для бокового хода: как у пресетов руления.
 SIDE_DEG = 90.0
 
-#: Заводские параметры шасси. Мотор AOVO Pro 350 Вт — колесо 8,5″ (216 мм);
-#: база и колея — типичные для такого шасси, их надо померить на своём роботе.
+#: AOVO Pro 350 W 36 V: номинальная шина 8,5″ = 215,9 мм. Эффективный
+#: диаметр под нагрузкой нужно откалибровать; база и колея — только примеры.
+#: https://www.aovofix.co.uk/products/aovo-pro-m365-es80-motor-v2
 DEFAULT_CHASSIS = {
-    "wheelDiameterMm": 216.0,
+    "wheelDiameterMm": 215.9,
     "wheelbaseMm": 500.0,
     "trackMm": 450.0,
     "rampSeconds": 0.5,
 }
 
-#: Заводские оценки скорости для режима «по времени» (пока нет своего прогона).
-#: Это именно оценка: после первого удачного прогона по тахометру сервер
-#: запоминает настоящую скорость (`learned`) и дальше берёт её.
+#: Грубые оценки только для таймаута и начальной рампы, не для измерения пути.
 DEFAULT_NOMINAL = {"mps": 0.35, "dps": 45.0}
 
 #: Пресеты. `kind` — что меряем: метры (`distanceM`) или градусы (`angleDeg`).
@@ -154,6 +148,30 @@ def _angle_error(current, target):
     """Разница углов без сюрпризов на переходе через ±180°."""
     diff = (float(current) - float(target)) % 360.0
     return abs(diff - 360.0) if diff > 180.0 else abs(diff)
+
+
+def odometry_error(frames):
+    """Вернуть причину отказа, если хотя бы один SC-счётчик недоступен.
+
+    Телеметрия должна быть предварительно отфильтрована по свежести. Ноль RPM
+    не доказывает исправность провода: молчание дополнительно контролируется
+    уже после начала тяги.
+    """
+    for module in MODULES:
+        frame = frames.get(module)
+        if not frame:
+            return "module_offline"
+        if type(frame.get("firmware")) is not int or frame["firmware"] < 17:
+            return "sc_firmware_required"
+        count, ppr, uptime, rpm = (frame.get("scCount"), frame.get("scPpr"),
+                                   frame.get("uptimeMs"), frame.get("scRpm"))
+        if (type(count) is not int or not 0 <= count <= 0xFFFFFFFF or
+                type(ppr) is not int or not 1 <= ppr <= 1000 or
+                type(uptime) is not int or not 0 <= uptime <= 0xFFFFFFFF or
+                not isinstance(rpm, (int, float)) or isinstance(rpm, bool) or
+                not math.isfinite(rpm) or not 0 <= rpm <= 404000.0 / ppr + 0.1):
+            return "sc_invalid"
+    return None
 
 
 # ------------------------------------------------------------------ конфиг # #
@@ -315,8 +333,10 @@ class ManeuverRunner:
     STEER_RESEND_S = 0.4
     STEER_TIMEOUT_S = 10.0
     SEND_INTERVAL_S = 0.2
-    #: Сколько ждать обороты, прежде чем признать тахометр молчащим.
-    TACH_GRACE_S = 1.5
+    #: Переходы могут быть редкими на малом ходу, но ждать бесконечно нельзя.
+    TACH_GRACE_S = 3.0
+    #: Аппаратный фильтр 150 мкс (≈6667 переходов/с); запас на задержку кадра.
+    MAX_EDGE_HZ = 6700.0
     #: Сколько секунд результат манёвра остаётся на экране.
     RESULT_S = 20.0
 
@@ -350,6 +370,8 @@ class ManeuverRunner:
         self._last_tick = None
         self._elapsed = 0.0
         self._travel = {m: 0.0 for m in MODULES}
+        self._sc = {}                    # последний счётчик, PPR и uptime каждого колеса
+        self._brake_id = None           # точный ACK начального STOP всех четырёх плат
         self._sent = {}                  # модуль → последний отправленный процент
         self._sent_at = 0.0
         self._steer_at = -1e9             # первая команда рулю — сразу, без паузы
@@ -368,6 +390,7 @@ class ManeuverRunner:
                 "title": (preset or {}).get("title"),
                 "kind": (preset or {}).get("kind"),
                 "mode": self.mode,
+                "sensor": "sc_count",
                 "target": round(self.target, 3),
                 "value": round(self.value, 3),
                 "progress": round(self.progress, 3),
@@ -409,10 +432,12 @@ class ManeuverRunner:
             if name in self.config["presets"] and \
                     self.config["presets"][name]["percent"] != before:
                 self.config["learned"].pop(name, None)
+            if name == "chassis":
+                self.config["learned"].clear()
             return {"ok": True, "config": self.config_payload()}
 
     # ------------------------------------------------------------------ старт #
-    def start(self, name, now, limit_percent=None):
+    def start(self, name, now, limit_percent=None, brake_id=None):
         """Начать манёвр. ``now`` — монотонное время (по нему же идут тики)."""
         with self.lock:
             if name not in self.config["presets"]:
@@ -428,6 +453,7 @@ class ManeuverRunner:
             self._clear()
             self.name = name
             self.state = self.STEERING
+            self._brake_id = brake_id
             self.target = preset_target(preset)
             self.work_percent = work
             self.started_at = now
@@ -475,8 +501,27 @@ class ManeuverRunner:
             self._stop("not_homed" if all(frames.get(m) for m in offline)
                        else "module_offline", now)
             return
+        error = odometry_error(frames)
+        if error:
+            self._stop(error, now)
+            return
+        if self._brake_id is not None:
+            if any(type(frames[m].get("brakeId")) is not int for m in MODULES):
+                self._stop("brake_firmware_required", now)
+                return
+            if any(frames[m]["brakeId"] != self._brake_id for m in MODULES):
+                if now - self.started_at > self.STEER_TIMEOUT_S:
+                    self._stop("brake_unconfirmed", now)
+                return
+            if any(frames[m].get("drivePercent") != 0 for m in MODULES):
+                self._stop("drive_mismatch", now)
+                return
         if now - self.started_at > self.STEER_TIMEOUT_S:
             self._stop("steering_timeout", now)
+            return
+        # Нельзя рулить, пока SC ещё показывает выбег. Ноль SC сам по себе
+        # не подтверждает провод: это контролируется при движении.
+        if any(frames[m]["scRpm"] > 1.0 for m in MODULES):
             return
         arrived = all(_angle_error(frames[m].get("deg") or 0.0, targets[m])
                       <= self.STEER_TOLERANCE_DEG and not frames[m].get("moving")
@@ -485,23 +530,57 @@ class ManeuverRunner:
             if now - self._steer_at >= self.STEER_RESEND_S:
                 self._steer_at = now
                 for module in MODULES:
-                    steer(module, targets[module])
+                    if frames[module].get("moving"):
+                        continue
+                    try:
+                        result = steer(module, targets[module])
+                    except Exception:
+                        result = False
+                    if result is False or (isinstance(result, dict) and not result.get("ok")
+                                           and result.get("reason") != "module_busy"):
+                        self._stop("command_failed", now)
+                        return
             return
         # Колёса на месте — начинаем движение с нуля измерений.
         self.state = self.DRIVING
         self._elapsed = 0.0
         self._travel = {m: 0.0 for m in MODULES}
+        self._sc = {m: {"count": frames[m]["scCount"], "ppr": frames[m]["scPpr"],
+                        "uptime": frames[m]["uptimeMs"], "sampleAt": now,
+                        "pulseAt": now} for m in MODULES}
         self._sent = {}
-        self.mode = "odometry" if any(frames[m].get("tach") for m in MODULES) else "time"
+        self.mode = "odometry"
         self._rate = self._rate_estimate()
         self._speed = 0.0
         self._last_value = 0.0
         self._deadline = now + self._expected_seconds() * 2.5 + 5.0
-        self.message = "Едем." if self.mode == "odometry" else "Едем; путь оценивается по времени, без одометрии."
+        self.message = "Едем по счётчикам SC; направление предполагается по команде."
 
     def _drive_phase(self, now, frames, drive, dt):
         self._elapsed += dt
-        measured = self._measure(dt, frames)
+        error = odometry_error(frames)
+        if error:
+            self._stop(error, now)
+            return
+        targets, signs = steering_targets(self.name, self.config["chassis"])
+        for module in MODULES:
+            frame = frames[module]
+            if not frame.get("cal") or frame.get("moving") or frame.get("calib") or frame.get("cycle"):
+                self._stop("steering_changed", now)
+                return
+            angle = frame.get("deg")
+            if not isinstance(angle, (int, float)) or not math.isfinite(angle) or \
+                    _angle_error(angle, targets[module]) > self.STEER_TOLERANCE_DEG:
+                self._stop("steering_changed", now)
+                return
+            reported = frame.get("drivePercent")
+            if reported is not None and reported * signs[module] < 0:
+                self._stop("drive_mismatch", now)
+                return
+        measured, error = self._measure(now, frames)
+        if error:
+            self._stop(error, now)
+            return
         if dt > 0:
             # Мгновенная скорость с лёгким сглаживанием: по ней считаем, где
             # начинать тормозной участок.
@@ -531,33 +610,53 @@ class ManeuverRunner:
         if self.value >= self.target + tolerance:
             self._stop(self._arrival_reason(tolerance), now)
             return
-        self._apply(now, drive)
+        try:
+            self._apply(now, drive)
+        except Exception:  # отказ отправки не должен оставлять предыдущую тягу
+            self._stop("command_failed", now)
+
+    def _target_wheel_path(self):
+        preset = self.config["presets"][self.name]
+        return (self.target if preset["kind"] == "distance" else
+                math.radians(self.target) * turn_radius_m(self.config["chassis"]))
 
     def _arrival_reason(self, tolerance):
+        # Среднее не должно скрыть полностью неработающий датчик на одном колесе.
+        if min(self._travel.values()) < self._target_wheel_path() * 0.5:
+            return "sc_mismatch"
         error = self.value - self.target
         if abs(error) <= tolerance:
             return "reached"
         return "underrun" if error < 0 else "overshoot"
 
     # ------------------------------------------------------------- измерение #
-    def _measure(self, dt, frames):
+    def _measure(self, now, frames):
         circumference = wheel_circumference_m(self.config["chassis"]["wheelDiameterMm"])
         for module in MODULES:
-            frame = frames.get(module) or {}
-            rpm = frame.get("rpm")
-            if rpm is None:
-                continue
-            self._travel[module] += (float(rpm) / 60.0) * circumference * dt
-        if self.mode == "odometry":
-            travel = max(abs(self._travel[m]) for m in MODULES)
-            if self._elapsed > self.TACH_GRACE_S and travel < 0.01:
-                # Тахометр «есть», а оборотов нет: не ждём у моря погоды.
-                self.mode = "time"
-                self._rate = self._rate_estimate()
-                self.message = "Тахометр молчит — считаю по времени."
-        if self.mode == "time":
-            return self._elapsed * self._rate
-        return self._odometry_value()
+            frame, previous = frames[module], self._sc[module]
+            count, uptime = frame["scCount"], frame["uptimeMs"]
+            if frame["scPpr"] != previous["ppr"]:
+                return None, "sc_changed"
+            elapsed = max(0.0, now - previous["sampleAt"])
+            dt_ms = (uptime - previous["uptime"]) & 0xFFFFFFFF
+            delta = (count - previous["count"]) & 0xFFFFFFFF
+            # Перезагрузка платы или порванный/переставленный счётчик нельзя
+            # принять за километры пути. Оба счётчика допускают переполнение.
+            if ((not dt_ms and delta) or dt_ms > elapsed * 1000.0 + 1250.0 or
+                    delta > self.MAX_EDGE_HZ * (elapsed + 0.5) + 2):
+                return None, "sc_changed"
+            if dt_ms:
+                previous.update(count=count, uptime=uptime, sampleAt=now)
+                if delta:
+                    self._travel[module] += circumference * delta / previous["ppr"]
+                    previous["pulseAt"] = now
+            if now - previous["pulseAt"] >= self.TACH_GRACE_S:
+                return None, "sc_stalled"
+        # Если цель уже пройдена одними колёсами, не продолжаем ждать другие.
+        paths = list(self._travel.values())
+        if max(paths) >= self._target_wheel_path() and min(paths) < max(paths) * 0.35:
+            return None, "sc_mismatch"
+        return self._odometry_value(), None
 
     def _odometry_value(self):
         preset = self.config["presets"][self.name]
@@ -612,7 +711,9 @@ class ManeuverRunner:
             self._sent = {m: percent for m in MODULES}
             self._sent_at = now
             self.percent = percent
-            drive(None, percent)
+            result = drive(None, percent)
+            if result is False or (isinstance(result, dict) and not result.get("ok")):
+                self._stop("command_failed", now)
             return
         changed = [m for m in MODULES if self._sent.get(m) != targets[m]]
         if not changed and not heartbeat:
@@ -621,7 +722,10 @@ class ManeuverRunner:
         for module in changed or list(MODULES):
             self.percent = targets[module]
             self._sent[module] = targets[module]
-            drive(module, targets[module])
+            result = drive(module, targets[module])
+            if result is False or (isinstance(result, dict) and not result.get("ok")):
+                self._stop("command_failed", now)
+                return
 
     def _stop(self, reason, now):
         """Погасить тягу и запомнить результат. Команда «b» — тормоз всем."""
@@ -656,7 +760,19 @@ class ManeuverRunner:
         elif reason == "not_homed":
             self.message = "У колеса нет нуля — сначала калибровка."
         elif reason == "module_offline":
-            self.message = "Колесо не на связи."
+            self.message = "Потеряна свежая телеметрия колеса — тяга снята."
+        elif reason == "sc_firmware_required":
+            self.message = "Для одометрии нужна прошивка v17 на всех четырёх платах."
+        elif reason in ("brake_firmware_required", "brake_unconfirmed"):
+            self.message = "Нет подтверждения тормоза от четырёх плат — движение не начато."
+        elif reason in ("sc_invalid", "sc_changed"):
+            self.message = "Счётчик SC неверен или плата перезапущена — тяга снята."
+        elif reason == "sc_stalled":
+            self.message = "Нет переходов SC одного из колёс — тяга снята."
+        elif reason == "sc_mismatch":
+            self.message = "Пути колёс слишком различаются — тяга снята, цель не подтверждена."
+        elif reason in ("steering_changed", "drive_mismatch", "command_failed"):
+            self.message = "Руль или команда тяги не подтверждены — тяга снята."
         else:
             self.message = "Манёвр прерван."
         if was in self.ACTIVE:

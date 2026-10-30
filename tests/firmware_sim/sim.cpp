@@ -633,6 +633,19 @@ static void scenario_drive() {
             board_fr.level[2] == LOW,
         "watchdog 650 мс: нейтраль, тормоз, драйвер выключен");
   CHECK(has(board_fr, "нет команды дольше 650 мс"), "сообщение watchdog");
+  // A tagged b is acknowledged only after applying the brake. A plain b
+  // invalidates that ACK; an old STOP cannot confirm a newer one.
+  board_fr.serial.send("b 123456");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr) && FR::brake_id == 123456, "tagged brake acknowledged after stop");
+  sim::run_for_ms(260);
+  CHECK(has(board_fr, "brake_id=123456"), "tagged brake is present in telemetry");
+  board_fr.serial.send("b");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr) && FR::brake_id == 0, "ordinary b clears stale ACK");
+  board_fr.serial.send("b bad");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr) && FR::brake_id == 0, "malformed tag still brakes");
   board_fr.serial.send("t 8");
   board_fr.serial.send("t -8");
   sim::run_for_ms(5);
@@ -835,7 +848,7 @@ static void scenario_system_calibrate_all() {
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=16"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=17"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -952,7 +965,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v16"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v17"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -1161,6 +1174,9 @@ static int run_pty(const char* link_base) {
       }
     }
   }
+  // Только для интеграционных тестов: искусственная модель SC следует
+  // команде тяги. Это не модель инерции, сцепления или реальных моторов.
+  const bool follow_drive = std::getenv("RC_SIM_SC_FOLLOW_DRIVE") != nullptr;
   std::printf("колёса: %s-FL … %s-RR → псевдотерминалы\n", link_base, link_base);
   std::fflush(stdout);
   const auto wall_start = std::chrono::steady_clock::now();
@@ -1171,6 +1187,18 @@ static int run_pty(const char* link_base) {
       char buffer[256];
       const ssize_t got = read(links[i].fd, buffer, sizeof(buffer));
       for (ssize_t j = 0; j < got; ++j) boards[i]->serial.input.push_back((uint8_t)buffer[j]);
+    }
+    if (follow_drive) {
+      const int values[4] = {wheel_fl::drive_percent, wheel_fr::drive_percent,
+                             wheel_rl::drive_percent, wheel_rr::drive_percent};
+      const bool active[4] = {wheel_fl::drive_active, wheel_fr::drive_active,
+                              wheel_rl::drive_active, wheel_rr::drive_active};
+      for (size_t i = 0; i < boards.size(); ++i) {
+        const int hz = active[i] ? std::abs(values[i]) * 12 : 0;
+        const int64_t period = hz ? 1000000LL / hz : 0;
+        if (period && !boards[i]->tach_period_us) boards[i]->tach_next_edge_us = sim::now_us + period;
+        boards[i]->tach_period_us = period;
+      }
     }
     sim::run_for_ms(10);
     for (size_t i = 0; i < links.size(); ++i) {
@@ -1486,10 +1514,14 @@ static void scenario_tach_display() {
   CHECK(std::abs((long)wheel_fr::tach_display_rpm_x10 - 1200L) <= 4, "FR 180 Гц ≈ 120 об/мин: %lu", (unsigned long)wheel_fr::tach_display_rpm_x10);
   CHECK(std::abs((long)wheel_rl::tach_display_rpm_x10 - 300L) <= 3, "RL 45 Гц ≈ 30 об/мин: %lu", (unsigned long)wheel_rl::tach_display_rpm_x10);
   CHECK(wheel_rr::tach_display_rpm_x10 == 0, "RR без переходов — 0");
+  CHECK(std::abs((long)wheel_fl::tach_edges_total - 189L) <= 1, "FL считает каждый принятый фронт");
+  CHECK(std::abs((long)wheel_fr::tach_edges_total - 378L) <= 1, "FR считает каждый принятый фронт");
+  CHECK(std::abs((long)wheel_rl::tach_edges_total - 94L) <= 1, "RL считает каждый принятый фронт");
+  CHECK(wheel_rr::tach_edges_total == 0, "RR без фронтов: счётчик 0");
   for (sim::Board* board : boards) {
     CHECK(drive_idle(*board), "%s: импульсы не включают тягу", board->name);
     CHECK(has(*board, "tach=0 ") && has(*board, "sc_rpm=") &&
-          has(*board, "sc_hz=") && has(*board, "sc_ppr=90 "),
+          has(*board, "sc_hz=") && has(*board, "sc_ppr=90 ") && has(*board, "sc_count="),
           "%s: отдельные поля SC и выключенный старый тахометр", board->name);
     CHECK(!has(*board, " rpm=") && !has(*board, " hz=") && !has(*board, " ppr="),
           "%s: для старой одометрии обороты отсутствуют", board->name);
@@ -1523,9 +1555,15 @@ static void scenario_tach_display() {
   // Короткий дребезг не меняет принятую метку времени.
   board_fr.tach_change();
   const uint32_t last = wheel_fr::tach_last_edge_us;
+  const uint32_t count = wheel_fr::tach_edges_total;
   sim::advance(50);
   board_fr.tach_change();
-  CHECK(wheel_fr::tach_last_edge_us == last, "переход менее 150 мкс отбрасывается");
+  CHECK(wheel_fr::tach_last_edge_us == last && wheel_fr::tach_edges_total == count,
+        "переход менее 150 мкс не меняет ни время, ни счётчик");
+  wheel_fr::tach_edges_total = UINT32_MAX;
+  sim::advance(1000);
+  board_fr.tach_change();
+  CHECK(wheel_fr::tach_edges_total == 0, "счётчик корректно переполняется по модулю 2^32");
 }
 
 static void scenario_tach_rollover() {
@@ -1558,7 +1596,7 @@ static void scenario_tach_rollover() {
         "оборотомер возобновляет показ после паузы");
 }
 
-// The longer fw16 frame must fit as a whole and resume after TX congestion.
+// The longer fw17 frame must fit as a whole and resume after TX congestion.
 static void scenario_telemetry_capacity() {
   boot({&board_fr});
   wheel_fr::tx_position = wheel_fr::tx_length = 0;
@@ -1571,11 +1609,13 @@ static void scenario_telemetry_capacity() {
   wheel_fr::drive_servo_value = 180;
   wheel_fr::tach_display_rpm_x10 = UINT32_MAX;
   wheel_fr::tach_display_hz = UINT16_MAX;
+  wheel_fr::tach_edges_total = UINT32_MAX;
+  wheel_fr::brake_id = INT32_MAX;
   wheel_fr::appendTelemetry();
   const std::string full(wheel_fr::tx_buf, wheel_fr::tx_length);
   CHECK(!full.empty() && full.size() < wheel_fr::TELEMETRY_LINE_CAPACITY,
         "максимально длинный @TLM помещается в локальный буфер");
-  CHECK(full.find("sc_rpm=429496729.5 sc_hz=65535 sc_ppr=90 t=4294967295\r\n") != std::string::npos,
+  CHECK(full.find("sc_rpm=429496729.5 sc_hz=65535 sc_ppr=90 sc_count=4294967295 brake_id=2147483647 t=4294967295\r\n") != std::string::npos,
         "максимально длинный @TLM целиком, включая конец: %s", full.c_str());
 
   // With one byte less than the reserved capacity the frame is skipped, not
@@ -1599,7 +1639,7 @@ static void scenario_telemetry_capacity() {
   board_fr.serial.writable = 63;
   wheel_fr::last_telemetry_ms = (uint32_t)millis() - wheel_fr::TELEMETRY_PERIOD_MS;
   wheel_fr::loop();
-  CHECK(has(board_fr, "\r\n@TLM deg=") && has(board_fr, "sc_ppr=90 t=") &&
+  CHECK(has(board_fr, "\r\n@TLM deg=") && has(board_fr, "sc_ppr=90 sc_count=") &&
         board_fr.serial.output.size() >= 2 &&
         board_fr.serial.output.substr(board_fr.serial.output.size() - 2) == "\r\n",
         "после освобождения TX телеметрия продолжается: %s", board_fr.serial.output.c_str());

@@ -12,14 +12,13 @@
     return (+v).toFixed(d == null ? 1 : d);
   };
 
-  // SC v16 — отдельное поле только для показа. Старое rpm оставлено для
-  // совместимости с прежними платами; отсутствие данных не выдаём за ноль.
+  // SC v16/v17 отделён от старого rpm; отсутствие данных не выдаём за ноль.
   function rpmText(motor, decimals = 1) {
     if (!live || !motor || motor.online === false) return '—';
     if (typeof motor.scRpm === 'number' && Number.isFinite(motor.scRpm) && motor.scRpm >= 0) {
       return fmt(motor.scRpm, decimals);
     }
-    // В v16 tach=false означает отключённую одометрию, а не отсутствие SC.
+    // В v16+ tach=false — старое поле, а не отсутствие SC.
     if (motor.firmware >= 16) return '—';
     if (motor.tach === false) return 'нет';
     return typeof motor.rpm === 'number' && Number.isFinite(motor.rpm) && motor.rpm >= 0
@@ -27,12 +26,16 @@
   }
 
   function setSteeringAuthorized(on) {
-    if (!on) stopDrive();
+    if (!on) {
+      stopDrive();
+      if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Управление заблокировано · WASD выключено.');
+    }
     steeringAuthorized = !!on;
     renderSteeringControls(lastData || {});
   }
 
   let lastData = null;
+  let keyboardControl = null;
   let live = false;
   let lastLiveAt = 0;
   let liveTimer = null;
@@ -114,8 +117,10 @@
         if ((servoRuns.size || hasServoTargets()) && !servoLinksReady(j.data)) releaseDrive();
         if (window.RCRobotModel) window.RCRobotModel.update(j.data);
         setLive(true);
+        if (keyboardControl) keyboardControl.stateChanged();
       } else {
         setLive(false);
+        if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Нет телеметрии · WASD выключено.');
         if (window.RCRemoteControls) {
           releaseDrive();
           if (window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
@@ -123,8 +128,9 @@
         }
       }
     } catch (e) {
-      // AbortError или сеть — не сразу гасим весь экран, даём grace-период
+      // Экран может не мигать на сетевых сбоях, но WASD fail-closed сразу.
       setLive(false);
+      if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Связь потеряна · WASD выключено.');
       if (window.RCRemoteControls) {
         releaseDrive();
         if (window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
@@ -187,7 +193,9 @@
     setText($('k-power'), fmt(useBms ? (measured.watts == null ? null : measured.watts / 1000) : d.powerKw, 2));
     setText($('k-range'), fmt(b.rangeKm, 1));
     setText($('k-btemp'), fmt(b.tempC, 0));
-    setText($('speed'), fmt(d.speedMps, 1));
+    const wheelSpeed = typeof d.wheelSpeedMps === 'number' && Number.isFinite(d.wheelSpeedMps);
+    setText($('speed'), fmt(wheelSpeed ? d.wheelSpeedMps : d.speedMps, 2));
+    setText($('speed-label'), wheelSpeed ? 'скорость колёс · м/с' : 'скорость корпуса · м/с');
   }
 
   function modTone(m) {
@@ -1182,7 +1190,10 @@
       const showMotors = name === 'motors';
       const showBattery = name === 'battery';
       const showMap = name === 'map';
-      if (activeSwipeView === 'motors' && !showMotors) void stopDrive();
+      if (activeSwipeView === 'motors' && !showMotors) {
+        if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Уход с экрана · WASD выключено.');
+        void stopDrive();
+      }
       activeSwipeView = showMotors ? 'motors'
         : (showBattery ? 'battery' : (showMap ? 'map' : 'cameras'));
       // Карта открывается кнопкой справа, как руление; свайпом на неё не попасть.
@@ -1256,7 +1267,10 @@
       if (!isOpen) return;
       isOpen = false;
       if (window.RCCameraView) window.RCCameraView.setActive(false);
-      if (activeSwipeView === 'motors') void stopDrive();
+      if (activeSwipeView === 'motors') {
+        if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Уход с экрана · WASD выключено.');
+        void stopDrive();
+      }
       page.classList.remove('is-open');
       document.body.classList.remove('swipe-open');
       page.setAttribute('aria-hidden', 'true');
@@ -2779,14 +2793,9 @@
     pin_required: 'PIN истёк; плата остановится по watchdog.'
   };
 
-  /* Тяга: вход «P» драйвера ZS-Z11H ведёт Servo на D3. Бортовой экран
-   * отправляет целое значение 0…150 без пересчёта. Обороты — только показание. */
+  /* Ручная тяга: Servo на D3, значение 0…150 без регулирования по RPM. */
 
-  /* --------------------------------------------------------------- манёвры
-   * Пресет здесь — цель, а не время. Старые прошивки с одометрией считают
-   * путь по тахометру; SC v16 используется только для показа, поэтому с ним
-   * сервер оценивает путь по времени. Числа сохраняются на сервере.
-   */
+  /* Манёвры: цель по счётчикам SC v17, без запасного режима по времени. */
   const MANEUVER_ORDER = ['forward', 'backward', 'left', 'right', 'spin_left', 'spin_right'];
   // Заводские значения — только для первой отрисовки, пока не пришёл
   // манифест с сервера (он же источник истины после правок).
@@ -2807,6 +2816,14 @@
     serial_unavailable: 'Нет связи с USB-платами.',
     not_homed: 'У колеса нет нуля — сначала калибровка по датчику.',
     steering_timeout: 'Колёса не успели встать в углы манёвра.',
+    sc_firmware_required: 'Обновите все четыре платы до v17 для одометрии.',
+    brake_firmware_required: 'Обновите все четыре платы до v17: нужно подтверждение тормоза.',
+    brake_unconfirmed: 'Тормоз не подтверждён всеми платами; движение не начато.',
+    sc_invalid: 'Нет корректных счётчиков SC; проверьте платы и провода.',
+    sc_changed: 'Счётчик SC изменился или плата перезагрузилась.',
+    sc_stalled: 'Один из датчиков SC молчит — тяга снята.',
+    sc_mismatch: 'Пути колёс расходятся — цель не подтверждена.',
+    wheel_moving: 'Колесо ещё вращается; дождитесь остановки.',
     drive_not_ready: 'Тяга сейчас недоступна.',
     pin_required: 'PIN истёк — разблокируйте управление.',
     estop: 'Включён E-STOP: манёвр заблокирован.',
@@ -2817,6 +2834,8 @@
   let maneuverMessage = '';
   let maneuverMessageUntil = 0;
   let maneuverPending = false;
+  let geometryDirty = false;
+  const GEOMETRY_KEYS = ['wheelDiameterMm', 'wheelbaseMm', 'trackMm'];
 
   function maneuverPreset(id, config) {
     const presets = (config && config.presets) || {};
@@ -2888,6 +2907,11 @@
     if (!stop || !statusEl) return;
     const d = data || {};
     const config = d.maneuverConfig || null;
+    const chassis = (config && config.chassis) || {};
+    if (!geometryDirty) GEOMETRY_KEYS.forEach((key) => {
+      const input = $('geometry-' + key);
+      if (input && Number.isFinite(Number(chassis[key])) && chassis[key] != null) input.value = String(chassis[key]);
+    });
     const supported = !!(config && config.supported !== false);
     const drive = d.drive || {};
     const state = drive.maneuver || {};
@@ -2923,7 +2947,8 @@
       const percent = Math.round((Number(state.progress) || 0) * 100);
       text = 'Манёвр «' + (state.title || state.name || '') + '»: ' + percent + '% · ' +
         maneuverText(state.value, kind) + ' из ' + maneuverText(state.target, kind) +
-        ' · ' + (state.mode === 'time' ? 'по времени (без одометрии)' : 'по тахометру');
+        ' · ' + (state.mode === 'time' ? 'по времени (без одометрии)' :
+          (state.sensor === 'sc_count' ? 'по счётчикам SC' : 'по тахометру'));
     } else if (state.state === 'done' || state.state === 'failed' || state.state === 'cancelled') {
       text = (state.message || 'Манёвр завершён.');
     } else {
@@ -2935,9 +2960,46 @@
     statusEl.dataset.active = String(active);
   }
 
+  async function saveGeometry() {
+    if (maneuverPending) return;
+    const status = $('geometry-status');
+    if (!steeringAuthorized) {
+      setText(status, 'Сначала разблокируйте управление.');
+      if (window._openSteeringAuth) window._openSteeringAuth();
+      return;
+    }
+    const values = {};
+    for (const key of GEOMETRY_KEYS) {
+      const input = $('geometry-' + key);
+      if (!input || !input.checkValidity() || !Number.isFinite(Number(input.value)) || !input.value.trim()) {
+        setText(status, 'Проверьте размеры и допустимые пределы.');
+        return;
+      }
+      values[key] = Number(input.value);
+    }
+    maneuverPending = true;
+    const saved = await postManeuver('api/kiosk_maneuver_config', {name: 'chassis', values});
+    maneuverPending = false;
+    if (!saved.ok) {
+      const reason = saved.body.reason || 'command_failed';
+      setText(status, MANEUVER_REASON_TEXT[reason] || ('Отказ: ' + reason));
+      return;
+    }
+    geometryDirty = false;
+    if (lastData && saved.body.config) lastData.maneuverConfig = saved.body.config;
+    setText(status, saved.body.warning || 'Размеры сохранены на борту.');
+    renderManeuvers(lastData || {});
+  }
+
   /** Старт манёвра: сначала сохраняем числа из формы, потом пускаем. */
   async function startManeuver(id) {
     if (maneuverPending) return;
+    if (geometryDirty) {
+      maneuverMessage = 'Сначала сохраните изменённые размеры шасси.';
+      maneuverMessageUntil = Date.now() + 6000;
+      renderManeuvers(lastData || {});
+      return;
+    }
     if (!steeringAuthorized) {
       // Не молчим: пресет доступен, просто сначала нужен PIN.
       maneuverMessage = 'Разблокируйте управление PIN — и манёвр поедет.';
@@ -3216,7 +3278,8 @@
   }
 
   async function stopDrive(force) {
-    if (window.RCRemoteControls && window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
+    const legacyStop = (window.RCRemoteControls && window.RCRemoteLegacyStop)
+      ? window.RCRemoteLegacyStop() : null;
     const wasDriving = servoRuns.size || hasServoTargets() || !!driveTimer;
     servoRuns.clear();
     SERVO_IDS.forEach((id) => { servoTargets[id] = 0; });
@@ -3224,9 +3287,11 @@
     driveTimer = null;
     syncServoSliders();
     renderDriveControls(lastData || {});
-    if (!wasDriving && !force) return;
-    // Ноль вытесняет ожидающие ненулевые команды, а b принимают и старые платы.
-    await queueServo('ALL', 0, 'forward');
+    if (wasDriving || force) {
+      // Ноль вытесняет ожидающие ненулевые команды, а b принимают и старые платы.
+      await queueServo('ALL', 0, 'forward');
+    }
+    if (legacyStop && typeof legacyStop.then === 'function') await legacyStop;
   }
 
   function stopModuleDrive(id) {
@@ -3329,6 +3394,38 @@
   function initSteeringControls() {
     const panel = $('swipe-motors-view');
     if (!panel) return;
+    if (window.RCKeyboard) keyboardControl = window.RCKeyboard.create({
+      getState: () => lastData,
+      freshAt: () => lastLiveAt,
+      stopManual: () => stopDrive(true)
+    });
+    // Другие органы управления сначала выключают WASD. Их первый клик не
+    // включает другую тягу параллельно с ещё выполняющимся STOP.
+    let blockedTarget = null;
+    const stopSelector = '#drive-stop, #remote-drive-stop, #maneuver-stop, [data-remote-stop], [id^="drive-module-stop-"]';
+    panel.addEventListener('pointerdown', (event) => {
+      const target = event.target && event.target.closest && event.target.closest('button, input, select, textarea, [role="button"]');
+      if (!keyboardControl || !keyboardControl.isActive() || !target || target.closest('#keyboard-panel')) return;
+      const isStop = target.matches(stopSelector);
+      keyboardControl.disable('Другая команда · WASD выключено.');
+      if (!isStop) {
+        blockedTarget = target;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }, true);
+    panel.addEventListener('click', (event) => {
+      const target = event.target && event.target.closest && event.target.closest('button, input, select, textarea, [role="button"]');
+      if (blockedTarget) {
+        const blocked = blockedTarget === target;
+        blockedTarget = null;
+        if (blocked) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+      }
+      if (!keyboardControl || !keyboardControl.isActive() || !target || target.closest('#keyboard-panel')) return;
+      const isStop = target.matches(stopSelector);
+      keyboardControl.disable('Другая команда · WASD выключено.');
+      if (!isStop) { event.preventDefault(); event.stopImmediatePropagation(); }
+    }, true);
     const ids = ['FL', 'FR', 'RL', 'RR'];
     const driveSpeed = $('drive-speed');
     if (driveSpeed) driveSpeed.addEventListener('input', () => {
@@ -3350,6 +3447,17 @@
       const stopButton = $('drive-module-stop-' + id);
       if (stopButton) stopButton.addEventListener('click', () => stopModuleDrive(id));
     });
+
+    // Геометрию не перерисовываем поверх незаписанных правок оператора.
+    GEOMETRY_KEYS.forEach((key) => {
+      const input = $('geometry-' + key);
+      if (input) input.addEventListener('input', () => {
+        geometryDirty = true;
+        setText($('geometry-status'), 'Размеры изменены; сохраните перед манёвром.');
+      });
+    });
+    const geometrySave = $('geometry-save');
+    if (geometrySave) geometrySave.addEventListener('click', () => { void saveGeometry(); });
 
     // Манёвры остаются отдельными от прямого управления Servo.
     MANEUVER_ORDER.forEach((id) => {

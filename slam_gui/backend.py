@@ -105,9 +105,9 @@ DRIVE_ANGLE_ALIGNMENT_DEG = 2.5
 #: SC отдельно, только для показа. 90 переходов/оборот — типовое значение,
 #: зависящее от мотора; проверять по фактическому колесу.
 DRIVE_TACH_PPR = 90
-#: В этой и следующих прошивках новые значения SC нельзя применять для
-#: автоматического управления или старой одометрии — только показывать.
-SC_DISPLAY_ONLY_FIRMWARE = 16
+#: Начиная с v16 SC отделён от исторических полей rpm/tach. С v17 счётчик
+#: scCount явно используется манёврами, не включая старую одометрию.
+SC_SEPARATE_FIELDS_FIRMWARE = 16
 #: Границы значения Servo в промилле шкалы write: 0…180 отображается как
 #: 0…1000. Поле duty в fw15 не измеряет физическую скважность на входе P;
 #: вне диапазона — испорченный кадр телеметрии.
@@ -324,16 +324,15 @@ def parse_master_line(line, module=None):
         angle = float(fields["deg"])
         target = float(fields.get("tgt", "0"))
         firmware = int(fields["fw"]) if "fw" in fields else None
-        display_only = firmware is not None and firmware >= SC_DISPLAY_ONLY_FIRMWARE
-        # v16+ изолирует SC от обратной связи: даже неожиданные старые поля
-        # rpm/tach не должны включить одометрию или изменить управление.
-        rpm = None if display_only else (float(fields["rpm"]) if "rpm" in fields else None)
+        separate_sc = firmware is not None and firmware >= SC_SEPARATE_FIELDS_FIRMWARE
+        # SC v16+ не подменяет исторические rpm/tach. Одометрия v17 явно
+        # использует scCount/scPpr, поэтому старые потребители не активируются.
+        rpm = None if separate_sc else (float(fields["rpm"]) if "rpm" in fields else None)
         drive_percent = int(fields["drive"]) if "drive" in fields else None
         calib_error = int(fields["err"]) if "err" in fields else None
         home = fields.get("home")
-        # Старое поле tach служило разрешением для одометрии; для v16+ оно
-        # всегда выключено. Показания SC приходят по отдельным полям sc_*.
-        tach = (False if display_only else
+        # Старый tach отключён; показания SC приходят по отдельным sc_*.
+        tach = (False if separate_sc else
                 ({"0": False, "1": True}.get(fields.get("tach")) if "tach" in fields else None))
         try:
             drive_max = int(fields["dmax"]) if "dmax" in fields else None
@@ -355,6 +354,14 @@ def parse_master_line(line, module=None):
         sc_rpm = display_field("sc_rpm", float, lambda value: math.isfinite(value) and value >= 0)
         sc_hz = display_field("sc_hz", int, lambda value: 0 <= value <= TACH_HZ_MAX)
         sc_ppr = display_field("sc_ppr", int, lambda value: 1 <= value <= TACH_PPR_MAX)
+        # Счётчик и время работают по модулю 2^32. Поле от старой прошивки
+        # не принимаем, даже если кто-то добавил его к строке вручную.
+        sc_count = (display_field("sc_count", int, lambda value: 0 <= value <= 0xFFFFFFFF)
+                    if firmware is not None and firmware >= 17 else None)
+        uptime_ms = (display_field("t", int, lambda value: 0 <= value <= 0xFFFFFFFF)
+                     if firmware is not None and firmware >= 17 else None)
+        brake_id = (display_field("brake_id", int, lambda value: 0 <= value <= 0x7FFFFFFF)
+                    if firmware is not None and firmware >= 17 else None)
         for key, value in (("tach", tach),):
             if key in fields and value is None:
                 return None
@@ -408,10 +415,14 @@ def parse_master_line(line, module=None):
             # оборот в секунду это и есть число импульсов на оборот: по нему
             # видно, тот ли провод на D19 и почему обороты не считаются.
             "tachHz": tach_hz,
-            # Изолированный показ SC v16+: его не читают манёвры и защита.
+            # Направления SC не содержит. v17 явно предоставляет счётчик
+            # принятых переходов для колёсной одометрии манёвров.
             "scRpm": sc_rpm,
             "scHz": sc_hz,
             "scPpr": sc_ppr,
+            "scCount": sc_count,
+            "uptimeMs": uptime_ms,
+            "brakeId": brake_id,
         }
     except (KeyError, ValueError):
         return None
@@ -527,6 +538,9 @@ class MasterSource:
         self.servo_commands = {}
         # Останов и раздача очереди не должны обгонять друг друга.
         self._commands_lock = threading.RLock()
+        # Random starting point avoids treating telemetry from a previous
+        # server process as acknowledgement of its first STOP.
+        self._brake_id = secrets.randbelow(0x7FFFFFFE) + 1
         #: Манёвры тяги («метр вперёд», «90° на месте»). Раннер тикает в потоке
         #: порта, сам держит heartbeat и сам гасит тягу на цели; его настройки
         #: (метры, градусы, процент, геометрия шасси) лежат в data/maneuvers.json.
@@ -799,6 +813,9 @@ class MasterSource:
         if not self.serial_ready.is_set():
             return {"ok": False, "reason": "serial_unavailable"}
 
+        # Ручное руление прерывает автоматический манёвр; собственные команды
+        # раннера помечены контекстом и не отменяют сами себя.
+        self._cancel_maneuver()
         now = time.time() if now is None else now
         with self.lock:
             entry = self.frames.get(module)
@@ -815,6 +832,8 @@ class MasterSource:
             return {"ok": False, "reason": "not_homed"}
         if frame.get("moving") or frame.get("calib") or frame.get("cycle"):
             return {"ok": False, "reason": "module_busy"}
+        if isinstance(frame.get("scRpm"), (int, float)) and frame["scRpm"] > 1.0:
+            return {"ok": False, "reason": "wheel_moving"}
 
         # Отдельная команда поворота одного модуля, без команды тяги.
         command = ("w %s %.1f\n" % (module, angle)).encode("ascii")
@@ -975,9 +994,11 @@ class MasterSource:
                 "rpm": frame.get("rpm") if frame else None,
                 "tach": frame.get("tach") if frame else None,
                 "tachHz": frame.get("tachHz") if frame else None,
-                # Отдельный read-only канал: не передаётся в логику манёвров.
+                # SC отдельно от прежних rpm/tach; v17 даёт счётчик для одометрии.
                 "scRpm": frame.get("scRpm") if frame else None,
                 "scHz": frame.get("scHz") if frame else None,
+                "scPpr": frame.get("scPpr") if frame else None,
+                "scCount": frame.get("scCount") if frame else None,
             }
 
         return {
@@ -1224,6 +1245,10 @@ class MasterSource:
     def _start_maneuver(self, name, now=None):
         if self.maneuvers is None:
             return {"ok": False, "reason": "control_not_supported"}
+        if name not in self.maneuver_core.MANEUVER_IDS:
+            return {"ok": False, "reason": "invalid_maneuver"}
+        if self.maneuvers.status()["active"]:
+            return {"ok": False, "reason": "maneuver_busy"}
         if not self.serial_ready.is_set():
             return {"ok": False, "reason": "serial_unavailable"}
         status = self.drive_status(now)
@@ -1232,8 +1257,25 @@ class MasterSource:
         if status["active"] or any(value not in (None, 0)
                                    for value in (status.get("reportedPercent") or {}).values()):
             return {"ok": False, "reason": "module_busy"}
+        wall = time.time() if now is None else now
+        with self.lock:
+            frames = {module: entry[0] for module, entry in self.frames.items()
+                      if entry is not None and wall - entry[1] < self.DRIVE_STALE_S}
+        error = self.maneuver_core.odometry_error(frames)
+        if error:
+            return {"ok": False, "reason": error}
+        if any(frame["scRpm"] > 1.0 for frame in frames.values()):
+            return {"ok": False, "reason": "wheel_moving"}
+        if any(type(frame.get("brakeId")) is not int for frame in frames.values()):
+            return {"ok": False, "reason": "brake_firmware_required"}
+        # Каждая плата должна подтвердить именно эту команду STOP, прежде чем
+        # манёвр начнёт рулить или подавать тягу. Старый drive=0 не является ACK.
+        barrier = self.brake_for_control()
+        if not barrier.get("ok"):
+            return barrier
         limit = self.drive_limit_percent(now)
-        result = self.maneuvers.start(name, time.monotonic(), limit_percent=limit)
+        result = self.maneuvers.start(name, time.monotonic(), limit_percent=limit,
+                                      brake_id=barrier["brakeId"])
         if result.get("ok"):
             self._note_message("маневр «%s»: цель %.2f" % (
                 name, result["maneuver"]["target"]), time.time())
@@ -1255,7 +1297,7 @@ class MasterSource:
         wall = time.time()
         with self.lock:
             frames = {module: entry[0] for module, entry in self.frames.items()
-                      if entry is not None and wall - entry[1] < self.STALE_S}
+                      if entry is not None and wall - entry[1] < self.DRIVE_STALE_S}
         self._maneuver_context.driving = True
         try:
             runner.tick(time.monotonic(), frames, self._maneuver_steer,
@@ -1264,8 +1306,7 @@ class MasterSource:
             self._maneuver_context.driving = False
         status = runner.status()
         if status["learned"] and status["state"] == runner.DONE:
-            # Измеренная скорость — в файл: следующий прогон без тахометра
-            # поедет по ней, а не по заводской оценке.
+            # Прикидка скорости только для рампы и таймаута, не замена SC.
             try:
                 self.maneuver_core.save_config(runner.config)
             except OSError:
@@ -1273,18 +1314,17 @@ class MasterSource:
 
     def _maneuver_steer(self, module, angle):
         try:
-            self.steer_module(module, angle)
+            return self.steer_module(module, angle)
         except Exception:                 # noqa: BLE001 — манёвр не должен падать
-            pass
+            return {"ok": False, "reason": "command_failed"}
 
     def _maneuver_drive(self, module, percent):
         try:
             if module is None:
-                self.drive(percent)
-            else:
-                self.drive_module(module, percent)
+                return self.drive(percent)
+            return self.drive_module(module, percent)
         except Exception:                 # noqa: BLE001 — см. выше
-            pass
+            return {"ok": False, "reason": "command_failed"}
 
     def _cancel_maneuver(self, reason="manual"):
         """Ручная тяга, СТОП или потеря колеса отменяют манёвр."""
@@ -1367,7 +1407,22 @@ class MasterSource:
             if link.module == module:
                 self._filter_queue(link.commands, lambda command: not is_drive(command))
 
-    def _brake_all(self):
+    def brake_for_control(self):
+        """Queue a uniquely identified brake and return the ID to be confirmed.
+
+        A plain zero command is not proof that four USB boards have applied it:
+        telemetry can predate the request, or acknowledge an older brake.
+        """
+        if not self.serial_ready.is_set():
+            self._brake_all()
+            return {"ok": False, "reason": "serial_unavailable"}
+        with getattr(self, "_commands_lock", nullcontext()):
+            self._brake_id = (getattr(self, "_brake_id", 0) % 0x7FFFFFFE) + 1
+            brake_id = self._brake_id
+            self._brake_all(brake_id)
+        return {"ok": True, "brakeId": brake_id}
+
+    def _brake_all(self, brake_id=None):
         """Тормоз на все порты; старый heartbeat не должен идти после СТОП."""
         with getattr(self, "_commands_lock", nullcontext()):
             self._discard_pending_commands()
@@ -1377,9 +1432,10 @@ class MasterSource:
                 self.drive_modules = {}
                 self.servo_commands = {}
                 self.drive_last_command = 0.0
+            command = ("b %d\n" % brake_id).encode("ascii") if brake_id is not None else b"b\n"
             for link in links:
                 try:
-                    link.commands.put_nowait(b"b\n")
+                    link.commands.put_nowait(command)
                 except queue.Full:
                     pass
 
@@ -1722,15 +1778,16 @@ class MasterSource:
                                "firmware": frame.get("firmware"),
                                "pot": frame.get("pot", False),
                                "potMode": frame.get("potMode"),
-                               # scRpm — только для вывода. rpm/tach остаются
-                               # отключёнными для одометрии и управления v16.
+                               # SC отдельно от старых rpm/tach; знак не измеряется.
                                "tach": frame.get("tach"),
                                "driveMaxPercent": frame.get("driveMaxPercent"),
                                "driveDutyPermille": frame.get("driveDutyPermille"),
                                "driveServoValue": frame.get("driveServoValue"),
                                "tachHz": frame.get("tachHz"),
                                "scRpm": frame.get("scRpm"), "scHz": frame.get("scHz"),
-                               "scPpr": frame.get("scPpr"),
+                               "scPpr": frame.get("scPpr"), "scCount": frame.get("scCount"),
+                               "brakeId": frame.get("brakeId"),
+                               "telemetryAgeS": round(max(0.0, now - entry[1]), 3),
                                "online": True, "fault": None,
                                "moving": frame["moving"], "calibrating": frame["calib"],
                                "cycling": frame.get("cycle", False)})
@@ -1740,13 +1797,27 @@ class MasterSource:
                                "drivePercent": None, "homed": None, "online": False, "fault": None,
                                "pot": None, "tach": None, "driveMaxPercent": None,
                                "driveDutyPermille": None, "driveServoValue": None, "tachHz": None,
-                               "scRpm": None, "scHz": None, "scPpr": None,
-                               "moving": False, "calibrating": False})
+                               "scRpm": None, "scHz": None, "scPpr": None, "scCount": None,
+                               "brakeId": None, "telemetryAgeS": None, "moving": False, "calibrating": False})
         out = NoSource().read()              # АКБ и маршрут пока не передаются
         out["motors"] = motors
         out["drive"] = self.drive_status(now)
+        # Это скорость окружности колёс, а не скорость корпуса: при развороте
+        # на месте, вывешенных колёсах и проскальзывании они различаются. Не
+        # подменяем speedMps, которую другие подсистемы считают скоростью робота.
+        config = self.maneuver_config()
+        diameter = (config.get("chassis") or {}).get("wheelDiameterMm", 215.9)
+        sc_values = [(m.get("scRpm"), m.get("scPpr")) for m in motors if m.get("online")]
+        if len(sc_values) == 4 and all(isinstance(rpm, (int, float)) and
+                                       isinstance(ppr, int) and ppr > 0 and
+                                       0 <= rpm <= 404000.0 / ppr + 0.1
+                                       for rpm, ppr in sc_values):
+            out["wheelSpeedMps"] = round(sum(rpm for rpm, _ in sc_values) / 4.0 *
+                                         math.pi * float(diameter) / 60000.0, 3)
+        else:
+            out["wheelSpeedMps"] = None
         # Пресеты манёвров — статичная настройка, но экран рисует форму из неё.
-        out["maneuverConfig"] = self.maneuver_config()
+        out["maneuverConfig"] = config
         out["mode"] = "МАСТЕР НА СВЯЗИ" if link else None
         out["linkOk"] = link
         out["masterMessages"] = self.recent_messages(8) if hasattr(self, "messages") else []

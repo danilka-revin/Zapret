@@ -783,6 +783,7 @@ ASSETS = {
     # страница киоска на борту робота (без авторизации)
     "robot.css": "robot_css",
     "robot.js": "robot_js",
+    "keyboard.js": "keyboard_js",
     "battery.js": "battery_js",
     "steering.css": "steering_css",
     "steering.js": "steering_js",
@@ -1304,6 +1305,7 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
             # отсюда, а раньше в ответе её не было вовсе.
             "lidarStatus": lidar_status_payload(manager, points, demo),
             "speedMps": snap.get("speedMps"),
+            "wheelSpeedMps": snap.get("wheelSpeedMps"),
             "powerKw": snap.get("powerKw"),
             "mode": snap.get("mode"),
             "linkOk": snap.get("linkOk"),

@@ -132,11 +132,12 @@
   }
 
   function stopAll(force) {
-    if (!force && !active.size && !timer) return;
+    if (!force && !active.size && !timer) return Promise.resolve();
     active.clear();
     stopTimerIfIdle();
-    void queueCommand('ALL', 0);
+    const stopped = queueCommand('ALL', 0);
     render();
+    return stopped;
   }
 
   function heartbeat() {
@@ -151,7 +152,7 @@
   }
 
   function start(id, direction, trigger) {
-    if (!allowed(id) || active.has(id)) return;
+    if (window.RCKeyboardActive || !allowed(id) || active.has(id)) return;
     if ((id === 'ALL' && active.size) || (id !== 'ALL' && active.has('ALL'))) return;
     active.set(id, {direction, ...trigger});
     lastTick = Date.now();

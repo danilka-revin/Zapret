@@ -721,11 +721,11 @@ def test_running_maneuver_shows_progress_and_stop(tmp_path):
     """Идущий манёвр: прогресс, чем меряем, и рабочая кнопка СТОП."""
     body = payload(maneuver={"supported": True, "active": True, "state": "driving",
                              "name": "forward", "title": "Вперёд", "kind": "distance",
-                             "mode": "odometry", "progress": 0.42,
+                             "mode": "odometry", "sensor": "sc_count", "progress": 0.42,
                              "value": 0.42, "target": 1.0, "percent": 12})
     report = run_screen(tmp_path, body)
     status = report["maneuvers"]["status"]
-    assert "42%" in status and "0.42 м из 1.00 м" in status and "по тахометру" in status
+    assert "42%" in status and "0.42 м из 1.00 м" in status and "по счётчикам SC" in status
     assert report["maneuvers"]["active"] == "true"
     assert report["maneuvers"]["stopDisabled"] is False
     buttons = {item["id"]: item for item in report["maneuvers"]["buttons"]}

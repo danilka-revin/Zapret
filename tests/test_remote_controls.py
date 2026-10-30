@@ -343,3 +343,29 @@ def test_remote_logs_read_board_journal_with_bounded_limit(client, operator, tra
     assert transport[1][-1][0].endswith('/api/kiosk_logs?limit=5000')
     assert client.post('/api/control/logs', json={}).status_code == 405
     assert transport[0].calls == []
+
+
+def test_remote_wasd_requires_auth_and_csrf_and_reaches_single_owner(client, operator, kiosk_client, transport):
+    from test_keyboard_control import Wheels, straight
+    source = Wheels()
+    kiosk_client.application.extensions['rc_slam'].source = source
+    body = {'action': 'begin'}
+    assert client.post('/api/control/keyboard', json=body).status_code in (302, 401)
+    login(client)
+    assert client.post('/api/control/keyboard', json=body).json['reason'] == 'request_header_required'
+    hdr = headers(client, 'drive')
+    hdr['X-Robot-Command-Deadline'] = str(time.time() + 0.5)
+    result = client.post('/api/control/keyboard', json=body, headers=hdr)
+    assert result.status_code == 200, result.json
+    token = result.json['session']
+    arm = {'action': 'arm', 'session': token, 'sequence': 1, 'direction': 1, 'angles': straight()}
+    permit = client.post('/api/control/keyboard', json=arm, headers=hdr).json['permit']
+    drive = {'action': 'drive', 'session': token, 'sequence': 2,
+             'percent': 8, 'angles': straight(), 'permit': permit}
+    assert client.post('/api/control/keyboard', json=drive, headers=hdr).json['ok']
+    assert source.commanded == 8
+    stop = {'action': 'stop', 'session': token, 'sequence': 3}
+    hdr.pop('X-Robot-Command-Deadline')  # STOP must never expire
+    assert client.post('/api/control/keyboard', json=stop, headers=hdr).json['ok']
+    assert source.commanded == 0
+    assert any('/api/kiosk_keyboard' in url for url, _, _ in transport[1])

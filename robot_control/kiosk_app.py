@@ -65,6 +65,7 @@ from robot_control.camera import CameraManager
 from robot_control.config import PROJECT_ROOT, Config
 from robot_control.lidar import LidarManager, set_self_port
 from robot_control.lidar_settings import apply_lidar_settings, settings_payload
+from robot_control.keyboard import KeyboardControl
 from robot_control.slam import (
     GUI_DIR,
     KIOSK_PAGE,
@@ -597,6 +598,20 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     nav_lidar = None if config.testing else (app.extensions.get("rc_lidar") or LidarManager.get_instance())
     navigation = NavigationService(map_service, getattr(state, "source", None), nav_lidar)
     app.extensions["rc_navigation"] = navigation
+    keyboard = KeyboardControl(lambda: getattr(state, "source", None), dispatch_drive_command,
+                               dispatch_steering_command, estop_latch.latched)
+    app.extensions["rc_keyboard"] = keyboard
+
+    @app.before_request
+    def interrupt_keyboard_on_other_motion():
+        # STOP, E-STOP, ручные и автономные команды всегда старше WASD.
+        # Отзыв под тем же замком не даст запоздавшему heartbeat снова поехать.
+        if request.method == "POST" and request.path in {
+            "/api/kiosk_drive", "/api/kiosk_steer", "/api/kiosk_zero",
+            "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_maneuver",
+            "/api/estop", "/api/navigation/start", "/api/navigation/cancel", "/api/navigation/estop",
+        }:
+            keyboard.interrupt()
 
     def _map_worker(stop_event: threading.Event) -> None:
         """Фоновая нить карты: впитывает сканы и перезаписывает файл карты.
@@ -732,6 +747,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             # а не молчит (порт не найден, скорость не та, порт занят и т. д.).
             "lidarStatus": lidar_status_payload(manager, points, demo),
             "speedMps": snap.get("speedMps"),
+            "wheelSpeedMps": snap.get("wheelSpeedMps"),
             "powerKw": snap.get("powerKw"),
             "estop": estop_info,
             "mode": snap.get("mode"),
@@ -740,6 +756,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "source": snap.get("source"),
             "steeringControl": steering_control_info(state.source),
             "drive": snap.get("drive"),
+            "maneuverConfig": snap.get("maneuverConfig"),
             # Какой порт мастера настроен/открыт: экран объясняет «нет связи».
             "masterPort": snap.get("masterPort"),
             # Последние сообщения прошивки мастера («# FR: Калибровка ЗАВЕРШЕНА!»).
@@ -947,6 +964,40 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if not result.get("ok"):
             return jsonify({"ok": False, "reason": result.get("reason", "pin")}), 403
         return jsonify(release_estop())
+
+    @app.post("/api/kiosk_keyboard")
+    def api_kiosk_keyboard():
+        if state is None:
+            return jsonify({"ok": False, "reason": "serial_unavailable"}), 503
+        if request.headers.get(STEERING_COMMAND_HEADER) != DRIVE_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        body = request.get_json(silent=True)
+        action = body.get("action") if isinstance(body, dict) else None
+        expires = None
+        if action not in {"stop", "end"}:
+            try:
+                expires = float(request.headers.get("X-Robot-Command-Deadline", ""))
+                now = time.time()
+                if not math.isfinite(expires) or expires < now or expires > now + 0.75:
+                    raise ValueError("expired or clock skew")
+            except (TypeError, ValueError):
+                keyboard.interrupt()
+                return jsonify(ok=False, reason="command_expired"), 408
+
+        def send_keyboard():
+            # Время могло истечь, пока навигация освобождала моторы.
+            if expires is not None and time.time() > expires:
+                keyboard.interrupt()
+                return {"ok": False, "reason": "command_expired"}, 408
+            return keyboard.handle(body)
+
+        # Сервер навигации освобождает тягу прежде чем разрешить WASD.
+        sent = navigation.manual_override(send_keyboard, wait_for_exit=action not in {"stop", "end"})
+        if sent is None:
+            keyboard.interrupt()
+            return jsonify(ok=False, reason="navigation_stopping"), 409
+        result, status = sent
+        return jsonify(result), status
 
     @app.post("/api/kiosk_drive")
     def api_kiosk_drive():
@@ -1164,7 +1215,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         })
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
-    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js", "robot.css", "robot.js", "battery.js", "lidar_settings.css",
+    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js", "robot.css", "robot.js", "keyboard.js", "battery.js", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "map_view.js",
                      "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):
