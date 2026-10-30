@@ -29,8 +29,9 @@
 // Если конкретное колесо крутится не в ту сторону — поменяйте местами два
 // фазных провода мотора или константы уровней ниже.
 //
-// SC на D19 считывается только для показа оборотов. Они не влияют на тягу,
-// тормоз, watchdog или манёвры. Для проверки нужен независимый физический E-STOP.
+// SC на D19 считает обороты и переходы для серверной одометрии манёвров.
+// Сама плата не регулирует тягу по SC; сервер отдельно следит за счётчиками.
+// Для проверки нужен независимый физический E-STOP.
 //
 // На каждой плате: свой TB6600 (шаговый руль), оптодатчик нуля на D18,
 // потенциометр положения колеса на A0 и интерфейс BLDC-тяги:
@@ -74,7 +75,7 @@
 
 // ---- распиновка (одинакова на всех четырёх платах) ----
 // STOP — отдельный выход на драйвер; SC — вход внешнего прерывания INT2.
-const uint8_t TACH_PIN = 19;         // BLDC SC — оба перехода, только индикация
+const uint8_t TACH_PIN = 19;         // BLDC SC — оба перехода для RPM и одометрии
 const uint8_t BLDC_STOP_PIN = 2;     // BLDC STOP — вход «разрешить» драйвера
 const uint8_t BLDC_SPEED_PIN = 3;    // сигнал Servo на вход «P» драйвера
 const uint8_t BLDC_DIR_PIN = 4;      // BLDC DIR
@@ -188,9 +189,9 @@ const uint32_t TACH_MIN_SILENCE_US = 300000UL;
 #define DRIVE_MIRRORED -1
 #endif
 
-// v16: v и t как в v15, плюс отдельная телеметрия SC только для показа.
-// Поля старого тахометра для управления остаются отключёнными.
-const uint8_t FIRMWARE_PROTOCOL = 16;          // поле fw= в @TLM
+// v17: v и t не изменены; SC дополнен накопительным счётчиком переходов.
+// Старое поле tach остаётся выключенным для совместимости со старым сервером.
+const uint8_t FIRMWARE_PROTOCOL = 17;          // поле fw= в @TLM
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -201,8 +202,10 @@ volatile int8_t step_dir = 1;
 volatile uint8_t half_period_ticks = 1;
 volatile uint8_t tick_count = 0;
 
-// Только измерение: прерывание складывает интервалы; loop атомарно забирает
-// их для обновления показания. Никакой управляющий код этих полей не читает.
+// Прерывание считает принятые переходы и интервалы. Счётчик монотонный по
+// модулю 2^32, сбрасывается только при перезагрузке; знак SC не измеряет.
+// Прошивка по нему не регулирует и не включает тягу.
+volatile uint32_t tach_edges_total = 0;
 volatile uint32_t tach_last_edge_us = 0;
 volatile uint32_t tach_last_period_us = 0;
 volatile uint32_t tach_interval_sum_us = 0;
@@ -386,11 +389,13 @@ void tachometerISR() {
   if (!tach_has_edge) {
     tach_has_edge = true;
     tach_last_edge_us = now;
+    ++tach_edges_total;                 // первый переход тоже составляет путь
     return;
   }
   const uint32_t interval = now - tach_last_edge_us;  // корректно при переполнении micros()
   if (interval < TACH_MIN_EDGE_US) return;
   tach_last_edge_us = now;
+  ++tach_edges_total;                   // дребезг не попадает в одометрию
   if (interval > TACH_MAX_SILENCE_US) {
     // После долгой паузы первый фронт — новая точка отсчёта, не интервал.
     tach_last_period_us = 0;
@@ -1494,6 +1499,9 @@ void printModuleStatus() {
 //   v <0…150>      прямое значение Servo.write с бортового экрана
 //   t <%> | b      прежняя команда тяги / тормоз
 //   p              состояние
+// Идентификатор последнего подтверждённого b, изменяется в основном цикле.
+uint32_t brake_id = 0;
+
 void stopEverything() {
   const bool cycling = cycle_active;
   const bool pot_cal = pot_cal_state != POT_CAL_IDLE;
@@ -1655,6 +1663,12 @@ void handleModuleCommand(char* line) {
     applyDirectDrive((uint8_t)value, forward);
   } else if (strcasecmp_P(command, PSTR("b")) == 0) {
     stopDriveLocal();
+    // Только после применения тормоза подтверждаем точный идентификатор b.
+    // Обычный b остаётся совместимым и сбрасывает прежнее подтверждение.
+    long requested_id = 0;
+    // Exclude LONG_MAX: strtol may return it for an overflowing token.
+    brake_id = (arg1 && !arg2 && !extra && parseLongToken(arg1, &requested_id) &&
+                requested_id > 0 && requested_id < 2147483647L) ? (uint32_t)requested_id : 0;
   } else if (strcasecmp_P(command, PSTR("p")) == 0) {
     printModuleStatus();
   } else {
@@ -1722,7 +1736,7 @@ uint32_t serial_last_char_ms = 0;
 const uint16_t SERIAL_LINE_TIMEOUT_MS = 1000;
 const uint16_t TELEMETRY_PERIOD_MS = 250;   // как часто печатаем @TLM
 // Одна и та же ёмкость для локальной строки и запаса места в TX.
-const uint16_t TELEMETRY_LINE_CAPACITY = 240;
+const uint16_t TELEMETRY_LINE_CAPACITY = 260;
 static_assert(TX_BUFFER_SIZE >= TELEMETRY_LINE_CAPACITY, "TX buffer too small for telemetry");
 uint32_t last_telemetry_ms = 0;
 
@@ -1747,7 +1761,7 @@ void printHelp() {
   note(PSTR("команды: k, q, c [°], c c, d [°] [f/b], h, s, g, z, p, ?"));
   note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: v [FL] 0…%u [f/b], b"),
        (unsigned)DRIVE_DIRECT_MAX_VALUE);
-  note(PSTR("Servo D3; SC D19: %u переходов/об, только показ"), (unsigned)TACH_EDGES_PER_REV);
+  note(PSTR("Servo D3; SC D19: %u переходов/об, счётчик без направления"), (unsigned)TACH_EDGES_PER_REV);
 }
 
 // Телеметрия не содержит роли колеса: порт назначает оператор в программе.
@@ -1760,10 +1774,15 @@ void appendTelemetry() {
   formatDegrees(targetNow(), tgt, sizeof(tgt));
   const char* home = !(status & STATUS_ZERO) ? "none"
       : ((status & STATUS_HOME_OPTO) ? "opto" : "manual");
-  // Отдельные sc_* предназначены ТОЛЬКО для экрана. Старые rpm/tach не
-  // включаются: сервер прежней версии не должен использовать SC для манёвров.
+  // 32-битное чтение ISR должно быть атомарным на 8-битном AVR.
+  const uint8_t saved_sreg = SREG;
+  cli();
+  const uint32_t edges = tach_edges_total;
+  SREG = saved_sreg;
+  // Старый сервер по-прежнему видит tach=0; новый может явно использовать
+  // sc_count для одометрии, не смешивая его с историческим rpm/tach.
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u drive=%d fw=%u pot=%d pm=%d tach=0 dmax=%u sv=%u duty=%u sc_rpm=%lu.%lu sc_hz=%u sc_ppr=%u t=%lu\r\n"),
+      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u drive=%d fw=%u pot=%d pm=%d tach=0 dmax=%u sv=%u duty=%u sc_rpm=%lu.%lu sc_hz=%u sc_ppr=%u sc_count=%lu brake_id=%lu t=%lu\r\n"),
       deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
       (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
       home, (unsigned)((status >> 8) & 0x0F), (int)drive_percent, (unsigned)FIRMWARE_PROTOCOL,
@@ -1772,7 +1791,8 @@ void appendTelemetry() {
       (unsigned)DRIVE_MAX_PERCENT, (unsigned)drive_servo_value,
       (unsigned)driveValuePermille(), (unsigned long)(tach_display_rpm_x10 / 10),
       (unsigned long)(tach_display_rpm_x10 % 10), (unsigned)tach_display_hz,
-      (unsigned)TACH_EDGES_PER_REV, (unsigned long)millis());
+      (unsigned)TACH_EDGES_PER_REV, (unsigned long)edges, (unsigned long)brake_id,
+      (unsigned long)millis());
   if (n <= 0 || n >= (int)sizeof(line)) return;
   txAppend(line, (uint16_t)n);
 }

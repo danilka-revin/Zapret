@@ -1,4 +1,4 @@
-"""SC D19 — только показания; обратная связь и движение не меняются."""
+"""SC D19: совместимость v16, счётчики v17 и неизменная ручная тяга."""
 from __future__ import annotations
 
 import queue
@@ -56,6 +56,8 @@ def test_readout_is_fresh_per_wheel_and_does_not_change_drive_readiness():
     assert [values[m]["scRpm"] for m in MODULES] == [0.0, 60.0, 120.0, 15.5]
     assert all(values[m]["rpm"] is None and values[m]["tach"] is False for m in MODULES)
     assert snapshot["speedMps"] is None and snapshot["drive"]["canDrive"]
+    # Отдельная скорость обода — не скорость корпуса и не пробег робота.
+    assert snapshot["wheelSpeedMps"] == round((0 + 60 + 120 + 15.5) / 4 * 3.141592653589793 * 0.2159 / 60, 3)
     assert source.commands.empty(), "одна телеметрия не отправляет команды"
 
     # Поломка именно диагностического поля не превращает свежую плату в offline.
@@ -65,22 +67,25 @@ def test_readout_is_fresh_per_wheel_and_does_not_change_drive_readiness():
     assert source.read(now=102.0)["motors"][0]["scRpm"] is None  # устарело
 
 
-def test_sc_values_never_influence_maneuver_mode_commands_or_learning():
+def test_v16_cannot_start_a_maneuver_from_averaged_rpm():
     backend = slam.load_backend()
+    frames = {module: backend.parse_master_line(line(module, sc="60", extra="tach=1 rpm=999 sc_count=90 t=1000"))
+              for module in MODULES}
+    assert all(frame["scCount"] is None for frame in frames.values())
+    runner = maneuvers.ManeuverRunner()
+    commands = []
+    assert runner.start("forward", 0.0)["ok"]
+    runner.tick(0.05, frames, lambda *args: commands.append(args), lambda *args: commands.append(args))
+    assert runner.status()["reason"] == "sc_firmware_required"
+    assert not commands
 
-    def run(sc):
-        frames = {module: backend.parse_master_line(line(module, sc=str(sc), extra="tach=1 rpm=999"))
-                  for module in MODULES}
-        runner = maneuvers.ManeuverRunner()
-        commands = []
-        assert runner.start("forward", 0.0)["ok"]
-        for i in range(1, 31):
-            runner.tick(i * 0.05, frames,
-                        lambda module, value: commands.append(("steer", module, value)),
-                        lambda module, value: commands.append(("drive", module, value)))
-        assert runner.status()["mode"] == "time"
-        assert not any(runner._travel.values())
-        assert runner.status()["learned"] is None
-        return runner.status(), commands
 
-    assert run(0) == run(10000)
+def test_v17_counter_and_uptime_are_validated_without_discarding_drive_data():
+    backend = slam.load_backend()
+    v17 = line("FL", sc="12", extra="sc_count=4294967295 t=4294967295").replace("fw=16", "fw=17")
+    frame = backend.parse_master_line(v17)
+    assert frame["scCount"] == frame["uptimeMs"] == 4294967295
+    assert frame["tach"] is False and frame["rpm"] is None
+    for bad in ("-1", "4294967296", "nan", "1.2", "oops"):
+        damaged = backend.parse_master_line(v17.replace("sc_count=4294967295", "sc_count=" + bad))
+        assert damaged["scCount"] is None and damaged["drivePercent"] == 0

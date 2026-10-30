@@ -1693,7 +1693,22 @@ body.swipe-open .kiosk {
   flex-direction: column;
   gap: 9px;
 }
+.keyboard-panel { grid-column: 1 / -1; display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--panel-2); }
+.keyboard-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.keyboard-options { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; }
+.keyboard-options label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.keyboard-panel button, .keyboard-panel select { padding: 8px 11px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg-2); color: var(--text); font: inherit; }
+.keyboard-panel button { cursor: pointer; }
+.keyboard-panel button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.keyboard-panel small, #keyboard-status { color: var(--muted); font-size: 12px; line-height: 1.45; }
+#keyboard-status[data-active="true"] { color: var(--accent); }
 .drive-maneuvers > summary { cursor: pointer; color: var(--text); font-size: 13px; font-weight: 800; }
+.maneuver-geometry { margin: 10px 0; padding: 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel-2); }
+.maneuver-geometry p, .maneuver-geometry small { color: var(--muted); font-size: 12px; }
+.maneuver-geometry-fields { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 8px 0; }
+.maneuver-geometry-fields label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+.maneuver-geometry-fields input { width: 110px; padding: 7px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg-2); color: var(--text); }
+.maneuver-geometry-fields button { padding: 8px 12px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg-2); color: var(--text); cursor: pointer; }
 .maneuver-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
 .maneuver-row {
   display: grid;

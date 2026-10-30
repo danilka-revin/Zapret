@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Манёвры тяги без железа: геометрия, рампа, измерение и остановка на цели.
 
-Проверяется то, что оператор видит кнопкой: «метр вперёд» действительно
-останавливается через метр (по тахометру), «90°» — через 90° дуги, а если
-тахометра нет, манёвр честно переходит на время и пишет об этом.
+Независимая модель считает реальный путь в каждом шаге, генерирует
+квантованные SC-переходы и проверяет метр, обратный ход, дугу и отказы.
+Датчик без знака и без измерения пробуксовки не гарантирует движение корпуса.
 """
 from __future__ import annotations
 
@@ -30,29 +30,40 @@ class World:
         self.angle = {module: 0.0 for module in MODULES}
         self.target_angle = {module: 0.0 for module in MODULES}
         self.travel = {module: 0.0 for module in MODULES}
+        self.edges = {module: 0.0 for module in MODULES}
+        self.quiet = set()
+        self.time = 0.0
         self.commands = []
         self.brakes = 0
         self.dt = 0.05
         self.circumference = m.wheel_circumference_m(m.DEFAULT_CHASSIS["wheelDiameterMm"])
 
     def step(self):
-        """Модули едут к цели с конечной скоростью — как настоящие."""
-        if self.stuck_steering:
-            return
+        """Путь считается непрерывно, а не только при отправке команд."""
+        self.time += self.dt
         limit = self.STEER_DEG_PER_S * self.dt
         for module in MODULES:
             diff = self.target_angle[module] - self.angle[module]
-            if abs(diff) <= limit:
-                self.angle[module] = self.target_angle[module]
-            else:
-                self.angle[module] += limit if diff > 0 else -limit
+            if not self.stuck_steering:
+                if abs(diff) <= limit:
+                    self.angle[module] = self.target_angle[module]
+                else:
+                    self.angle[module] += limit if diff > 0 else -limit
+            turns = abs(self.percent[module]) * self.rpm_per_percent / 60.0 * self.dt
+            self.travel[module] += turns * self.circumference
+            if module not in self.quiet:
+                self.edges[module] += turns * 90
 
     def frames(self):
         return {module: {
             "deg": self.angle[module],
             "moving": abs(self.target_angle[module] - self.angle[module]) > 0.5,
-            "rpm": (self.percent[module] * self.rpm_per_percent) if self.tach else None,
-            "tach": self.tach,
+            "firmware": 17 if self.tach else 16,
+            "scRpm": abs(self.percent[module] * self.rpm_per_percent),
+            "scPpr": 90,
+            "scCount": int(self.edges[module]) % (2 ** 32) if self.tach else None,
+            "uptimeMs": round(self.time * 1000) % (2 ** 32),
+            "drivePercent": self.percent[module],
             "cal": True,
         } for module in MODULES}
 
@@ -65,7 +76,6 @@ class World:
         targets = MODULES if module is None else (module,)
         for item in targets:
             self.percent[item] = percent
-            self.travel[item] += (percent * self.rpm_per_percent / 60.0) * self.circumference * self.dt
 
     def brake(self):
         self.brakes += 1
@@ -89,8 +99,9 @@ def run(world, runner, seconds, start_now=0.0):
 
 # --------------------------------------------------------------- геометрия # #
 def test_wheel_circumference_matches_the_wheel_diameter():
-    # 8,5″ (216 мм) — колесо AOVO Pro: один оборот ≈ 0,68 м.
-    assert round(m.wheel_circumference_m(216), 3) == 0.679
+    # 8,5″ = 215,9 мм; один оборот ≈ 0,678 м.
+    assert m.DEFAULT_CHASSIS["wheelDiameterMm"] == 215.9
+    assert round(m.wheel_circumference_m(215.9), 3) == 0.678
 
 
 def test_turn_radius_uses_base_and_track():
@@ -255,7 +266,8 @@ def test_forward_one_metre_stops_within_tolerance():
     status = runner.status()
     assert status["state"] == runner.DONE, status
     assert status["reason"] == "reached"
-    assert abs(status["value"] - 1.0) <= 0.10, status
+    assert abs(status["value"] - 1.0) <= 0.05, status
+    assert all(abs(distance - 1.0) <= 0.06 for distance in world.travel.values())
     assert status["progress"] == 1.0
     # Тормоз — всем колёсам, и проценты на нуле.
     assert world.brakes >= 1
@@ -285,6 +297,7 @@ def test_backward_maneuver_drives_with_minus():
     drive = [command for command in world.commands if command[0] == "drive"]
     assert drive and all(command[2] <= 0 for command in drive)
     assert runner.status()["state"] == runner.DONE
+    assert all(abs(distance - 0.5) < 0.06 for distance in world.travel.values())
 
 
 def test_spin_ninety_degrees_is_measured_by_arc_length():
@@ -294,7 +307,9 @@ def test_spin_ninety_degrees_is_measured_by_arc_length():
     run(world, runner, 60.0)
     status = runner.status()
     assert status["state"] == runner.DONE, status
-    assert abs(status["value"] - 90.0) <= 6.0, status
+    assert abs(status["value"] - 90.0) <= 3.0, status
+    expected_arc = math.pi / 2 * m.turn_radius_m(m.DEFAULT_CHASSIS)
+    assert all(abs(distance - expected_arc) < 0.04 for distance in world.travel.values())
     # Борта ехали в разные стороны.
     per_module = {}
     for command in world.commands:
@@ -303,8 +318,8 @@ def test_spin_ninety_degrees_is_measured_by_arc_length():
     assert per_module["FL"] * per_module["FR"] <= 0
 
 
-def test_same_maneuver_twice_learns_the_real_speed():
-    """Второй прогон без тахометра считается по скорости первого."""
+def test_successful_maneuver_learns_rate_for_ramp_and_timeout_only():
+    """Измеренная скорость не разрешает движение без SC."""
     world = World()
     runner = runner_for(world)
     runner.start("forward", 0.0)
@@ -314,19 +329,15 @@ def test_same_maneuver_twice_learns_the_real_speed():
     assert learned["percent"] == 12.0
 
 
-def test_without_tachometer_the_maneuver_goes_by_time_and_says_so():
+def test_without_counter_the_maneuver_never_drives_by_time():
     world = World(tach=False)
     runner = runner_for(world)
     runner.start("forward", 0.0)
     run(world, runner, 0.3)
     status = runner.status()
-    assert status["mode"] == "time"
-    assert "по времени" in status["message"] or "времени" in status["message"]
-    # Манёвр всё равно заканчивается сам, а не висит до таймаута.
-    run(world, runner, 40.0, start_now=0.3)
-    status = runner.status()
-    assert status["state"] in (runner.DONE, runner.FAILED), status
-    assert status["state"] == runner.DONE
+    assert status["state"] == runner.FAILED
+    assert status["reason"] == "sc_firmware_required"
+    assert not [c for c in world.commands if c[0] == "drive"]
     assert world.brakes >= 1
 
 
@@ -405,3 +416,132 @@ def test_status_payload_has_no_active_maneuver_when_idle():
     payload = runner.config_payload()
     assert set(payload["presets"]) == set(m.MANEUVER_IDS)
     assert payload["limits"]["distanceM"][0] > 0
+
+
+def test_realistic_250ms_frames_measure_pulses_not_rpm_or_command_count():
+    world = World()
+    runner = runner_for(world)
+    assert runner.start("forward", 0.0)["ok"]
+    frames = world.frames()
+    for tick in range(600):
+        world.step()
+        if tick % 5 == 0:  # @TLM раз в 250 мс, не каждый тик сервера
+            frames = world.frames()
+            # Ошибочная скорость не должна добавлять путь: только счётчик.
+            for frame in frames.values():
+                frame["scRpm"] = 0.0
+        runner.tick(world.time, frames, world.steer, world.drive)
+        if not runner.status()["active"]:
+            break
+    assert runner.status()["state"] == runner.DONE, runner.status()
+    assert all(abs(value - 1.0) < 0.10 for value in world.travel.values())
+
+
+@pytest.mark.parametrize("quiet", ["FL", "FR", "RL", "RR"])
+def test_each_silent_sc_sensor_stops_every_wheel(quiet):
+    world = World()
+    world.quiet.add(quiet)
+    runner = runner_for(world)
+    runner.start("forward", 0.0)
+    run(world, runner, 8.0)
+    assert runner.status()["state"] == runner.FAILED
+    assert runner.status()["reason"] in ("sc_stalled", "sc_mismatch")
+    assert set(world.percent.values()) == {0} and world.brakes
+    assert runner.status()["mode"] == "odometry"
+
+
+def test_short_target_cannot_succeed_on_three_wheels_only():
+    world = World(rpm_per_percent=20)
+    world.quiet.add("FR")
+    runner = runner_for(world)
+    assert runner.update_config("forward", {"distanceM": 0.05})["ok"]
+    runner.start("forward", 0.0)
+    run(world, runner, 5.0)
+    assert runner.status()["state"] == runner.FAILED
+    assert runner.status()["reason"] == "sc_mismatch"
+    assert set(world.percent.values()) == {0}
+
+
+def test_missing_telemetry_aborts_immediately_without_time_fallback():
+    world = World()
+    runner = runner_for(world)
+    runner.start("forward", 0.0)
+    now = run(world, runner, 0.8)
+    frames = world.frames()
+    del frames["RL"]
+    runner.tick(now + 0.05, frames, world.steer, world.drive)
+    assert runner.status()["reason"] == "module_offline"
+    assert set(world.percent.values()) == {0}
+
+
+@pytest.mark.parametrize("damage, reason", [
+    (lambda frame: frame.update(scCount=None), "sc_invalid"),
+    (lambda frame: frame.update(scPpr=91), "sc_changed"),
+    (lambda frame: frame.update(scCount=4000000), "sc_changed"),
+    (lambda frame: frame.update(uptimeMs=0), "sc_changed"),
+    (lambda frame: frame.update(firmware=16), "sc_firmware_required"),
+    (lambda frame: frame.update(deg=20), "steering_changed"),
+    (lambda frame: frame.update(drivePercent=-5), "drive_mismatch"),
+])
+def test_corrupt_or_changed_feedback_stops_immediately(damage, reason):
+    world = World()
+    runner = runner_for(world)
+    runner.start("forward", 0.0)
+    now = run(world, runner, 1.0)
+    frames = world.frames()
+    damage(frames["FR"])
+    runner.tick(now + 0.05, frames, world.steer, world.drive)
+    assert runner.status()["reason"] == reason
+    assert set(world.percent.values()) == {0}
+
+
+def test_counter_rollover_counts_small_positive_delta():
+    world = World()
+    for module in MODULES:
+        world.edges[module] = 2 ** 32 - 5
+    runner = runner_for(world)
+    runner.start("forward", 0.0)
+    run(world, runner, 30.0)
+    assert runner.status()["state"] == runner.DONE, runner.status()
+    assert all(abs(value - 1.0) < 0.06 for value in world.travel.values())
+
+
+def test_drive_command_rejection_brakes_everything():
+    world = World()
+    runner = runner_for(world)
+    runner.start("forward", 0.0)
+    world.step()
+    runner.tick(world.time, world.frames(), world.steer,
+                lambda module, value: {"ok": False, "reason": "command_queue_full"})
+    assert runner.status()["reason"] == "command_failed"
+    assert world.brakes
+
+
+def test_maneuver_waits_for_exact_brake_ack_from_every_board():
+    world = World()
+    runner = runner_for(world)
+    assert runner.start("forward", 0.0, brake_id=42)["ok"]
+    frames = world.frames()
+    for frame in frames.values():
+        frame["brakeId"] = 41  # an earlier STOP, not this one
+    for module in MODULES[:-1]:
+        frames[module]["brakeId"] = 42
+    runner.tick(0.05, frames, world.steer, world.drive)
+    assert runner.status()["state"] == runner.STEERING and not world.commands
+    frames[MODULES[-1]]["brakeId"] = 42
+    runner.tick(0.10, frames, world.steer, world.drive)
+    assert runner.status()["state"] == runner.DRIVING
+    assert any(command[0] == "drive" for command in world.commands)
+
+
+def test_maneuver_missing_brake_ack_fails_closed():
+    world = World()
+    runner = runner_for(world)
+    runner.start("right", 0.0, brake_id=42)
+    frames = world.frames()
+    for frame in frames.values():
+        frame["brakeId"] = 42
+    frames["FR"]["brakeId"] = None
+    runner.tick(0.05, frames, world.steer, world.drive)
+    assert runner.status()["reason"] == "brake_firmware_required"
+    assert not world.commands and world.brakes == 1

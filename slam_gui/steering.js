@@ -26,6 +26,14 @@
     serial_unavailable: 'Нет связи с USB-платами.',
     not_homed: 'У колеса нет нуля — сначала калибровка по датчику.',
     steering_timeout: 'Колёса не успели встать в углы манёвра.',
+    sc_firmware_required: 'Для одометрии обновите все платы до fw17.',
+    brake_firmware_required: 'Нужно подтверждение тормоза всех плат fw17.',
+    brake_unconfirmed: 'Тормоз не подтверждён всеми платами.',
+    sc_invalid: 'Нет корректных счётчиков SC.',
+    sc_changed: 'Счётчик SC изменился или плата перезапустилась.',
+    sc_stalled: 'Один из датчиков SC молчит — тяга снята.',
+    sc_mismatch: 'Пути колёс расходятся — цель не подтверждена.',
+    wheel_moving: 'Колёса ещё вращаются.',
     drive_not_ready: 'Тяга сейчас недоступна.',
     pin_required: 'PIN истёк — разблокируйте управление снова.',
     estop: 'Включён E-STOP: манёвр заблокирован.',
@@ -614,7 +622,8 @@
       statusEl.textContent = 'Манёвр «' + (state.title || state.name || '') + '»: ' +
         Math.round((Number(state.progress) || 0) * 100) + '% · ' +
         format(state.value) + ' из ' + format(state.target) +
-        ' · ' + (state.mode === 'time' ? 'по времени (без одометрии)' : 'по тахометру');
+        ' · ' + (state.mode === 'time' ? 'по времени (без одометрии)' :
+          state.sensor === 'sc_count' ? 'по счётчикам SC' : 'по тахометру');
     } else if (state.state === 'done' || state.state === 'failed' || state.state === 'cancelled') {
       statusEl.textContent = state.message || 'Манёвр завершён.';
     } else if (!supported) {

@@ -116,8 +116,8 @@ def test_telemetry_api_returns_only_public_values(kiosk_client):
         body = response.get_json()
         assert body["ok"] is True
         assert set(body["data"]) == {
-            "battery", "motors", "lidar", "speedMps", "powerKw", "mode", "linkOk", "ts",
-            "source", "steeringControl", "drive", "lidarStatus", "lidarDemo", "masterMessages",
+            "battery", "motors", "lidar", "speedMps", "wheelSpeedMps", "powerKw", "mode", "linkOk", "ts",
+            "source", "steeringControl", "drive", "maneuverConfig", "lidarStatus", "lidarDemo", "masterMessages",
             # состояние E-STOP публично: экран обязан показывать защёлку
             "estop",
             # какой порт мастера настроен/открыт: экран объясняет «нет связи»
