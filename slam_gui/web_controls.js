@@ -18,6 +18,7 @@
   session.catch(() => {});
   const routes = {
     '/api/kiosk_state': '/api/control/state',
+    '/api/kiosk_wheel_state': '/api/control/wheel_state',
     '/api/kiosk_logs': '/api/control/logs',
     '/api/battery': '/api/control/battery',
     '/api/kiosk_lock': '/api/control/lock',
@@ -30,6 +31,7 @@
     '/api/kiosk_maneuver': '/api/control/maneuver',
     '/api/kiosk_maneuver_config': '/api/control/maneuver_config',
     '/api/kiosk_keyboard': '/api/control/keyboard',
+    '/api/kiosk_neutral': '/api/control/neutral',
     '/api/kiosk_drive': '/api/control/drive',
     '/api/estop': '/api/control/estop',
     '/api/estop/release': '/api/control/estop/release',

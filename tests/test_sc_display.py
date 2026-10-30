@@ -89,3 +89,73 @@ def test_v17_counter_and_uptime_are_validated_without_discarding_drive_data():
     for bad in ("-1", "4294967296", "nan", "1.2", "oops"):
         damaged = backend.parse_master_line(v17.replace("sc_count=4294967295", "sc_count=" + bad))
         assert damaged["scCount"] is None and damaged["drivePercent"] == 0
+
+
+def test_v18_neutral_fields_are_strict_without_corrupting_other_telemetry():
+    backend = slam.load_backend()
+    text = line("FL", extra="brake_id=20 neutral_id=0 neutral_lock=1 t=1000").replace("fw=16", "fw=18")
+    frame = backend.parse_master_line(text)
+    assert frame["neutralId"] == 0 and frame["neutralLocked"] is True and frame["brakeId"] == 20
+    for malformed in ("-1", "2", "nan", "true"):
+        frame = backend.parse_master_line(text.replace("neutral_lock=1", "neutral_lock=" + malformed))
+        assert frame["neutralLocked"] is None and frame["drivePercent"] == 0
+    v17 = backend.parse_master_line(text.replace("fw=18", "fw=17"))
+    assert v17["neutralId"] is None and v17["neutralLocked"] is None
+
+
+def test_source_fails_closed_on_unknown_v18_neutral_state():
+    backend = slam.load_backend()
+    source = object.__new__(backend.MasterSource)
+    source.lock = threading.Lock()
+    frame = backend.parse_master_line(line("FL", extra="brake_id=20 neutral_id=0 neutral_lock=0 t=1000")
+                                      .replace("fw=16", "fw=18"))
+    source.frames = {"FL": (frame, 0)}
+    assert not source.observed_neutral()
+    frame["neutralLocked"] = None
+    assert source.observed_neutral()  # unknown is not a confirmed brake
+    frame["firmware"] = 17
+    assert not source.observed_neutral()  # v17 remains compatible with ordinary drive
+
+
+def test_v19_recent_sc_field_is_strict_and_not_invented_for_old_boards():
+    backend = slam.load_backend()
+    text = line("FL", sc="0", extra="sc_count=1 sc_recent=1 brake_id=1 neutral_id=0 neutral_lock=0 t=1000").replace("fw=16", "fw=19")
+    assert backend.parse_master_line(text)["scRecent"] is True
+    assert backend.parse_master_line(text.replace("sc_recent=1", "sc_recent=0"))["scRecent"] is False
+    for bad in ("true", "2", "-1", "nan", ""):
+        frame = backend.parse_master_line(text.replace("sc_recent=1", "sc_recent=" + bad))
+        assert frame["scRecent"] is None and frame["drivePercent"] == 0
+    assert backend.parse_master_line(text.replace("fw=19", "fw=18"))["scRecent"] is None
+
+
+def test_v19_manual_steering_rejects_recent_or_unknown_sc():
+    backend = slam.load_backend()
+    source = object.__new__(backend.MasterSource)
+    source.lock = threading.Lock()
+    source.frames = {}
+    source.drive_percent = 0
+    source.drive_last_command = 0
+    source.commands = queue.Queue(maxsize=8)
+    source.serial_ready = threading.Event()
+    source.serial_ready.set()
+    frame = line("FL", sc="0", extra="sc_count=1 sc_recent=1 brake_id=1 neutral_id=0 neutral_lock=0 t=1000").replace("fw=16", "fw=19")
+    source.feed(frame, now=100.0)
+    assert source.steer_module("FL", 25, now=100.1)["reason"] == "wheel_moving"
+    source.feed(frame.replace("sc_recent=1", "sc_recent=broken"), now=100.0)
+    assert source.steer_module("FL", 25, now=100.1)["reason"] == "sc_invalid"
+    source.feed(frame.replace("sc_recent=1", "sc_recent=0"), now=100.0)
+    assert source.steer_module("FL", 25, now=100.1)["ok"]
+    assert source.commands.get_nowait() == b"w FL 25.0\n"
+
+
+def test_v20_live_ack_is_strict_and_never_invented_for_older_firmware():
+    backend = slam.load_backend()
+    text = line("FL", sc="0", extra="sc_count=1 sc_recent=0 brake_id=9 neutral_id=0 neutral_lock=0 live_id=9 live_seq=12 t=1000").replace("fw=16", "fw=20")
+    frame = backend.parse_master_line(text)
+    assert frame["liveId"] == 9 and frame["liveSeq"] == 12
+    assert backend.parse_master_line(text.replace("fw=20", "fw=19"))["liveId"] is None
+    for field in ("live_id=9", "live_seq=12"):
+        for bad in ("-1", "2147483647", "nan", "true", ""):
+            parsed = backend.parse_master_line(text.replace(field, field.split('=')[0] + '=' + bad))
+            key = "liveId" if field.startswith("live_id") else "liveSeq"
+            assert parsed[key] is None

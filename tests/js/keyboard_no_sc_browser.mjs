@@ -21,7 +21,7 @@ try {
   await page.locator('#keyboard-enable').click();
   await page.waitForFunction(() => document.getElementById('keyboard-enable').getAttribute('aria-pressed') === 'true');
   await page.locator('#keyboard-enable').focus();
-  await page.keyboard.down('w');
+  await page.keyboard.down('ArrowUp');
   await poll(data => data.motors.every(m => m.drivePercent > 0));
   // No simulator pulses: the server, not only the browser, must stop all wheels.
   await page.waitForFunction(() => document.getElementById('keyboard-enable').getAttribute('aria-pressed') === 'false', null, {timeout: 6500});

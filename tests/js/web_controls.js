@@ -63,6 +63,8 @@ for (const name of ['slam_auth.js', 'web_controls.js']) {
   assert.equal(logs.searchParams.get('st'), 'signed-session');
   await context.window.fetch('api/kiosk_state');
   assert.equal(new URL(calls.at(-1).url).pathname, '/api/control/state');
+  await context.window.fetch('api/kiosk_wheel_state');
+  assert.equal(new URL(calls.at(-1).url).pathname, '/api/control/wheel_state');
   await context.window.fetch(new Request('http://robot.example:8080/api/kiosk_zero', {
     method: 'POST', headers: {'Content-Type': 'application/json', 'X-Robot-Control': 'steering'},
     body: JSON.stringify({module: 'FR'})}));

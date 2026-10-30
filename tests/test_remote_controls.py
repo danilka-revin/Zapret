@@ -369,3 +369,12 @@ def test_remote_wasd_requires_auth_and_csrf_and_reaches_single_owner(client, ope
     assert client.post('/api/control/keyboard', json=stop, headers=hdr).json['ok']
     assert source.commanded == 0
     assert any('/api/kiosk_keyboard' in url for url, _, _ in transport[1])
+
+
+def test_fast_wheel_state_uses_authenticated_proxy(client, operator, transport):
+    assert client.get('/api/control/wheel_state').status_code in (302, 401)
+    login(client)
+    response = client.get('/api/control/wheel_state')
+    assert response.status_code == 200 and response.json['ok']
+    assert 'lidar' not in response.json['data']
+    assert transport[1][-1][0].endswith('/api/kiosk_wheel_state')

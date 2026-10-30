@@ -35,7 +35,8 @@
       if (desired && mode === desired) { desired = null; host.querySelector('[role="alert"]').textContent = ''; }
       if (desired && Date.now() > deadline) { desired = null; host.querySelector('[role="alert"]').textContent = 'Платы не подтвердили режим. Проверьте связь и повторите.'; }
       const busy = motors.some(m => m.moving || m.calibrating || m.cycling || m.drivePercent);
-      const disabled = !authorized || !ready || busy || pending || !!desired || !!(state && state.estop && (state.estop.latched || state.estop.unknown));
+      const disabled = !authorized || !ready || busy || pending || !!desired ||
+        !!(state && state.neutral && state.neutral.locked) || !!(state && state.estop && (state.estop.latched || state.estop.unknown));
       host.querySelector('select').disabled = disabled;
       host.querySelector('select').value = mode;
       host.querySelector('button').disabled = disabled || mode !== 'on' || !motors.every(m => m.homed);

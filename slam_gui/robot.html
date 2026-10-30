@@ -745,14 +745,20 @@
             <span id="drive-status" class="direct-servo-control" role="status">Проверка связи с платами…</span><span id="remote-drive-status" class="remote-legacy-drive" role="status">Проверка связи с платами…</span>
           </div>
 
+          <section id="neutral-panel" class="neutral-panel" aria-label="Ручное перекатывание робота">
+            <div class="neutral-head"><b>Ручное перекатывание · нейтраль</b><button id="neutral-toggle" type="button" aria-pressed="false">Снять тормоз</button></div>
+            <div id="neutral-status" role="status" aria-live="polite">Проверка состояния тормозов…</div>
+            <small>Только на ровной поверхности и без задания. Робот может покатиться: удерживайте его и используйте колёсные упоры. Не перекатывайте, пока все четыре платы не подтвердили «НЕЙТРАЛЬ»: тормоз может сниматься неодновременно. Нейтраль блокирует тягу, руль и манёвры; перед работой нажмите «Вернуть тормоз». При потере связи тормоз запрашивается автоматически. Электронный тормоз не гарантирует удержание при отключении питания.</small>
+          </section>
+
           <section id="keyboard-panel" class="keyboard-panel" aria-label="Управление с клавиатуры WASD">
             <div class="keyboard-head"><b>Управление WASD</b><button id="keyboard-enable" type="button" aria-pressed="false">Включить WASD</button></div>
             <div class="keyboard-options">
               <label>Режим <select id="keyboard-mode"><option value="crab">Краб</option><option value="normal">Обычное руление</option></select></label>
-              <label>Тяга, % шкалы Servo <output id="keyboard-speed-value">8</output><input id="keyboard-speed" type="range" min="1" max="100" step="1" value="8"></label>
+              <label>Тяга, % шкалы Servo <output id="keyboard-speed-value">20</output><input id="keyboard-speed" type="range" min="1" max="100" step="1" value="20"></label>
               <button id="keyboard-stop" type="button" class="traction-stop">СТОП WASD</button>
             </div>
-            <small>Удерживайте W/S для движения вперёд/назад. В «крабе» A/D — влево/вправо боком, сочетания дают диагональ. В обычном режиме A/D поворачивают передние колёса; без W/S тяги нет. При смене угла сначала остановка, затем поворот и только после подтверждения — движение. Отпускание, потеря фокуса или связи снимают тягу. Первые проверки — с вывешенными колёсами и физическим E-STOP.</small>
+            <small>W/S/A/D выбирают направление колёс, стрелка ↑ включает движение по нему, ↓ — обратно. Без WASD колёса направлены прямо; без стрелки тяги нет. В «крабе» A/D выставляют колёса боком, сочетания дают диагональ; противоположная сторона использует обратное вращение. В обычном режиме A/D поворачивают передние и задние колёса в противоположные стороны, отпускание возвращает руль прямо. Руление возможно на ходу; перед сменой направления вращения система тормозит. Нужна fw20 или новее на всех платах. Первые проверки — с вывешенными колёсами и независимым E-STOP.</small>
             <div id="keyboard-status" role="status" aria-live="polite">WASD выключено.</div>
           </section>
 
@@ -1050,6 +1056,7 @@
   <script src="pot_mode.js"></script>
   <script src="steer_dial.js"></script>
   <script src="keyboard.js"></script>
+  <script src="neutral.js"></script>
   <script src="robot.js"></script>
   <script src="wheel_settings.js"></script>
   <script src="battery.js"></script>

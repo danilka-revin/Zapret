@@ -3,9 +3,9 @@
 // Порт для каждого колеса оператор выбирает вручную в программе.
 // MODULE_ID задаёт имя в журнале, фильтр адресных команд и зеркалирование DIR.
 // Программа назначает порты вручную и посылает локальные команды (w 12.5);
-// @TLM раз в 250 мс не определяет роль порта. При прошивке укажите имя колеса.
+// @TLM раз в 50 мс и после изменения состояния не определяет роль порта.
 //
-// Команды с USB (как в проверенном скетче): k, q, c, d, h, s, g, z, p, w, v, t, b.
+// Команды с USB (как в проверенном скетче): k, q, c, d, h, s, g, z, p, w, v, t, b, n.
 //   w 12.5 | w FL 12.5 — поворот колеса; w zero / w calib — ноль и калибровка;
 //   v N [f/b] — прямое значение Servo.write для тяги (0…150) и направление;
 //   t N — прежняя команда тяги BLDC ±N% для других пультов;
@@ -189,9 +189,10 @@ const uint32_t TACH_MIN_SILENCE_US = 300000UL;
 #define DRIVE_MIRRORED -1
 #endif
 
-// v17: v и t не изменены; SC дополнен накопительным счётчиком переходов.
+// v20: отдельное защищённое руление на ходу для клавиатурного режима.
+// v21: короткая полная телеметрия с CRC и совместимый подробный кадр.
 // Старое поле tach остаётся выключенным для совместимости со старым сервером.
-const uint8_t FIRMWARE_PROTOCOL = 17;          // поле fw= в @TLM
+const uint8_t FIRMWARE_PROTOCOL = 21;          // поле fw= в @TLM
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -279,6 +280,21 @@ bool resume_allowed = false;           // g продолжит поворот, �
 bool drive_active = false;
 int8_t drive_percent = 0;
 uint32_t last_drive_command_ms = 0;
+// Только свежий подтверждённый b <id> разрешает первый n <id>.
+// После STOP или watchdog прежний n больше не может отпустить тормоз.
+uint32_t brake_id = 0;
+uint32_t brake_id_ms = 0;
+const uint16_t NEUTRAL_START_TIMEOUT_MS = 600;
+bool neutral_active = false;
+// После нейтрали даже watchdog не разрешает старую тягу: нужен новый tagged b.
+bool neutral_inhibit = false;
+uint32_t neutral_id = 0;
+// A live keyboard session starts only from its own tagged STOP and cannot be
+// revived after STOP/watchdog. Ordinary w/t/v keep their original interlocks.
+uint32_t live_id = 0;
+uint32_t live_seq = 0;
+int32_t live_target_step = 0;
+const uint16_t LIVE_START_TIMEOUT_MS = 6000;
 
 // Тяга: какие проценты просили и какое значение сейчас на входе «P».
 // Значение — шкала Servo.write: 0…DRIVE_SERVO_MAX_VALUE (0 — мотор не тянет).
@@ -453,6 +469,25 @@ void updateTachDisplay() {
     SREG = reset_sreg;
   }
   tach_display_hz = (uint16_t)((tach_display_rpm_x10 * TACH_EDGES_PER_REV + 300UL) / 600UL);
+}
+
+// Recent SC edges are checked independently of the 500 ms RPM display.
+// A single edge counts as recent for up to 1.5 s until a period is known.
+// Silence cannot distinguish a stopped wheel from a disconnected SC wire.
+bool tachMotionRecent() {
+  const uint8_t saved_sreg = SREG;
+  cli();
+  const uint32_t last = tach_last_edge_us;
+  const uint32_t period = tach_last_period_us;
+  const bool seen = tach_has_edge;
+  SREG = saved_sreg;
+  if (!seen) return false;
+  uint32_t silence = TACH_MAX_SILENCE_US;
+  if (period) {
+    silence = period >= TACH_MAX_SILENCE_US / 3 ? TACH_MAX_SILENCE_US : period * 3;
+    if (silence < TACH_MIN_SILENCE_US) silence = TACH_MIN_SILENCE_US;
+  }
+  return (uint32_t)((uint32_t)micros() - last) <= silence;
 }
 
 // ---------------------------------------------------------------------------
@@ -1365,7 +1400,9 @@ void printDriveInfo() {
 // ---------------------------------------------------------------------------
 // Тяга BLDC: только при заданном нуле и стоящем руле, с watchdog 650 мс.
 bool localDriveAllowed() {
-  return zero_set && !motorBusy() && calib_state == CAL_IDLE &&
+  // A stopped step motor can still be waiting for potentiometer correction.
+  // Do not start percentage traction until that automatic steering is done.
+  return zero_set && !motorBusy() && !feedback_pending && calib_state == CAL_IDLE &&
          pot_cal_state == POT_CAL_IDLE && !cycle_active;
 }
 
@@ -1393,6 +1430,7 @@ void applyDriveCommand(int8_t percent) {
   driveWriteServo(driveValueForPercent(percent));
   drive_percent = percent;
   drive_active = percent != 0;
+  brake_id = 0;
   last_drive_command_ms = millis();
   if (!drive_active) {                // «t 0» — сразу снять тягу и затормозить
     driveSetBrake(true);
@@ -1401,11 +1439,25 @@ void applyDriveCommand(int8_t percent) {
 }
 
 void stopDriveLocal() {
+  // In live mode STOP/watchdog must also cancel a steering move; a delayed
+  // heartbeat from that session must not restart either actuator.
+  if (live_id != 0) {
+    haltMotor();
+    feedback_pending = false;
+    move_report_pending = false;
+    resume_allowed = false;
+  }
+  live_id = 0;
+  live_seq = 0;
   driveWriteServo(0);                // Servo продолжает давать короткий импульс
   driveSetBrake(true);               // тормоз: колесо не катится
   driveSetStop(true);                // выходы драйвера выключены
   drive_percent = 0;
   drive_active = false;
+  neutral_active = false;
+  neutral_id = 0;
+  brake_id = 0;
+  brake_id_ms = 0;
 }
 
 // v: число ползунка без пересчёта идёт в Servo.write на D3. Направление
@@ -1432,6 +1484,7 @@ void applyDirectDrive(uint8_t value, bool forward) {
   drive_percent = (int8_t)(((uint16_t)value * 100U + 90U) / 180U);
   if (!forward) drive_percent = -drive_percent;
   drive_active = true;
+  brake_id = 0;
   last_drive_command_ms = millis();
 }
 
@@ -1450,16 +1503,19 @@ bool applyLocalDrive(int8_t percent) {
 }
 
 void updateDriveWatchdog() {
-  if (drive_active && (uint32_t)(millis() - last_drive_command_ms) > DRIVE_COMMAND_TIMEOUT_MS) {
+  if ((drive_active || neutral_active) &&
+      (uint32_t)(millis() - last_drive_command_ms) > DRIVE_COMMAND_TIMEOUT_MS) {
     stopDriveLocal();
-    note(PSTR("тяга: нет команды дольше 650 мс — выходы выключены, тормоз"));
+    note(PSTR("нет команды дольше 650 мс — выходы выключены, тормоз"));
   }
 }
 
 // ---------------------------------------------------------------------------
 uint16_t moduleStatus() {
   uint16_t status = STATUS_V2;
-  if (motorBusy()) status |= STATUS_MOVING;
+  // Between correction passes the motor is temporarily still, but steering
+  // may resume automatically. The server must not treat that pause as arrival.
+  if (motorBusy() || feedback_pending) status |= STATUS_MOVING;
   if (zero_set) status |= STATUS_ZERO;
   if (calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE) status |= STATUS_CALIB;
   if (optoActive()) status |= STATUS_OPTO;
@@ -1498,11 +1554,9 @@ void printModuleStatus() {
 //   w <°>          абсолютный угол (нужен ноль, предел ±90°) — команда сервера
 //   v <0…150>      прямое значение Servo.write с бортового экрана
 //   t <%> | b      прежняя команда тяги / тормоз
+//   b <id>, n <id> подтверждённый тормоз и heartbeat нейтрали (fw18)
 //   p              состояние
-// Идентификатор последнего подтверждённого b, изменяется в основном цикле.
-uint32_t brake_id = 0;
-
-void stopEverything() {
+void stopEverything(bool quiet) {
   const bool cycling = cycle_active;
   const bool pot_cal = pot_cal_state != POT_CAL_IDLE;
   if (calib_state != CAL_IDLE) failCalibration(CAL_ERR_ABORTED);
@@ -1516,9 +1570,11 @@ void stopEverything() {
     note(PSTR("калибровка потенциометра прервана"));
   }
   if (cycling) resume_allowed = false;
-  char angle[16];
-  formatDegrees(stepNow(), angle, sizeof(angle));
-  note(PSTR("ПАУЗА. Угол: %s° (руль стоит, тяга выключена)"), angle);
+  if (!quiet) {
+    char angle[16];
+    formatDegrees(stepNow(), angle, sizeof(angle));
+    note(PSTR("ПАУЗА. Угол: %s° (руль стоит, тяга выключена)"), angle);
+  }
 }
 
 void handleModuleCommand(char* line) {
@@ -1528,6 +1584,28 @@ void handleModuleCommand(char* line) {
   char* arg1 = strtok_r(nullptr, " \t", &save);
   char* arg2 = strtok_r(nullptr, " \t", &save);
   char* extra = strtok_r(nullptr, " \t", &save);
+
+  // На нейтрали запрещены даже прямые команды Servo и руления. Нулевые
+  // команды остаются аварийным тормозом; STOP/b всегда имеют приоритет.
+  if (neutral_inhibit && strcasecmp_P(command, PSTR("n")) != 0 &&
+      strcasecmp_P(command, PSTR("b")) != 0 &&
+      strcasecmp_P(command, PSTR("s")) != 0 &&
+      strcasecmp_P(command, PSTR("p")) != 0) {
+    long value = -1;
+    if ((strcasecmp_P(command, PSTR("t")) == 0 || strcasecmp_P(command, PSTR("v")) == 0) &&
+        arg1 && parseLongToken(arg1, &value) && value == 0) stopDriveLocal();
+    return;
+  }
+
+  // No old-style command may take over a live session. STOP still wins; a
+  // fresh tagged brake is needed before another controller can start.
+  if (live_id != 0 && strcasecmp_P(command, PSTR("j")) != 0 &&
+      strcasecmp_P(command, PSTR("b")) != 0 &&
+      strcasecmp_P(command, PSTR("s")) != 0 &&
+      strcasecmp_P(command, PSTR("p")) != 0) {
+    stopDriveLocal();
+    return;
+  }
 
   if (strcasecmp_P(command, PSTR("k")) == 0 || strcasecmp_P(command, PSTR("calib")) == 0) {
     startCalibration();
@@ -1553,7 +1631,10 @@ void handleModuleCommand(char* line) {
   } else if (strcasecmp_P(command, PSTR("q")) == 0) {
     startPotCalibration();
   } else if (strcasecmp_P(command, PSTR("s")) == 0) {
-    stopEverything();
+    // The computer can omit the redundant human-readable pause message;
+    // regular 's' keeps its existing monitor output and identical STOP action.
+    const bool quiet = arg1 && !arg2 && !extra && strcmp(arg1, "q") == 0;
+    stopEverything(quiet);
   } else if (strcasecmp_P(command, PSTR("z")) == 0 || strcasecmp_P(command, PSTR("zero")) == 0) {
     setZeroHere();
   } else if (strcasecmp_P(command, PSTR("h")) == 0) {
@@ -1643,6 +1724,54 @@ void handleModuleCommand(char* line) {
     }
     if (!steeringAllowed()) return;
     startPlainMove(degreesToSteps(degrees), false);
+  } else if (strcasecmp_P(command, PSTR("j")) == 0) {
+    // j <brake-id> <sequence> <percent> <absolute-angle>
+    // A live session can only start at rest, at the already-confirmed angle.
+    // After that, its own monotonic heartbeats may move the steering while
+    // traction continues. STOP/watchdog invalidate the ID and halt both.
+    char* angle_token = strtok_r(nullptr, " \t", &save);
+    char* trailing = strtok_r(nullptr, " \t", &save);
+    long requested_id = 0, requested_seq = 0, percent = 0;
+    float degrees = 0.0f;
+    if (!arg1 || !arg2 || !extra || !angle_token || trailing ||
+        !parseLongToken(arg1, &requested_id) || requested_id <= 0 || requested_id >= 2147483647L ||
+        !parseLongToken(arg2, &requested_seq) || requested_seq <= 0 || requested_seq >= 2147483647L ||
+        !parseLongToken(extra, &percent) || percent == 0 ||
+        percent < -(long)DRIVE_MAX_PERCENT || percent > (long)DRIVE_MAX_PERCENT ||
+        !parseFloatToken(angle_token, &degrees) || fabsf(degrees) > STEER_LIMIT_DEG ||
+        !zero_set || calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE || cycle_active) {
+      stopDriveLocal();
+      return;
+    }
+    const int32_t target = degreesToSteps(degrees);
+    if (live_id == 0) {
+      if (brake_id != (uint32_t)requested_id ||
+          (uint32_t)(millis() - brake_id_ms) > LIVE_START_TIMEOUT_MS ||
+          drive_active || motorBusy() || feedback_pending ||
+          tach_display_rpm_x10 > 10 || tachMotionRecent() ||
+          labs(target - stepNow()) > degreesToSteps(1.5f)) {
+        stopDriveLocal();
+        return;
+      }
+      live_id = (uint32_t)requested_id;
+      // The already-confirmed angle may differ by less than 1.5°. Do not
+      // unexpectedly start a correction on the very first traction packet.
+      live_target_step = target;
+    } else {
+      if (live_id != (uint32_t)requested_id ||
+          (uint32_t)(millis() - last_drive_command_ms) > DRIVE_COMMAND_TIMEOUT_MS ||
+          !drive_active || ((percent > 0) != (drive_percent > 0))) {
+        stopDriveLocal();
+        return;
+      }
+      if ((uint32_t)requested_seq <= live_seq) return;  // never refresh a stale packet
+    }
+    if (target != live_target_step) {
+      live_target_step = target;
+      startPlainMove(target, false);
+    }
+    live_seq = (uint32_t)requested_seq;
+    applyDriveCommand((int8_t)percent);
   } else if (strcasecmp_P(command, PSTR("t")) == 0) {
     long percent = 0;
     if (!arg1 || arg2 || !parseLongToken(arg1, &percent) ||
@@ -1661,6 +1790,29 @@ void handleModuleCommand(char* line) {
       return;
     }
     applyDirectDrive((uint8_t)value, forward);
+  } else if (strcasecmp_P(command, PSTR("n")) == 0) {
+    long requested = 0;
+    if (!arg1 || arg2 || extra || !parseLongToken(arg1, &requested) ||
+        requested <= 0 || requested >= 2147483647L ||
+        (neutral_active ? neutral_id != (uint32_t)requested :
+         brake_id != (uint32_t)requested ||
+         (uint32_t)(millis() - brake_id_ms) > NEUTRAL_START_TIMEOUT_MS ||
+         drive_active || motorBusy() || feedback_pending ||
+         calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE || cycle_active ||
+         tach_display_rpm_x10 > 10 || tachMotionRecent())) {
+      stopDriveLocal();
+      return;
+    }
+    if (!neutral_active) {
+      driveWriteServo(0);
+      driveSetStop(true);                 // выходы выключены до снятия тормоза
+      driveSetBrake(false);
+      neutral_active = true;
+      neutral_inhibit = true;
+      neutral_id = (uint32_t)requested;
+      brake_id = 0;                       // одноразовое разрешение
+    }
+    last_drive_command_ms = millis();
   } else if (strcasecmp_P(command, PSTR("b")) == 0) {
     stopDriveLocal();
     // Только после применения тормоза подтверждаем точный идентификатор b.
@@ -1669,6 +1821,8 @@ void handleModuleCommand(char* line) {
     // Exclude LONG_MAX: strtol may return it for an overflowing token.
     brake_id = (arg1 && !arg2 && !extra && parseLongToken(arg1, &requested_id) &&
                 requested_id > 0 && requested_id < 2147483647L) ? (uint32_t)requested_id : 0;
+    if (brake_id != 0) neutral_inhibit = false;
+    brake_id_ms = millis();
   } else if (strcasecmp_P(command, PSTR("p")) == 0) {
     printModuleStatus();
   } else {
@@ -1734,11 +1888,22 @@ uint32_t serial_last_char_ms = 0;
 // Обрывок строки без \n дольше секунды — мусор (наводка, сброс порта, эхо):
 // выбрасываем, иначе он склеится со следующей командой и «съест» её.
 const uint16_t SERIAL_LINE_TIMEOUT_MS = 1000;
-const uint16_t TELEMETRY_PERIOD_MS = 250;   // как часто печатаем @TLM
-// Одна и та же ёмкость для локальной строки и запаса места в TX.
-const uint16_t TELEMETRY_LINE_CAPACITY = 260;
+// Compact frames carry ALL control/safety fields; the full text frame remains
+// available to older servers and serial monitors. At the worst permitted rate,
+// 160/20 ms + 384/200 ms = 9920 bytes/s, below 115200-baud 8N1 payload capacity
+// (11520 bytes/s), leaving headroom for occasional human-readable messages.
+const uint16_t FAST_TELEMETRY_PERIOD_MS = 30;
+const uint16_t FAST_TELEMETRY_MIN_SPACING_MS = 20;
+const uint16_t FULL_TELEMETRY_PERIOD_MS = 200;
+const uint16_t FAST_TELEMETRY_LINE_CAPACITY = 160;
+const uint16_t TELEMETRY_LINE_CAPACITY = 384;
 static_assert(TX_BUFFER_SIZE >= TELEMETRY_LINE_CAPACITY, "TX buffer too small for telemetry");
 uint32_t last_telemetry_ms = 0;
+uint32_t last_fast_telemetry_ms = 0;
+bool telemetry_urgent = false;
+bool last_steering_busy = false;
+bool last_sc_recent = false;
+uint32_t last_sc_recent_check_ms = 0;
 
 // Имя модуля в команде «w <имя> …»: своё колесо, ALL, чужое колесо или не имя.
 const uint8_t MOD_UNKNOWN = 0;
@@ -1764,6 +1929,52 @@ void printHelp() {
   note(PSTR("Servo D3; SC D19: %u переходов/об, счётчик без направления"), (unsigned)TACH_EDGES_PER_REV);
 }
 
+// CRC-16/Modbus, computed over the exact ASCII payload before the CRC field.
+// CRC detects line corruption; it is not authentication or a physical E-STOP.
+uint16_t telemetryCrc16(const char* data, uint16_t size) {
+  uint16_t crc = 0xFFFF;
+  for (uint16_t i = 0; i < size; ++i) {
+    crc ^= (uint8_t)data[i];
+    for (uint8_t bit = 0; bit < 8; ++bit) {
+      crc = (crc & 1) ? (crc >> 1) ^ 0xA001U : crc >> 1;
+    }
+  }
+  return crc;
+}
+
+bool appendCheckedFrame(char* line, uint16_t capacity, int length, bool full) {
+  if (length <= 0 || length >= (int)capacity) return false;
+  const uint16_t crc = telemetryCrc16(line, (uint16_t)length);
+  const int tail = full
+      ? snprintf_P(line + length, capacity - (uint16_t)length, PSTR(" crc=%04X\r\n"), (unsigned)crc)
+      : snprintf_P(line + length, capacity - (uint16_t)length, PSTR(" %04X\r\n"), (unsigned)crc);
+  if (tail <= 0 || tail >= (int)(capacity - (uint16_t)length)) return false;
+  txAppend(line, (uint16_t)(length + tail));
+  return true;
+}
+
+// The compact record contains the same safety and diagnostic state as @TLM;
+// no acknowledgement is combined with an older steering/SC snapshot.
+bool appendFastTelemetry() {
+  const uint16_t status = moduleStatus();
+  const long deg_c = lroundf((float)stepNow() * 100.0f / STEPS_PER_DEGREE);
+  const long tgt_c = lroundf((float)targetNow() * 100.0f / STEPS_PER_DEGREE);
+  const uint8_t saved_sreg = SREG;
+  cli();
+  const uint32_t edges = tach_edges_total;
+  SREG = saved_sreg;
+  char line[FAST_TELEMETRY_LINE_CAPACITY];
+  const int n = snprintf_P(line, sizeof(line),
+      PSTR("@F %u %ld %ld %u %d %u %u %lu %u %u %lu %u %lu %lu %u %lu %lu %lu"),
+      (unsigned)FIRMWARE_PROTOCOL, deg_c, tgt_c, (unsigned)status, (int)drive_percent,
+      (unsigned)DRIVE_MAX_PERCENT, (unsigned)drive_servo_value, (unsigned long)tach_display_rpm_x10,
+      (unsigned)tach_display_hz, (unsigned)TACH_EDGES_PER_REV, (unsigned long)edges,
+      (unsigned)tachMotionRecent(), (unsigned long)brake_id, (unsigned long)neutral_id,
+      (unsigned)neutral_inhibit, (unsigned long)live_id, (unsigned long)live_seq,
+      (unsigned long)millis());
+  return appendCheckedFrame(line, sizeof(line), n, false);
+}
+
 // Телеметрия не содержит роли колеса: порт назначает оператор в программе.
 void appendTelemetry() {
   const uint16_t status = moduleStatus();
@@ -1782,7 +1993,7 @@ void appendTelemetry() {
   // Старый сервер по-прежнему видит tach=0; новый может явно использовать
   // sc_count для одометрии, не смешивая его с историческим rpm/tach.
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u drive=%d fw=%u pot=%d pm=%d tach=0 dmax=%u sv=%u duty=%u sc_rpm=%lu.%lu sc_hz=%u sc_ppr=%u sc_count=%lu brake_id=%lu t=%lu\r\n"),
+      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u drive=%d fw=%u pot=%d pm=%d tach=0 dmax=%u sv=%u duty=%u sc_rpm=%lu.%lu sc_hz=%u sc_ppr=%u sc_count=%lu sc_recent=%u brake_id=%lu neutral_id=%lu neutral_lock=%u live_id=%lu live_seq=%lu t=%lu"),
       deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
       (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
       home, (unsigned)((status >> 8) & 0x0F), (int)drive_percent, (unsigned)FIRMWARE_PROTOCOL,
@@ -1791,10 +2002,10 @@ void appendTelemetry() {
       (unsigned)DRIVE_MAX_PERCENT, (unsigned)drive_servo_value,
       (unsigned)driveValuePermille(), (unsigned long)(tach_display_rpm_x10 / 10),
       (unsigned long)(tach_display_rpm_x10 % 10), (unsigned)tach_display_hz,
-      (unsigned)TACH_EDGES_PER_REV, (unsigned long)edges, (unsigned long)brake_id,
-      (unsigned long)millis());
-  if (n <= 0 || n >= (int)sizeof(line)) return;
-  txAppend(line, (uint16_t)n);
+      (unsigned)TACH_EDGES_PER_REV, (unsigned long)edges, (unsigned)tachMotionRecent(),
+      (unsigned long)brake_id, (unsigned long)neutral_id, (unsigned)neutral_inhibit,
+      (unsigned long)live_id, (unsigned long)live_seq, (unsigned long)millis());
+  appendCheckedFrame(line, sizeof(line), n, true);
 }
 
 // Общая точка входа USB: «w [FL] …» разбирается на имя колеса и команду ядра,
@@ -1920,6 +2131,9 @@ void readSerialLines() {
           // Любой @ — входное эхо/мусор, не запрос определения колеса.
         } else if (serial_line[0] != '#') {
           handleWheelCommand(serial_line);
+          // The next frame represents the result, not just receipt of bytes.
+          // Repeated heartbeats are rate-limited together with normal frames.
+          telemetry_urgent = true;
         }
       }
       serial_length = 0;
@@ -1935,7 +2149,7 @@ void readSerialLines() {
 void setup() {
   Serial.begin(115200);
   steeringSetup();
-  last_telemetry_ms = millis();
+  last_telemetry_ms = last_fast_telemetry_ms = millis();
   note(PSTR("--- КОЛЕСО %s: руль v%u, USB 115200; ноль не задан — k или z ---"),
        MODULE_ID, (unsigned)FIRMWARE_PROTOCOL);
   potBootNote();
@@ -1945,11 +2159,35 @@ void setup() {
 void loop() {
   readSerialLines();
   steeringLoop();
+  // Completion of a move (including potentiometer correction) is as important
+  // as a command ACK. Do not wait for the next periodic frame to report it.
+  const bool steering_busy = motorBusy() || feedback_pending;
+  if (steering_busy != last_steering_busy) {
+    last_steering_busy = steering_busy;
+    telemetry_urgent = true;
+  }
   const uint32_t now = millis();
-  if ((uint32_t)(now - last_telemetry_ms) >= TELEMETRY_PERIOD_MS) {
+  if ((uint32_t)(now - last_sc_recent_check_ms) >= 10) {
+    last_sc_recent_check_ms = now;
+    const bool recent = tachMotionRecent();
+    if (recent != last_sc_recent) {
+      last_sc_recent = recent;
+      telemetry_urgent = true;
+    }
+  }
+  const uint16_t interval = telemetry_urgent ? FAST_TELEMETRY_MIN_SPACING_MS : FAST_TELEMETRY_PERIOD_MS;
+  if ((uint32_t)(now - last_fast_telemetry_ms) >= interval && txFree() >= FAST_TELEMETRY_LINE_CAPACITY) {
+    // A frame must fit whole. If TX is busy, retain the urgent request and
+    // retry on the next loop instead of dropping the ACK or blocking control.
+    if (appendFastTelemetry()) {
+      last_fast_telemetry_ms = now;
+      telemetry_urgent = false;
+    }
+  }
+  if ((uint32_t)(now - last_telemetry_ms) >= FULL_TELEMETRY_PERIOD_MS &&
+      txFree() >= TELEMETRY_LINE_CAPACITY) {
+    appendTelemetry();  // old servers ignore the additional CRC field
     last_telemetry_ms = now;
-    // Блок @TLM должен уйти целиком: обрезанный — сервер не разберёт.
-    if (txFree() >= TELEMETRY_LINE_CAPACITY) appendTelemetry();
   }
   txPump();
 }

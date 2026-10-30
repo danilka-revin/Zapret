@@ -784,6 +784,7 @@ ASSETS = {
     "robot.css": "robot_css",
     "robot.js": "robot_js",
     "keyboard.js": "keyboard_js",
+    "neutral.js": "neutral_js",
     "battery.js": "battery_js",
     "steering.css": "steering_css",
     "steering.js": "steering_js",

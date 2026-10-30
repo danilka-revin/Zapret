@@ -31,7 +31,7 @@
 
   function allowed(id) {
     const drive = state && state.drive || {};
-    if (!state || state.linkOk === false || state.estop || !drive.available) return false;
+    if (!state || state.linkOk === false || state.estop || (state.neutral && state.neutral.locked) || !drive.available) return false;
     return id === 'ALL' ? drive.canDrive === true
       : !!(drive.perModule && drive.perModule[id] && drive.perModule[id].canDrive);
   }

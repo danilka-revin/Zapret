@@ -4,6 +4,9 @@
 
   const LIDAR_RANGE_M = 10;
   const POLL_MS = 250;
+  // A small wheel-only snapshot is polled while WASD is enabled. The full
+  // lidar/map state keeps its ordinary cadence and is not sent 20 times/s.
+  const WASD_POLL_MS = 50;
 
   const $ = (id) => document.getElementById(id);
   const setText = (el, txt) => { if (el) el.textContent = txt; };
@@ -36,6 +39,9 @@
 
   let lastData = null;
   let keyboardControl = null;
+  let keyboardData = null, keyboardDataAt = 0, keyboardDataSession = null;
+  let keyboardFetchPending = false;
+  let neutralControl = null;
   let live = false;
   let lastLiveAt = 0;
   let liveTimer = null;
@@ -98,7 +104,7 @@
   }
 
   async function fetchState() {
-    // Не запускаем параллельные 250-мс опросы: медленный ответ не должен
+    // Не запускаем параллельные опросы: медленный ответ не должен
     // перезаписать более свежий скан лидара или телеметрию.
     // + таймаут, чтобы зависший запрос не держал UI в «нет связи» 2 сек.
     if (stateFetchPending) return;
@@ -118,9 +124,11 @@
         if (window.RCRobotModel) window.RCRobotModel.update(j.data);
         setLive(true);
         if (keyboardControl) keyboardControl.stateChanged();
+        if (neutralControl) neutralControl.stateChanged();
       } else {
         setLive(false);
         if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Нет телеметрии · WASD выключено.');
+        if (neutralControl && neutralControl.isActive()) void neutralControl.restore(true);
         if (window.RCRemoteControls) {
           releaseDrive();
           if (window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
@@ -131,6 +139,7 @@
       // Экран может не мигать на сетевых сбоях, но WASD fail-closed сразу.
       setLive(false);
       if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Связь потеряна · WASD выключено.');
+      if (neutralControl && neutralControl.isActive()) void neutralControl.restore(true);
       if (window.RCRemoteControls) {
         releaseDrive();
         if (window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
@@ -139,6 +148,39 @@
     } finally {
       clearTimeout(t);
       stateFetchPending = false;
+    }
+  }
+
+  async function fetchKeyboardState() {
+    const session = keyboardControl && keyboardControl.session();
+    if (!session) {
+      keyboardData = null;
+      keyboardDataSession = null;
+      return;
+    }
+    if (keyboardFetchPending) return;
+    keyboardFetchPending = true;
+    const started = Date.now(), controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 550);
+    try {
+      const response = await fetch('api/kiosk_wheel_state', {cache: 'no-store', signal: controller.signal});
+      const result = await response.json();
+      if (!response.ok || !result || !result.ok || !result.data) throw new Error('wheel state unavailable');
+      // A response from an old lease cannot become the state of a new one.
+      if (!keyboardControl || keyboardControl.session() !== session) return;
+      keyboardData = result.data;
+      keyboardDataSession = session;
+      // Count network delay towards freshness instead of treating an old reply
+      // as a new measurement when it finally arrives.
+      keyboardDataAt = started;
+      keyboardControl.stateChanged();
+    } catch (error) {
+      if (keyboardControl && keyboardControl.session() === session) {
+        keyboardControl.disable('Связь с колёсами потеряна · WASD выключено.');
+      }
+    } finally {
+      clearTimeout(timeout);
+      keyboardFetchPending = false;
     }
   }
 
@@ -412,6 +454,7 @@
   function boot() {
     fetchState();
     setInterval(fetchState, POLL_MS);
+    setInterval(() => { void fetchKeyboardState(); }, WASD_POLL_MS);
     bindLidarRange();
     loop();
     initKioskControls();
@@ -1192,7 +1235,8 @@
       const showMap = name === 'map';
       if (activeSwipeView === 'motors' && !showMotors) {
         if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Уход с экрана · WASD выключено.');
-        void stopDrive();
+        if (neutralControl && neutralControl.isActive()) void neutralControl.restore(true);
+        else void stopDrive();
       }
       activeSwipeView = showMotors ? 'motors'
         : (showBattery ? 'battery' : (showMap ? 'map' : 'cameras'));
@@ -1269,7 +1313,8 @@
       if (window.RCCameraView) window.RCCameraView.setActive(false);
       if (activeSwipeView === 'motors') {
         if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Уход с экрана · WASD выключено.');
-        void stopDrive();
+        if (neutralControl && neutralControl.isActive()) void neutralControl.restore(true);
+        else void stopDrive();
       }
       page.classList.remove('is-open');
       document.body.classList.remove('swipe-open');
@@ -2238,6 +2283,7 @@
   function steerPresetBlockedReason() {
     const d = lastData || {};
     const control = d.steeringControl || {};
+    if (d.neutral && d.neutral.locked) return 'Сначала верните тормоз после нейтрали.';
     if (!control.available) {
       return String(control.source || '') === 'master-peer'
         ? 'Руление и пресеты доступны на бортовом экране (порт 8090).'
@@ -2553,7 +2599,8 @@
     if (!panel) return;
     const d = data || {};
     const control = d.steeringControl || {};
-    const available = control.available === true;
+    const neutralLocked = !!(d.neutral && d.neutral.locked);
+    const available = control.available === true && !neutralLocked;
     // Предел руля берём из ответа сервера: ползунки, подписи и пресеты
     // подстраиваются под то, что реально принимает плата.
     syncSteerLimit(control);
@@ -2566,7 +2613,9 @@
     renderSteerPresetBar(d, motors, available, tractionActive);
 
     if (sourceStatus) {
-      if (!available && String(control.source || '') === 'master-peer') {
+      if (neutralLocked) {
+        sourceStatus.textContent = 'Нейтраль: перед рулением и тягой верните тормоз.';
+      } else if (!available && String(control.source || '') === 'master-peer') {
         sourceStatus.textContent = 'Руление и тяга — только на бортовом экране (порт 8090). Здесь показана телеметрия.';
       } else if (!available) {
         sourceStatus.textContent = 'Ручной поворот доступен только при RC_SLAM_SOURCE=master и подключённом UART мастера.';
@@ -2916,7 +2965,7 @@
     const drive = d.drive || {};
     const state = drive.maneuver || {};
     const active = !!state.active;
-    const available = !!(d.steeringControl && d.steeringControl.available);
+    const available = !!(d.steeringControl && d.steeringControl.available) && !(d.neutral && d.neutral.locked);
     const authorized = steeringAuthorized && available;
     const editing = document.activeElement && document.activeElement.id;
     MANEUVER_ORDER.forEach((id) => {
@@ -3072,7 +3121,7 @@
     const drive = (data || {}).drive || {};
     const servo = drive.servo || {};
     const states = servo.perModule || {};
-    return !data.estop && !!drive.available && SERVO_IDS.every((id) =>
+    return !data.estop && !(data.neutral && data.neutral.locked) && !!drive.available && SERVO_IDS.every((id) =>
       !(servoRuns.has('ALL') || servoRuns.has(id) || servoTargets[id]) ||
       !!(states[id] && states[id].canDrive));
   }
@@ -3114,7 +3163,7 @@
     const drive = d.drive || {};
     const servo = drive.servo || null;
     const enabled = !!servo && !!drive.available && steeringAuthorized;
-    const canDrive = enabled && !!servo.canDrive && !d.estop;
+    const canDrive = enabled && !!servo.canDrive && !d.estop && !(d.neutral && d.neutral.locked);
     speed.max = String(SERVO_MAX);
     speed.disabled = !canDrive || (servoRuns.size > 0 && !servoRuns.has('ALL'));
     renderServoButtons('ALL', !!canDrive);
@@ -3125,6 +3174,7 @@
     if (message) status.textContent = message;
     else if (!servo) status.textContent = 'Прямая тяга доступна при RC_SLAM_SOURCE=master.';
     else if (d.estop) status.textContent = DRIVE_REASON_TEXT.estop;
+    else if (d.neutral && d.neutral.locked) status.textContent = 'Сначала верните тормоз после нейтрали.';
     else if (!steeringAuthorized) status.textContent = 'Управление временно недоступно.';
     else if (!servo.canDrive) status.textContent = DRIVE_REASON_TEXT[servo.reason] || 'Нет связи с платами.';
     else if (run) status.textContent = (run.direction === 'forward' ? 'Вперёд' : 'Назад') + ' · движение включено, нажмите СТОП для остановки.';
@@ -3163,7 +3213,7 @@
     const reported = motor && motor.driveServoValue != null ? Number(motor.driveServoValue) : null;
     setText($('drive-module-rpm-' + id), rpmText(motor));
     const canDrive = supported && !!drive.available && steeringAuthorized &&
-      !data.estop && !!state && !!state.canDrive;
+      !data.estop && !(data.neutral && data.neutral.locked) && !!state && !!state.canDrive;
     if (slider) {
       slider.max = String(SERVO_MAX);
       slider.disabled = !canDrive || servoRuns.has('ALL');
@@ -3179,6 +3229,7 @@
     if (note && note.until > Date.now()) text = note.text;
     else if (!supported) text = 'прямая тяга недоступна';
     else if (data.estop) text = DRIVE_REASON_TEXT.estop;
+    else if (data.neutral && data.neutral.locked) text = 'сначала верните тормоз';
     else if (!steeringAuthorized) text = 'управление недоступно';
     else if (!state) text = 'нет телеметрии';
     else if (!state.canDrive) text = DRIVE_REASON_TEXT[state.reason] || 'не готово';
@@ -3246,7 +3297,7 @@
     const drive = data.drive || {};
     const servo = drive.servo || {};
     const state = id === 'ALL' ? servo : (servo.perModule || {})[id];
-    if (!steeringAuthorized || document.hidden || data.estop || !drive.available || !state || !state.canDrive || servoRuns.has(id)) return;
+    if (!steeringAuthorized || document.hidden || data.estop || (data.neutral && data.neutral.locked) || !drive.available || !state || !state.canDrive || servoRuns.has(id)) return;
     if ((id === 'ALL' && servoRuns.size) || (id !== 'ALL' && servoRuns.has('ALL'))) return;
     const value = id === 'ALL' ? servoCommonSpeed : servoSpeeds[id];
     if (value === 0) {
@@ -3395,10 +3446,14 @@
     const panel = $('swipe-motors-view');
     if (!panel) return;
     if (window.RCKeyboard) keyboardControl = window.RCKeyboard.create({
-      getState: () => lastData,
-      freshAt: () => lastLiveAt,
+      getState: () => (keyboardControl && keyboardControl.session() &&
+        keyboardDataSession === keyboardControl.session() ? keyboardData : lastData),
+      freshAt: () => (keyboardControl && keyboardControl.session() &&
+        keyboardDataSession === keyboardControl.session() ? keyboardDataAt : lastLiveAt),
+      onReady: () => { void fetchKeyboardState(); },
       stopManual: () => stopDrive(true)
     });
+    if (window.RCNeutral) neutralControl = window.RCNeutral.create({getState: () => lastData});
     // Другие органы управления сначала выключают WASD. Их первый клик не
     // включает другую тягу параллельно с ещё выполняющимся STOP.
     let blockedTarget = null;

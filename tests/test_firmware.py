@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -176,21 +177,28 @@ def test_firmware_has_no_usb_role_discovery():
     # Legacy addressed monitor commands remain compatible; the application
     # sends local commands to the manually selected port.
     assert 'classifyModuleToken' in text
-    # v17 добавляет счётчик SC, не меняя назначения USB.
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '17'
+    # v21 retains live control and adds checked compact telemetry.
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '21'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
     text = _text(WHEEL)
-    assert int(_const(text, "TELEMETRY_PERIOD_MS")) == 250
-    # @TLM выходит целиком: обрезанный блок сервер не разберёт.
-    assert int(_const(text, "TELEMETRY_LINE_CAPACITY")) == 260
+    assert int(_const(text, "FAST_TELEMETRY_PERIOD_MS")) == 30
+    assert int(_const(text, "FAST_TELEMETRY_MIN_SPACING_MS")) == 20
+    assert int(_const(text, "FULL_TELEMETRY_PERIOD_MS")) == 200
+    # Both frames are complete, checked, and fit at the worst permitted rate.
+    assert int(_const(text, "FAST_TELEMETRY_LINE_CAPACITY")) == 160
+    assert int(_const(text, "TELEMETRY_LINE_CAPACITY")) == 384
     assert "char line[TELEMETRY_LINE_CAPACITY];" in text
-    assert "if (txFree() >= TELEMETRY_LINE_CAPACITY) appendTelemetry();" in text
+    assert "char line[FAST_TELEMETRY_LINE_CAPACITY];" in text
+    assert "txFree() >= TELEMETRY_LINE_CAPACITY" in text
+    assert "txFree() >= FAST_TELEMETRY_LINE_CAPACITY" in text
+    assert "telemetry_urgent ? FAST_TELEMETRY_MIN_SPACING_MS : FAST_TELEMETRY_PERIOD_MS" in text
+    assert "telemetryCrc16" in text
     # Диагностический канал SC отделён от полей старой одометрии.
     for field in ("deg=", "tgt=", "moving=", "cal=", "cycle=", "calib=",
                   "opto=", "home=", "err=", "drive=", "fw=", "pot=", "pm=", "t=",
-                  "tach=0", "dmax=", "sv=", "duty=", "sc_rpm=", "sc_hz=", "sc_ppr=", "sc_count="):
+                  "tach=0", "dmax=", "sv=", "duty=", "sc_rpm=", "sc_hz=", "sc_ppr=", "sc_count=", "sc_recent=", "live_id=", "live_seq="):
         assert field in text, field
     telemetry = re.search(r'PSTR\("(@TLM [^"\n]+)', text).group(1)
     assert not any(token.startswith(("rpm=", "hz=", "ppr=")) for token in telemetry.split())
@@ -330,6 +338,23 @@ def test_firmware_simulation_scenarios(simulator):
     assert summary and summary.group(1) == summary.group(2), report
 
 
+def test_fast_and_full_simulated_frames_encode_the_same_instant(simulator):
+    """Compare actual firmware encoders, including CRC and active steering."""
+    from robot_control import slam
+    backend = slam.load_backend()
+    result = subprocess.run([str(simulator), "snapshot_dump"], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    short = next(line for line in lines if line.startswith("@F "))
+    full = next(line for line in lines if line.startswith("@TLM "))
+    fast = backend.parse_master_line(short, module="FR")
+    slow = backend.parse_master_line(full, module="FR")
+    assert fast is not None and fast == slow
+    assert fast["firmware"] == 21 and fast["liveId"] == 42 and fast["liveSeq"] == 3
+    assert fast["drivePercent"] == 20 and fast["moving"] and fast["scRecent"]
+    assert len(short) < len(full) / 2
+
+
 def test_server_parses_simulated_wheel_telemetry(simulator):
     """Строки @TLM настоящей прошивки (из симуляции) понимает сервер."""
     import importlib.util
@@ -355,7 +380,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 17 and frame["calibError"] == 0
+        assert frame["firmware"] == 21 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] is None
         assert frame["tach"] is False and frame["tachHz"] is None
         assert frame["scRpm"] == 0.0 and frame["scHz"] == 0 and frame["scPpr"] == 90
@@ -714,6 +739,76 @@ def test_wasd_in_real_browser_through_all_four_simulated_usb_boards(simulator, k
             process.communicate()
 
 
+@pytest.mark.skipif(
+    os.name != "posix" or not shutil.which("node") or
+    not os.environ.get("RC_TEST_CHROMIUM") or not os.environ.get("RC_TEST_PLAYWRIGHT_CORE"),
+    reason="для нейтрали нужны Chromium и playwright-core",
+)
+@pytest.mark.parametrize("remote", [False, True], ids=["onboard", "remote-proxy"])
+def test_neutral_in_real_browser_through_four_simulated_boards(
+        simulator, kiosk_client, app, operator, monkeypatch, tmp_path, remote):
+    """Браузер и при необходимости авторизованный пульт → борт → 4 PTY."""
+    import threading
+    from werkzeug.serving import make_server
+    from robot_control import slam
+
+    base = tmp_path / "neutral-wheel"
+    process = subprocess.Popen([str(simulator), "pty", str(base)], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+    source = board_server = web_server = None
+    threads = []
+
+    def wait_for(predicate, timeout=10):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if predicate():
+                return True
+            time.sleep(0.05)
+        return bool(predicate())
+
+    try:
+        ports = {m: f"{base}-{m}" for m in MODULE_IDS}
+        assert wait_for(lambda: all(Path(port).exists() for port in ports.values()))
+        source = slam.load_backend().MasterSource(list(ports.values()), module_ports=ports)
+        kiosk_client.application.extensions["rc_slam"].source = source
+        assert wait_for(lambda: source.servo_drive_status()["canDrive"]), source.read()
+        board_server = make_server("127.0.0.1", 0, kiosk_client.application, threaded=True)
+        thread = threading.Thread(target=board_server.serve_forever, daemon=True)
+        thread.start()
+        threads.append(thread)
+        board_origin = f"http://127.0.0.1:{board_server.server_port}"
+        origin = board_origin
+        if remote:
+            monkeypatch.setenv("RC_SLAM_PEER_URL", board_origin + "/api/kiosk_state")
+            web_server = make_server("127.0.0.1", 0, app, threaded=True)
+            thread = threading.Thread(target=web_server.serve_forever, daemon=True)
+            thread.start()
+            threads.append(thread)
+            origin = f"http://127.0.0.1:{web_server.server_port}"
+        result = subprocess.run(
+            [shutil.which("node"), str(ROOT / "tests/js/neutral_browser.mjs"), origin,
+             board_origin, "remote" if remote else "onboard"],
+            capture_output=True, text=True, timeout=90,
+        )
+        assert result.returncode == 0, result.stdout + "\n" + result.stderr
+        assert "four simulated USB boards: OK" in result.stdout
+    finally:
+        for server in (web_server, board_server):
+            if server is not None:
+                server.shutdown()
+                server.server_close()
+        for thread in threads:
+            thread.join(timeout=3)
+        if source is not None:
+            source._stop = True
+        process.terminate()
+        try:
+            process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+
+
 @pytest.mark.skipif(os.name != "posix", reason="PTY нужны для симуляции USB")
 def test_sc_maneuver_through_four_simulated_usb_boards(simulator, kiosk_client, tmp_path):
     """HTTP-манёвр проходит через реальный backend и четыре fw17; SC модель игрушечная."""
@@ -763,3 +858,121 @@ def test_sc_maneuver_through_four_simulated_usb_boards(simulator, kiosk_client, 
         except subprocess.TimeoutExpired:
             process.kill()
             process.communicate()
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or not shutil.which("node") or
+    not os.environ.get("RC_TEST_CHROMIUM") or not os.environ.get("RC_TEST_PLAYWRIGHT_CORE"),
+    reason="для браузерной проверки нужны Chromium и playwright-core",
+)
+def test_remote_wasd_fast_wheel_state_through_four_simulated_boards(
+        simulator, kiosk_client, app, operator, monkeypatch, tmp_path):
+    """Авторизованный браузер → proxy → борт → четыре прошивки, включая потерю канала."""
+    import threading
+    from werkzeug.serving import make_server
+    from robot_control import slam
+
+    base = tmp_path / "remote-wasd-wheel"
+    env = dict(os.environ, RC_SIM_SC_FOLLOW_DRIVE="1")
+    process = subprocess.Popen([str(simulator), "pty", str(base)], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, env=env)
+    source = board_server = web_server = None
+    threads = []
+
+    def wait_for(predicate, timeout=10):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if predicate():
+                return True
+            time.sleep(0.05)
+        return bool(predicate())
+
+    try:
+        ports = {m: f"{base}-{m}" for m in MODULE_IDS}
+        assert wait_for(lambda: all(Path(port).exists() for port in ports.values()))
+        source = slam.load_backend().MasterSource(module_ports=ports)
+        kiosk_client.application.extensions["rc_slam"].source = source
+        assert wait_for(lambda: source.servo_drive_status()["canDrive"]), source.read()
+        for module in MODULE_IDS:
+            assert source.zero_module(module)["ok"]
+        assert wait_for(lambda: all(m.get("homed") for m in source.read()["motors"])), source.read()
+        board_server = make_server("127.0.0.1", 0, kiosk_client.application, threaded=True)
+        board_origin = f"http://127.0.0.1:{board_server.server_port}"
+        monkeypatch.setenv("RC_SLAM_PEER_URL", board_origin + "/api/kiosk_state")
+        web_server = make_server("127.0.0.1", 0, app, threaded=True)
+        for server in (board_server, web_server):
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            threads.append(thread)
+        result = subprocess.run(
+            [shutil.which("node"), str(ROOT / "tests/js/keyboard_remote_browser.mjs"),
+             f"http://127.0.0.1:{web_server.server_port}", board_origin],
+            capture_output=True, text=True, timeout=90,
+        )
+        assert result.returncode == 0, result.stdout + "\n" + result.stderr
+        assert "four simulated boards: OK" in result.stdout
+    finally:
+        for server in (web_server, board_server):
+            if server is not None:
+                server.shutdown()
+                server.server_close()
+        for thread in threads:
+            thread.join(timeout=3)
+        if source is not None:
+            source._stop = True
+        process.terminate()
+        try:
+            process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="для интеграции нужны POSIX псевдотерминалы")
+def test_latency_cli_via_onboard_server_and_four_simulated_boards(simulator, kiosk_client, tmp_path):
+    """Real HTTP/STOP/ACK, but no real serial port or motor is touched."""
+    import threading
+    from werkzeug.serving import make_server
+    from robot_control import slam
+
+    base = tmp_path / "latency-wheel"
+    process = subprocess.Popen([str(simulator), "pty", str(base)], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.PIPE, text=True)
+    source = server = thread = None
+
+    def wait_for(predicate, timeout=8):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if predicate():
+                return True
+            time.sleep(0.05)
+        return bool(predicate())
+
+    try:
+        ports = {m: f"{base}-{m}" for m in MODULE_IDS}
+        assert wait_for(lambda: all(Path(port).exists() for port in ports.values()))
+        source = slam.load_backend().MasterSource(module_ports=ports)
+        kiosk_client.application.extensions["rc_slam"].source = source
+        assert wait_for(lambda: len(source.modules) == 4)
+        server = make_server("127.0.0.1", 0, kiosk_client.application, threaded=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "measure_wheel_latency.py"),
+             "--url", f"http://127.0.0.1:{server.server_port}", "--confirm-stop", "--count", "3"],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert result.returncode == 0, result.stdout + "\n" + result.stderr
+        assert "all: n=3" in result.stdout and all(f"{m}: n=3" in result.stdout for m in MODULE_IDS)
+        assert all(m["drivePercent"] == 0 and not m["moving"] for m in source.read()["motors"])
+    finally:
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if thread is not None:
+            thread.join(timeout=3)
+        if source is not None:
+            source._stop = True
+            source._dispatch_wakeup.set()
+        process.terminate()
+        process.wait(timeout=3)

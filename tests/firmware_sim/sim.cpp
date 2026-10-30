@@ -12,6 +12,7 @@
 #include <chrono>
 #include <fcntl.h>
 #include <functional>
+#include <sstream>
 #include <sys/wait.h>
 #include <termios.h>
 #include <thread>
@@ -154,6 +155,33 @@ static long count_since(const sim::Board& board, const char* text, size_t from) 
     pos += std::strlen(text);
   }
   return n;
+}
+
+struct FastFrame {
+  unsigned firmware = 0, status = 0, maximum = 0, servo = 0, hz = 0, ppr = 0, recent = 0, neutral_lock = 0;
+  long deg = 0, target = 0;
+  int drive = 0;
+  unsigned long rpm10 = 0, edges = 0, brake = 0, neutral = 0, live = 0, sequence = 0, time = 0;
+};
+
+static bool latest_fast_frame(const sim::Board& board, FastFrame* out) {
+  const size_t start = board.serial.output.rfind("@F ");
+  if (start == std::string::npos) return false;
+  const size_t end = board.serial.output.find("\r\n", start);
+  if (end == std::string::npos) return false;
+  const std::string line = board.serial.output.substr(start, end - start);
+  const size_t split = line.rfind(' ');
+  if (split == std::string::npos || line.size() - split != 5) return false;
+  const std::string payload = line.substr(0, split);
+  char* tail = nullptr;
+  const unsigned long expected = std::strtoul(line.c_str() + split + 1, &tail, 16);
+  if (!tail || *tail || expected != wheel_fr::telemetryCrc16(payload.c_str(), (uint16_t)payload.size())) return false;
+  std::istringstream input(payload);
+  std::string prefix;
+  input >> prefix >> out->firmware >> out->deg >> out->target >> out->status >> out->drive
+        >> out->maximum >> out->servo >> out->rpm10 >> out->hz >> out->ppr >> out->edges
+        >> out->recent >> out->brake >> out->neutral >> out->neutral_lock >> out->live >> out->sequence >> out->time;
+  return !input.fail() && prefix == "@F";
 }
 
 static void check_signals(const sim::Board& board) {
@@ -848,7 +876,7 @@ static void scenario_system_calibrate_all() {
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=17"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=21"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -965,7 +993,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v17"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v21"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -1103,6 +1131,25 @@ static void scenario_preset_burst() {
           board->serial.output.c_str());
     check_signals(*board);
   }
+}
+
+// Identical instant encoded both ways for the server's cross-protocol test.
+static void scenario_snapshot_dump() {
+  boot({&board_fr});
+  board_fr.serial.send("z");
+  board_fr.serial.send("b 42");
+  sim::run_for_ms(5);
+  board_fr.serial.send("j 42 2 20 0");
+  board_fr.serial.send("j 42 3 20 25");
+  sim::run_for_ms(10);
+  board_fr.tach_change();
+  sim::run_for_ms(1);
+  board_fr.serial.output.clear();
+  wheel_fr::tx_position = wheel_fr::tx_length = 0;
+  wheel_fr::appendFastTelemetry();
+  wheel_fr::appendTelemetry();
+  wheel_fr::txPump();
+  std::fwrite(board_fr.serial.output.data(), 1, board_fr.serial.output.size(), stdout);
 }
 
 static void scenario_tlm_dump() {
@@ -1596,7 +1643,359 @@ static void scenario_tach_rollover() {
         "оборотомер возобновляет показ после паузы");
 }
 
-// The longer fw17 frame must fit as a whole and resume after TX congestion.
+// Freewheel requires a fresh, one-shot brake ACK and its own heartbeat.
+static void scenario_neutral() {
+  boot({&board_fr});
+  board_fr.serial.send("z");
+  board_fr.serial.send("n 42");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr) && !FR::neutral_active, "n без tagged b не снимает тормоз");
+  board_fr.serial.send("b 42");
+  board_fr.serial.send("n 42");
+  sim::run_for_ms(5);
+  CHECK(FR::neutral_active && FR::neutral_id == 42 && FR::brake_id == 0 &&
+        board_fr.level[2] == LOW && board_fr.level[5] == LOW && servo_value(board_fr) == 0,
+        "нейтраль: выходы выключены, тормоз отпущен, Servo=0");
+  board_fr.serial.send("v 80");
+  board_fr.serial.send("t 20");
+  board_fr.serial.send("w 45");
+  board_fr.serial.send("k");
+  sim::run_for_ms(50);
+  CHECK(FR::neutral_active && !FR::drive_active && !FR::motorBusy() &&
+        board_fr.level[2] == LOW && board_fr.level[5] == LOW,
+        "движение, прямой Servo и калибровка запрещены на нейтрали");
+  // SC импульсы имитируют ручное перекатывание после включения нейтрали.
+  board_fr.tach_period_us = 10000;
+  board_fr.tach_next_edge_us = sim::now_us + board_fr.tach_period_us;
+  for (int i = 0; i < 5; ++i) {
+    board_fr.serial.send("n 42");
+    sim::run_for_ms(200);
+  }
+  CHECK(FR::neutral_active && FR::tach_display_rpm_x10 > 10 && has(board_fr, "neutral_id=42"),
+        "heartbeat сохраняет нейтраль при ручном вращении по SC");
+  board_fr.tach_period_us = 0;
+  board_fr.serial.send("b");
+  board_fr.serial.send("n 42");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr) && !FR::neutral_active, "запоздавший n после STOP не отпускает тормоз");
+  sim::run_for_ms(2000); // дождаться нуля оборотов перед повторным включением
+  board_fr.serial.send("b 43");
+  board_fr.serial.send("n 43");
+  sim::run_for_ms(5);
+  CHECK(FR::neutral_active, "новый tagged b разрешает новую нейтраль");
+  sim::run_for_ms(700);
+  CHECK(drive_idle(board_fr) && !FR::neutral_active, "потеря heartbeat включает тормоз");
+  board_fr.serial.send("n 43");
+  board_fr.serial.send("v 80");
+  board_fr.serial.send("t 30");
+  board_fr.serial.send("b");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr) && !FR::neutral_active && FR::neutral_inhibit,
+        "старые n/v/t и обычный b после watchdog не возобновляют движение");
+  board_fr.serial.send("b 444");
+  board_fr.serial.send("v 20");
+  sim::run_for_ms(5);
+  CHECK(!FR::neutral_inhibit && FR::drive_active && thrust_on(board_fr),
+        "только новый tagged b снова разрешает тягу");
+  board_fr.serial.send("b 44");
+  board_fr.serial.send("n 44");
+  board_fr.serial.send("t 0");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr) && !FR::neutral_active, "t 0 остаётся аварийным тормозом");
+  board_fr.serial.send("b 45");
+  board_fr.serial.send("n 45");
+  board_fr.serial.send("n 46");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr) && !FR::neutral_active, "чужой id снимает нейтраль и тормозит");
+  board_fr.serial.send("b 47");
+  sim::run_for_ms(5);
+  FR::tach_display_rpm_x10 = 100;
+  board_fr.serial.send("n 47");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr) && !FR::neutral_active, "вращающееся колесо не отпускаем");
+  FR::tach_display_rpm_x10 = 0;
+  board_fr.serial.send("b 48");
+  sim::run_for_ms(610);
+  board_fr.serial.send("n 48");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr) && !FR::neutral_active, "просроченный tagged b не разрешает первый n");
+}
+
+// An edge must be noticed immediately, even before the 500 ms RPM sample.
+static void scenario_recent_sc() {
+  boot({&board_fr});
+  board_fr.serial.send("z");
+  sim::run_for_ms(200);
+  CHECK(wheel_fr::tach_display_rpm_x10 == 0 && !wheel_fr::tachMotionRecent(),
+        "начальное отсутствие импульсов не выдумывает вращение");
+  board_fr.serial.output.clear();
+  board_fr.tach_change();
+  sim::run_for_ms(40);
+  CHECK(wheel_fr::tach_display_rpm_x10 == 0 && wheel_fr::tachMotionRecent(),
+        "первый импульс виден сразу, хотя RPM ещё не обновился");
+  FastFrame recent_frame;
+  CHECK(latest_fast_frame(board_fr, &recent_frame) && recent_frame.recent == 1 && recent_frame.rpm10 == 0,
+        "переход SC публикуется до следующего окна RPM");
+  board_fr.serial.send("b 901");
+  sim::run_for_ms(2);
+  board_fr.serial.send("n 901");
+  sim::run_for_ms(2);
+  CHECK(!wheel_fr::neutral_active && board_fr.level[5] == HIGH,
+        "один недавний импульс блокирует нейтраль даже при RPM=0");
+  sim::run_for_ms(1600);
+  CHECK(!wheel_fr::tachMotionRecent(), "после достаточной тишины недавних импульсов нет");
+  board_fr.serial.send("b 902");
+  sim::run_for_ms(2);
+  board_fr.serial.send("n 902");
+  sim::run_for_ms(2);
+  CHECK(wheel_fr::neutral_active, "после тишины и свежего STOP нейтраль разрешается");
+
+  // Hold time follows three periods, bounded to 300 ms..1500 ms.
+  wheel_fr::tach_has_edge = true;
+  wheel_fr::tach_last_edge_us = 100000;
+  wheel_fr::tach_last_period_us = 50000;
+  sim::now_us = 399999;
+  CHECK(wheel_fr::tachMotionRecent(), "короткий период удерживает признак 300 мс");
+  sim::now_us = 400001;
+  CHECK(!wheel_fr::tachMotionRecent(), "после нижней границы признак очищен");
+  wheel_fr::tach_last_period_us = 900000;
+  sim::now_us = 1599999;
+  CHECK(wheel_fr::tachMotionRecent(), "длинный период ограничен 1500 мс");
+  sim::now_us = 1600001;
+  CHECK(!wheel_fr::tachMotionRecent(), "после верхней границы признак очищен");
+
+  // Unsigned micros arithmetic must survive its ~71-minute rollover.
+  wheel_fr::tach_has_edge = true;
+  wheel_fr::tach_last_edge_us = 0xFFFFFFF0UL;
+  wheel_fr::tach_last_period_us = 100000;
+  sim::now_us = 0x100000000LL + 10000;
+  CHECK(wheel_fr::tachMotionRecent(), "свежий SC после переполнения micros()");
+  sim::now_us += 400000;
+  CHECK(!wheel_fr::tachMotionRecent(), "старый SC после переполнения micros()");
+}
+
+// Live steering is opt-in and bound to a fresh tagged STOP and a watchdog.
+static void scenario_live_steering() {
+  boot({&board_fr});
+  board_fr.serial.send("z");
+  sim::run_for_ms(5);
+  board_fr.serial.send("j 101 1 20 0");
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr) && wheel_fr::live_id == 0, "j без подтверждённого тормоза отклонён");
+
+  board_fr.serial.send("b 101");
+  sim::run_for_ms(5);
+  board_fr.serial.send("j 101 1 20 25");
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr), "первый запуск не меняет неподтверждённый угол");
+  board_fr.serial.send("b 102");
+  sim::run_for_ms(5);
+  board_fr.serial.send("j 102 1 20 0.5");
+  sim::run_for_ms(5);
+  CHECK(thrust_on(board_fr) && !wheel_fr::motorBusy() && wheel_fr::live_id == 102 && wheel_fr::live_seq == 1,
+        "старт на подтверждённом угле без неожиданной начальной коррекции");
+  board_fr.serial.send("j 102 2 20 25");
+  sim::run_for_ms(100);
+  CHECK(thrust_on(board_fr) && wheel_fr::motorBusy() && wheel_fr::live_seq == 2,
+        "руль поворачивается, а тяга остаётся включена");
+  const int32_t first_step = wheel_fr::stepNow();
+  board_fr.serial.send("j 102 1 20 -25");  // stale sequence cannot change target or refresh TTL
+  sim::run_for_ms(10);
+  CHECK(wheel_fr::live_target_step == wheel_fr::degreesToSteps(25) && wheel_fr::live_seq == 2,
+        "устаревшая команда не меняет цель руля");
+  board_fr.serial.send("j 102 3 20 25");
+  sim::run_for_ms(100);
+  CHECK(wheel_fr::stepNow() > first_step && thrust_on(board_fr),
+        "одинаковый heartbeat не перезапускает ход руля");
+  FastFrame live_frame;
+  CHECK(latest_fast_frame(board_fr, &live_frame) && live_frame.live == 102 && live_frame.sequence == 3,
+        "короткий кадр подтверждает сессию и порядковый номер");
+
+  board_fr.serial.send("j 102 4 -20 25");
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr) && !wheel_fr::motorBusy() && wheel_fr::live_id == 0,
+        "реверс без STOP снимает тягу и останавливает руление");
+  board_fr.serial.send("j 102 5 20 0");
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr), "устаревший heartbeat не возобновляет тягу");
+
+  board_fr.serial.send("z");
+  board_fr.serial.send("b 103");
+  sim::run_for_ms(5);
+  board_fr.serial.send("j 103 1 20 0");
+  board_fr.serial.send("j 103 2 20 90");
+  sim::run_for_ms(100);
+  CHECK(thrust_on(board_fr) && wheel_fr::motorBusy(), "подготовлен ход для проверки watchdog");
+  sim::run_for_ms(660);
+  CHECK(!thrust_on(board_fr) && !wheel_fr::motorBusy() && wheel_fr::live_id == 0,
+        "watchdog останавливает и тягу, и руль");
+  board_fr.serial.send("j 103 3 20 90");
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr) && !wheel_fr::motorBusy(), "поздний j после watchdog не запускает моторы");
+
+  board_fr.serial.send("z");
+  board_fr.serial.send("b 104");
+  sim::run_for_ms(5);
+  board_fr.serial.send("j 104 1 20 0");
+  board_fr.serial.send("j 104 2 20 90");
+  sim::run_for_ms(30);
+  board_fr.serial.send("b 105");
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr) && !wheel_fr::motorBusy() && wheel_fr::brake_id == 105,
+        "tagged STOP прерывает руление на ходу");
+  board_fr.serial.send("j 104 3 20 90");
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr), "старый j после нового STOP не возобновляет тягу");
+
+  board_fr.serial.send("z");
+  board_fr.serial.send("b 106");
+  sim::run_for_ms(5);
+  board_fr.serial.send("j 106 1 20 0");
+  board_fr.serial.send("j 106 2 20 90");
+  sim::run_for_ms(30);
+  board_fr.serial.send("w -90");  // ordinary commands cannot take over live
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr) && !wheel_fr::motorBusy() && wheel_fr::live_id == 0,
+        "обычная команда не перехватывает руление и останавливает live");
+  board_fr.serial.send("j 106 3 20 90");
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr), "heartbeat после перехвата не возобновляет тягу");
+
+  board_fr.serial.send("z");
+  board_fr.serial.send("b 107");
+  sim::run_for_ms(5);
+  board_fr.tach_change();
+  board_fr.serial.send("j 107 1 20 0");
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr) && wheel_fr::tach_display_rpm_x10 == 0,
+        "недавний SC блокирует первый live-старт, даже когда RPM ещё ноль");
+
+  sim::run_for_ms(1600);
+  board_fr.serial.send("z");
+  board_fr.serial.send("b 108");
+  sim::run_for_ms(5);
+  wheel_fr::brake_id_ms = (uint32_t)millis() - wheel_fr::LIVE_START_TIMEOUT_MS - 1;
+  board_fr.serial.send("j 108 1 20 0");
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr), "старый tagged тормоз не разрешает первый live-пакет");
+  board_fr.serial.send("b 109");
+  sim::run_for_ms(5);
+  board_fr.serial.send("j 109 1 20 0");
+  sim::run_for_ms(5);
+  wheel_fr::last_drive_command_ms = (uint32_t)millis() - wheel_fr::DRIVE_COMMAND_TIMEOUT_MS - 1;
+  board_fr.serial.send("j 109 2 20 25");
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr) && !wheel_fr::motorBusy(),
+        "запоздавший heartbeat не обходит watchdog даже до его следующего тика");
+}
+
+static void scenario_quiet_stop() {
+  boot({&board_fr});
+  board_fr.serial.send("z");
+  board_fr.serial.send("b 301");
+  sim::run_for_ms(5);
+  board_fr.serial.send("j 301 1 20 0");
+  board_fr.serial.send("j 301 2 20 25");
+  sim::run_for_ms(10);
+  CHECK(thrust_on(board_fr) && wheel_fr::motorBusy(), "подготовлена тяга и руление");
+  board_fr.serial.output.clear();
+  board_fr.serial.send("s q\nb 302");
+  sim::run_for_ms(5);
+  CHECK(!thrust_on(board_fr) && !wheel_fr::motorBusy() && wheel_fr::brake_id == 302,
+        "тихий STOP и tagged brake последовательно гасят тягу и руление");
+  CHECK(!has(board_fr, "ПАУЗА."), "тихий STOP не задерживает ответ длинной обычной заметкой");
+  board_fr.serial.send("s");
+  sim::run_for_ms(5);
+  CHECK(has(board_fr, "ПАУЗА."), "обычный s сохраняет текст монитора");
+}
+
+// Fast frames are bounded, CRC-checked and reflect applied STOP/steering state.
+static void scenario_fast_telemetry() {
+  boot({&board_fr});
+  sim::run_for_ms(350);
+  board_fr.serial.output.clear();
+  wheel_fr::last_fast_telemetry_ms = wheel_fr::last_telemetry_ms = (uint32_t)millis();
+  board_fr.serial.send("b 123");
+  sim::run_for_ms(15);
+  CHECK(!has(board_fr, "@F "), "частые быстрые кадры ограничены для UART");
+  sim::run_for_ms(8);
+  FastFrame fast;
+  CHECK(latest_fast_frame(board_fr, &fast) && fast.brake == 123 && fast.drive == 0,
+        "быстрый кадр подтверждает применённый STOP с CRC до длинного периода");
+  CHECK(!has(board_fr, "@TLM "), "подтверждение не ждёт длинного кадра");
+
+  // An occupied TX buffer must neither truncate nor forget the newest ACK.
+  board_fr.serial.output.clear();
+  board_fr.serial.writable = 0;
+  wheel_fr::tx_position = 0;
+  wheel_fr::tx_length = sizeof(wheel_fr::tx_buf) - wheel_fr::FAST_TELEMETRY_LINE_CAPACITY + 1;
+  std::memset(wheel_fr::tx_buf, 'x', wheel_fr::tx_length);
+  wheel_fr::tx_buf[wheel_fr::tx_length - 1] = '\n';
+  wheel_fr::last_fast_telemetry_ms = wheel_fr::last_telemetry_ms = (uint32_t)millis();
+  board_fr.serial.send("b 456");
+  sim::run_for_ms(100);
+  CHECK(wheel_fr::brake_id == 456 && wheel_fr::telemetry_urgent,
+        "занятый TX не должен терять запрос подтверждения");
+  CHECK(board_fr.serial.output.empty(), "при занятом TX нельзя выдать обрезанный кадр");
+  board_fr.serial.writable = 63;
+  sim::run_for_ms(5);
+  CHECK(has(board_fr, "\n@F ") && latest_fast_frame(board_fr, &fast) && fast.brake == 456,
+        "последний ACK отправлен целиком после освобождения TX");
+
+  // Worst-case reservations and spacing keep a sustained command burst below
+  // nominal 115200-baud 8N1 capacity even with regular compatibility frames.
+  sim::run_for_ms(50);
+  board_fr.serial.output.clear();
+  wheel_fr::last_fast_telemetry_ms = wheel_fr::last_telemetry_ms = (uint32_t)millis();
+  for (int i = 1; i <= 40; ++i) {
+    board_fr.serial.send("b " + std::to_string(1000 + i));
+    sim::run_for_ms(5);
+  }
+  sim::run_for_ms(35);
+  CHECK(count(board_fr, "@F ") <= 12 && count(board_fr, "@TLM ") <= 2,
+        "частые команды не должны забить UART кадрами: fast=%ld full=%ld",
+        count(board_fr, "@F "), count(board_fr, "@TLM "));
+  CHECK(latest_fast_frame(board_fr, &fast) && fast.brake == 1040,
+        "последний короткий кадр содержит актуальный ACK");
+
+  // Feedback settling is busy even if the stepper is temporarily stationary.
+  wheel_fr::zero_set = true;
+  wheel_fr::feedback_pending = true;
+  wheel_fr::feedback_wait_ms = (uint32_t)millis() + 200;
+  CHECK((wheel_fr::moduleStatus() & wheel_fr::STATUS_MOVING) != 0 && !wheel_fr::localDriveAllowed(),
+        "пауза перед доводкой не является подтверждённой остановкой руля");
+  board_fr.serial.send("b 2001");
+  sim::run_for_ms(5);
+  board_fr.serial.send("n 2001");
+  sim::run_for_ms(5);
+  CHECK(!wheel_fr::neutral_active && board_fr.level[5] == HIGH,
+        "нейтраль не включается до завершения доводки");
+  sim::run_for_ms(35);
+  CHECK(latest_fast_frame(board_fr, &fast) && (fast.status & wheel_fr::STATUS_MOVING),
+        "доводка публикуется как движущийся руль");
+  board_fr.serial.output.clear();
+  wheel_fr::feedback_pending = false;
+  sim::run_for_ms(35);
+  CHECK(latest_fast_frame(board_fr, &fast) && !(fast.status & wheel_fr::STATUS_MOVING),
+        "завершение доводки публикуется без команды");
+
+  board_fr.serial.output.clear();
+  wheel_fr::last_fast_telemetry_ms = wheel_fr::last_telemetry_ms = (uint32_t)millis();
+  sim::run_for_ms(200);
+  CHECK(count(board_fr, "@F ") >= 6 && count(board_fr, "@F ") <= 7 && count(board_fr, "@TLM ") == 1,
+        "без событий: короткие каждые 30 мс, совместимый полный каждые 200 мс");
+
+  board_fr.serial.output.clear();
+  sim::now_us = ((int64_t)UINT32_MAX - 10) * 1000;
+  sim::next_tick_us = sim::now_us + 50;
+  wheel_fr::last_fast_telemetry_ms = wheel_fr::last_telemetry_ms = (uint32_t)millis();
+  board_fr.serial.send("b 3001");
+  sim::run_for_ms(25);
+  CHECK(latest_fast_frame(board_fr, &fast) && fast.brake == 3001 && fast.time < 50,
+        "быстрое подтверждение переживает переполнение millis()");
+}
+
+// Both fw21 frames must fit as a whole and resume after TX congestion.
 static void scenario_telemetry_capacity() {
   boot({&board_fr});
   wheel_fr::tx_position = wheel_fr::tx_length = 0;
@@ -1611,16 +2010,28 @@ static void scenario_telemetry_capacity() {
   wheel_fr::tach_display_hz = UINT16_MAX;
   wheel_fr::tach_edges_total = UINT32_MAX;
   wheel_fr::brake_id = INT32_MAX;
+  wheel_fr::neutral_id = INT32_MAX - 1;
+  wheel_fr::live_id = INT32_MAX - 1;
+  wheel_fr::live_seq = INT32_MAX - 1;
   wheel_fr::appendTelemetry();
   const std::string full(wheel_fr::tx_buf, wheel_fr::tx_length);
   CHECK(!full.empty() && full.size() < wheel_fr::TELEMETRY_LINE_CAPACITY,
         "максимально длинный @TLM помещается в локальный буфер");
-  CHECK(full.find("sc_rpm=429496729.5 sc_hz=65535 sc_ppr=90 sc_count=4294967295 brake_id=2147483647 t=4294967295\r\n") != std::string::npos,
+  CHECK(full.find("sc_rpm=429496729.5 sc_hz=65535 sc_ppr=90 sc_count=4294967295 sc_recent=0 brake_id=2147483647 neutral_id=2147483646 neutral_lock=0 live_id=2147483646 live_seq=2147483646 t=4294967295 crc=") != std::string::npos,
         "максимально длинный @TLM целиком, включая конец: %s", full.c_str());
+  wheel_fr::tx_position = wheel_fr::tx_length = 0;
+  CHECK(wheel_fr::appendFastTelemetry(), "максимальный быстрый кадр помещается");
+  CHECK(wheel_fr::tx_length < wheel_fr::FAST_TELEMETRY_LINE_CAPACITY, "быстрый кадр меньше буфера");
+  board_fr.serial.output.assign(wheel_fr::tx_buf, wheel_fr::tx_length);
+  FastFrame fast;
+  CHECK(latest_fast_frame(board_fr, &fast) && fast.brake == INT32_MAX && fast.edges == UINT32_MAX &&
+        fast.live == INT32_MAX - 1 && fast.sequence == INT32_MAX - 1,
+        "максимальный быстрый кадр целый и содержит верную CRC");
 
   // With one byte less than the reserved capacity the frame is skipped, not
   // truncated; once TX drains, the next period must deliver complete data.
   sim::now_us = 5000;
+  wheel_fr::live_id = wheel_fr::live_seq = 0;
   wheel_fr::current_step = wheel_fr::target_step = 0;
   wheel_fr::drive_percent = wheel_fr::drive_servo_value = 0;
   wheel_fr::tach_display_rpm_x10 = wheel_fr::tach_display_hz = 0;
@@ -1631,13 +2042,14 @@ static void scenario_telemetry_capacity() {
   wheel_fr::tx_buf[wheel_fr::tx_length - 1] = '\n';
   board_fr.serial.output.clear();
   board_fr.serial.writable = 0;  // имитируем переполненный аппаратный UART
-  wheel_fr::last_telemetry_ms = (uint32_t)millis() - wheel_fr::TELEMETRY_PERIOD_MS;
+  wheel_fr::last_fast_telemetry_ms = (uint32_t)millis();
+  wheel_fr::last_telemetry_ms = (uint32_t)millis() - wheel_fr::FULL_TELEMETRY_PERIOD_MS;
   wheel_fr::loop();
   CHECK(board_fr.serial.output.empty() && wheel_fr::tx_position == 0 &&
         wheel_fr::tx_length == sizeof(wheel_fr::tx_buf) - wheel_fr::TELEMETRY_LINE_CAPACITY + 1,
         "при занятом TX кадр не обрезается и не дописывается в буфер");
   board_fr.serial.writable = 63;
-  wheel_fr::last_telemetry_ms = (uint32_t)millis() - wheel_fr::TELEMETRY_PERIOD_MS;
+  wheel_fr::last_telemetry_ms = (uint32_t)millis() - wheel_fr::FULL_TELEMETRY_PERIOD_MS;
   wheel_fr::loop();
   CHECK(has(board_fr, "\r\n@TLM deg=") && has(board_fr, "sc_ppr=90 sc_count=") &&
         board_fr.serial.output.size() >= 2 &&
@@ -1688,6 +2100,11 @@ static const Scenario SCENARIOS[] = {
     {"mirrored_wheels", scenario_mirrored_wheels},
     {"tach_display", scenario_tach_display},
     {"tach_rollover", scenario_tach_rollover},
+    {"neutral", scenario_neutral},
+    {"recent_sc", scenario_recent_sc},
+    {"live_steering", scenario_live_steering},
+    {"quiet_stop", scenario_quiet_stop},
+    {"fast_telemetry", scenario_fast_telemetry},
     {"telemetry_capacity", scenario_telemetry_capacity},
 };
 
@@ -1705,6 +2122,11 @@ static int run_one(const Scenario& scenario) {
 
 int main(int argc, char** argv) {
   if (argc > 2 && std::strcmp(argv[1], "pty") == 0) return run_pty(argv[2]);
+  if (argc > 1 && std::strcmp(argv[1], "snapshot_dump") == 0) {
+    bind_boards();
+    scenario_snapshot_dump();
+    return failures ? 1 : 0;
+  }
   if (argc > 1 && std::strcmp(argv[1], "tlm_dump") == 0) {
     bind_boards();
     scenario_tlm_dump();
