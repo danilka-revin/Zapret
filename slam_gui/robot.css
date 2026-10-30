@@ -1767,7 +1767,7 @@ body.swipe-open .kiosk {
 .steer-actions button.steer-calib { grid-column: span 2; border-color: rgba(192, 80, 90, .5); background: rgba(192, 80, 90, .10); color: var(--accent-strong); }
 .steer-actions button.steer-origin { grid-column: span 2; border-color: rgba(255,196,107,.5); color: var(--warn); }
 .steer-actions button.steer-calib[hidden] + button.steer-origin { grid-column: 1 / -1; }
-/* Тяга одного колеса в карточке: своя скорость, удержание и стоп. Отделена
+/* Тяга одного колеса в карточке: своя скорость, направление и стоп. Отделена
    линией от руления, чтобы «Повернуть» не путали с «вперёд». */
 .steer-drive {
   display: flex;
@@ -1785,6 +1785,12 @@ body.swipe-open .kiosk {
 .steer-actions button.steer-drive-fwd,
 .steer-actions button.steer-drive-back { min-height: 40px; font-size: 13px; touch-action: none; user-select: none; }
 .steer-actions button.steer-drive-fwd { border-color: rgba(120, 200, 140, .55); background: rgba(120, 200, 140, .10); }
+.steer-actions button.steer-drive-fwd.is-active,
+.steer-actions button.steer-drive-back.is-active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--panel-2);
+}
 .steer-actions button.steer-drive-stop { border-color: rgba(192, 80, 90, .55); color: var(--accent-strong); background: rgba(192, 80, 90, .12); }
 .steer-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: -4px; font-size: 11px; font-weight: 800; color: var(--muted); }
 .steer-meta span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

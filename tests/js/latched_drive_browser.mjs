@@ -1,0 +1,127 @@
+/* Optional full-stack check: real Chromium -> kiosk API -> four PTY firmware
+ * simulators. Set RC_TEST_PLAYWRIGHT_CORE to playwright-core's entry point and
+ * RC_TEST_CHROMIUM to the Chromium executable; tests/test_firmware.py starts
+ * the temporary HTTP server and the simulated USB ports. No real motors. */
+import assert from 'node:assert/strict';
+import {pathToFileURL} from 'node:url';
+
+const {chromium} = await import(pathToFileURL(process.env.RC_TEST_PLAYWRIGHT_CORE).href);
+const origin = process.argv[2];
+const browser = await chromium.launch({
+  executablePath: process.env.RC_TEST_CHROMIUM,
+  args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+  headless: true,
+});
+const context = await browser.newContext({viewport: {width: 1200, height: 900}, hasTouch: true});
+const page = await context.newPage();
+const errors = [];
+page.on('pageerror', error => errors.push(String(error)));
+
+const allValuesAre = async (value) => {
+  await page.waitForFunction(async expected => {
+    const reply = await fetch('/api/kiosk_state', {cache: 'no-store'});
+    const state = await reply.json();
+    return state.ok && ['FL', 'FR', 'RL', 'RR'].every(id => {
+      const motor = (state.data.motors || []).find(item => item.id === id);
+      return motor && motor.online && motor.driveServoValue === expected;
+    });
+  }, value, {timeout: 8000, polling: 150});
+};
+
+const valuesAre = async expected => {
+  await page.waitForFunction(async values => {
+    const reply = await fetch('/api/kiosk_state', {cache: 'no-store'});
+    const state = await reply.json();
+    return state.ok && Object.entries(values).every(([id, value]) => {
+      const motor = (state.data.motors || []).find(item => item.id === id);
+      return motor && motor.online && motor.driveServoValue === value;
+    });
+  }, expected, {timeout: 8000, polling: 150});
+};
+
+const setSpeed = async (value, selector = '#drive-speed') => {
+  const slider = page.locator(selector);
+  await slider.scrollIntoViewIfNeeded();
+  await slider.focus();
+  if (value === 150) await page.keyboard.press('End');
+  else {
+    await page.keyboard.press('Home');
+    for (let i = 0; i < value; i += 1) await page.keyboard.press('ArrowRight');
+  }
+  assert.equal(await slider.inputValue(), String(value));
+};
+
+const touch = async selector => {
+  const button = page.locator(selector);
+  await button.scrollIntoViewIfNeeded();
+  const box = await button.boundingBox();
+  assert.ok(box, `button not visible: ${selector}`);
+  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+};
+
+try {
+  await page.goto(origin + '/main.html', {waitUntil: 'domcontentloaded'});
+  await page.waitForFunction(() => typeof window._showSteeringPage === 'function');
+  await page.evaluate(() => window._showSteeringPage());
+  await page.waitForFunction(() => !document.getElementById('drive-speed').disabled, null, {timeout: 10000});
+
+  await setSpeed(2);
+  await touch('#direct-drive-forward-ALL');
+  await allValuesAre(2);
+  // A normal tap has already ended. More than two watchdog periods must pass
+  // with the latest value still arriving, rather than stopping on pointerup.
+  await page.waitForTimeout(1600);
+  await allValuesAre(2);
+  assert.equal(await page.locator('#direct-drive-forward-ALL').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('#direct-drive-back-ALL').isDisabled(), true);
+
+  await setSpeed(150);
+  await allValuesAre(150);
+  await page.waitForFunction(() => document.getElementById('drive-servo-reported').textContent.includes('RR: 150'));
+  await setSpeed(2);
+  await allValuesAre(2);
+  await page.waitForTimeout(800);
+  await allValuesAre(2);
+
+  await touch('#drive-stop');
+  await allValuesAre(0);
+  await page.waitForTimeout(800);
+  await allValuesAre(0);
+  assert.equal(await page.locator('#drive-speed').inputValue(), '2');
+  assert.equal(await page.locator('#direct-drive-forward-ALL').getAttribute('aria-pressed'), 'false');
+
+  // The individual wheel card also latches and updates independently.
+  await page.locator('#steer-fine > summary').click();
+  await setSpeed(2, '#drive-module-FL');
+  await touch('#direct-drive-forward-FL');
+  await valuesAre({FL: 2, FR: 0, RL: 0, RR: 0});
+  const forwardFL = page.locator('#direct-drive-forward-FL');
+  assert.equal(await forwardFL.getAttribute('aria-pressed'), 'true');
+  assert.notEqual(await forwardFL.evaluate(element => getComputedStyle(element).boxShadow), 'none');
+  assert.equal(await page.locator('#direct-drive-back-FL').isDisabled(), true);
+  await page.waitForTimeout(800);
+  await valuesAre({FL: 2, FR: 0, RL: 0, RR: 0});
+  await setSpeed(150, '#drive-module-FL');
+  await valuesAre({FL: 150, FR: 0, RL: 0, RR: 0});
+  await touch('#drive-module-stop-FL');
+  await allValuesAre(0);
+
+  // A native Enter activation starts the other direction; losing the visible
+  // page is still fail-closed and does not resume after focus returns.
+  const back = page.locator('#direct-drive-back-ALL');
+  await back.focus();
+  await page.keyboard.press('Enter');
+  await allValuesAre(2);
+  const other = await context.newPage();
+  await other.goto('about:blank');
+  await other.bringToFront();
+  await page.waitForTimeout(900);
+  await page.bringToFront();
+  await allValuesAre(0);
+  await page.waitForTimeout(800);
+  await allValuesAre(0);
+  assert.deepEqual(errors, []);
+  console.log('Chromium touch/keyboard + kiosk API + four simulated USB boards: OK');
+} finally {
+  await browser.close();
+}

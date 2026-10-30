@@ -166,6 +166,46 @@ def test_source_routes_exact_value_and_direction_to_each_arduino(direction, valu
     assert source.drive_servo(value, direction="invalid", now=100.1)["reason"] == "invalid_direction"
 
 
+def test_rapid_global_slider_changes_keep_latest_servo_value():
+    _, source = bare_source()
+    for module in MODULES:
+        source.feed(frame(module), now=100.0)
+    # Сотни input-событий не должны забить очередь старыми скоростями.
+    source.commands.put(b"w FL 10\n")
+    for value in range(1, 151):
+        assert source.drive_servo(value, now=100.1)["ok"]
+    assert list(source.commands.queue) == [b"w FL 10\n", b"v 150\n"]
+    for module in MODULES:
+        link = source.links[f"/dev/test-{module}"]
+        link.commands.put(b"v 2\n")
+        link.commands.put(b"b\n")
+    source._fanout_commands()
+    for module in MODULES:
+        commands = list(source.links[f"/dev/test-{module}"].commands.queue)
+        assert b"v 2\n" not in commands
+        assert commands[-1] == b"v 150\n"
+        assert b"b\n" in commands  # STOP и руление не удаляются
+        if module == "FL":
+            assert b"w 10\n" in commands
+
+
+def test_latest_individual_value_keeps_broadcast_and_other_wheels():
+    _, source = bare_source()
+    for module in MODULES:
+        source.feed(frame(module), now=100.0)
+    source.commands.put(b"v 20\n")
+    source.commands.put(b"v FL 2\n")
+    source.commands.put(b"v FR 60 b\n")
+    source.commands.put(b"w RR 10\n")
+    assert source.drive_servo(150, module="FL", now=100.1)["ok"]
+    assert list(source.commands.queue) == [b"v 20\n", b"v FR 60 b\n", b"w RR 10\n", b"v FL 150\n"]
+    source._fanout_commands()
+    assert list(source.links["/dev/test-FL"].commands.queue) == [b"v 150\n"]
+    assert list(source.links["/dev/test-FR"].commands.queue) == [b"v 60 b\n"]
+    assert list(source.links["/dev/test-RL"].commands.queue) == [b"v 20\n"]
+    assert list(source.links["/dev/test-RR"].commands.queue) == [b"v 20\n", b"w 10\n"]
+
+
 def test_source_requires_new_firmware_and_fresh_port_but_always_allows_stop():
     _, source = bare_source()
     source.feed(frame("FL", fw=14), now=100.0)

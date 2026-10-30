@@ -193,6 +193,7 @@ global.confirm = () => payload.confirm !== false;
 /* ------------------------------------------------------- сеть (как в экране) */
 const sent = [];      // команды руления: {module, angle}
 const drives = [];    // команды тяги: {value} или прежний {percent}
+const driveDeadlines = [];  // сроки годности команд: STOP без срока
 const emptyJournal = { ok: true, data: { entries: [], count: 0, shown: 0, dropped: 0, limit: 400,
                                          levels: {}, uptimeSec: 0, source: null, demo: false, journal: 'robot' } };
 
@@ -277,6 +278,7 @@ global.fetch = async (url, init) => {
     else sent.percent = body.percent;
     if (Object.prototype.hasOwnProperty.call(body, 'direction')) sent.direction = body.direction;
     drives.push(sent);
+    driveDeadlines.push((init.headers || {})['X-Robot-Command-Deadline'] || null);
     if (payload.deferFirstDrive && !heldOneDrive && Number(body.value) > 0) {
       heldOneDrive = true;
       await new Promise((resolve) => { heldDriveResolve = resolve; });
@@ -448,7 +450,10 @@ function findPreset(id) {
         const direction = action.direction === 'backward' ? 'back' : 'forward';
         const pointerId = action.pointerId || (id === 'ALL' ? 1 : ['FL', 'FR', 'RL', 'RR'].indexOf(id) + 2);
         const button = byId('direct-drive-' + direction + '-' + id);
+        // Короткое касание/клик: браузер выдаёт click после отпускания.
         button.fire('pointerdown', {button: 0, pointerId});
+        button.fire('pointerup', {pointerId});
+        if (!button.disabled) button.fire('click', {detail: 1});
         await flush(action.rounds || 2);
         if (action.release === true) {
           button.fire('pointerup', {pointerId});
@@ -459,7 +464,10 @@ function findPreset(id) {
       const id = String(action.id || 'ALL');
       const direction = action.direction === 'backward' ? 'back' : 'forward';
       const pointerId = action.pointerId || (id === 'ALL' ? 1 : ['FL', 'FR', 'RL', 'RR'].indexOf(id) + 2);
-      byId('direct-drive-' + direction + '-' + id).fire('pointerdown', {button: 0, pointerId});
+      const button = byId('direct-drive-' + direction + '-' + id);
+      button.fire('pointerdown', {button: 0, pointerId});
+      button.fire('pointerup', {pointerId});
+      if (!button.disabled) button.fire('click', {detail: 1});
       await flush(action.rounds || 3);
     } else if (action.type === 'release') {
       const id = String(action.id || 'ALL');
@@ -470,8 +478,17 @@ function findPreset(id) {
     } else if (action.type === 'key') {
       const id = String(action.id || 'ALL');
       const direction = action.direction === 'backward' ? 'back' : 'forward';
-      byId('direct-drive-' + direction + '-' + id).fire(action.event || 'keydown', {key: action.key || 'Enter'});
+      const button = byId('direct-drive-' + direction + '-' + id);
+      const event = action.event || 'keydown';
+      const key = action.key || 'Enter';
+      button.fire(event, {key});
+      // Нативные кнопки посылают click с Enter на keydown и с пробела на keyup.
+      if (!button.disabled && ((key === 'Enter' && event === 'keydown') || (key === ' ' && event === 'keyup'))) {
+        button.fire('click', {detail: 0});
+      }
       await flush(action.rounds || 3);
+    } else if (action.type === 'wait') {
+      await flush(action.rounds || 10);
     } else if (action.type === 'blur') {
       global.dispatchEvent({type: 'blur'});
       await flush(action.rounds || 3);
@@ -544,12 +561,15 @@ function findPreset(id) {
     sourceStatus: byId('steer-source-status').textContent,
     dataChip: byId('data-chip').textContent,
     driveStatus: byId('drive-status').textContent,
+    driveReported: byId('drive-servo-reported').textContent,
     driveSpeedMax: byId('drive-speed').max,
     driveSpeedMin: byId('drive-speed').min,
     driveSpeedValue: byId('drive-speed').value,
     driveSpeedDisabled: !!byId('drive-speed').disabled,
     driveBackDisabled: !!byId('direct-drive-back-ALL').disabled,
     driveForwardDisabled: !!byId('direct-drive-forward-ALL').disabled,
+    driveBackPressed: byId('direct-drive-back-ALL').getAttribute('aria-pressed'),
+    driveForwardPressed: byId('direct-drive-forward-ALL').getAttribute('aria-pressed'),
     rpmText: ['FL', 'FR', 'RL', 'RR'].map((id) => byId('rpm-' + id).textContent),
     wheelDrive: ['FL', 'FR', 'RL', 'RR'].map((id) => ({
       id,
@@ -561,6 +581,8 @@ function findPreset(id) {
       sliderDisabled: !!byId('drive-module-' + id).disabled,
       backDisabled: !!byId('direct-drive-back-' + id).disabled,
       forwardDisabled: !!byId('direct-drive-forward-' + id).disabled,
+      backPressed: byId('direct-drive-back-' + id).getAttribute('aria-pressed'),
+      forwardPressed: byId('direct-drive-forward-' + id).getAttribute('aria-pressed'),
       stopDisabled: !!byId('drive-module-stop-' + id).disabled,
     })),
     maneuvers: {
@@ -581,6 +603,7 @@ function findPreset(id) {
     masterValue: byId('steer-master-value').textContent,
     sent,
     drives,
+    driveDeadlines,
     driveCfgSent,
     netlog,
     renderErrors,
