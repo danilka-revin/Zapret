@@ -677,6 +677,29 @@ def test_maneuver_presets_are_editable_and_validated():
         "ok": False, "reason": "invalid_maneuver"}
 
 
+def test_master_preserves_saved_geometry_until_explicit_update():
+    backend = _load_backend()
+    src = _source_with_runner(backend)
+    core = src.maneuver_core
+    previous = core.default_config()
+    previous["chassis"].update(wheelDiameterMm=207.5, trackMm=450.0)
+    previous["presets"]["forward"]["distanceM"] = 1.35
+    core.save_config(previous)
+    path = core.config_path()
+    before = path.read_bytes()
+
+    src.maneuvers = core.ManeuverRunner(core.load_config(), brake=src._brake_all)
+    assert src.maneuver_config()["chassis"]["trackMm"] == 450.0
+    assert path.read_bytes() == before
+    result = src.set_maneuver_config("chassis", {"wheelbaseMm": 500, "trackMm": 380})
+    assert result["ok"] and "warning" not in result
+    saved = core.load_config()
+    assert saved["chassis"]["wheelbaseMm"] == 500.0
+    assert saved["chassis"]["trackMm"] == 380.0
+    assert saved["chassis"]["wheelDiameterMm"] == 207.5
+    assert saved["presets"]["forward"]["distanceM"] == 1.35
+
+
 def test_pot_mode_requires_all_boards_and_idle_telemetry():
     backend = _load_backend()
     src = _bare_master_source(backend)

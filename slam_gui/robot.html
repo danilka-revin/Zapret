@@ -774,11 +774,12 @@
             </p>
             <div class="maneuver-geometry" aria-label="Размеры шасси для одометрии">
               <b>Геометрия для одометрии</b>
-              <p>Шина AOVO Pro номинально 8,5″ = 215,9 мм. Диаметр под нагрузкой откалибруйте по пройденному пути. База 500 и колея 450 мм — только примеры, обязательно измерьте расстояния между центрами колёс вашего робота.</p>
+              <p>Между осями поворота измерено 500 мм вдоль и 380 мм поперёк. Сохранённые ранее размеры не меняются автоматически: проверьте поля и при необходимости исправьте и сохраните.</p>
+              <p>Шина AOVO Pro номинально 8,5″ = 215,9 мм; диаметр под нагрузкой откалибруйте по пройденному пути. При развороте расчёт приближённый: смещение контакта колеса от оси поворота и проскальзывание влияют на результат.</p>
               <div class="maneuver-geometry-fields">
                 <label>Диаметр колеса, мм <input id="geometry-wheelDiameterMm" type="number" min="50" max="400" step="0.1" value="215.9"></label>
-                <label>База, мм <input id="geometry-wheelbaseMm" type="number" min="100" max="3000" step="1" value="500"></label>
-                <label>Колея, мм <input id="geometry-trackMm" type="number" min="100" max="3000" step="1" value="450"></label>
+                <label>База вдоль движения, мм <input id="geometry-wheelbaseMm" type="number" min="100" max="3000" step="1" value="500"></label>
+                <label>Колея поперёк, мм <input id="geometry-trackMm" type="number" min="100" max="3000" step="1" value="380"></label>
                 <button id="geometry-save" type="button">Сохранить размеры</button>
               </div>
               <small id="geometry-status" role="status">Размеры из настроек сервера.</small>

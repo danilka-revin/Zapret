@@ -3,11 +3,37 @@
 
 import math
 
+import pytest
+
+from robot_control.maneuvers import DEFAULT_CHASSIS
 from robot_control.rus_core.kinematics import SwerveKinematics
 
 
 def _by_id(commands):
     return {c.module_id: c for c in commands}
+
+
+def test_default_positions_match_measured_steering_axes():
+    kin = SwerveKinematics()
+    assert kin.wheelbase == DEFAULT_CHASSIS["wheelbaseMm"] / 1000 == 0.5
+    assert kin.track == DEFAULT_CHASSIS["trackMm"] / 1000 == 0.38
+    positions = {module.name: (module.x, module.y) for module in kin.modules}
+    assert positions == {
+        "FL": (0.25, 0.19), "FR": (0.25, -0.19),
+        "RL": (-0.25, 0.19), "RR": (-0.25, -0.19),
+    }
+    cmds = _by_id(kin.inverse(0.0, 0.0, 1.0))
+    assert [abs(math.degrees(cmds[module.module_id].angle_rad)) for module in kin.modules] == \
+        pytest.approx([52.76516601842533] * 4)
+    assert [abs(cmds[module.module_id].speed_mps) for module in kin.modules] == \
+        pytest.approx([0.31400636936215165] * 4)
+
+
+def test_explicit_kinematic_geometry_remains_configurable():
+    kin = SwerveKinematics(wheelbase=0.6, track=0.8)
+    assert [(m.x, m.y) for m in kin.modules] == [
+        (0.3, 0.4), (0.3, -0.4), (-0.3, 0.4), (-0.3, -0.4),
+    ]
 
 
 def test_full_stop_disables_modules():

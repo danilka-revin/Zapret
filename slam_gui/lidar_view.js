@@ -33,8 +33,8 @@
   const ROBOT_WIDTH_M = 0.60;
   const ROBOT_HEIGHT_M = 0.30;
   const LIDAR_OFFSET_X_M = 0.35;
-  const WHEELBASE_M = 0.55;
-  const TRACK_M = 0.46;
+  const WHEELBASE_M = 0.50;    // расстояния между осями поворота, по умолчанию
+  const TRACK_M = 0.38;
   const WHEEL_LEN_M = 0.14;    // размер колеса вдоль оси, м
   const WHEEL_WID_M = 0.07;    // поперёк оси, м
 
@@ -431,7 +431,7 @@
     const bodyHalfW = (ROBOT_WIDTH_M / 2) * L.k;   // 0.30 м полуширина, px
     const bodyHalfL = (ROBOT_LENGTH_M / 2) * L.k;  // 0.375 м полудлина, px
     const wheelHalfX = (WHEELBASE_M / 2) * L.k;
-    const wheelHalfY = (TRACK_M / 2 + 0.02) * L.k;
+    const wheelHalfY = (TRACK_M / 2) * L.k;
     ctx.fillStyle = 'rgba(80,66,72,0.58)';
     ctx.strokeStyle = '#f4f4f6';
     ctx.lineWidth = 1.2;

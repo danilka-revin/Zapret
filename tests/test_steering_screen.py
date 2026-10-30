@@ -630,6 +630,52 @@ def test_drive_screen_has_no_drive_config_controls():
 
 
 # ------------------------------- манёвры ----------------------------------- #
+def test_geometry_markup_has_measured_defaults(tmp_path):
+    report = run_screen(tmp_path, payload())
+    assert report["geometry"]["wheelDiameterMm"] == "215.9"
+    assert report["geometry"]["wheelbaseMm"] == "500"
+    assert report["geometry"]["trackMm"] == "380"
+    assert report["maneuversSent"] == []
+
+
+def test_geometry_form_displays_saved_values_without_automatic_overwrite(tmp_path):
+    body = payload()
+    body["data"]["maneuverConfig"] = maneuver_config(chassis={
+        "wheelDiameterMm": 207.5, "wheelbaseMm": 500, "trackMm": 450,
+    })
+    report = run_screen(tmp_path, body)
+    assert report["geometry"]["wheelDiameterMm"] == "207.5"
+    assert report["geometry"]["wheelbaseMm"] == "500"
+    assert report["geometry"]["trackMm"] == "450"
+    assert report["maneuversSent"] == []
+    assert report["renderErrors"] == []
+
+
+def test_geometry_change_requires_explicit_save_before_a_maneuver(tmp_path):
+    body = payload(actions=[
+        {"type": "geometry", "values": {"trackMm": 380}, "save": False},
+        {"type": "maneuver", "id": "spin_left"},
+    ])
+    body["data"]["maneuverConfig"] = maneuver_config(chassis={
+        "wheelDiameterMm": 207.5, "wheelbaseMm": 500, "trackMm": 450,
+    })
+    report = run_screen(tmp_path, body)
+    assert report["geometry"]["trackMm"] == "380"  # телеметрия не затёрла правку
+    assert report["maneuversSent"] == []
+    assert "сохраните" in report["maneuvers"]["status"].lower()
+    assert report["renderErrors"] == []
+
+    body["actions"] = [{"type": "geometry", "values": {"trackMm": 380}}]
+    report = run_screen(tmp_path, body)
+    assert report["maneuversSent"] == [{
+        "url": "api/kiosk_maneuver_config", "action": "config", "name": "chassis",
+        "values": {"wheelDiameterMm": 207.5, "wheelbaseMm": 500, "trackMm": 380},
+    }]
+    assert report["geometry"]["trackMm"] == "380"
+    assert "сохранены" in report["geometry"]["status"].lower()
+    assert report["renderErrors"] == []
+
+
 def test_maneuver_numbers_come_from_the_server(tmp_path):
     """Числа пресетов — с сервера, а не зашиты в разметку."""
     body = payload()

@@ -43,9 +43,27 @@ assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'strokeStyle' && op
 assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'fillStyle' && op[2] === '#e35d6a'));
 const locations = operations.filter(op => op[0] === 'translate').slice(1);
 assert.deepEqual(locations, [
-  ['translate', 27.500000000000004, -25], ['translate', 27.500000000000004, 25],
-  ['translate', -27.500000000000004, -25], ['translate', -27.500000000000004, 25]
+  ['translate', 25, -19], ['translate', 25, 19],
+  ['translate', -25, -19], ['translate', -25, 19]
 ]);
+
+// The illustration follows the geometry actually saved on the server. A
+// previous installation may still have the old 450 mm track until edited.
+payload.maneuverConfig = { chassis: { wheelbaseMm: 500, trackMm: 450 } };
+model.update(payload, 10000);
+operations.length = 0;
+model.draw(ctx, 100, 200, 0, 100, { state: model.state(10001) });
+assert.deepEqual(operations.filter(op => op[0] === 'translate').slice(1), [
+  ['translate', 25, -22.5], ['translate', 25, 22.5],
+  ['translate', -25, -22.5], ['translate', -25, 22.5]
+]);
+// Malformed geometry is never allowed to create nonsensical transforms.
+payload.maneuverConfig.chassis = { wheelbaseMm: 'bad', trackMm: 0 };
+model.update(payload, 10000);
+operations.length = 0;
+model.draw(ctx, 100, 200, 0, 100, { state: model.state(10001) });
+assert.deepEqual(operations.filter(op => op[0] === 'translate').slice(1), locations);
+delete payload.maneuverConfig;
 
 const stale = model.state(10000 + model.STALE_MS + 1);
 assert.equal(stale.fresh, false);

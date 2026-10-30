@@ -45,8 +45,8 @@ class ModuleCommand:
 class SwerveKinematics:
     """Обратная кинематика шасси с 4 независимыми модулями."""
 
-    wheelbase: float = 0.55       # расстояние между осями модулей по X, м
-    track: float = 0.46           # колея по Y, м
+    wheelbase: float = 0.50       # между осями поворота вдоль X, м
+    track: float = 0.38           # между осями поворота поперёк Y, м
     max_speed: float = 2.0        # физический предел скорости колеса, м/с
     deadband: float = 0.01        # порог нулевых команд, м/с и рад/с
     modules: List[ModulePose] = field(default_factory=list)
