@@ -416,8 +416,13 @@
         wheel.style.transform = 'rotate(' + angle.toFixed(1) + 'deg)';
       }
       setText(angleEl, hasAngle ? Math.round(angle) + '°' : '—');
-      // Нет тахометра — «нет», а не выдуманный ноль оборотов.
-      setText(rpmEl, m.tach === false ? 'нет' : (typeof m.rpm === 'number' ? fmt(m.rpm, 0) : '—'));
+      // SC v16 — отдельный канал только для показа; состояние модуля и
+      // управление не должны зависеть от этого значения.
+      const scRpm = m.online !== false && typeof m.scRpm === 'number' && Number.isFinite(m.scRpm) && m.scRpm >= 0
+        ? m.scRpm : null;
+      setText(rpmEl, m.online === false ? '—' : scRpm != null ? fmt(scRpm, 1)
+        : m.firmware >= 16 ? '—' : m.tach === false ? 'нет'
+        : (typeof m.rpm === 'number' ? fmt(m.rpm, 0) : '—'));
 
       const warm = hasTemp(m);
       setText(tempEl, warm ? fmt(m.temp, 0) : '—');

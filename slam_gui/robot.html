@@ -621,6 +621,7 @@
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
               <div class="steer-drive" data-drive-card="FL">
                 <div class="steer-readout direct-servo-control"><span>Тяга <b id="drive-module-state-FL">—</b></span><span>Выход <b id="drive-module-output-FL">—</b></span></div>
+                <div class="steer-readout direct-servo-control"><span>Обороты SC: <b id="drive-module-rpm-FL">—</b> об/мин</span></div>
                 <label class="steer-drive-speed direct-servo-control">Servo.write <b><output id="drive-module-value-FL">0</output></b>
                   <input id="drive-module-FL" data-drive-module-slider="FL" type="range" min="0" max="150" step="1" value="0" aria-label="Servo.write колеса переднее левое, 0–150" disabled />
                 </label>
@@ -650,6 +651,7 @@
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
               <div class="steer-drive" data-drive-card="FR">
                 <div class="steer-readout direct-servo-control"><span>Тяга <b id="drive-module-state-FR">—</b></span><span>Выход <b id="drive-module-output-FR">—</b></span></div>
+                <div class="steer-readout direct-servo-control"><span>Обороты SC: <b id="drive-module-rpm-FR">—</b> об/мин</span></div>
                 <label class="steer-drive-speed direct-servo-control">Servo.write <b><output id="drive-module-value-FR">0</output></b>
                   <input id="drive-module-FR" data-drive-module-slider="FR" type="range" min="0" max="150" step="1" value="0" aria-label="Servo.write колеса переднее правое, 0–150" disabled />
                 </label>
@@ -679,6 +681,7 @@
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
               <div class="steer-drive" data-drive-card="RL">
                 <div class="steer-readout direct-servo-control"><span>Тяга <b id="drive-module-state-RL">—</b></span><span>Выход <b id="drive-module-output-RL">—</b></span></div>
+                <div class="steer-readout direct-servo-control"><span>Обороты SC: <b id="drive-module-rpm-RL">—</b> об/мин</span></div>
                 <label class="steer-drive-speed direct-servo-control">Servo.write <b><output id="drive-module-value-RL">0</output></b>
                   <input id="drive-module-RL" data-drive-module-slider="RL" type="range" min="0" max="150" step="1" value="0" aria-label="Servo.write колеса заднее левое, 0–150" disabled />
                 </label>
@@ -708,6 +711,7 @@
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
               <div class="steer-drive" data-drive-card="RR">
                 <div class="steer-readout direct-servo-control"><span>Тяга <b id="drive-module-state-RR">—</b></span><span>Выход <b id="drive-module-output-RR">—</b></span></div>
+                <div class="steer-readout direct-servo-control"><span>Обороты SC: <b id="drive-module-rpm-RR">—</b> об/мин</span></div>
                 <label class="steer-drive-speed direct-servo-control">Servo.write <b><output id="drive-module-value-RR">0</output></b>
                   <input id="drive-module-RR" data-drive-module-slider="RR" type="range" min="0" max="150" step="1" value="0" aria-label="Servo.write колеса заднее правое, 0–150" disabled />
                 </label>
@@ -733,7 +737,7 @@
           <ul id="steer-messages" class="steer-messages" aria-label="Сообщения прошивки руля" hidden></ul>
         </details>
 
-        <p class="steer-footnote direct-servo-control">Ползунок в карточке задаёт скорость этого колеса, общий ползунок ниже — всех четырёх. Нажмите «Вперёд» или «Назад» один раз; для остановки нажмите СТОП. Ползунок меняет заданное значение и во время движения. Число 0–150 передаётся в Servo.write без пересчёта. Обороты пока не считываются. Первые испытания — с вывешенными колёсами и физическим аварийным выключателем.</p>
+        <p class="steer-footnote direct-servo-control">Ползунок в карточке задаёт скорость этого колеса, общий ползунок ниже — всех четырёх. Нажмите «Вперёд» или «Назад» один раз; для остановки нажмите СТОП. Ползунок меняет заданное значение и во время движения. Число 0–150 передаётся в Servo.write без пересчёта. Обороты SC на D19 отображаются отдельно и ни на что не влияют. 0 также возможен при отключённом проводе SC. Первые испытания — с вывешенными колёсами и физическим аварийным выключателем.</p>
 
         <section class="traction-controls" aria-label="Тяговые BLDC-моторы">
           <div class="traction-head">
@@ -745,8 +749,8 @@
           <details id="drive-maneuvers" class="drive-maneuvers">
             <summary>Манёвры · метр вперёд, разворот на 90°</summary>
             <p class="drive-setup-hint">
-              Кнопка задаёт <b>цель</b> в метрах или градусах. В прошивке v15
-              тахометр отключён, поэтому манёвр оценивается по времени: фактическое
+              Кнопка задаёт <b>цель</b> в метрах или градусах. В прошивках v15/v16
+              показания SC не используются для манёвра, поэтому он оценивается по времени: фактическое
               расстояние и угол могут отличаться, точной одометрии сейчас нет.
               Тяга набирается и гасится плавно (рампа). Разворот на месте: колёса
               встают по касательной (±≈48°), левые борта едут назад, правые вперёд —
@@ -804,6 +808,7 @@
           <label class="traction-speed direct-servo-control">Значение Servo.write <b><output id="drive-speed-value">0</output></b>
             <input id="drive-speed" type="range" min="0" max="150" step="1" value="0" aria-label="Servo.write всех колёс, 0–150" disabled></label>
           <small id="drive-servo-reported" class="traction-warning direct-servo-control">Платы сообщили Servo.write: —</small>
+          <small id="drive-rpm-reported" class="traction-warning direct-servo-control">Обороты SC, об/мин: —</small>
           <div class="traction-actions direct-servo-control">
             <button id="direct-drive-back-ALL" type="button" disabled>Назад</button>
             <button id="direct-drive-forward-ALL" type="button" disabled>Вперёд</button>
@@ -819,7 +824,7 @@
             </div>
             <small>Движение только при удержании. Отпускание и потеря связи останавливают моторы. Первые проверки — с вывешенными колёсами и физическим E-STOP.</small>
           </div>
-          <small class="traction-warning direct-servo-control">Ползунок задаёт значение Servo.write на D3 без пересчёта и меняет его на ходу. Нажмите «Вперёд» или «Назад» один раз — движение продолжается после отпускания. СТОП или 0 снимает тягу; для повторного запуска снова нажмите направление. Перед сменой направления нажмите СТОП и дождитесь остановки колёс. Потеря фокуса, уход со страницы или связи также останавливают тягу; watchdog платы срабатывает через 650 мс. Обороты пока не считываются. Программный стоп не заменяет физическую аварийную кнопку. Испытывайте с вывешенными колёсами.</small>
+          <small class="traction-warning direct-servo-control">Ползунок задаёт значение Servo.write на D3 без пересчёта и меняет его на ходу. Нажмите «Вперёд» или «Назад» один раз — движение продолжается после отпускания. СТОП или 0 снимает тягу; для повторного запуска снова нажмите направление. Перед сменой направления нажмите СТОП и дождитесь остановки колёс. Потеря фокуса, уход со страницы или связи также останавливают тягу; watchdog платы срабатывает через 650 мс. Обороты SC на D19 отображаются отдельно и ни на что не влияют. 0 также возможен при отключённом проводе SC. Программный стоп не заменяет физическую аварийную кнопку. Испытывайте с вывешенными колёсами.</small>
         </section>
       </section>
     </div>

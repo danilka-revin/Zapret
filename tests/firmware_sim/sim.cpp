@@ -710,7 +710,8 @@ static void scenario_direct_directions() {
   boot(all_boards());
   for (sim::Board* board : all_boards()) {
     CHECK(board->servo_pin == 3 && board->servo_running(), "%s: Servo на D3", board->name);
-    CHECK(board->tach_fn == nullptr, "%s: SC не считывается", board->name);
+    CHECK(board->tach_fn != nullptr && board->tach_irq == 4 && board->tach_mode == CHANGE &&
+          board->mode[19] == INPUT_PULLUP, "%s: SC на D19 считает оба фронта", board->name);
   }
   for (const char direction : {'f', 'b'}) {
     for (int value = 0; value <= 150; ++value) {
@@ -834,7 +835,7 @@ static void scenario_system_calibrate_all() {
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=15"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=16"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -951,7 +952,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v15"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v16"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -1146,6 +1147,20 @@ static int run_pty(const char* link_base) {
   board_rl.phys = 40;
   board_rr.phys = -9000;
   boot(all_boards());
+  // Тест может независимо подать на четыре входа фиксированные частоты SC.
+  // По умолчанию переходов нет, модель зависимости от Servo не создаётся.
+  if (const char* frequencies = std::getenv("RC_SIM_SC_HZ")) {
+    unsigned hz[4] = {0, 0, 0, 0};
+    if (std::sscanf(frequencies, "%u,%u,%u,%u", &hz[0], &hz[1], &hz[2], &hz[3]) == 4) {
+      const auto boards = all_boards();
+      for (size_t i = 0; i < boards.size(); ++i) {
+        if (hz[i] && hz[i] <= 10000) {
+          boards[i]->tach_period_us = 1000000LL / hz[i];
+          boards[i]->tach_next_edge_us = sim::now_us + boards[i]->tach_period_us;
+        }
+      }
+    }
+  }
   std::printf("колёса: %s-FL … %s-RR → псевдотерминалы\n", link_base, link_base);
   std::fflush(stdout);
   const auto wall_start = std::chrono::steady_clock::now();
@@ -1177,13 +1192,13 @@ static void scenario_drive_hardware() {
   board_fr.serial.send("z");
   sim::run_for_ms(2);
 
-  // SC временно не считывается и не объявляется измеренным нулём.
-  CHECK(board_fr.tach_fn == nullptr, "прерывание тахометра не подключено");
+  // SC включён только в диагностическом канале, не в старой одометрии.
+  CHECK(board_fr.tach_fn != nullptr && board_fr.tach_irq == 4 && board_fr.tach_mode == CHANGE &&
+        board_fr.mode[19] == INPUT_PULLUP, "прерывание SC подключено на оба фронта D19");
   sim::run_for_ms(300);
-  CHECK(has(board_fr, "tach=0"), "в @TLM измерение тахометра отключено: %s",
+  CHECK(has(board_fr, "tach=0") && has(board_fr, "sc_rpm=0.0") && has(board_fr, "sc_ppr=90"),
+        "@TLM несёт отдельное значение SC; старый режим выключен: %s",
         board_fr.serial.output.c_str());
-  CHECK(!has(board_fr, "rpm=") && !has(board_fr, "hz=") && !has(board_fr, "ppr="),
-        "несуществующие измерения SC не передаются");
   CHECK(has(board_fr, "duty=0 "), "в @TLM нулевая скважность покоя: %s",
         board_fr.serial.output.c_str());
   CHECK(has(board_fr, "dmax=100"), "в @TLM предел тяги 100 %: %s",
@@ -1291,10 +1306,8 @@ static void scenario_drive_hardware() {
         "стоп: выходы выключены, тормоз взведён, скважность нулевая");
 }
 
-// Переходы тахометра «как на железе»: равномерно за отведённое время. Разом (в
-// одну и ту же микросекунду) их слать нельзя: прошивка отбрасывает дребезг —
-// два перехода ближе 150 мкс физически невозможны. Время двигаем через
-// run_for_ms: заодно тикает loop(), то есть окно замера оборотов (500 мс).
+// Искусственные переходы SC: равномерно за отведённое время, независимо от
+// команд тяги. run_for_ms тикает loop() и окно замера оборотов (500 мс).
 static void spin_tach(sim::Board* board, int edges, double over_ms) {
   if (edges <= 0) {
     sim::run_for_ms(over_ms);
@@ -1303,13 +1316,12 @@ static void spin_tach(sim::Board* board, int edges, double over_ms) {
   const double step_ms = over_ms / (double)edges;
   for (int i = 0; i < edges; ++i) {
     sim::run_for_ms(step_ms);
-    if (board->tach_fn) board->tach_fn();
+    board->tach_change();
   }
 }
 
-// Проверяем команды и номинальную длительность импульса библиотеки Servo,
-// а не выдумываем зависимость оборотов от значения: настоящий драйвер и мотор
-// здесь не моделируются, SC в этой прошивке не считывается.
+// Проверяем команды и номинальную длительность импульса Servo, не выдумывая
+// зависимость оборотов от значения: настоящий драйвер и мотор не моделируются.
 static void scenario_drive_speed() {
   boot({&board_fr});
   board_fr.serial.send("z");
@@ -1345,14 +1357,14 @@ static void scenario_drive_speed() {
   CHECK(servo_value(board_fr) == 2 && board_fr.servo_pulse_us() == 564 && thrust_on(board_fr),
         "write(2) после write(150) → снова около 564 мкс");
 
-  // SC не считывается: при молчании более 3 с команда не обрывается.
+  // Молчание SC более 3 с не обрывает старую команду: канал только для показа.
   for (int i = 0; i < 40; ++i) {
     board_fr.serial.send("t 100");
     sim::run_for_ms(200);
     CHECK(servo_value(board_fr) == 180 && thrust_on(board_fr),
           "SC не влияет на старую команду, тик %d", i);
   }
-  CHECK(board_fr.tach_fn == nullptr, "SC физически не считывается");
+  CHECK(board_fr.tach_fn != nullptr, "SC считывается, но не управляет тягой");
   board_fr.serial.send("b");
   sim::run_for_ms(2);
 }
@@ -1452,30 +1464,145 @@ struct Scenario {
   void (*fn)();
 };
 
-// Обороты по тахометру SC: драйвер даёт 90 переходов на оборот колеса, то есть
-// RPM = 60 / (90 × время между переходами). Число — свойство драйвера, а не
-// настройка: раньше «ppr» подбирали с экрана, теперь он в прошивке.
-//
-// Обороты считаются по среднему интервалу между переходами «SC», а не по числу
-// переходов за окно: окно 500 мс квантует медленное вращение шагами по 20 %.
-// Заодно это защита от главной жалобы «показывает 3600, а по факту 60»:
-// невозможно частые переходы (помеха, дребезг) больше не превращаются в
-// выдуманные обороты — прошивка честно говорит «нет».
-static void scenario_tach_disabled() {
-  boot({&board_fr});
-  CHECK(board_fr.tach_fn == nullptr, "на D19 не подключено прерывание SC");
-  board_fr.serial.send("v 75 b");
-  for (int i = 0; i < 20; ++i) {
-    board_fr.serial.send("v 75 b");
-    spin_tach(&board_fr, 30, 200);
-    CHECK(servo_value(board_fr) == 75 && thrust_on(board_fr),
-          "сигнал SC не влияет на Servo.write, тик %d", i);
+// SC — независимые искусственные переходы, не модель зависимости мотора от
+// Servo. Проверяем полный путь D19 → прерывание → @TLM, отсутствие влияния на
+// обе команды тяги и корректную остановку показания после прекращения импульсов.
+static void scenario_tach_display() {
+  boot(all_boards());
+  const int hz[4] = {90, 180, 45, 0};
+  const auto boards = all_boards();
+  for (size_t i = 0; i < boards.size(); ++i) {
+    sim::Board* board = boards[i];
+    CHECK(board->mode[19] == INPUT_PULLUP && board->tach_irq == 4 &&
+          board->tach_mode == CHANGE && board->tach_fn,
+          "%s: оба фронта SC подключены к D19", board->name);
+    if (hz[i]) {
+      board->tach_period_us = 1000000LL / hz[i];
+      board->tach_next_edge_us = sim::now_us + board->tach_period_us;
+    }
   }
-  CHECK(has(board_fr, "tach=0") && !has(board_fr, "rpm=") &&
-        !has(board_fr, "hz=") && !has(board_fr, "ppr="),
-        "обороты и импульсы не считываются и не передаются");
+  sim::run_for_ms(2100);
+  CHECK(std::abs((long)wheel_fl::tach_display_rpm_x10 - 600L) <= 3, "FL 90 Гц ≈ 60 об/мин: %lu", (unsigned long)wheel_fl::tach_display_rpm_x10);
+  CHECK(std::abs((long)wheel_fr::tach_display_rpm_x10 - 1200L) <= 4, "FR 180 Гц ≈ 120 об/мин: %lu", (unsigned long)wheel_fr::tach_display_rpm_x10);
+  CHECK(std::abs((long)wheel_rl::tach_display_rpm_x10 - 300L) <= 3, "RL 45 Гц ≈ 30 об/мин: %lu", (unsigned long)wheel_rl::tach_display_rpm_x10);
+  CHECK(wheel_rr::tach_display_rpm_x10 == 0, "RR без переходов — 0");
+  for (sim::Board* board : boards) {
+    CHECK(drive_idle(*board), "%s: импульсы не включают тягу", board->name);
+    CHECK(has(*board, "tach=0 ") && has(*board, "sc_rpm=") &&
+          has(*board, "sc_hz=") && has(*board, "sc_ppr=90 "),
+          "%s: отдельные поля SC и выключенный старый тахометр", board->name);
+    CHECK(!has(*board, " rpm=") && !has(*board, " hz=") && !has(*board, " ppr="),
+          "%s: для старой одометрии обороты отсутствуют", board->name);
+  }
+
+  board_fr.serial.send("v 75 b");
+  for (int i = 0; i < 25; ++i) {
+    if (i == 8) board_fr.tach_period_us = 0;  // обрыв/остановка не гасит тягу
+    board_fr.serial.send("v 75 b");
+    sim::run_for_ms(200);
+    CHECK(servo_value(board_fr) == 75 && thrust_on(board_fr),
+          "SC не меняет Servo.write и линии драйвера, тик %d", i);
+  }
+  CHECK(wheel_fr::tach_display_rpm_x10 == 0, "при отсутствии переходов показание возвращается в 0");
   board_fr.serial.send("b");
-  sim::run_for_ms(2);
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr), "обычный СТОП работает независимо от SC");
+  spin_tach(&board_fr, 90, 1000);
+  CHECK(drive_idle(board_fr) && std::abs((long)wheel_fr::tach_display_rpm_x10 - 600L) <= 8,
+        "вращение без тяги показывается, но не запускает мотор");
+
+  // Один переход в секунду ≈ 0.67 об/мин: между окнами 500 мс показание
+  // не должно прыгать в ноль, пока следующий переход ещё не пришёл.
+  sim::run_for_ms(2000);
+  spin_tach(&board_fr, 4, 4000);
+  CHECK(wheel_fr::tach_display_rpm_x10 >= 6 && wheel_fr::tach_display_rpm_x10 <= 8,
+        "медленное вращение ≈ 0.7 об/мин: %lu", (unsigned long)wheel_fr::tach_display_rpm_x10);
+  sim::run_for_ms(2000);
+  CHECK(wheel_fr::tach_display_rpm_x10 == 0, "медленное вращение после остановки → 0");
+
+  // Короткий дребезг не меняет принятую метку времени.
+  board_fr.tach_change();
+  const uint32_t last = wheel_fr::tach_last_edge_us;
+  sim::advance(50);
+  board_fr.tach_change();
+  CHECK(wheel_fr::tach_last_edge_us == last, "переход менее 150 мкс отбрасывается");
+}
+
+static void scenario_tach_rollover() {
+  boot({&board_fr});
+  // micros() на AVR переполняется каждые 2^32 мкс; интервалы вычисляются
+  // беззнаковым вычитанием и должны пережить границу.
+  sim::now_us = 4294967296LL - 12000;
+  sim::next_tick_us = sim::now_us + 50;
+  wheel_fr::tach_last_sample_ms = (uint32_t)(sim::now_us / 1000);
+  spin_tach(&board_fr, 100, 1000);
+  CHECK(std::abs((long)wheel_fr::tach_display_rpm_x10 - 667L) <= 8,
+        "после переполнения micros(): 100 Гц ≈ 66.7 об/мин, получено %lu",
+        (unsigned long)wheel_fr::tach_display_rpm_x10);
+
+  sim::run_for_ms(2000);
+  CHECK(!wheel_fr::tach_has_edge && wheel_fr::tach_display_rpm_x10 == 0,
+        "после паузы старая точка отсчёта сброшена");
+  const uint32_t old_edge = wheel_fr::tach_last_edge_us;
+  // Долгая остановка охватила полное переполнение micros(). Без сброса первый
+  // фронт выглядел бы интервалом всего в 10 мс и дал бы ложные 66,7 об/мин.
+  sim::now_us = ((sim::now_us / 4294967296LL) + 1) * 4294967296LL +
+                (uint32_t)(old_edge + 10000UL);
+  sim::next_tick_us = sim::now_us + 50;
+  board_fr.tach_change();
+  wheel_fr::updateTachDisplay();
+  CHECK(wheel_fr::tach_display_rpm_x10 == 0,
+        "первый фронт после долгой паузы не создаёт ложные обороты");
+  spin_tach(&board_fr, 90, 1000);
+  CHECK(std::abs((long)wheel_fr::tach_display_rpm_x10 - 600L) <= 8,
+        "оборотомер возобновляет показ после паузы");
+}
+
+// The longer fw16 frame must fit as a whole and resume after TX congestion.
+static void scenario_telemetry_capacity() {
+  boot({&board_fr});
+  wheel_fr::tx_position = wheel_fr::tx_length = 0;
+  // Extreme widths, deliberately beyond real operating values, exercise the
+  // longest formatting path (including the 32-bit millis rollover boundary).
+  sim::now_us = 4294967295000LL;
+  wheel_fr::current_step = -2000000;
+  wheel_fr::target_step = 2000000;
+  wheel_fr::drive_percent = -100;
+  wheel_fr::drive_servo_value = 180;
+  wheel_fr::tach_display_rpm_x10 = UINT32_MAX;
+  wheel_fr::tach_display_hz = UINT16_MAX;
+  wheel_fr::appendTelemetry();
+  const std::string full(wheel_fr::tx_buf, wheel_fr::tx_length);
+  CHECK(!full.empty() && full.size() < wheel_fr::TELEMETRY_LINE_CAPACITY,
+        "максимально длинный @TLM помещается в локальный буфер");
+  CHECK(full.find("sc_rpm=429496729.5 sc_hz=65535 sc_ppr=90 t=4294967295\r\n") != std::string::npos,
+        "максимально длинный @TLM целиком, включая конец: %s", full.c_str());
+
+  // With one byte less than the reserved capacity the frame is skipped, not
+  // truncated; once TX drains, the next period must deliver complete data.
+  sim::now_us = 5000;
+  wheel_fr::current_step = wheel_fr::target_step = 0;
+  wheel_fr::drive_percent = wheel_fr::drive_servo_value = 0;
+  wheel_fr::tach_display_rpm_x10 = wheel_fr::tach_display_hz = 0;
+  wheel_fr::tx_position = 0;
+  wheel_fr::tx_length = sizeof(wheel_fr::tx_buf) - wheel_fr::TELEMETRY_LINE_CAPACITY + 1;
+  std::memset(wheel_fr::tx_buf, 'x', wheel_fr::tx_length);
+  wheel_fr::tx_buf[wheel_fr::tx_length - 2] = '\r';
+  wheel_fr::tx_buf[wheel_fr::tx_length - 1] = '\n';
+  board_fr.serial.output.clear();
+  board_fr.serial.writable = 0;  // имитируем переполненный аппаратный UART
+  wheel_fr::last_telemetry_ms = (uint32_t)millis() - wheel_fr::TELEMETRY_PERIOD_MS;
+  wheel_fr::loop();
+  CHECK(board_fr.serial.output.empty() && wheel_fr::tx_position == 0 &&
+        wheel_fr::tx_length == sizeof(wheel_fr::tx_buf) - wheel_fr::TELEMETRY_LINE_CAPACITY + 1,
+        "при занятом TX кадр не обрезается и не дописывается в буфер");
+  board_fr.serial.writable = 63;
+  wheel_fr::last_telemetry_ms = (uint32_t)millis() - wheel_fr::TELEMETRY_PERIOD_MS;
+  wheel_fr::loop();
+  CHECK(has(board_fr, "\r\n@TLM deg=") && has(board_fr, "sc_ppr=90 t=") &&
+        board_fr.serial.output.size() >= 2 &&
+        board_fr.serial.output.substr(board_fr.serial.output.size() - 2) == "\r\n",
+        "после освобождения TX телеметрия продолжается: %s", board_fr.serial.output.c_str());
 }
 
 static const Scenario SCENARIOS[] = {
@@ -1519,7 +1646,9 @@ static const Scenario SCENARIOS[] = {
     {"drive_one_wheel", scenario_drive_one_wheel},
     {"drive_speed", scenario_drive_speed},
     {"mirrored_wheels", scenario_mirrored_wheels},
-    {"tach_disabled", scenario_tach_disabled},
+    {"tach_display", scenario_tach_display},
+    {"tach_rollover", scenario_tach_rollover},
+    {"telemetry_capacity", scenario_telemetry_capacity},
 };
 
 static int run_one(const Scenario& scenario) {

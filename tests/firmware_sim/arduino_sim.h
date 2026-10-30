@@ -89,6 +89,7 @@ class SimSerial {
  public:
   std::deque<uint8_t> input;
   std::string output;
+  int writable = 63;
   void begin(unsigned long) {}
   int available() { return (int)input.size(); }
   int read() {
@@ -97,7 +98,7 @@ class SimSerial {
     input.pop_front();
     return ch;
   }
-  int availableForWrite() { return 63; }
+  int availableForWrite() { return writable; }
   size_t write(uint8_t ch) {
     output.push_back((char)ch);
     return 1;
@@ -123,6 +124,18 @@ struct Board {
   void (*loop_fn)() = nullptr;
   void (*isr_fn)() = nullptr;
   void (*tach_fn)() = nullptr;
+  uint8_t tach_irq = 0xFF;
+  int tach_mode = 0;
+  // Опциональные искусственные переходы SC для PTY-тестов, не модель мотора.
+  int64_t tach_period_us = 0;
+  int64_t tach_next_edge_us = 0;
+
+  void tach_change() {
+    const uint8_t previous = level[19];
+    level[19] = previous == HIGH ? LOW : HIGH;
+    if (tach_fn && tach_irq == 4 && (tach_mode == CHANGE ||
+        (tach_mode == RISING && previous == LOW))) tach_fn();
+  }
 
   // Вход «P» драйвера — сигнал сервопривода 50 Гц из штатной библиотеки Servo.
   // Прошивка делает attach(D3) и write(0…180); заглушка Servo пишет сюда же.
@@ -280,6 +293,10 @@ inline std::vector<Board*> boards;
 inline void tick_all() {
   for (Board* board : boards) {
     if (board->isr_fn) board->isr_fn();
+    if (board->tach_period_us > 0 && now_us >= board->tach_next_edge_us) {
+      board->tach_change();
+      board->tach_next_edge_us += board->tach_period_us;
+    }
   }
 }
 

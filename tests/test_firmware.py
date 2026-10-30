@@ -144,9 +144,13 @@ def test_drive_uses_servo_values_without_tachometer_feedback():
                  "DRIVE_SEEK_STEP", "DRIVE_MAX_RPM_X10"):
         assert gone not in code, gone
     assert "void updateDriveSpeed()" not in code
-    # SC сейчас не считывается и не снимает тягу ни для v, ни для legacy t.
-    for gone in ("TACH_PIN", "tachometerISR", "attachInterrupt(", "updateRpm()",
-                 "updateDriveFeedback()", "DRIVE_FEEDBACK_TIMEOUT_MS"):
+    # SC на D19 считывается на обоих фронтах только для показа. Ни v, ни t
+    # не должны регулироваться или отключаться по отсутствию оборотов.
+    assert int(_const(text, "TACH_PIN")) == 19
+    assert int(_const(text, "TACH_EDGES_PER_REV")) == 90
+    assert "pinMode(TACH_PIN, INPUT_PULLUP)" in code
+    assert "attachInterrupt(digitalPinToInterrupt(TACH_PIN), tachometerISR, CHANGE)" in code
+    for gone in ("updateDriveFeedback()", "DRIVE_FEEDBACK_TIMEOUT_MS"):
         assert gone not in code, gone
     assert "tach=0" in text
 
@@ -172,22 +176,24 @@ def test_firmware_has_no_usb_role_discovery():
     # Legacy addressed monitor commands remain compatible; the application
     # sends local commands to the manually selected port.
     assert 'classifyModuleToken' in text
-    # v15 добавляет направление к прямой команде v, не меняя назначения USB.
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '15'
+    # v16 добавляет отдельные read-only показания SC, не меняя назначения USB.
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '16'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
     text = _text(WHEEL)
     assert int(_const(text, "TELEMETRY_PERIOD_MS")) == 250
     # @TLM выходит целиком: обрезанный блок сервер не разберёт.
-    assert "if (txFree() >= 210) appendTelemetry();" in text
-    # Строка @TLM несёт все поля, которые ждёт сервер (parse_master_line).
+    assert int(_const(text, "TELEMETRY_LINE_CAPACITY")) == 240
+    assert "char line[TELEMETRY_LINE_CAPACITY];" in text
+    assert "if (txFree() >= TELEMETRY_LINE_CAPACITY) appendTelemetry();" in text
+    # Диагностический канал SC отделён от полей старой одометрии.
     for field in ("deg=", "tgt=", "moving=", "cal=", "cycle=", "calib=",
                   "opto=", "home=", "err=", "drive=", "fw=", "pot=", "pm=", "t=",
-                  "tach=0", "dmax=", "sv=", "duty="):
+                  "tach=0", "dmax=", "sv=", "duty=", "sc_rpm=", "sc_hz=", "sc_ppr="):
         assert field in text, field
     telemetry = re.search(r'PSTR\("(@TLM [^"\n]+)', text).group(1)
-    assert all(field not in telemetry for field in ("rpm=", "hz=", "ppr="))
+    assert not any(token.startswith(("rpm=", "hz=", "ppr=")) for token in telemetry.split())
 
 
 def test_monitor_commands_of_the_tested_sketch():
@@ -349,9 +355,10 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 15 and frame["calibError"] == 0
+        assert frame["firmware"] == 16 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] is None
         assert frame["tach"] is False and frame["tachHz"] is None
+        assert frame["scRpm"] == 0.0 and frame["scHz"] == 0 and frame["scPpr"] == 90
         assert frame["pot"] is True
     assert frames["FR"]["deg"] == 12.5 and frames["FR"]["moving"] is False
     assert any("FR: Калибровка ЗАВЕРШЕНА!" in line for line in messages)
@@ -477,7 +484,7 @@ def test_direct_slider_api_reaches_real_firmware_sim_over_serial(simulator, kios
             return {module: frame["driveServoValue"] for module, frame in motors().items()}
 
         # Каждая плата получает точное число и отдельное направление; ноль
-        # руления не задан, прерывания тахометра не подключены.
+        # руления не задан, показания тахометра не влияют на команду.
         for module in MODULE_IDS:
             for direction, sign in (("forward", 1), ("backward", -1)):
                 send(40, module, direction)
@@ -498,7 +505,8 @@ def test_direct_slider_api_reaches_real_firmware_sim_over_serial(simulator, kios
                                 tick=lambda: send(value, direction=direction)), source.read()
             send(0)
             assert wait_for(lambda: all(v == 0 for v in servo_values().values())), source.read()
-        assert all(motor["rpm"] is None and motor["tach"] is False for motor in motors().values())
+        assert all(motor["rpm"] is None and motor["tach"] is False and motor["scRpm"] == 0
+                   for motor in motors().values())
     finally:
         if source is not None:
             source._stop = True
@@ -522,8 +530,10 @@ def test_latched_drive_in_real_browser_through_all_four_simulated_usb_boards(sim
     from robot_control import slam
 
     base = tmp_path / "browser-wheel"
+    # Искусственные частоты SC независимы от Servo и проверяют весь путь в UI.
+    env = dict(os.environ, RC_SIM_SC_HZ="90,180,45,0")
     process = subprocess.Popen([str(simulator), "pty", str(base)], stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True)
+                               stderr=subprocess.PIPE, text=True, env=env)
     source = server = thread = None
 
     def wait_for(predicate, timeout=8):
