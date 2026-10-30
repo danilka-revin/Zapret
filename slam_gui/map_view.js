@@ -23,8 +23,8 @@
   const ROBOT_WIDTH_M = 0.60;
   const ROBOT_HEIGHT_M = 0.30;
   const LIDAR_OFFSET_X_M = 0.35;
-  const WHEELBASE_M = 0.55;
-  const TRACK_M = 0.46;
+  const WHEELBASE_M = 0.50;    // расстояния между осями поворота, по умолчанию
+  const TRACK_M = 0.38;
   const GOAL_STORAGE_KEY = 'rc_nav_goal_v1';
 
   const DEFAULTS = {
@@ -294,7 +294,7 @@
 
     // Четыре поворачиваемых колеса.
     const wxOff = halfL * (WHEELBASE_M / ROBOT_LENGTH_M);
-    const wyOff = halfW * 0.94;
+    const wyOff = halfW * (TRACK_M / ROBOT_WIDTH_M);
     const wLen = Math.max(5, lenPx * 0.22);
     const wWid = Math.max(3, widPx * 0.14);
     for (const sx of [-1, 1]) {

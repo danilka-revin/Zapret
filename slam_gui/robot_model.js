@@ -47,6 +47,18 @@
   let receivedAt = 0;
   const finite = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 
+  // The markers approximate the wheel contact at each steering axis. Show the
+  // server's saved maneuver geometry when available, not just the defaults.
+  function axisGeometry() {
+    const chassis = data && data.maneuverConfig && data.maneuverConfig.chassis;
+    const meters = (value, fallback) => finite(value) && Number(value) >= 100 && Number(value) <= 3000
+      ? Number(value) / 1000 : fallback;
+    return {
+      wheelbase: meters(chassis && chassis.wheelbaseMm, 0.50),
+      track: meters(chassis && chassis.trackMm, 0.38)
+    };
+  }
+
   function update(snapshot, now = Date.now()) {
     data = snapshot && typeof snapshot === 'object' ? snapshot : null;
     receivedAt = now;
@@ -90,10 +102,11 @@
     ctx.lineTo(-.375 * k, -.30 * k); ctx.lineTo(-.375 * k, .30 * k);
     ctx.lineTo(.295 * k, .30 * k); ctx.lineTo(.375 * k, .22 * k); ctx.closePath(); ctx.fill(); ctx.stroke();
     // Per-wheel telemetry: FL/FR at +X; left is +Y, hence screen -Y.
+    const axes = axisGeometry();
     live.wheels.forEach(wheel => {
       const front = wheel.id[0] === 'F' ? 1 : -1;
       const side = wheel.id[1] === 'L' ? 1 : -1;
-      ctx.save(); ctx.translate(front * .275 * k, -side * .25 * k);
+      ctx.save(); ctx.translate(front * axes.wheelbase / 2 * k, -side * axes.track / 2 * k);
       // Target is an unfilled, dashed outline; actual is a smaller solid wheel.
       // Distinct shapes remain readable when colors coincide or angles overlap.
       if (Number.isFinite(wheel.targetRadians)) {

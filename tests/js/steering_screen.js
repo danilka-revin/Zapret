@@ -104,6 +104,11 @@ class El {
   getBoundingClientRect() { return { width: 320, height: 320, top: 0, left: 0 }; }
   setAttribute(name, value) { this[name] = value; }
   getAttribute(name) { return this[name] === undefined ? null : this[name]; }
+  checkValidity() {
+    const value = Number(this.value);
+    return this.value.trim() !== '' && Number.isFinite(value) &&
+      (this.min === '' || value >= Number(this.min)) && (this.max === '' || value <= Number(this.max));
+  }
   focus() { global.document.activeElement = this; }
   click() { this.fire('click'); }
   fire(name, extra) {
@@ -263,6 +268,12 @@ global.fetch = async (url, init) => {
                         values: body.values === undefined ? null : body.values});
     if (payload.maneuverConfigRefuse) {
       return jsonResponse({ ok: false, reason: payload.maneuverConfigRefuse }, 400);
+    }
+    if (body.name === 'chassis') {
+      const config = payload.data.maneuverConfig || {};
+      config.chassis = Object.assign({}, config.chassis || {}, body.values);
+      payload.data.maneuverConfig = config;
+      return jsonResponse({ ok: true, config }, 200);
     }
     return jsonResponse({ ok: true }, 200);
   }
@@ -523,6 +534,14 @@ function findPreset(id) {
     } else if (action.type === 'stop') {
       byId('drive-stop').fire('click');
       await flush(3);
+    } else if (action.type === 'geometry') {
+      for (const [key, value] of Object.entries(action.values || {})) {
+        const input = byId('geometry-' + key);
+        input.value = String(value);
+        input.fire('input');
+      }
+      if (action.save !== false) byId('geometry-save').fire('click');
+      await flush(action.rounds || 6);
     } else if (action.type === 'maneuver') {
       const id = String(action.id || 'forward');
       if (action.target !== undefined) {
@@ -607,6 +626,12 @@ function findPreset(id) {
       active: byId('maneuver-status').dataset.active,
     },
     maneuversSent,
+    geometry: {
+      wheelDiameterMm: byId('geometry-wheelDiameterMm').value,
+      wheelbaseMm: byId('geometry-wheelbaseMm').value,
+      trackMm: byId('geometry-trackMm').value,
+      status: byId('geometry-status').textContent,
+    },
     heroAngle: byId('steer-hero-angle').textContent,
     heroMode: byId('steer-hero-mode').textContent,
     masterValue: byId('steer-master-value').textContent,

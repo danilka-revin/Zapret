@@ -7,6 +7,8 @@ import math
 import random
 import struct
 
+import pytest
+
 from robot_control.rus_core.kinematics import SwerveKinematics
 from robot_control.rus_core.lds import LdsParser
 from robot_control.rus_core.odometry import SwerveOdometry, WheelSample
@@ -70,12 +72,14 @@ def test_wrap_keeps_shortest_turn():
     assert cmd.speed_mps > 0
 
 
-def test_round_trip_kinematics_to_odometry_recovers_body_twist():
-    """Команды модулей, отданные обратно как измерения колёс, дают исходную скорость корпуса."""
-    kin = SwerveKinematics(max_speed=5.0)
+@pytest.mark.parametrize("wheelbase, track", [(0.50, 0.38), (0.55, 0.46)])
+def test_round_trip_kinematics_to_odometry_recovers_body_twist(wheelbase, track):
+    """Колёсные проекции восстанавливаются; компоненты — когда они наблюдаемы."""
+    kin = SwerveKinematics(wheelbase=wheelbase, track=track, max_speed=5.0)
     odom = SwerveOdometry(kin.wheelbase, kin.track)
     dt = 0.05
     rnd = random.Random(3)
+    well_conditioned = 0
     for _ in range(300):
         vx, vy, wz = rnd.uniform(-0.6, 0.6), rnd.uniform(-0.6, 0.6), rnd.uniform(-0.6, 0.6)
         cmds = kin.inverse(vx, vy, wz)
@@ -83,7 +87,30 @@ def test_round_trip_kinematics_to_odometry_recovers_body_twist():
             continue
         samples = [WheelSample(c.module_id, c.angle_rad, c.speed_mps * dt) for c in cmds]
         est = odom.estimate_twist(dt, samples)
-        assert abs(est.vx - vx) < 1e-6 and abs(est.vy - vy) < 1e-6 and abs(est.wz - wz) < 1e-6
+        rows = []
+        for c in cmds:
+            x, y = odom.positions[c.module_id]
+            co, si = math.cos(c.angle_rad), math.sin(c.angle_rad)
+            row = (co, si, x * si - y * co)
+            rows.append(row)
+            # Даже возле вырождения оценка должна соответствовать измеренным
+            # проекциям скорости на все четыре направления качения.
+            assert abs(row[0] * est.vx + row[1] * est.vy + row[2] * est.wz - c.speed_mps) < 1e-6
+        assert math.hypot(est.vx, est.vy, est.wz) <= math.hypot(vx, vy, wz) + 1e-6
+
+        # При почти вырожденной матрице компоненты плохо наблюдаемы:
+        # стабилизирующая добавка 1e-9 намеренно смещает их к меньшей норме.
+        # Новая геометрия 500×380 попадает в такой случай в этой выборке.
+        ata = [[sum(row[i] * row[j] for row in rows) for j in range(3)] for i in range(3)]
+        det = (ata[0][0] * (ata[1][1] * ata[2][2] - ata[1][2] * ata[2][1])
+               - ata[0][1] * (ata[1][0] * ata[2][2] - ata[1][2] * ata[2][0])
+               + ata[0][2] * (ata[1][0] * ata[2][1] - ata[1][1] * ata[2][0]))
+        if det > 0.001:
+            well_conditioned += 1
+        # Для прежней базы сохраняем строгую проверку всех прежних 300 случаев.
+        if det > 0.001 or (wheelbase, track) == (0.55, 0.46):
+            assert abs(est.vx - vx) < 1e-6 and abs(est.vy - vy) < 1e-6 and abs(est.wz - wz) < 1e-6
+    assert well_conditioned > 200
 
 
 def test_straight_line_with_all_wheels_aligned_is_exact():

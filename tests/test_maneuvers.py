@@ -110,6 +110,30 @@ def test_turn_radius_uses_base_and_track():
     assert round(m.turn_radius_m(chassis), 3) == 0.500
 
 
+def test_measured_pivot_axes_determine_the_default_spin_geometry():
+    """Продольная база 500 мм, поперечная колея 380 мм — не наоборот."""
+    chassis = m.default_config()["chassis"]
+    assert chassis["wheelbaseMm"] == 500.0
+    assert chassis["trackMm"] == 380.0
+    assert m.turn_radius_m(chassis) == pytest.approx(0.31400636936215165)
+    assert m.pivot_angle_deg(chassis) == pytest.approx(52.76516601842533)
+
+    angles, signs = m.steering_targets("spin_left", chassis)
+    assert angles == pytest.approx({
+        "FL": 52.76516601842533, "FR": -52.76516601842533,
+        "RL": -52.76516601842533, "RR": 52.76516601842533,
+    })
+    assert signs == {"FL": -1, "FR": 1, "RL": -1, "RR": 1}
+
+    # Для цели 90° каждый контакт проходит примерно 493,24 мм при
+    # идеальном вращении без смещения и проскальзывания.
+    runner = m.ManeuverRunner()
+    assert runner.start("spin_left", 0.0)["ok"]
+    assert runner._target_wheel_path() == pytest.approx(0.49324005158426937)
+    runner._travel = {module: 0.49324005158426937 for module in MODULES}
+    assert runner._odometry_value() == pytest.approx(90.0)
+
+
 def test_straight_maneuvers_keep_wheels_straight():
     angles, signs = m.steering_targets("forward")
     assert set(angles.values()) == {0.0}
@@ -224,6 +248,43 @@ def test_config_survives_a_round_trip_on_disk(tmp_path):
     assert loaded["presets"]["forward"]["distanceM"] == 1.35
     assert loaded["chassis"]["wheelDiameterMm"] == 254.0
     assert loaded["learned"]["forward"] == {"rate": 0.28, "percent": 12.0}
+
+
+def test_missing_config_uses_measured_axes_without_creating_a_file(tmp_path):
+    path = tmp_path / "maneuvers.json"
+    config = m.load_config(path)
+    assert config["chassis"]["wheelbaseMm"] == 500.0
+    assert config["chassis"]["trackMm"] == 380.0
+    assert not path.exists()
+
+
+def test_saved_geometry_is_preserved_until_operator_edits_it(tmp_path):
+    path = tmp_path / "maneuvers.json"
+    original = m.default_config()
+    original["chassis"].update(wheelDiameterMm=207.5, trackMm=450.0)
+    original["presets"]["forward"]["distanceM"] = 1.35
+    original["learned"]["spin_left"] = {"rate": 20.0, "percent": 10.0}
+    m.save_config(original, path)
+    contents = path.read_bytes()
+
+    loaded = m.load_config(path)
+    runner = m.ManeuverRunner(loaded)
+    assert path.read_bytes() == contents  # чтение и создание раннера ничего не мигрируют
+    assert runner.config_payload()["chassis"]["trackMm"] == 450.0
+    assert m.turn_radius_m(loaded["chassis"]) == pytest.approx(0.3363406011768428)
+    assert m.pivot_angle_deg(loaded["chassis"]) == pytest.approx(48.01278750418334)
+    assert runner.config_payload()["learned"]["spin_left"]["rate"] == 20.0
+
+    # Только явное сохранение оператором меняет колею; его другие настройки целы.
+    result = runner.update_config("chassis", {"trackMm": 380.0})
+    assert result["ok"]
+    m.save_config(runner.config, path)
+    updated = m.load_config(path)
+    assert updated["chassis"]["trackMm"] == 380.0
+    assert updated["chassis"]["wheelDiameterMm"] == 207.5
+    assert updated["presets"]["forward"]["distanceM"] == 1.35
+    assert updated["learned"] == {}   # оценки скорости пересчитывают при смене шасси
+    assert m.pivot_angle_deg(updated["chassis"]) == pytest.approx(52.76516601842533)
 
 
 def test_broken_config_file_returns_factory_defaults(tmp_path):
