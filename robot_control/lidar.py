@@ -46,6 +46,7 @@ import math
 import os
 import re
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -1021,12 +1022,15 @@ def excluded_ports() -> set[str]:
     """Порты, которые лидару трогать нельзя: мастер и модули шасси."""
     ports: set[str] = set()
     raw = os.environ.get("RC_LIDAR_EXCLUDE") or ""
-    for name in ("RC_SLAM_PORT", "RC_SLAM_MASTER_PORT",
-                 "RC_WHEEL_FL_PORT", "RC_WHEEL_FR_PORT",
-                 "RC_WHEEL_RL_PORT", "RC_WHEEL_RR_PORT"):
-        value = os.environ.get(name)
-        if value:
-            raw = raw + "," + value
+    if os.environ.get("RC_USB_DISCOVERY_MODE") != "1":
+        # Legacy/standalone serial mode only. In master auto mode these old
+        # paths can now refer to a completely different device.
+        for name in ("RC_SLAM_PORT", "RC_SLAM_MASTER_PORT",
+                     "RC_WHEEL_FL_PORT", "RC_WHEEL_FR_PORT",
+                     "RC_WHEEL_RL_PORT", "RC_WHEEL_RR_PORT"):
+            value = os.environ.get(name)
+            if value:
+                raw = raw + "," + value
     raw = raw + "," + (os.environ.get("RC_SLAM_PORTS") or "")
     for chunk in raw.split(","):
         chunk = chunk.strip()
@@ -1165,17 +1169,21 @@ def _pid_alive(pid: int) -> bool:
 
 def _write_state_file(path: Path, payload: dict[str, Any]) -> None:
     """Пишет JSON состояния атомарно: читатель не увидит половину файла."""
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(payload, ensure_ascii=False), "utf-8")
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as handle:
+            tmp = Path(handle.name)
+            json.dump(payload, handle, ensure_ascii=False)
         os.replace(tmp, path)
     except OSError as exc:
         log.debug("Лидар: не записать %s: %s", path.name, exc)
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def _read_state_file(path: Path, ttl: float) -> Optional[dict[str, Any]]:
@@ -1201,6 +1209,83 @@ def _read_state_file(path: Path, ttl: float) -> Optional[dict[str, Any]]:
 def ports_state_dir() -> Path:
     """Каталог журнала портов: ``data/ports`` (см. ``PORTS_STATE_SUBDIR``)."""
     return DATA_DIR / PORTS_STATE_SUBDIR
+
+
+def publish_usb_scan(checked: Iterable[tuple[str, tuple[int, int, int], Optional[bool]]]) -> None:
+    """Publish passive wheel checks and JBD results to the other processes.
+
+    A stale/missing record grants no access. Fingerprints prevent a new USB
+    device reusing the old tty name from inheriting the old classification.
+    """
+    entries = [{"port": path, "device": os.path.realpath(path), "fingerprint": list(fingerprint),
+                "bms": is_bms} for path, fingerprint, is_bms in checked]
+    _write_state_file(ports_state_dir() / ("usb-scan-%d.json" % os.getpid()),
+                      {"pid": os.getpid(), "at": time.time(), "ports": entries})
+
+
+def publish_bms_port(port: str | None) -> None:
+    path = ports_state_dir() / ("bms-state-%d.json" % os.getpid())
+    if not port:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    try:
+        st = os.stat(port)
+    except OSError:
+        return
+    _write_state_file(path, {"pid": os.getpid(), "at": time.time(),
+                             "port": port, "device": os.path.realpath(port),
+                             "fingerprint": [st.st_dev, st.st_ino, st.st_rdev, st.st_ctime_ns]})
+
+
+def detected_bms_ports() -> set[str]:
+    result: set[str] = set()
+    for path in ports_state_dir().glob("bms-state-*.json"):
+        data = _read_state_file(path, MODULE_TAG_TTL_S)
+        if not data:
+            continue
+        port = data.get("port")
+        device = data.get("device")
+        if not isinstance(port, str) or not port:
+            continue
+        try:
+            st = os.stat(port)
+        except OSError:
+            continue
+        if (os.path.realpath(port) == device and
+                data.get("fingerprint") == [st.st_dev, st.st_ino, st.st_rdev, st.st_ctime_ns]):
+            result.update((port, device))
+    return result
+
+
+def checked_usb_ports(*, lidar_only: bool = False) -> list[str]:
+    """Live unchanged passive checks; lidar also requires a negative JBD probe."""
+    result = []
+    for path in sorted(ports_state_dir().glob("usb-scan-*.json")):
+        data = _read_state_file(path, LIDAR_STATE_TTL_S)
+        if not data:
+            continue
+        for entry in data.get("ports") or []:
+            if not isinstance(entry, dict) or (lidar_only and entry.get("bms") is not False):
+                continue
+            port = entry.get("port")
+            if not isinstance(port, str) or not port:
+                continue
+            try:
+                st = os.stat(port)
+                fingerprint = [st.st_dev, st.st_ino, st.st_rdev, st.st_ctime_ns]
+            except OSError:
+                continue
+            if (entry.get("fingerprint") == fingerprint and
+                    entry.get("device") == os.path.realpath(port) and port not in result):
+                result.append(port)
+    return result
+
+
+def checked_lidar_ports() -> list[str]:
+    return checked_usb_ports(lidar_only=True)
 
 
 def lidar_state_file(pid: Optional[int] = None) -> Path:
@@ -2267,11 +2352,9 @@ class LidarManager:
         return self.feed_scan_msg(**fields)
 
     def stop(self) -> None:
-        self._stop = True
-        self._release_port_lock()
-        # Состояние в общем журнале: без этого мёртвый процесс держал бы порты
-        # «в приоритете» лидара, пока не истечёт TTL файла.
-        self._clear_state()
+        # Do not release the common lock while the serial worker still has the
+        # UART open: another subsystem could open/reset it in that interval.
+        self._stop_worker()
 
     # ------------------------- настройки (веб-панель) ---------------------- #
 
@@ -2326,8 +2409,11 @@ class LidarManager:
         self._stop = True
         if thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=timeout)
-        self._release_port_lock()
-        self._clear_state()
+        if not thread or not thread.is_alive():
+            self._release_port_lock()
+            self._clear_state()
+        # If the worker is still exiting, it owns the lock until _read_port's
+        # finally block has closed the serial handle.
 
     def reconfigure(self, settings: dict[str, Any]) -> dict[str, Any]:
         """Новые настройки без перезапуска приложения: поиск начинается заново.
@@ -2567,6 +2653,21 @@ class LidarManager:
         ports = discover_ports(
             configured=self.port, autoprobe=wide, excluded=excluded
         )
+        if os.environ.get("RC_USB_DISCOVERY_MODE") == "1":
+            # Never send lidar motor/scan commands to an unclassified USB
+            # device. The owner first listens for wheels and probes JBD BMS.
+            allowed_paths = checked_lidar_ports()
+            allowed = {os.path.realpath(p) for p in allowed_paths}
+            ports = [p for p in ports if os.path.realpath(p) in allowed]
+            from .battery import reserved_ports
+            blocked = excluded | reserved_ports()
+            blocked |= {os.path.realpath(p) for p in blocked}
+            seen = {os.path.realpath(p) for p in ports}
+            for path in allowed_paths:
+                real = os.path.realpath(path)
+                if path not in blocked and real not in blocked and real not in seen:
+                    ports.append(path)
+                    seen.add(real)
         if ports:
             known = self._sticky_port(ports)
             if known is not None:
@@ -3207,8 +3308,16 @@ class LidarManager:
     def _acquire_port_lock(self, port: str) -> bool:
         """Пытается занять порт. False — его уже читает другой процесс робота."""
         fd = try_lock_port(port)
-        if fd is None:
+        if fd is None or (fd == -1 and os.environ.get("RC_USB_DISCOVERY_MODE") == "1"):
             return False
+        if os.environ.get("RC_USB_DISCOVERY_MODE") == "1":
+            from .battery import reserved_ports
+            real = os.path.realpath(port)
+            blocked = reserved_ports() | set(chassis_module_ports())
+            if (real not in {os.path.realpath(p) for p in checked_lidar_ports()} or
+                    real in {os.path.realpath(p) for p in blocked}):
+                unlock_port(fd)
+                return False
         self._release_port_lock()
         self._lock_fd = fd
         return True

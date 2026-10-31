@@ -1,7 +1,7 @@
-"""USB port names and reservations. Wheel assignments are manual only.
+"""USB serial enumeration and reservations for automatic wheel discovery.
 
-Listing serial devices never opens them. Legacy RC_SLAM_PORT diagnostics are
-retained for compatibility; the wheel source uses only RC_WHEEL_*_PORT.
+Listing devices does not open them. Roles are proved by fw22 telemetry rather
+than by port order; legacy configured-port helpers remain for diagnostics.
 """
 
 from __future__ import annotations
@@ -116,6 +116,19 @@ def reserved_ports() -> set[str]:
         out.add(value)
         out.add(_real(value))
     return out
+
+
+def autodiscovery_reserved_ports() -> set[str]:
+    """Only active owners and explicit exclusions, not stale wheel/BMS hints."""
+    from .lidar import lidar_active_port
+
+    # BMS remains in the topology after its passive wheel probe so its
+    # fingerprint survives; its held lock and the cached result prevent opens.
+    values = {lidar_active_port()}
+    for name in ("RC_SLAM_PORTS", "RC_LIDAR_EXCLUDE"):
+        values.update(chunk.strip() for chunk in (os.environ.get(name) or "").replace(";", ",").split(","))
+    paths = {str(value) for value in values if value}
+    return paths | {os.path.realpath(value) for value in paths}
 
 
 def master_ports(configured: str | None = None) -> list[str]:

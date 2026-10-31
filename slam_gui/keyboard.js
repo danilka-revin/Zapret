@@ -43,7 +43,7 @@
     const state = {enabled: false, enabling: false, token: null, sequence: 0,
       generation: 0, keys: new Set(), timer: null, running: null, planning: false,
       drivePending: false, pingPending: false, lastTick: 0, lastDrive: 0, lastPing: 0,
-      chain: Promise.resolve()};
+      chain: Promise.resolve(), retirement: Promise.resolve()};
     const reasons = {
       keyboard_expired: 'Управление просрочено; включите WASD заново.',
       keyboard_session: 'WASD прервано другой командой; включите заново.',
@@ -110,8 +110,9 @@
       return post(Object.assign({action, session: token, sequence}, values || {}), keepalive);
     }
     function retire(token, sequence, keepalive) {
-      if (!token) return;
-      void post({action: 'end', session: token, sequence}, keepalive).catch(() => {});
+      if (!token) return state.retirement;
+      state.retirement = post({action: 'end', session: token, sequence}, keepalive).catch(() => {});
+      return state.retirement;
     }
     function disable(message, keepalive) {
       const token = state.token;
@@ -127,7 +128,7 @@
       state.timer = null;
       updateButton();
       show(message || 'WASD выключено; тяга снята.');
-      retire(token, sequence, keepalive);
+      return retire(token, sequence, keepalive);
     }
     function fail(error) {
       const reason = error && error.message || 'command_failed';
@@ -352,7 +353,7 @@
     window.addEventListener('pagehide', () => { if (state.enabled || state.enabling) disable('Страница закрыта · WASD выключено.', true); });
     document.addEventListener('visibilitychange', () => { if (document.hidden && (state.enabled || state.enabling)) disable('Вкладка скрыта · WASD выключено.', true); });
     updateButton();
-    return {disable, isActive: () => state.enabled || state.enabling,
+    return {disable, waitForStop: () => state.retirement, isActive: () => state.enabled || state.enabling,
       session: () => state.token,
       stateChanged: () => { if (state.enabled) { const error = snapshotError(options.getState()); if (error) fail(new Error(error)); } }};
   }

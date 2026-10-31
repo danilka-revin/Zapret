@@ -2,8 +2,8 @@
 
 * Пины, уровни и скорости берутся из скетча, проверенного на железе
   (firmware/reference/steering_tested) — расхождение ловится здесь, а не на роботе.
-* I²C вырезан: каждое колесо — своя плата на своём USB, порты назначает
-  оператор; новая телеметрия не содержит роль колеса.
+* I²C вырезан: каждое колесо — своя плата на своём USB, fw22+ сообщает
+  CRC-защищённую роль; fw23 сохраняет поправку полного нуля в EEPROM.
 * tests/firmware_sim — хост-симуляция четырёх плат (TB6600, оптодатчик D18):
   калибровка из разных положений, ошибки датчика, команды монитора, тяга и
   watchdog. Нужен g++; без него тест пропускается.
@@ -168,17 +168,14 @@ def test_drive_uses_servo_values_without_tachometer_feedback():
     assert re.search(r"^DRIVE_DUTY_MAX_PERMILLE = 1000$", mirror, re.M)
 
 
-def test_firmware_has_no_usb_role_discovery():
+def test_firmware_transmits_its_wheel_role_in_checked_telemetry():
     text = _text(WHEEL)
-    assert 'printIdentity' not in text
-    assert '@ID' not in text
-    assert 'PSTR("@TLM deg=%s' in text
-    assert 'mod=%s' not in text
-    # Legacy addressed monitor commands remain compatible; the application
-    # sends local commands to the manually selected port.
+    assert 'PSTR("@TLM mod=%s' in text
+    assert 'wheelIdentityCode()' in text
+    # Addressed commands remain compatible; the server verifies the role
+    # before sending anything to an automatically discovered port.
     assert 'classifyModuleToken' in text
-    # v21 retains live control and adds checked compact telemetry.
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '21'
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '23'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
@@ -350,7 +347,11 @@ def test_fast_and_full_simulated_frames_encode_the_same_instant(simulator):
     fast = backend.parse_master_line(short, module="FR")
     slow = backend.parse_master_line(full, module="FR")
     assert fast is not None and fast == slow
-    assert fast["firmware"] == 21 and fast["liveId"] == 42 and fast["liveSeq"] == 3
+    assert fast["firmware"] == 23 and fast["mod"] == "FR" and fast["liveId"] == 42 and fast["liveSeq"] == 3
+    assert backend.parse_master_line(short) == fast
+    assert backend.parse_master_line(full) == slow
+    assert backend.parse_master_line(short, module="FL") is None
+    assert backend.parse_master_line(full, module="FL") is None
     assert fast["drivePercent"] == 20 and fast["moving"] and fast["scRecent"]
     assert len(short) < len(full) / 2
 
@@ -380,7 +381,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 21 and frame["calibError"] == 0
+        assert frame["firmware"] == 23 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] is None
         assert frame["tach"] is False and frame["tachHz"] is None
         assert frame["scRpm"] == 0.0 and frame["scHz"] == 0 and frame["scPpr"] == 90

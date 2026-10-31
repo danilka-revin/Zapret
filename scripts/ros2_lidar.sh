@@ -85,6 +85,15 @@ for _key in RC_LIDAR_PROTOCOL RC_LIDAR_PORT RC_LIDAR_BAUD RC_LIDAR_SOURCE \
 done
 unset _key _value
 
+# In the normal four-wheel configuration the onboard owner classifies USB
+# devices first. The ROS supervisor waits for its allowlist instead of opening
+# an unidentified wheel or BMS, even when this service starts first.
+if [[ "${RC_SLAM_SOURCE:-master}" == "master" ]]; then
+  export RC_USB_DISCOVERY_MODE=1
+  export RC_USB_DISCOVERY_DIR="$ROOT/data/ports"
+  export RC_USB_LOCK_DIR="$ROOT/data"
+fi
+
 # --- 1. что запускать: модель, порт, скорость -------------------------------- #
 [[ -n "$MODEL" ]] || MODEL="${RC_LIDAR_PROTOCOL:-auto}"
 [[ -n "$PORT"  ]] || PORT="$(read_env RC_LIDAR_PORT '')"

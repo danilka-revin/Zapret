@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from .frames import (PROTOCOL_BAUDS, RPLIDAR_CMD_SCAN, SCORE_STRONG, SCORE_WEAK,
                      score_bytes)
+from . import usb_guard
 
 log = logging.getLogger("zapret_lidar.probe")
 
@@ -60,10 +61,16 @@ def read_bytes(port: str, baud: int, window: float = READ_WINDOW_S,
     занимало секунды на каждой скорости и каждом порту. Для проверки нам достаточно 0,45 с.
     """
     timeout = max(0.02, min(0.1, window))
-    handle = _open(port, baud, timeout=timeout)
-    if handle is None:
+    token = usb_guard.claim(port)
+    if token is None:
         return b""
+    handle = None
     try:
+        if not usb_guard.permitted(port):
+            return b""
+        handle = _open(port, baud, timeout=timeout)
+        if handle is None:
+            return b""
         if command:
             try:
                 handle.dtr = False
@@ -100,10 +107,12 @@ def read_bytes(port: str, baud: int, window: float = READ_WINDOW_S,
             total += len(data)
         return b"".join(chunks)
     finally:
-        try:
-            handle.close()
-        except Exception:  # noqa: BLE001
-            pass
+        if handle is not None:
+            try:
+                handle.close()
+            except Exception:  # noqa: BLE001
+                pass
+        usb_guard.release(token)
 
 
 def probe_port(port: str, *, bauds: Optional[dict[str, tuple[int, ...]]] = None,

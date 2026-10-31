@@ -158,7 +158,7 @@ static long count_since(const sim::Board& board, const char* text, size_t from) 
 }
 
 struct FastFrame {
-  unsigned firmware = 0, status = 0, maximum = 0, servo = 0, hz = 0, ppr = 0, recent = 0, neutral_lock = 0;
+  unsigned firmware = 0, identity = 0, status = 0, maximum = 0, servo = 0, hz = 0, ppr = 0, recent = 0, neutral_lock = 0;
   long deg = 0, target = 0;
   int drive = 0;
   unsigned long rpm10 = 0, edges = 0, brake = 0, neutral = 0, live = 0, sequence = 0, time = 0;
@@ -178,7 +178,7 @@ static bool latest_fast_frame(const sim::Board& board, FastFrame* out) {
   if (!tail || *tail || expected != wheel_fr::telemetryCrc16(payload.c_str(), (uint16_t)payload.size())) return false;
   std::istringstream input(payload);
   std::string prefix;
-  input >> prefix >> out->firmware >> out->deg >> out->target >> out->status >> out->drive
+  input >> prefix >> out->firmware >> out->identity >> out->deg >> out->target >> out->status >> out->drive
         >> out->maximum >> out->servo >> out->rpm10 >> out->hz >> out->ppr >> out->edges
         >> out->recent >> out->brake >> out->neutral >> out->neutral_lock >> out->live >> out->sequence >> out->time;
   return !input.fail() && prefix == "@F";
@@ -846,15 +846,16 @@ static void calibrate_all() {
   sim::run_for_ms(300);                  // телеметрия всех четырёх колёс
 }
 
-// Only telemetry, no USB-port/role discovery response.
+// Identity is part of the telemetry and is covered by its CRC.
 static void scenario_identity() {
   boot(all_boards());
   for (sim::Board* board : all_boards()) board->serial.send("@ID");
   sim::run_for_ms(300);
   for (sim::Board* board : all_boards()) {
     CHECK(!has(*board, "@ID"), "no discovery answer");
-    CHECK(has(*board, "@TLM deg="), "telemetry on selected port");
-    CHECK(!has(*board, "mod="), "role is not reported by firmware");
+    const std::string role = std::string("@TLM mod=") + board->name + " deg=";
+    CHECK(board->serial.output.find(role) != std::string::npos && has(*board, "crc="),
+          "checksummed identity in telemetry for %s", board->name);
   }
   board_fl.serial.send("w RR 90");
   sim::run_for_ms(200);
@@ -870,13 +871,13 @@ static void scenario_system_calibrate_all() {
         "колёса на нулях датчиков: %ld %ld %ld %ld", board_fl.phys, board_fr.phys, board_rl.phys,
         board_rr.phys);
   for (sim::Board* board : all_boards()) {
-    const std::string tag = std::string("@TLM deg=0.00 tgt=0.00 moving=0 cal=1 cycle=0 calib=0");
+    const std::string tag = std::string("@TLM mod=") + board->name + " deg=0.00 tgt=0.00 moving=0 cal=1 cycle=0 calib=0";
     CHECK(board->serial.output.find(tag) != std::string::npos,
           "телеметрия %s после калибровки: %s", board->name, board->serial.output.c_str());
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=21"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=23"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -895,7 +896,7 @@ static void scenario_system_server_commands() {
         "w FR 12.5 на своём порту: FR=%ld", (long)wheel_fr::stepNow());
   CHECK(wheel_fl::stepNow() == 0 && wheel_rl::stepNow() == 0, "остальные не тронуты");
   sim::run_for_ms(300);                  // телеметрия FR: tgt=12.50 в кадре
-  CHECK(has(board_fr, "@TLM deg=12.50 tgt=12.50 moving=0 cal=1"), "телеметрия FR на 12.5°");
+  CHECK(has(board_fr, "@TLM mod=FR deg=12.50 tgt=12.50 moving=0 cal=1"), "телеметрия FR на 12.5°");
   board_fl.serial.send("w FL -7");
   CHECK(wait_until([] { return !wheel_fl::motorBusy() && wheel_fl::stepNow() == -933; }, 3000),
         "w FL -7 — своё колесо: %ld", (long)wheel_fl::stepNow());
@@ -993,7 +994,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v21"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v23"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -2051,14 +2052,185 @@ static void scenario_telemetry_capacity() {
   board_fr.serial.writable = 63;
   wheel_fr::last_telemetry_ms = (uint32_t)millis() - wheel_fr::FULL_TELEMETRY_PERIOD_MS;
   wheel_fr::loop();
-  CHECK(has(board_fr, "\r\n@TLM deg=") && has(board_fr, "sc_ppr=90 sc_count=") &&
+  CHECK(has(board_fr, "\r\n@TLM mod=FR deg=") && has(board_fr, "sc_ppr=90 sc_count=") &&
         board_fr.serial.output.size() >= 2 &&
         board_fr.serial.output.substr(board_fr.serial.output.size() - 2) == "\r\n",
         "после освобождения TX телеметрия продолжается: %s", board_fr.serial.output.c_str());
 }
 
+// Full zero persists per board and is applied during, not before, k.
+static void scenario_full_zero_reboot() {
+  boot({&board_fr});
+  calibrate_fr();
+  board_fr.serial.send("w 1.3");
+  sim::run_for_ms(3);
+  CHECK(wait_until(fr_settled, 3000), "first correction settled");
+  const long physical = board_fr.phys;
+  board_fr.serial.send("zq 201");
+  sim::run_for_ms(250);
+  CHECK(FR::zero_reply_status == 1 && FR::zero_reply_id == 201, "preflight ready");
+  CHECK(has(board_fr, "@Z 23 2 201 1 "), "checked preflight returned");
+  board_fr.serial.send("zc 202");
+  sim::run_for_ms(250);
+  CHECK(FR::zero_reply_status == 2 && FR::full_zero_steps == physical && FR::stepNow() == 0,
+        "EEPROM committed and coordinates rebased: %ld %ld %ld", (long)FR::full_zero_steps,
+        physical, (long)FR::stepNow());
+  CHECK(has(board_fr, "@Z 23 2 202 2 "), "checked commit returned");
+  const uint32_t generation = FR::full_zero_generation;
+  board_fr.serial.send("zc 202"); // retry is idempotent
+  sim::run_for_ms(2);
+  CHECK(FR::full_zero_generation == generation, "duplicate does not write EEPROM");
+
+  // setup() does not reset globals in the simulator; reset session state just
+  // as the AVR startup does, retaining only board EEPROM and physical position.
+  FR::zero_set = false;
+  FR::home_source = FR::HOME_NONE;
+  FR::current_step = FR::target_step = 0;
+  FR::full_zero_steps = 0;
+  FR::full_zero_generation = 0;
+  FR::setup();
+  sim::run_for_ms(10);
+  CHECK(FR::full_zero_steps == physical && !FR::zero_set && board_fr.phys == physical,
+        "power-on loads trim, never starts movement");
+  calibrate_fr();
+  CHECK(FR::zero_set && FR::home_source == FR::HOME_OPTO && std::labs(board_fr.phys - physical) <= 1,
+        "k returns to stored physical zero: %ld != %ld", board_fr.phys, physical);
+  CHECK(FR::stepNow() == 0, "returned to corrected coordinate zero");
+
+  board_fr.serial.send("w -0.4");
+  sim::run_for_ms(3);
+  CHECK(wait_until(fr_settled, 3000), "second correction settled");
+  const long physical2 = board_fr.phys;
+  board_fr.serial.send("zc 203");
+  sim::run_for_ms(250);
+  CHECK(FR::zero_reply_status == 2 && FR::full_zero_steps == physical2 && FR::stepNow() == 0,
+        "recalibration adds new displacement to old offset");
+  calibrate_fr();
+  CHECK(std::labs(board_fr.phys - physical2) <= 1, "new offset used on next optical calibration");
+}
+
+static void scenario_full_zero_failures() {
+  boot({&board_fr});
+  board_fr.serial.send("zq 301");
+  sim::run_for_ms(3);
+  CHECK(FR::zero_reply_status == 3, "cannot save without optical calibration");
+  board_fr.serial.send("z");
+  board_fr.serial.send("zc 302");
+  sim::run_for_ms(3);
+  CHECK(FR::zero_reply_status == 3, "manual zero is not an optical reference");
+  calibrate_fr();
+  board_fr.serial.send("w 2.0");
+  sim::run_for_ms(3);
+  CHECK(wait_until(fr_settled, 3000), "move to first offset");
+  board_fr.serial.send("zc 303");
+  sim::run_for_ms(3);
+  const int32_t old = FR::full_zero_steps;
+  CHECK(FR::zero_reply_status == 2 && old != 0, "first offset committed");
+  uint8_t backup[1024];
+  std::memcpy(backup, board_fr.eeprom, sizeof(backup));
+  // Interrupt at every byte of the alternating write. Loading after any cut
+  // may select old or complete new, never an arbitrary intermediate value.
+  for (int remaining = 0; remaining <= 15; ++remaining) {
+    std::memcpy(board_fr.eeprom, backup, sizeof(backup));
+    FR::loadFullZero();
+    board_fr.eeprom_writes_left = remaining;
+    const bool committed = FR::persistFullZero(old + 111);
+    board_fr.eeprom_writes_left = -1;
+    FR::loadFullZero();
+    CHECK(FR::full_zero_steps == old || FR::full_zero_steps == old + 111,
+          "interrupted EEPROM never selects arbitrary value cut=%d offset=%ld", remaining, (long)FR::full_zero_steps);
+    if (committed) {
+      CHECK(!FR::full_zero_storage_fault && FR::full_zero_steps == old + 111, "verified write survives reboot");
+    } else if (!FR::fullZeroSlotBlank(1)) {
+      CHECK(FR::full_zero_storage_fault, "partially written slot fails closed cut=%d", remaining);
+    }
+  }
+  std::memcpy(board_fr.eeprom, backup, sizeof(backup));
+  FR::loadFullZero();
+  FR::current_step = FR::degreesToSteps(21.0f);
+  FR::target_step = FR::current_step;
+  board_fr.serial.send("zq 304");
+  sim::run_for_ms(3);
+  CHECK(FR::zero_reply_status == 5, "out-of-range proposed trim rejected");
+  FR::current_step = 0;
+  FR::target_step = 0;
+  board_fr.eeprom_writes_left = 0;
+  board_fr.serial.send("zc 305");
+  sim::run_for_ms(3);
+  CHECK(FR::zero_reply_status == 6 && FR::full_zero_storage_fault,
+        "failed EEPROM commit latches fault immediately");
+  board_fr.eeprom_writes_left = -1;
+  std::memcpy(board_fr.eeprom, backup, sizeof(backup));
+  FR::loadFullZero();
+  // Corrupt the only valid slot: calibration must not silently use zero.
+  board_fr.eeprom[FR::EEPROM_ZERO_SLOTS[FR::full_zero_slot] + 7] ^= 0x40;
+  FR::loadFullZero();
+  CHECK(FR::full_zero_storage_fault, "CRC corruption fails closed");
+  CHECK(!FR::startCalibration(), "calibration refuses corrupted EEPROM");
+  CHECK((FR::moduleStatus() & FR::STATUS_FULL_ZERO_FAULT) != 0, "fault reported in compact telemetry");
+  board_fr.serial.send("v 15");
+  sim::run_for_ms(3);
+  CHECK(!FR::drive_active && drive_idle(board_fr), "direct Servo cannot bypass EEPROM fault");
+  FR::zero_set = false;
+  const long physical_before_fault_commands = board_fr.phys;
+  board_fr.serial.send("z");
+  board_fr.serial.send("d 10 f");
+  board_fr.serial.send("q");
+  sim::run_for_ms(4);
+  CHECK(!FR::zero_set && !FR::motorBusy() && board_fr.phys == physical_before_fault_commands,
+        "fault also blocks manual zero, steering and potentiometer calibration");
+  // Even a stale/forged zero flag must not bypass fault through live WASD.
+  FR::zero_set = true;
+  FR::current_step = FR::target_step = 0;
+  board_fr.serial.send("b 777");
+  board_fr.serial.send("j 777 1 15 0");
+  sim::run_for_ms(4);
+  CHECK(!FR::drive_active && FR::live_id == 0 && drive_idle(board_fr),
+        "tagged brake cannot bypass EEPROM fault via live WASD");
+  // Service reset is an explicit, stationary, fault-only operation. It does not
+  // touch the potentiometer slots; a new optical calibration is still required.
+  FR::zero_set = false;
+  FR::home_source = FR::HOME_NONE;
+  board_fr.serial.send("zr wrong");
+  sim::run_for_ms(3);
+  CHECK(FR::full_zero_storage_fault, "no reset without exact confirmation");
+  board_fr.serial.send("zr CONFIRM");
+  sim::run_for_ms(3);
+  CHECK(!FR::full_zero_storage_fault && FR::full_zero_steps == 0 && !FR::zero_set,
+        "explicit service reset clears only failed trim");
+}
+
+static void scenario_full_zero_corrupt_latest() {
+  boot({&board_fr});
+  calibrate_fr();
+  board_fr.serial.send("w 1");
+  sim::run_for_ms(3);
+  CHECK(wait_until(fr_settled, 3000), "first correction");
+  board_fr.serial.send("zc 401");
+  sim::run_for_ms(3);
+  board_fr.serial.send("w 1");
+  sim::run_for_ms(3);
+  CHECK(wait_until(fr_settled, 3000), "second correction");
+  board_fr.serial.send("zc 402");
+  sim::run_for_ms(3);
+  const uint8_t latest = (uint8_t)FR::full_zero_slot;
+  FR::FullZeroRecord older;
+  CHECK(FR::readFullZeroSlot(latest ^ 1, &older), "older slot exists");
+  board_fr.eeprom[FR::EEPROM_ZERO_SLOTS[latest] + 7] ^= 0x01;
+  FR::loadFullZero();
+  CHECK(FR::full_zero_storage_fault, "bad committed newest CRC cannot silently fall back to old value");
+  // An erased marker is indistinguishable from an interrupted write.
+  board_fr.eeprom[FR::EEPROM_ZERO_SLOTS[latest] + 7] ^= 0x01;
+  board_fr.eeprom[FR::EEPROM_ZERO_SLOTS[latest]] = 0;
+  FR::loadFullZero();
+  CHECK(FR::full_zero_storage_fault, "damaged marker cannot silently select the older valid slot");
+}
+
 static const Scenario SCENARIOS[] = {
     {"boot", scenario_boot},
+    {"full_zero_reboot", scenario_full_zero_reboot},
+    {"full_zero_failures", scenario_full_zero_failures},
+    {"full_zero_corrupt_latest", scenario_full_zero_corrupt_latest},
     {"identity", scenario_identity},
     {"calib_left", scenario_calib_left},
     {"calib_right", scenario_calib_right},

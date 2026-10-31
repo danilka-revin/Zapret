@@ -783,6 +783,7 @@ ASSETS = {
     # страница киоска на борту робота (без авторизации)
     "robot.css": "robot_css",
     "robot.js": "robot_js",
+    "full_zero.js": "full_zero_js",
     "keyboard.js": "keyboard_js",
     "neutral.js": "neutral_js",
     "battery.js": "battery_js",
@@ -940,7 +941,7 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
     """Источник данных робота.
 
     ``master``: четыре колеса по одному USB каждое (см. firmware/motor_wheel).
-    Порты FL/FR/RL/RR задаются только вручную (RC_WHEEL_*_PORT).
+    Порты определяются по проверенной идентичности fw22, а не по номерам USB.
     Порты открывает только владелец (``master_role="owner"`` — бортовой экран);
     пульт (``"peer"``) читает телеметрию с экрана и порты не трогает.
     ``auto``: ROS 2, если есть rclpy; иначе UART-модули, если есть pyserial и
@@ -965,27 +966,20 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
     if mode == "master" and master_role == "peer":
         return mod.MasterPeerSource(peer_kiosk_url())
     if mode == "master":
-        from .master_port import reserved_ports
-        from .wheel_settings import current_settings
+        from .master_port import serial_ports, autodiscovery_reserved_ports
+        from .lidar import publish_usb_scan
 
-        assignments = {m: p for m, p in current_settings().items() if p}
-        blocked = reserved_ports()
-        for module, path in list(assignments.items()):
-            if path in blocked or os.path.realpath(path) in blocked:
-                log.error("Колесо %s: порт %s занят лидаром/BMS — отключено", module, path)
-                assignments.pop(module)
-        if not assignments:
-            log.warning("Порты колёс не назначены: выберите их на бортовом экране → Тяга и руление")
-        # Прошивки плат в программе нет вовсе: платы шьют вручную из Arduino IDE.
-        # Обновление с GitHub только кладёт новый код на диск и USB колёс не
-        # трогает.
+        # Old RC_WHEEL_*_PORT settings are deliberately ignored. Identity is
+        # proven anew from fw22 CRC telemetry after each open/reconnect.
         return mod.MasterSource(
-            module_ports=assignments,
+            auto_discovery=True,
+            port_provider=serial_ports,
+            blocked_ports=autodiscovery_reserved_ports,
+            publish_discovery=publish_usb_scan,
             on_message=note_master_message,
             on_status=note_master_status,
             claim=try_lock_port,
             release=unlock_port,
-            yield_to_lidar=lidar_holds_port,
             tag_module=tag_module_port,
             untag_module=untag_module_port,
         )
@@ -1626,10 +1620,8 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     @bp.get("/api/wheels/settings")
     @guard
     def api_wheel_settings():
-        from .wheel_settings import settings_payload
-        result = settings_payload()
-        result["canEdit"] = False
-        return jsonify(result)
+        from .wheel_settings import discovery_payload
+        return jsonify(discovery_payload(getattr(state, "source", None)))
 
     @bp.get("/api/camera/settings")
     @guard

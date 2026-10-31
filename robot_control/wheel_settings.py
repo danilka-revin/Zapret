@@ -16,7 +16,23 @@ MODULES = {"FL": "Переднее левое", "FR": "Переднее прав
 ENV_KEYS = {module: f"RC_WHEEL_{module}_PORT" for module in MODULES}
 
 
+def discovery_payload(source=None):
+    """Read the owner's live, verified USB routing; never persist a mapping."""
+    info = {}
+    if source is not None:
+        try:
+            info = source.read().get("masterPort") or {}
+        except Exception:  # noqa: BLE001 — dashboard stays available
+            info = {}
+    modules = info.get("modules") if isinstance(info.get("modules"), dict) else {}
+    return {"ok": True, "auto": True, "canEdit": False, "restartRequired": False,
+            "settings": {module: modules.get(module, "") for module in MODULES},
+            "ready": bool(info.get("ready")), "legacy": info.get("legacy") or [],
+            "error": info.get("error"), "candidates": info.get("candidates") or []}
+
+
 def current_settings():
+    """Legacy bootstrap assignments for the manual firmware flashing utility."""
     return {module: os.environ.get(key, "").strip() for module, key in ENV_KEYS.items()}
 
 

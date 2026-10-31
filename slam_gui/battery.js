@@ -70,9 +70,11 @@
     text('bms-updated', data
       ? 'Измерено: ' + new Date(data.updatedAt * 1000).toLocaleString('ru-RU') + (available ? '' : ' · последние известные данные')
       : (transportOk && !configured
-        ? (window.RCRemoteControls
-          ? 'BMS ещё не подключена: настройте порт на бортовом экране → «АКБ» → «Подключение BMS».'
-          : 'BMS ещё не подключена: нажмите «Подключение BMS», выберите порт и «Сохранить и подключить».')
+        ? (snapshot && snapshot.auto
+          ? 'Автопоиск JBD BMS: проверьте питание, USB-UART и TX/RX/GND.'
+          : (window.RCRemoteControls
+            ? 'BMS ещё не подключена: настройте порт на бортовом экране → «АКБ» → «Подключение BMS».'
+            : 'BMS ещё не подключена: нажмите «Подключение BMS», выберите порт и «Сохранить и подключить».'))
         : 'Нет измерений: проверьте кабель USB-UART и питание BMS.'));
     const report = $('bms-report');
     report.setAttribute('aria-disabled', available ? 'false' : 'true');
@@ -82,7 +84,10 @@
     const live = $('swipe-live');
     if (!page.hidden && live) live.textContent = available ? (snapshot.complete ? '● BMS' : 'НЕ ВСЕ БАНКИ') : 'НЕТ ДАННЫХ BMS';
     const setupButton = $('bms-setup-open');
-    if (setupButton) setupButton.classList.toggle('attention', transportOk && (!configured || !available));
+    if (setupButton) {
+      setupButton.hidden = Boolean(snapshot && snapshot.auto);
+      setupButton.classList.toggle('attention', transportOk && (!configured || !available));
+    }
     if (transportOk && !configured && !page.hidden && !setupAutoOpened && snapshot.setupAvailable) {
       setupAutoOpened = true;
       openSetup(true);

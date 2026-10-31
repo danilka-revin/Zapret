@@ -39,9 +39,33 @@ class NoAnswer(ProtocolError):
     """Плата промолчала (а не отказала статусом 0x80)."""
 
 
+_auto_port_lock = threading.Lock()
+_auto_port = ""
+
+
+def active_auto_port():
+    """BMS port validated and held by the onboard process, if any."""
+    with _auto_port_lock:
+        return _auto_port
+
+
+def _set_auto_port(port):
+    global _auto_port
+    with _auto_port_lock:
+        _auto_port = str(port or "")
+
+
 def reserved_ports():
-    port = os.environ.get("RC_BMS_PORT", "").strip()
-    return {port, os.path.realpath(port)} if port else set()
+    from .lidar import detected_bms_ports
+    ports = set(detected_bms_ports())
+    port = active_auto_port()
+    # In automatic mode an old /dev/ttyUSBx setting is not evidence that the
+    # same device is still the BMS after USB enumeration changes.
+    if not port and os.environ.get("RC_USB_DISCOVERY_MODE") != "1":
+        port = os.environ.get("RC_BMS_PORT", "").strip()
+    if port:
+        ports.update((port, os.path.realpath(port)))
+    return ports
 
 
 #: Счётчики срабатываний защит (регистр 0xAA, по u16 на счётчик), порядок bms-tools.
@@ -238,6 +262,7 @@ class BatteryManager:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
+        self._auto_source = None
         self._sample = None
         self._error = "Ожидание BMS" if port else NOT_CONFIGURED
         self._connected_since = None
@@ -262,10 +287,17 @@ class BatteryManager:
             timeout=0.05, write_timeout=0.8, xonxoff=False, rtscts=False, dsrdtr=False,
         )
 
+    def enable_auto(self, source):
+        """Use only the wheel owner's passively checked USB candidates."""
+        self._auto_source = source
+        self.port = ""
+        self._error = "Автопоиск BMS: жду проверки USB-портов колёс"
+
     def start(self):
-        if self.port and not (self._thread and self._thread.is_alive()):
+        if (self.port or self._auto_source is not None) and not (self._thread and self._thread.is_alive()):
             self._stop.clear()
-            self._thread = threading.Thread(target=self._loop, name="jbd-bms", daemon=True)
+            target = self._auto_loop if self._auto_source is not None else self._loop
+            self._thread = threading.Thread(target=target, name="jbd-bms", daemon=True)
             self._thread.start()
             atexit.register(self.stop)
 
@@ -277,6 +309,8 @@ class BatteryManager:
     def reconfigure(self, port):
         """Сменить порт на ходу (страница «Подключение BMS»): поток перезапускается."""
         port = (port or "").strip()
+        if self._auto_source is not None:
+            raise ValueError("BMS определяется автоматически; ручное назначение отключено")
         self.stop()
         with self._lock:
             self.port = port
@@ -393,6 +427,92 @@ class BatteryManager:
             "thresholdsState": thresholds_state,
         }
 
+    def _scan_auto_candidates(self):
+        """Complete JBD classification on wheel-checked ports, without guessing."""
+        from . import bms_setup
+        source = self._auto_source
+        candidates = source.auto_probe_candidates_for_bms()
+        checked = source.auto_bms_results()
+        for port in candidates:
+            if self._stop.is_set():
+                break
+            if port in checked:
+                continue
+            fingerprint = source._device_fingerprint(port)
+            result = bms_setup.probe_port(port, timeout=0.8)
+            # Busy/permission/disconnect are not a negative classification.
+            if result.get("ok") and not result.get("current"):
+                source.record_auto_bms_result(port, fingerprint, bool(result.get("found")))
+        return [path for path, found in source.auto_bms_results().items() if found]
+
+    def _auto_loop(self):
+        from .lidar import publish_bms_port, try_lock_port, unlock_port
+        transport = None
+        fd = None
+        current = ""
+        try:
+            while not self._stop.is_set():
+                try:
+                    matches = self._scan_auto_candidates()
+                    if len(matches) > 1:
+                        raise ProtocolError("Найдено несколько JBD BMS: подключение неоднозначно")
+                    wanted = matches[0] if matches else ""
+                    if current and wanted != current:
+                        raise ProtocolError("USB-порт BMS изменился; повторяю автопоиск")
+                    if not wanted:
+                        with self._lock:
+                            self._error = "Автопоиск BMS: устройство JBD пока не найдено"
+                        self._stop.wait(1)
+                        continue
+                    if transport is None:
+                        fd = try_lock_port(wanted)
+                        if fd is None or fd == -1:
+                            raise OSError("Порт BMS занят или общий USB-замок недоступен")
+                        if self._auto_source.auto_bms_results().get(wanted) is not True:
+                            raise OSError("USB-порт BMS изменился")
+                        with self._lock:
+                            self.port = wanted
+                            self._reset_extras()
+                            self._connected_since = None
+                        transport = self._opener()
+                        # Revalidate both JBD replies after obtaining ownership;
+                        # the port could have changed since the initial probe.
+                        self.poll(transport)
+                        current = wanted
+                        _set_auto_port(current)
+                    else:
+                        self.poll(transport)
+                    publish_bms_port(current)
+                    self.poll_extras(transport)
+                    self._stop.wait(1)
+                except Exception as exc:  # noqa: BLE001 — safely release and retry
+                    with self._lock:
+                        self._error = str(exc) or type(exc).__name__
+                        self.port = ""
+                        self._connected_since = None
+                    log.warning("BMS автопоиск: %s", exc)
+                    if transport is not None:
+                        try:
+                            transport.close()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    transport = None
+                    unlock_port(fd)
+                    fd = None
+                    current = ""
+                    _set_auto_port("")
+                    publish_bms_port(None)
+                    self._stop.wait(3)
+        finally:
+            if transport is not None:
+                try:
+                    transport.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            unlock_port(fd)
+            _set_auto_port("")
+            publish_bms_port(None)
+
     def _loop(self):
         from .lidar import try_lock_port, unlock_port
         while not self._stop.is_set():
@@ -439,7 +559,7 @@ class BatteryManager:
             sample.update(self.extras())
         with self._lock:
             since = self._connected_since
-        return {"configured": bool(self.port), "connected": connected,
+        return {"configured": bool(self.port), "auto": self._auto_source is not None, "connected": connected,
                 "complete": complete, "reason": reason, "ageS": age, "data": sample,
                 "port": self.port or None, "connectedSince": since if connected else None}
 

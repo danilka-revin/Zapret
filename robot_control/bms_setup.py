@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .battery import ProtocolError, extract_frames, parse_snapshot, read_request, reserved_ports
+from .battery import NoAnswer, ProtocolError, extract_frames, parse_snapshot, read_request, reserved_ports
 
 #: USB VID плат Arduino (официальные и частые клоны с собственным USB).
 ARDUINO_VIDS = {0x2341, 0x2A03, 0x1B4F, 0x239A, 0x2886}
@@ -63,14 +63,15 @@ def master_ports() -> set[str]:
     Только явно заданные порты: открыть порт Arduino — перезагрузить её.
     """
     ports: set[str] = set()
-    master = (os.environ.get("RC_SLAM_PORT") or "").strip()
-    for value in (master, (os.environ.get("RC_SLAM_MASTER_PORT") or "").strip()):
-        if value:
-            ports |= {value, _real(value)}
-    for module in ("FL", "FR", "RL", "RR"):
-        value = os.environ.get(f"RC_WHEEL_{module}_PORT", "").strip()
-        if value:
-            ports |= {value, _real(value)}
+    if os.environ.get("RC_USB_DISCOVERY_MODE") != "1":
+        master = (os.environ.get("RC_SLAM_PORT") or "").strip()
+        for value in (master, (os.environ.get("RC_SLAM_MASTER_PORT") or "").strip()):
+            if value:
+                ports |= {value, _real(value)}
+        for module in ("FL", "FR", "RL", "RR"):
+            value = os.environ.get(f"RC_WHEEL_{module}_PORT", "").strip()
+            if value:
+                ports |= {value, _real(value)}
     for chunk in (os.environ.get("RC_SLAM_PORTS") or "").split(","):
         chunk = chunk.strip()
         if chunk:
@@ -80,7 +81,7 @@ def master_ports() -> set[str]:
 
 def _lidar_ports() -> set[str]:
     from .lidar import lidar_active_port, lidar_reserved_ports
-    ports = set(lidar_reserved_ports())
+    ports = set() if os.environ.get("RC_USB_DISCOVERY_MODE") == "1" else set(lidar_reserved_ports())
     active = lidar_active_port()
     if active:
         ports |= {active, _real(active)}
@@ -160,16 +161,21 @@ def _exchange(transport, register: int, timeout: float) -> bytes:
     transport.reset_input_buffer()
     transport.write(read_request(register))
     buffer = b""
+    seen_jbd = False
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         buffer += transport.read(256)
+        seen_jbd = seen_jbd or bytes([0xDD, register]) in buffer
         frames, buffer = extract_frames(buffer)
+        seen_jbd = seen_jbd or bool(frames)
         for reg, status, data in frames:
             if reg == register:
                 if status:
                     raise ProtocolError(f"BMS: статус 0x{status:02X}, регистр 0x{reg:02X}")
                 return data
-    raise ProtocolError("нет ответа JBD на 9600 8N1")
+    if seen_jbd:
+        raise ProtocolError("JBD ответила некорректно: тип USB-устройства не подтверждён")
+    raise NoAnswer("нет ответа JBD на 9600 8N1")
 
 
 def probe_port(port: str, *, opener: Callable[[str], Any] | None = None,
@@ -180,6 +186,12 @@ def probe_port(port: str, *, opener: Callable[[str], Any] | None = None,
     if not port or not os.path.exists(port):
         return {"ok": False, "port": port, "found": False, "error": "порт не существует"}
     real = _real(port)
+    if os.environ.get("RC_USB_DISCOVERY_MODE") == "1":
+        from .lidar import checked_usb_ports
+        permitted = {_real(path) for path in checked_usb_ports()}
+        if real not in permitted:
+            return {"ok": False, "port": port, "found": False,
+                    "error": "порт ещё не прошёл безопасную проверку колёс"}
     if port in master_ports() or real in master_ports():
         return {"ok": False, "port": port, "found": False, "error": "это порт мастера руля — не трогаем"}
     if port in _lidar_ports() or real in _lidar_ports():
@@ -187,13 +199,21 @@ def probe_port(port: str, *, opener: Callable[[str], Any] | None = None,
     if port in _chassis_ports() or real in _chassis_ports():
         return {"ok": False, "port": port, "found": False, "error": "это порт модуля шасси — не трогаем"}
     fd = try_lock_port(port)
-    if fd is None:
-        if port in reserved_ports() or real in reserved_ports():
+    if fd is None or (fd == -1 and os.environ.get("RC_USB_DISCOVERY_MODE") == "1"):
+        from .battery import active_auto_port
+        current = active_auto_port()
+        if current and real == _real(current):
             return {"ok": True, "port": port, "found": True, "current": True,
                     "error": "", "summary": "этот порт уже читает BMS (текущее подключение)"}
-        return {"ok": False, "port": port, "found": False, "error": "порт занят другим процессом"}
+        return {"ok": False, "port": port, "found": False, "error": "порт занят или общий USB-замок недоступен"}
     transport = None
+    basic = None
     try:
+        if os.environ.get("RC_USB_DISCOVERY_MODE") == "1":
+            from .lidar import checked_usb_ports
+            if real not in {_real(path) for path in checked_usb_ports()}:
+                return {"ok": False, "port": port, "found": False,
+                        "error": "USB-устройство изменилось во время проверки"}
         transport = (opener or _open_serial)(port)
         time.sleep(0.05)
         basic = _exchange(transport, 0x03, timeout)
@@ -203,10 +223,15 @@ def probe_port(port: str, *, opener: Callable[[str], Any] | None = None,
                 "volts": sample["volts"], "soc": sample["soc"], "cells": sample["receivedCount"],
                 "summary": "JBD BMS: %.2f В, %d %%, банок %d" % (
                     sample["volts"], sample["soc"], sample["receivedCount"])}
-    except (ProtocolError, OSError, ValueError) as exc:
-        return {"ok": True, "port": port, "found": False, "error": str(exc) or type(exc).__name__}
-    except Exception as exc:  # noqa: BLE001 — pyserial SerialException и т. п.
-        return {"ok": True, "port": port, "found": False, "error": str(exc) or type(exc).__name__}
+    except NoAnswer as exc:
+        # Silence is weak negative evidence only. A partial JBD exchange is
+        # ambiguous and must never be offered to an active lidar probe.
+        return {"ok": basic is None, "port": port, "found": False,
+                "error": str(exc) or type(exc).__name__}
+    except ProtocolError as exc:
+        return {"ok": False, "port": port, "found": False, "error": str(exc) or type(exc).__name__}
+    except Exception as exc:  # failed open/read is not a completed classification
+        return {"ok": False, "port": port, "found": False, "error": str(exc) or type(exc).__name__}
     finally:
         try:
             if transport is not None:
@@ -281,6 +306,8 @@ def save_port(port: str, env_path: Path | None = None) -> str:
 
 def apply_port(manager, port: str, env_path: Path | None = None) -> dict[str, Any]:
     """Проверить, сохранить в .env и сразу переподключить BMS (пустой порт — отключить)."""
+    if getattr(manager, "_auto_source", None) is not None:
+        raise ValueError("BMS определяется автоматически; ручное назначение отключено")
     port = (port or "").strip()
     if port:
         if not os.path.exists(port):

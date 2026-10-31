@@ -27,6 +27,7 @@
     '/api/kiosk_steer': '/api/control/steer',
     '/api/kiosk_zero': '/api/control/zero',
     '/api/kiosk_calibrate': '/api/control/calibrate',
+    '/api/kiosk_full_zero': '/api/control/full_zero',
     '/api/kiosk_pot_mode': '/api/control/pot_mode',
     '/api/kiosk_maneuver': '/api/control/maneuver',
     '/api/kiosk_maneuver_config': '/api/control/maneuver_config',

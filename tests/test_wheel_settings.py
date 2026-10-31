@@ -70,13 +70,12 @@ def test_aliases_and_reserved_ports_are_rejected(settings_file, monkeypatch, tmp
 def test_kiosk_api_and_assets(kiosk_client, settings_file):
     assert 'wheel-port-settings' in kiosk_client.get('/kiosk').text
     assert kiosk_client.get('/wheel_settings.js').status_code == 200
-    assert kiosk_client.get('/api/wheels/settings').json['canEdit']
-    assert kiosk_client.post('/api/wheels/settings', json={}).status_code == 400
+    status = kiosk_client.get('/api/wheels/settings').json
+    assert status['auto'] and not status['canEdit']
     response = kiosk_client.post('/api/wheels/settings', json={'FL': '/dev/ttyACM0'},
                                  headers={'X-Robot-Control': 'wheel-settings'})
-    assert response.status_code == 200
-    assert response.json['restartRequired']
-    assert kiosk_client.get('/api/wheels/settings').json['settings']['FL'] == '/dev/ttyACM0'
+    assert response.status_code == 410
+    assert not settings_file.exists()
 
 
 def source_without_threads():
@@ -157,7 +156,7 @@ def test_manual_ports_excluded_from_lidar_but_active_lidar_keeps_ownership(monke
     assert lidar.lidar_holds_port('/dev/ttyUSB9')
 
 
-def test_master_source_receives_assignments_and_scans_them_first(monkeypatch):
+def test_master_source_ignores_old_assignments_and_discovers_all_usb(monkeypatch):
     from robot_control import master_port, battery
     monkeypatch.setenv('RC_WHEEL_FR_PORT', '/dev/serial/by-path/hub:1.2')
     monkeypatch.setattr(master_port, 'reserved_ports', lambda: set())
@@ -171,8 +170,9 @@ def test_master_source_receives_assignments_and_scans_them_first(monkeypatch):
 
     monkeypatch.setattr(backend, 'MasterSource', source)
     slam.make_source('master')
-    assert captured['module_ports']['FR'] == '/dev/serial/by-path/hub:1.2'
-    assert 'port_provider' not in captured
+    assert captured['auto_discovery'] is True
+    assert 'module_ports' not in captured
+    assert callable(captured['port_provider'])
     assert 'ports' not in captured
 
 
@@ -226,11 +226,12 @@ def test_port_list_uses_real_names_and_never_opens_devices(settings_file, monkey
     assert data['settings']['FL'] == '/dev/ttyUSB0'
 
 
-def test_wheel_ui_has_no_auto_option(kiosk_client):
+def test_wheel_ui_is_status_only(kiosk_client):
     script = kiosk_client.get('/wheel_settings.js').text
-    assert 'Авто · по имени платы' not in script
-    assert "new Option('Не подключено · порт не выбран', '')" in script
-    assert 'new Option(port.path, port.path)' in script
+    page = kiosk_client.get('/kiosk').text
+    assert 'data.settings' in script and 'data.ready' in script
+    assert 'wheel-ports-save' not in page and 'new Option(' not in script
+    assert 'fw22' in page
 
 
 def test_duplicate_assignments_fail_before_opening_serial(monkeypatch):
