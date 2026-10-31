@@ -161,7 +161,8 @@ def test_master_source_gets_the_same_port_etiquette_as_serial(monkeypatch, tmp_p
     try:
         assert src.claim is lidar.try_lock_port
         assert src.release is lidar.unlock_port
-        assert src.yield_to_lidar is lidar.lidar_holds_port
+        assert src.auto_discovery
+        assert src.yield_to_lidar is None  # discovery holds the shared lock before any probe
         assert src.tag_module is lidar.tag_module_port
         assert src.untag_module is lidar.untag_module_port
     finally:

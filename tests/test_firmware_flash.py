@@ -118,7 +118,7 @@ def flashing_host(tmp_path, monkeypatch):
 
 
 def run_flash(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["bash", str(SCRIPTS / "flash_firmware.sh"), *args],
+    return subprocess.run(["bash", str(SCRIPTS / "flash_firmware.sh"), "--confirm-physical-roles", *args],
                           capture_output=True, text=True, check=False)
 
 
@@ -126,6 +126,17 @@ def flashes(host) -> list[str]:
     """Только строки загрузки: `core list` в журнал не считается прошивкой."""
     return [line for line in host.calls.read_text(encoding="utf-8").splitlines()
             if "compile --upload" in line]
+
+
+def test_legacy_uploader_refuses_without_fresh_physical_role_confirmation(flashing_host):
+    port = flashing_host.port("ttyUSB1")
+    flashing_host.assign(f"RC_WHEEL_FL_PORT={port}")
+    result = subprocess.run(["bash", str(SCRIPTS / "flash_firmware.sh"), "--force"],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 64
+    assert "не доказывают расположение" in result.stderr
+    assert flashing_host.calls.read_text(encoding="utf-8") == ""
+    assert not flashing_host.var.exists()
 
 
 # ------------------------------------------------------------- скрипт --- #
@@ -144,7 +155,7 @@ def test_no_ports_configured_is_explained(flashing_host):
     result = run_flash()
     assert result.returncode == 3
     assert "порты колёс не выбраны" in result.stdout
-    assert "Настройка портов колёс" in result.stdout
+    assert "физической проверкой роли" in result.stdout
     assert flashing_host.calls.read_text(encoding="utf-8") == ""
 
 

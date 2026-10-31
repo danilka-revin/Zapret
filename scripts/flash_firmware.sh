@@ -1,48 +1,13 @@
 #!/usr/bin/env bash
-# Прошивка плат колёс в те USB-порты, которые выбраны в настройках.
+# Старый инструмент обслуживания: порты RC_WHEEL_*_PORT берутся из .env и
+# НЕ подтверждают расположение физической платы. Автопоиска ролей здесь нет.
+# Предпочтительно прошивать платы по одной через Arduino IDE, проверив кабель и
+# MODULE_ID. Даже --check открывает порты и может перезагрузить Arduino.
 #
-# Запускается ТОЛЬКО вручную, из терминала: в самой программе прошивки плат нет
-# (ни кнопки на экране, ни автопрошивки). Платы трогает человек, и только он.
-# Альтернатива для тех, кому привычнее Arduino IDE, — файлы motor_wheel_*.ino
-# с рабочего стола.
-#
-# Порты берутся оттуда же, откуда их берёт программа: `.env` →
-# RC_WHEEL_FL_PORT … RC_WHEEL_RR_PORT (бортовой экран → «Тяга и руление» →
-# «Настройка портов колёс»). Ничего не угадывается: нет порта в настройках —
-# плата не прошивается, и об этом честно сказано в журнале.
-#
-# Прошивка собирается из firmware/motor_wheel/motor_wheel.ino с уже вписанным
-# именем колеса (MODULE_ID), ровно как motor_wheel_FL.ino на рабочем столе:
-# четыре платы, прошитые одним и тем же файлом, все называют себя FL.
-#
-# Прошиваем не «по файлу-отметке», а по факту: плата в каждой телеметрической
-# строке сообщает `fw=` — протокол своей прошивки (scripts/firmware_probe.py).
-# Если на плате другая версия, чем в коде (или версия неизвестна), плата
-# прошивается заново. Отметка var/firmware-flashed/<КОЛЕСО> с хешем скетча
-# экономит время: она избавляет от лишнего стирания и записи, но не отменяет
-# проверку по @TLM.
-#
-# Повторной прошивки нет: плата с уже актуальной прошивкой не трогается.
-# Неудачная попытка запоминается («fail»): та же прошивка в тот же порт без
-# --force не повторяется — чтобы кнопка не висела на неотвечающей плате.
-#
-# Чем шить — выбирается сам, по порядку:
-#   1) arduino-cli, если он есть;
-#   2) scripts/avr_upload.py — сборка обычным avr-gcc и загрузка avrdude, без
-#      arduino-cli вообще (важно там, где сайт Arduino недоступен: ядро AVR
-#      качается с GitHub, а gcc-avr/avrdude ставятся из apt);
-#   3) если нет ни того, ни другого — скрипт пробует доставить avr-gcc/avrdude
-#      (`apt install gcc-avr avr-libc avrdude`) и arduino-cli (GitHub);
-#   4) последний вариант — копии motor_wheel_*.ino с рабочего стола в Arduino IDE.
-#
-# Коды возврата:
-#   0  всё прошито (или прошивать нечего)
-#   1  хотя бы одна плата не прошилась
-#   2  нечем прошивать: нет ни arduino-cli, ни avr-gcc/avrdude (шаг пропускается)
-#   3  ни одного порта не выбрано в настройках
-#
-# Флаги: --check (только показать план), --force (прошить даже актуальные),
-#        --no-verify (не спрашивать плату про fw=), --reason ТЕКСТ (в журнал).
+# Обязателен --confirm-physical-roles: перед КАЖДЫМ вызовом человек физически
+# проверил все старые назначения .env и кабели; иное может прошить неверную роль.
+# Флаги: --check (план), --force (загрузить заново), --no-verify, --reason TEXT.
+# Инструмент выбирает arduino-cli или avr-gcc/avrdude. Код 64 — нет подтверждения.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -59,16 +24,18 @@ CLI_DIR="${RC_ARDUINO_CLI_DIR:-$HOME/.local/bin}"
 
 CHECK=0
 FORCE=0
+CONFIRM_PHYSICAL_ROLES=0
 VERIFY="${RC_FIRMWARE_VERIFY:-1}"
 REASON=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) CHECK=1 ;;
     --force) FORCE=1 ;;
+    --confirm-physical-roles) CONFIRM_PHYSICAL_ROLES=1 ;;
     --no-verify) VERIFY=0 ;;
     --reason) shift; REASON="${1:-}" ;;
     -h|--help)
-      sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) echo "[firmware] неизвестный аргумент: $1" >&2; exit 64 ;;
   esac
@@ -77,6 +44,17 @@ done
 
 say() { printf '[firmware] %s\n' "$*"; }
 warn() { printf '[firmware] %s\n' "$*" >&2; }
+
+# This maintenance utility predates automatic discovery and trusts old .env
+# assignments. USB renumbering can flash FR firmware onto a physical FL board.
+# Never open, probe or upload any such port without explicit, fresh physical
+# verification by the operator. This is not automatic role detection.
+if [[ "$CONFIRM_PHYSICAL_ROLES" -ne 1 ]]; then
+  warn "ОТКАЗ: старые RC_WHEEL_*_PORT не доказывают расположение плат."
+  warn "Прошейте платы по одной через IDE с проверкой физической роли;"
+  warn "либо после проверки каждого кабеля передайте --confirm-physical-roles."
+  exit 64
+fi
 
 read_env() {
   local key="$1" fallback="${2:-}" value
@@ -231,8 +209,8 @@ if [[ ${#current_records[@]} -gt 0 ]]; then
 fi
 
 if [[ ${#unassigned[@]} -eq ${#MODULES[@]} ]]; then
-  say "порты колёс не выбраны: бортовой экран → «Тяга и руление» → «Настройка портов колёс»."
-  say "выберите USB-порт для каждого колеса — после этого прошивка пойдёт сама."
+  say "порты колёс не выбраны в старых RC_WHEEL_*_PORT для обслуживания."
+  say "Предпочтительна прошивка по одной плате в IDE с физической проверкой роли."
   exit 3
 fi
 

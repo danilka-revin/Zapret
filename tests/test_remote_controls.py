@@ -210,18 +210,17 @@ def test_browser_transport_and_unload_stop():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_manual_ports_can_be_saved_from_web_without_autodetection(client, operator, transport, monkeypatch, tmp_path):
+def test_manual_ports_cannot_be_saved_from_web_during_autodiscovery(client, operator, transport, monkeypatch, tmp_path):
     from robot_control import wheel_settings
     target = tmp_path / '.env'
     monkeypatch.setattr(wheel_settings, 'env_file_path', lambda: target)
-    monkeypatch.setattr(wheel_settings, 'reserved_ports', lambda: set())
     login(client)
-    assert client.get('/api/control/wheels/settings').json['canEdit']
+    settings = client.get('/api/control/wheels/settings').json
+    assert settings['auto'] and not settings['canEdit']
     result = client.post('/api/control/wheels/settings', json={'FR': '/dev/ttyUSB3'},
                          headers=headers(client, 'wheel-settings'))
-    assert result.status_code == 200 and result.json['restartRequired']
-    assert 'RC_WHEEL_FR_PORT=/dev/ttyUSB3' in target.read_text()
-    assert client.get('/api/control/wheels/settings').json['settings']['FR'] == '/dev/ttyUSB3'
+    assert result.status_code == 410 and not result.json['ok']
+    assert not target.exists()
 
 
 def test_proxy_generates_deadline_and_does_not_forward_browser_auth_headers(client, operator, transport):

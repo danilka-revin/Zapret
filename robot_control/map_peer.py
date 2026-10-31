@@ -94,6 +94,7 @@ CONTROL_ROUTES = {
     'steer': ('/api/kiosk_steer', {'POST'}, 'steering'),
     'zero': ('/api/kiosk_zero', {'POST'}, 'steering'),
     'calibrate': ('/api/kiosk_calibrate', {'POST'}, 'steering'),
+    'full_zero': ('/api/kiosk_full_zero', {'POST'}, 'steering'),
     'pot_mode': ('/api/kiosk_pot_mode', {'POST'}, 'steering'),
     # Манёвры тяги: «метр вперёд», «90° на месте» и их настройка.
     'maneuver': ('/api/kiosk_maneuver', {'POST'}, 'steering'),

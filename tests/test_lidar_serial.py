@@ -1289,6 +1289,7 @@ def test_real_pyserial_reads_lds01_from_tty(monkeypatch):
     pty = pytest.importorskip("pty")
 
     master, slave = pty.openpty()
+    os.set_blocking(master, False)
     port = os.ttyname(slave)
     stop = threading.Event()
     written = {"count": 0}
@@ -1298,8 +1299,11 @@ def test_real_pyserial_reads_lds01_from_tty(monkeypatch):
         started = time.monotonic()
         while not stop.is_set():
             allowed = int((time.monotonic() - started) * 23040.0)     # 10 бит на байт
-            while written["count"] < allowed:
-                os.write(master, encode_lds01_packet(written["count"] % 60, 1.5))
+            while written["count"] < allowed and not stop.is_set():
+                try:
+                    os.write(master, encode_lds01_packet(written["count"] % 60, 1.5))
+                except BlockingIOError:
+                    break
                 written["count"] += 1
             time.sleep(0.003)
 
@@ -1353,6 +1357,7 @@ def test_real_pyserial_reads_lds01_from_tty(monkeypatch):
     finally:
         stop.set()
         thread.join(timeout=2.0)
+        assert not thread.is_alive(), "test device thread leaked"
         os.close(slave)
         os.close(master)
 

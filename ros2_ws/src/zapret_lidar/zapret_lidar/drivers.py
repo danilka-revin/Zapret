@@ -265,8 +265,9 @@ def reserved_ports() -> set[str]:
     Те же переменные, что и в веб-приложении (``robot_control/lidar.py``):
     лидар не должен перебирать порт мастера или аккумулятора.
     """
-    names = ("RC_SLAM_PORT", "RC_BMS_PORT", "RC_SLAM_MASTER_PORT",
-             "RC_WHEEL_FL_PORT", "RC_WHEEL_FR_PORT", "RC_WHEEL_RL_PORT", "RC_WHEEL_RR_PORT")
+    names = (() if os.environ.get("RC_USB_DISCOVERY_MODE") == "1" else
+             ("RC_SLAM_PORT", "RC_BMS_PORT", "RC_SLAM_MASTER_PORT",
+              "RC_WHEEL_FL_PORT", "RC_WHEEL_FR_PORT", "RC_WHEEL_RL_PORT", "RC_WHEEL_RR_PORT"))
     values: list[str] = []
     for name in names:
         raw = (os.environ.get(name) or "").strip()
@@ -290,11 +291,21 @@ def reserved_ports() -> set[str]:
 
 def candidate_ports(spec: str | Iterable[str] | None = None) -> list[str]:
     """Порты-кандидаты для лидара: без портов мастера/шасси/BMS и дублей."""
+    from . import usb_guard
     blocked = reserved_ports()
+    allowed = usb_guard.checked_lidar_ports() if usb_guard.enabled() else None
     out: list[str] = []
-    for port in parse_ports(spec):
-        if port in blocked or os.path.realpath(port) in blocked:
+    candidates = parse_ports(spec)
+    if allowed is not None:
+        candidates += [p for p in sorted(allowed) if p not in candidates]
+    seen: set[str] = set()
+    for port in candidates:
+        real = os.path.realpath(port)
+        if port in blocked or real in blocked or real in seen:
             continue
+        if allowed is not None and real not in allowed:
+            continue
+        seen.add(real)
         out.append(port)
     return out
 
@@ -376,13 +387,15 @@ def build_plan(
                 # другой драйвер. Иначе turtlebot3_node открывал бы порт лидара.
                 driver_ports = [port for port in port_list
                                 if port.startswith("/dev/ttyACM")]
-                primary = [OPENC_R_PORT] if os.path.exists(OPENC_R_PORT) else []
+                from . import usb_guard
+                primary = ([OPENC_R_PORT] if os.path.exists(OPENC_R_PORT) and
+                           usb_guard.permitted(OPENC_R_PORT) else [])
                 driver_ports = list(dict.fromkeys(primary + driver_ports))
             else:
                 driver_ports = list(port_list)
         else:
             driver_ports = [""]
-        if driver.name == "opencr" and not driver_ports:
+        if driver.name == "opencr" and not driver_ports and os.environ.get("RC_USB_DISCOVERY_MODE") != "1":
             # ttyACM не нашёлся (например, кабель ещё не подключён): оставляем
             # одну попытку на стандартном порту, чтобы статус объяснял причину,
             # а не показывал пустой план.

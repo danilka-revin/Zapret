@@ -2831,6 +2831,8 @@
     module_offline: 'Нет свежей телеметрии всех четырёх модулей.',
     drive_firmware_required: 'Обновите прошивку всех четырёх плат для тяги и watchdog.',
     servo_firmware_required: 'Прошейте плату актуальным motor_wheel.ino (v15).',
+    full_zero_active: 'Настройка полного нуля: тяга временно заблокирована.',
+    full_zero_eeprom_fault: 'Ошибка памяти полного нуля на плате: проверьте её перед движением.',
     estop: 'Включён E-STOP: тяга заблокирована.',
     not_homed: 'Сначала откалибруйте колёса по датчику (или задайте 0° вручную).',
     module_busy: 'Дождитесь остановки рулевых модулей.',
@@ -3454,6 +3456,16 @@
       stopManual: () => stopDrive(true)
     });
     if (window.RCNeutral) neutralControl = window.RCNeutral.create({getState: () => lastData});
+    // Drain client-side WASD and latched servo heartbeats *before* the full
+    // zero session reserves the motors; delayed STOPs must not abort it.
+    window.RCPrepareFullZero = async () => {
+      if (keyboardControl && keyboardControl.isActive()) {
+        await keyboardControl.disable('Настройка полного нуля · WASD выключено.');
+      } else if (keyboardControl && keyboardControl.waitForStop) {
+        await keyboardControl.waitForStop();
+      }
+      await stopDrive(true);
+    };
     // Другие органы управления сначала выключают WASD. Их первый клик не
     // включает другую тягу параллельно с ещё выполняющимся STOP.
     let blockedTarget = null;

@@ -66,6 +66,7 @@ from robot_control.config import PROJECT_ROOT, Config
 from robot_control.lidar import LidarManager, set_self_port
 from robot_control.lidar_settings import apply_lidar_settings, settings_payload
 from robot_control.keyboard import KeyboardControl
+from robot_control.full_zero import FullZeroControl
 from robot_control.neutral import NeutralControl
 from robot_control.slam import (
     GUI_DIR,
@@ -466,6 +467,8 @@ def browser_command(exe: str, url: str, profile_dir: Path | str | None = None) -
 # ------------------------------------------------------------------- сервер -- #
 def create_kiosk_app(config: Config | None = None) -> Flask:
     config = config or Config.from_env()
+    if not config.testing and config.slam_source == "master":
+        os.environ["RC_USB_DISCOVERY_MODE"] = "1"
     app = Flask(__name__)
     app.config.update(
         SECRET_KEY=config.secret_key or secrets.token_urlsafe(48),
@@ -483,8 +486,6 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     from . import bms_setup
     battery = BatteryManager(os.environ.get("RC_BMS_PORT", "").strip())
     app.extensions["rc_battery"] = battery
-    if not config.testing:
-        battery.start()
 
     from .connections import ConnectionsMonitor
     connections = ConnectionsMonitor()
@@ -499,8 +500,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     @app.get("/api/battery")
     def api_battery():
         snap = battery.snapshot()
-        # Настройка порта BMS есть только здесь, на бортовом экране (он держит UART).
-        snap["setupAvailable"] = True
+        # Automatic mode does not offer a manual port selector.
+        snap["setupAvailable"] = not snap.get("auto", False)
         return jsonify({"ok": True, "battery": snap}), 200, {"Cache-Control": "no-store"}
 
     @app.get("/api/battery/report.csv")
@@ -567,6 +568,16 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         log.error("киоск: не удалось подключить источник: %s", exc)
         state = None
     app.extensions["rc_slam"] = state
+    if not config.testing:
+        if config.slam_source == "master":
+            wheel_source = getattr(state, "source", None)
+            if getattr(wheel_source, "auto_discovery", False):
+                battery.enable_auto(wheel_source)
+                battery.start()
+            else:
+                log.error("BMS: автопоиск запрещён без владельца проверки колёс")
+        else:
+            battery.start()
 
     def note_case_pin_result(result: dict, *, where: str) -> None:
         """Журналировать PIN кейса без самого кода и без обещаний авторизации руля."""
@@ -605,12 +616,15 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     neutral = NeutralControl(lambda: getattr(state, "source", None), estop_latch.latched,
                              lambda: navigation.active, interrupt_keyboard=keyboard.interrupt)
     app.extensions["rc_neutral"] = neutral
+    full_zero = FullZeroControl(lambda: getattr(state, "source", None), estop_latch.latched,
+                                neutral.status, lambda: navigation.active)
+    app.extensions["rc_full_zero"] = full_zero
     motion_gate = threading.RLock()
     motion_routes = {
         "/api/kiosk_neutral", "/api/kiosk_drive", "/api/kiosk_keyboard", "/api/kiosk_steer",
         "/api/kiosk_zero", "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_maneuver",
         "/api/kiosk_maneuver_config", "/api/navigation/start", "/api/navigation/cancel",
-        "/api/navigation/estop", "/api/estop", "/api/estop/release", "/api/wheels/settings",
+        "/api/navigation/estop", "/api/estop", "/api/estop/release",
         "/api/system/stop",
     }
 
@@ -621,6 +635,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if request.method != "POST" or request.path not in motion_routes:
             return None
         arrival_epoch, arrival_locked = neutral.ticket()
+        zero_epoch, zero_locked = full_zero.ticket()
         body = request.get_json(silent=True)
         body = body if isinstance(body, dict) else {}
         if request.path == "/api/kiosk_drive":
@@ -638,7 +653,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                   "navigation" if request.path.startswith("/api/navigation/") else
                   STOP_COMMAND_HEADER_VALUE if request.path == "/api/system/stop" else "drive")
         global_stop = (request.path != "/api/kiosk_drive" or body.get("module") in (None, "ALL", "all")
-                       or arrival_locked)
+                       or arrival_locked or zero_locked)
         if is_stop and global_stop and request.headers.get(STEERING_COMMAND_HEADER) == marker:
             brake = getattr(getattr(state, "source", None), "_brake_all", None)
             if callable(brake):
@@ -646,18 +661,37 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                     brake()
                 except Exception:  # noqa: BLE001 — firmware watchdog is the backstop
                     pass
+            if zero_locked:
+                # The ordinary traction STOP does not stop a calibration stepper.
+                # Revoke the wizard and send s + tagged brake immediately.
+                full_zero.interrupt("stop")
+                g.full_zero_stop = True
         motion_gate.acquire()
         g.neutral_motion_gate = True
         if request.path == "/api/kiosk_neutral":
+            # Restoring the brake is always allowed, starting neutral is not.
+            if body.get("action") != "restore" and (zero_locked or full_zero.ticket()[1] or
+                                                   zero_epoch != full_zero.ticket()[0]):
+                return jsonify(ok=False, reason="full_zero_active"), 409
             return None
         current = neutral.status()
         if is_stop:
             if current["locked"]:
                 neutral.interrupt()
             return None
+        if zero_locked or full_zero.ticket()[1] or zero_epoch != full_zero.ticket()[0]:
+            return jsonify(ok=False, reason="full_zero_active"), 409
         if current["locked"] or arrival_locked or arrival_epoch != neutral.ticket()[0]:
             return jsonify(ok=False, reason="neutral_locked"), 409
         return None
+
+    @app.after_request
+    def repeat_full_zero_stop(response):
+        # The endpoint's normal b/STOP may have cleared the early command.
+        # Send the final s + tagged b after that endpoint, still under the gate.
+        if getattr(g, "full_zero_stop", False):
+            full_zero.interrupt("stop", repeat=True)
+        return response
 
     @app.teardown_request
     def release_neutral_motion_gate(_error):
@@ -963,6 +997,30 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "error": "no source"}), 503
         return jsonify(state.close_lock())
 
+    @app.post("/api/kiosk_full_zero")
+    def api_kiosk_full_zero():
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify(ok=False, reason="request_header_required"), 400
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify(ok=False, reason="payload"), 400
+        action = body.get("action")
+        # Cancellation and status must not wait behind a queued motion request.
+        if action in {"cancel", "status"}:
+            result, status = full_zero.handle(body)
+            return jsonify(result), status, {"Cache-Control": "no-store"}
+        with motion_gate:
+            if action == "begin":
+                keyboard.interrupt()
+                # No late navigation heartbeat may overtake the calibration STOP.
+                dispatched = navigation.manual_override(lambda: full_zero.handle(body))
+                if dispatched is None:
+                    return jsonify(ok=False, reason="navigation_stopping"), 409
+                result, status = dispatched
+            else:
+                result, status = full_zero.handle(body)
+        return jsonify(result), status, {"Cache-Control": "no-store"}
+
     @app.post("/api/kiosk_steer")
     def api_kiosk_steer():
         if state is None:
@@ -1238,25 +1296,12 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     @app.get("/api/wheels/settings")
     def api_wheel_settings():
-        from .wheel_settings import settings_payload
-        result = settings_payload()
-        result["canEdit"] = True
-        return jsonify(result)
+        from .wheel_settings import discovery_payload
+        return jsonify(discovery_payload(getattr(state, "source", None)))
 
     @app.post("/api/wheels/settings")
     def api_wheel_settings_save():
-        from .wheel_settings import save_settings
-        if request.headers.get("X-Robot-Control") != "wheel-settings":
-            return jsonify({"ok": False, "error": "Требуется X-Robot-Control: wheel-settings"}), 400
-        body = request.get_json(silent=True)
-        try:
-            result = save_settings(body)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        except OSError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 500
-        eventlog.record("ok", "Порты колёс сохранены. Для применения нужен перезапуск программы.", source="колёса")
-        return jsonify(result)
+        return jsonify({"ok": False, "error": "Порты колёс определяются автоматически; ручное назначение отключено"}), 410
 
     # ------------------------ Настройки камер ------------------------- #
     # Отдельные порты передней и задней камер. На борту (8090) можно менять
@@ -1338,7 +1383,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         })
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
-    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js", "robot.css", "robot.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
+    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js", "robot.css", "robot.js", "full_zero.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "map_view.js",
                      "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):

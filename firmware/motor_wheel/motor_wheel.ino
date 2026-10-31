@@ -1,9 +1,9 @@
 // motor_wheel — прошивка ОДНОГО колеса руля (Arduino Mega 2560 / Mega Mini).
 // Каждая плата подключена отдельным USB-кабелем (115200 бод).
-// Порт для каждого колеса оператор выбирает вручную в программе.
-// MODULE_ID задаёт имя в журнале, фильтр адресных команд и зеркалирование DIR.
-// Программа назначает порты вручную и посылает локальные команды (w 12.5);
-// @TLM раз в 50 мс и после изменения состояния не определяет роль порта.
+// MODULE_ID задаёт положение колеса, фильтр адресных команд и зеркалирование DIR.
+// С fw22 каждая проверенная CRC телеметрия содержит это имя: сервер определяет
+// USB-порт автоматически, не угадывая роль по номеру порта или USB-разъёму.
+// Физически правильное расположение плат всё равно проверяет человек.
 //
 // Команды с USB (как в проверенном скетче): k, q, c, d, h, s, g, z, p, w, v, t, b, n.
 //   w 12.5 | w FL 12.5 — поворот колеса; w zero / w calib — ноль и калибровка;
@@ -49,8 +49,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Имя колеса задаёт зеркалирование DIR; USB-порт оператор назначает вручную.
-// Скрипт sync_firmware_desktop.sh подставляет сюда FL/FR/RL/RR.
+// Имя колеса задаёт положение и зеркалирование DIR. Его обязательно прошить
+// правильно для каждой платы; sync_firmware_desktop.sh подставляет FL/FR/RL/RR.
 #ifndef MODULE_ID
 #define MODULE_ID "FL"
 #endif
@@ -125,7 +125,8 @@ const float CALIB_MAX_FLAG_DEGREES = 30.0f;    // шире — датчик «з
 // false: ноль = кромка при подходе вправо — так скетч работал фактически,
 // потому что медленные фазы сразу срабатывали на той же кромке.
 const bool CALIB_ZERO_AT_CENTER = true;
-const float CALIB_ZERO_OFFSET_DEG = 0.0f;      // поправка, если «прямо» ≠ нулю датчика
+const float CALIB_ZERO_OFFSET_DEG = 0.0f;      // заводская поправка к центру флажка
+const float FULL_ZERO_MAX_OFFSET_DEG = 20.0f;   // до ±100° остаётся запас в ходе ±125°
 const uint32_t CALIB_TIMEOUT_MS = 120000UL;    // страховка: дольше — ошибка (3 подхода на кромку)
 const uint8_t OPTO_DEBOUNCE_TICKS = 3;         // 3 тика по 50 мкс подряд = срабатывание
 
@@ -158,6 +159,27 @@ const uint32_t POT_CAL_TIMEOUT_MS = 30000UL;
 const uint16_t EEPROM_POT_MAGIC_SLOT = 2;
 const uint16_t EEPROM_POT_SLOPE_SLOT = 3;   // 4 байта, float, little-endian
 const uint8_t EEPROM_POT_MAGIC = 0x51;      // «q» — наклон измерен
+
+// Два независимых CRC-слота: последовательность, роль и поправка в шагах.
+// 2…6 заняты потенциометром; 16…28 и 32…44 принадлежат полному нулю.
+// Маркер записывается ПОСЛЕДНИМ: обрыв питания оставляет предыдущий слот.
+const uint16_t EEPROM_ZERO_SLOTS[2] = {16, 32};
+const uint8_t EEPROM_ZERO_MARKER = 0xA7;
+const uint8_t EEPROM_ZERO_VERSION = 1;
+const uint8_t EEPROM_ZERO_RECORD_SIZE = 13;
+int32_t full_zero_steps = 0;
+uint32_t full_zero_generation = 0;
+int8_t full_zero_slot = -1;
+bool full_zero_storage_fault = false;
+uint32_t zero_reply_id = 0;
+uint8_t zero_reply_status = 0;
+int32_t zero_reply_proposed = 0;
+uint32_t zero_reply_started = 0;
+uint32_t zero_reply_last = 0;
+uint8_t zero_reply_operation = 0;
+// Короткое отдельное сообщение в существующем CRC-протоколе.
+uint8_t wheelIdentityCode();
+uint16_t telemetryCrc16(const char* data, uint16_t size);
 
 // ---- тяга BLDC: драйвер RioRand ZS-Z11H (hoverboard-мотор) ----
 // Штатная библиотека Servo выдаёт на вход P сигнал около 50 Гц. Значение
@@ -192,7 +214,7 @@ const uint32_t TACH_MIN_SILENCE_US = 300000UL;
 // v20: отдельное защищённое руление на ходу для клавиатурного режима.
 // v21: короткая полная телеметрия с CRC и совместимый подробный кадр.
 // Старое поле tach остаётся выключенным для совместимости со старым сервером.
-const uint8_t FIRMWARE_PROTOCOL = 21;          // поле fw= в @TLM
+const uint8_t FIRMWARE_PROTOCOL = 23;          // сохранённый полный ноль + CRC role ID
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -256,6 +278,7 @@ const uint16_t STATUS_CYCLE = 0x10;
 const uint16_t STATUS_HOME_OPTO = 0x20;
 const uint16_t STATUS_V2 = 0x40;       // признак кадра этой версии
 const uint16_t STATUS_POT_MODE = 0x1000;  // режим с потенциометром
+const uint16_t STATUS_FULL_ZERO_FAULT = 0x4000;  // сохранённая поправка не заслуживает доверия
 const uint16_t STATUS_POT_MODE_SUPPORTED = 0x2000;
 const uint16_t STATUS_POT = 0x80;      // потенциометр откалиброван, доводка включена
 // биты 8–11: код ошибки калибровки; биты 12–15 — режим потенциометра.
@@ -304,6 +327,91 @@ bool drive_mirrored = false;       // это колесо стоит зерка�
 char tx_buf[TX_BUFFER_SIZE];
 uint16_t tx_length = 0;
 uint16_t tx_position = 0;
+
+// Проверка EEPROM не использует имена USB-портов. Даже после перепрошивки с
+// другой MODULE_ID запись старой физической роли не применяется молча.
+struct FullZeroRecord { uint32_t generation; int32_t steps; };
+
+bool readFullZeroSlot(uint8_t slot, FullZeroRecord* record) {
+  uint8_t raw[EEPROM_ZERO_RECORD_SIZE];
+  for (uint8_t i = 0; i < sizeof(raw); ++i)
+    raw[i] = eeprom_read_byte((const uint8_t*)(uintptr_t)(EEPROM_ZERO_SLOTS[slot] + i));
+  if (raw[0] != EEPROM_ZERO_MARKER || raw[1] != EEPROM_ZERO_VERSION ||
+      raw[2] == 0 || raw[2] != wheelIdentityCode()) return false;
+  const uint16_t stored = (uint16_t)raw[11] | ((uint16_t)raw[12] << 8);
+  if (telemetryCrc16((const char*)raw + 1, 10) != stored) return false;
+  memcpy(&record->generation, raw + 3, 4);
+  memcpy(&record->steps, raw + 7, 4);
+  const int32_t max_steps = (int32_t)lroundf(FULL_ZERO_MAX_OFFSET_DEG * STEPS_PER_DEGREE);
+  return record->steps >= -max_steps && record->steps <= max_steps;
+}
+
+bool fullZeroSlotBlank(uint8_t slot) {
+  bool erased_ff = true, erased_zero = true;
+  for (uint8_t i = 0; i < EEPROM_ZERO_RECORD_SIZE; ++i) {
+    const uint8_t b = eeprom_read_byte((const uint8_t*)(uintptr_t)(EEPROM_ZERO_SLOTS[slot] + i));
+    if (b != 0xFF) erased_ff = false;
+    if (b != 0) erased_zero = false;  // память симулятора / чистая нулевая EEPROM
+  }
+  return erased_ff || erased_zero;
+}
+
+void loadFullZero() {
+  FullZeroRecord a, b;
+  const bool valid_a = readFullZeroSlot(0, &a), valid_b = readFullZeroSlot(1, &b);
+  full_zero_steps = 0;
+  full_zero_generation = 0;
+  full_zero_slot = -1;
+  full_zero_storage_fault = false;
+  // A partially written record and a damaged commit marker are indistinguishable.
+  // Do not silently roll back to an older physical alignment in either case;
+  // require explicit service recovery and calibration instead.
+  for (uint8_t slot = 0; slot < 2; ++slot) {
+    const bool valid = slot == 0 ? valid_a : valid_b;
+    if (!valid && !fullZeroSlotBlank(slot)) full_zero_storage_fault = true;
+  }
+  if (valid_a || valid_b) {
+    const bool use_b = valid_b && (!valid_a || (int32_t)(b.generation - a.generation) > 0);
+    const FullZeroRecord& chosen = use_b ? b : a;
+    full_zero_steps = chosen.steps;
+    full_zero_generation = chosen.generation;
+    full_zero_slot = use_b ? 1 : 0;
+  } else if (!fullZeroSlotBlank(0) || !fullZeroSlotBlank(1)) {
+    // Повреждённая память или запись чужой роли — не считать её нулевой.
+    full_zero_storage_fault = true;
+  }
+}
+
+bool persistFullZero(int32_t steps) {
+  const uint8_t slot = full_zero_slot == 0 ? 1 : 0;
+  uint8_t raw[EEPROM_ZERO_RECORD_SIZE] = {0};
+  raw[0] = EEPROM_ZERO_MARKER;
+  raw[1] = EEPROM_ZERO_VERSION;
+  raw[2] = wheelIdentityCode();
+  const uint32_t generation = full_zero_generation + 1;
+  memcpy(raw + 3, &generation, 4);
+  memcpy(raw + 7, &steps, 4);
+  const uint16_t crc = telemetryCrc16((const char*)raw + 1, 10);
+  raw[11] = (uint8_t)crc;
+  raw[12] = (uint8_t)(crc >> 8);
+  const uint16_t base = EEPROM_ZERO_SLOTS[slot];
+  eeprom_update_byte((uint8_t*)(uintptr_t)base, 0); // прежний маркер недействителен
+  if (eeprom_read_byte((const uint8_t*)(uintptr_t)base) != 0) return false;
+  for (uint8_t i = 1; i < sizeof(raw); ++i)
+    eeprom_update_byte((uint8_t*)(uintptr_t)(base + i), raw[i]);
+  // Не фиксировать запись при отказе EEPROM или неверной роли.
+  for (uint8_t i = 1; i < sizeof(raw); ++i)
+    if (eeprom_read_byte((const uint8_t*)(uintptr_t)(base + i)) != raw[i]) return false;
+  if (raw[2] == 0) return false;
+  eeprom_update_byte((uint8_t*)(uintptr_t)base, EEPROM_ZERO_MARKER);
+  FullZeroRecord verified;
+  if (!readFullZeroSlot(slot, &verified) || verified.generation != generation || verified.steps != steps)
+    return false;
+  full_zero_steps = steps;
+  full_zero_generation = generation;
+  full_zero_slot = slot;
+  return true;
+}
 
 // ---------------------------------------------------------------------------
 // Вывод в USB без блокировки loop(): строка копируется в буфер и уходит в порт
@@ -780,6 +888,7 @@ void startPotCalMove(uint8_t state, float degrees) {
 }
 
 bool startPotCalibration() {
+  if (full_zero_storage_fault) { note(PSTR("ОШИБКА EEPROM полного нуля")); return false; }
   if (!pot_enabled) { note(PSTR("Сначала pm 1 — включить потенциометр")); return false; }
   if (drive_active) {
     note(PSTR("потенциометр: включена тяга — сначала b или s"));
@@ -999,6 +1108,10 @@ void calibrationStep(uint8_t state, float degrees, uint16_t period_us, uint8_t w
 }
 
 bool startCalibration() {
+  if (full_zero_storage_fault) {
+    note(PSTR("ОШИБКА EEPROM полного нуля или роль платы изменилась — проверьте память"));
+    return false;
+  }
   if (drive_active) {
     note(PSTR("калибровка отклонена: включена тяга (сначала b или s)"));
     return false;
@@ -1090,7 +1203,7 @@ void finishCalibrationEdges() {
     const int32_t sum = edge_plus + edge_minus;
     zero_at = sum >= 0 ? (sum + 1) / 2 : -((1 - sum) / 2);
   }
-  zero_at += degreesToSteps(CALIB_ZERO_OFFSET_DEG);
+  zero_at += degreesToSteps(CALIB_ZERO_OFFSET_DEG) + full_zero_steps;
   char width[16];
   char shift[16];
   char spread_a[16];
@@ -1102,7 +1215,7 @@ void finishCalibrationEdges() {
   note(PSTR("Калибровка: кромки найдены, ширина флажка %s°, разброс %s°/%s°, ноль на %s°"),
        width, spread_a, spread_b, shift);
   noInterrupts();
-  current_step -= zero_at;   // среднее положение флажка становится нулём
+  current_step -= zero_at;   // сохранённый физический ноль относительно флажка
   target_step = current_step;
   interrupts();
   calib_state = CAL_GO_ZERO;
@@ -1210,6 +1323,7 @@ void updateCalibration() {
 // ---------------------------------------------------------------------------
 // Качание (c), обычные повороты (d, h, w, g), ноль (z), стоп (s).
 bool steeringAllowed() {
+  if (full_zero_storage_fault) { note(PSTR("ОШИБКА EEPROM полного нуля")); return false; }
   if (drive_active) {
     note(PSTR("руль заблокирован: включена тяга — сначала b или s"));
     return false;
@@ -1227,7 +1341,8 @@ bool steeringAllowed() {
 
 void startPlainMove(int32_t target, bool report) {
   const int32_t limit = degreesToSteps(STEER_TRAVEL_LIMIT_DEG);
-  if (target > limit || target < -limit) {
+  const int32_t sensor_target = target + (home_source == HOME_OPTO ? full_zero_steps : 0);
+  if (target > limit || target < -limit || sensor_target > limit || sensor_target < -limit) {
     char text[16];
     formatDegrees(target, text, sizeof(text));
     note(PSTR("цель %s° вне хода ±%d°"), text, (int)STEER_TRAVEL_LIMIT_DEG);
@@ -1248,7 +1363,9 @@ void startCycle(float degrees) {
   const int32_t start = stepNow();
   const int32_t delta = degreesToSteps(degrees);
   const int32_t limit = degreesToSteps(STEER_TRAVEL_LIMIT_DEG);
-  if (start + delta > limit || start - delta < -limit) {
+  const int32_t sensor_center = start + (home_source == HOME_OPTO ? full_zero_steps : 0);
+  if (start + delta > limit || start - delta < -limit ||
+      sensor_center + delta > limit || sensor_center - delta < -limit) {
     note(PSTR("качание %d° выходит за ход ±%d°"), (int)degrees, (int)STEER_TRAVEL_LIMIT_DEG);
     return;
   }
@@ -1295,6 +1412,7 @@ void updateMoveReport() {
 }
 
 bool setZeroHere() {
+  if (full_zero_storage_fault) { note(PSTR("ОШИБКА EEPROM полного нуля")); return false; }
   if (drive_active || calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE) {
     note(PSTR("ноль не задан: %s"),
          drive_active ? "включена тяга"
@@ -1402,7 +1520,7 @@ void printDriveInfo() {
 bool localDriveAllowed() {
   // A stopped step motor can still be waiting for potentiometer correction.
   // Do not start percentage traction until that automatic steering is done.
-  return zero_set && !motorBusy() && !feedback_pending && calib_state == CAL_IDLE &&
+  return !full_zero_storage_fault && zero_set && !motorBusy() && !feedback_pending && calib_state == CAL_IDLE &&
          pot_cal_state == POT_CAL_IDLE && !cycle_active;
 }
 
@@ -1463,7 +1581,7 @@ void stopDriveLocal() {
 // v: число ползунка без пересчёта идёт в Servo.write на D3. Направление
 // задаётся отдельно через DIR; ноль руля и тахометр в этом режиме не участвуют.
 void applyDirectDrive(uint8_t value, bool forward) {
-  if (value == 0) {
+  if (value == 0 || full_zero_storage_fault) {
     stopDriveLocal();
     return;
   }
@@ -1524,6 +1642,7 @@ uint16_t moduleStatus() {
   if (potFeedbackAllowed()) status |= STATUS_POT;
   status |= STATUS_POT_MODE_SUPPORTED;  // поддержка переключения режима
   if (pot_enabled) status |= STATUS_POT_MODE;
+  if (full_zero_storage_fault) status |= STATUS_FULL_ZERO_FAULT;
   status |= (uint16_t)(calib_error & 0x0F) << 8;
   return status;
 }
@@ -1577,6 +1696,43 @@ void stopEverything(bool quiet) {
   }
 }
 
+// status: 1 = preflight ready, 2 = committed and read back; 3 = not optical,
+// 4 = busy/SC/neutral, 5 = outside ±20°, 6 = storage error. All responses are
+// CRC-protected and carry both persisted and proposed offsets in motor steps.
+void handleFullZeroRequest(uint32_t id, bool commit) {
+  if (id == zero_reply_id && zero_reply_operation == (commit ? 2 : 1)) {
+    zero_reply_started = millis();  // повтор ACK, без повторной записи
+    return;
+  }
+  zero_reply_id = id;
+  zero_reply_operation = commit ? 2 : 1;
+  zero_reply_started = millis();
+  zero_reply_last = 0;
+  zero_reply_proposed = full_zero_steps + stepNow();
+  const int32_t limit = degreesToSteps(FULL_ZERO_MAX_OFFSET_DEG);
+  if (full_zero_storage_fault) zero_reply_status = 6;
+  else if (!zero_set || home_source != HOME_OPTO) zero_reply_status = 3;
+  else if (drive_active || drive_percent || neutral_inhibit || live_id ||
+           calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE || cycle_active ||
+           motorBusy() || feedback_pending || tachMotionRecent() || tach_display_rpm_x10 > 10)
+    zero_reply_status = 4;
+  else if (zero_reply_proposed < -limit || zero_reply_proposed > limit) zero_reply_status = 5;
+  else if (!commit) zero_reply_status = 1;
+  else if (!persistFullZero(zero_reply_proposed)) {
+    full_zero_storage_fault = true; // block all traction until service/reboot
+    zero_reply_status = 6;
+  } else {
+    // Новая система координат сразу действует для w/j/манёвров/всех режимов.
+    noInterrupts();
+    current_step = 0;
+    target_step = 0;
+    interrupts();
+    potCaptureZero();
+    zero_reply_status = 2;
+    note(PSTR("Полный ноль сохранён в EEPROM"));
+  }
+}
+
 void handleModuleCommand(char* line) {
   char* save = nullptr;
   char* command = strtok_r(line, " \t", &save);
@@ -1607,7 +1763,24 @@ void handleModuleCommand(char* line) {
     return;
   }
 
-  if (strcasecmp_P(command, PSTR("k")) == 0 || strcasecmp_P(command, PSTR("calib")) == 0) {
+  if (strcasecmp_P(command, PSTR("zr")) == 0) {
+    // Явное сервисное восстановление только после повреждения памяти/смены
+    // роли, на неподвижной плате без нуля. Не принимать случайную команду.
+    if (!arg1 || strcmp(arg1, "CONFIRM") || arg2 || extra || !full_zero_storage_fault ||
+        zero_set || drive_active || drive_percent || motorBusy() || feedback_pending ||
+        calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE || cycle_active ||
+        tachMotionRecent() || tach_display_rpm_x10 > 10) return;
+    for (uint8_t slot = 0; slot < 2; ++slot)
+      for (uint8_t i = 0; i < EEPROM_ZERO_RECORD_SIZE; ++i)
+        eeprom_update_byte((uint8_t*)(uintptr_t)(EEPROM_ZERO_SLOTS[slot] + i), 0);
+    loadFullZero();
+    note(full_zero_storage_fault ? PSTR("ОШИБКА: EEPROM полного нуля не очищена") :
+                                  PSTR("Повреждённая память полного нуля очищена; выполните k и настройку заново"));
+  } else if (strcasecmp_P(command, PSTR("zq")) == 0 || strcasecmp_P(command, PSTR("zc")) == 0) {
+    long id = 0;
+    if (!arg1 || arg2 || extra || !parseLongToken(arg1, &id) || id <= 0 || id >= 2147483647L) return;
+    handleFullZeroRequest((uint32_t)id, strcasecmp_P(command, PSTR("zc")) == 0);
+  } else if (strcasecmp_P(command, PSTR("k")) == 0 || strcasecmp_P(command, PSTR("calib")) == 0) {
     startCalibration();
   } else if (strcasecmp_P(command, PSTR("pm")) == 0) {
     if (!arg1 || arg2 || (strcmp(arg1, "0") && strcmp(arg1, "1"))) {
@@ -1739,7 +1912,7 @@ void handleModuleCommand(char* line) {
         !parseLongToken(extra, &percent) || percent == 0 ||
         percent < -(long)DRIVE_MAX_PERCENT || percent > (long)DRIVE_MAX_PERCENT ||
         !parseFloatToken(angle_token, &degrees) || fabsf(degrees) > STEER_LIMIT_DEG ||
-        !zero_set || calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE || cycle_active) {
+        full_zero_storage_fault || !zero_set || calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE || cycle_active) {
       stopDriveLocal();
       return;
     }
@@ -1859,6 +2032,7 @@ void steeringSetup() {
   pinMode(STEP_ENA_PIN, OUTPUT);
 
   setupStepTimer();
+  loadFullZero();
   last_drive_command_ms = millis();
   last_pot_sample_ms = millis();
 }
@@ -1953,6 +2127,26 @@ bool appendCheckedFrame(char* line, uint16_t capacity, int length, bool full) {
   return true;
 }
 
+// Numeric role in the CRC-protected compact frame. An invalid MODULE_ID is 0
+// and the server refuses to identify the board; never guess from a USB port.
+uint8_t wheelIdentityCode() {
+  if (strcasecmp_P(MODULE_ID, PSTR("FL")) == 0) return 1;
+  if (strcasecmp_P(MODULE_ID, PSTR("FR")) == 0) return 2;
+  if (strcasecmp_P(MODULE_ID, PSTR("RL")) == 0) return 3;
+  if (strcasecmp_P(MODULE_ID, PSTR("RR")) == 0) return 4;
+  return 0;
+}
+
+// @Z is emitted separately, not spliced into a newer fast safety snapshot.
+// It is repeated only briefly; after reboot request IDs are forgotten.
+bool appendFullZeroReply() {
+  char line[96];
+  const int n = snprintf_P(line, sizeof(line), PSTR("@Z %u %u %lu %u %ld %ld"),
+      (unsigned)FIRMWARE_PROTOCOL, (unsigned)wheelIdentityCode(), (unsigned long)zero_reply_id,
+      (unsigned)zero_reply_status, (long)full_zero_steps, (long)zero_reply_proposed);
+  return appendCheckedFrame(line, sizeof(line), n, false);
+}
+
 // The compact record contains the same safety and diagnostic state as @TLM;
 // no acknowledgement is combined with an older steering/SC snapshot.
 bool appendFastTelemetry() {
@@ -1965,8 +2159,8 @@ bool appendFastTelemetry() {
   SREG = saved_sreg;
   char line[FAST_TELEMETRY_LINE_CAPACITY];
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@F %u %ld %ld %u %d %u %u %lu %u %u %lu %u %lu %lu %u %lu %lu %lu"),
-      (unsigned)FIRMWARE_PROTOCOL, deg_c, tgt_c, (unsigned)status, (int)drive_percent,
+      PSTR("@F %u %u %ld %ld %u %d %u %u %lu %u %u %lu %u %lu %lu %u %lu %lu %lu"),
+      (unsigned)FIRMWARE_PROTOCOL, (unsigned)wheelIdentityCode(), deg_c, tgt_c, (unsigned)status, (int)drive_percent,
       (unsigned)DRIVE_MAX_PERCENT, (unsigned)drive_servo_value, (unsigned long)tach_display_rpm_x10,
       (unsigned)tach_display_hz, (unsigned)TACH_EDGES_PER_REV, (unsigned long)edges,
       (unsigned)tachMotionRecent(), (unsigned long)brake_id, (unsigned long)neutral_id,
@@ -1975,7 +2169,7 @@ bool appendFastTelemetry() {
   return appendCheckedFrame(line, sizeof(line), n, false);
 }
 
-// Телеметрия не содержит роли колеса: порт назначает оператор в программе.
+// The role is inside the CRC, not inferred from a USB path or human log.
 void appendTelemetry() {
   const uint16_t status = moduleStatus();
   char deg[16];
@@ -1993,12 +2187,13 @@ void appendTelemetry() {
   // Старый сервер по-прежнему видит tach=0; новый может явно использовать
   // sc_count для одометрии, не смешивая его с историческим rpm/tach.
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@TLM deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u drive=%d fw=%u pot=%d pm=%d tach=0 dmax=%u sv=%u duty=%u sc_rpm=%lu.%lu sc_hz=%u sc_ppr=%u sc_count=%lu sc_recent=%u brake_id=%lu neutral_id=%lu neutral_lock=%u live_id=%lu live_seq=%lu t=%lu"),
-      deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
+      PSTR("@TLM mod=%s deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u drive=%d fw=%u pot=%d pm=%d zfault=%d tach=0 dmax=%u sv=%u duty=%u sc_rpm=%lu.%lu sc_hz=%u sc_ppr=%u sc_count=%lu sc_recent=%u brake_id=%lu neutral_id=%lu neutral_lock=%u live_id=%lu live_seq=%lu t=%lu"),
+      MODULE_ID, deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
       (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
       home, (unsigned)((status >> 8) & 0x0F), (int)drive_percent, (unsigned)FIRMWARE_PROTOCOL,
       (status & STATUS_POT) ? 1 : 0,
       (status & STATUS_POT_MODE_SUPPORTED) ? ((status & STATUS_POT_MODE) ? 1 : 0) : -1,
+      (status & STATUS_FULL_ZERO_FAULT) ? 1 : 0,
       (unsigned)DRIVE_MAX_PERCENT, (unsigned)drive_servo_value,
       (unsigned)driveValuePermille(), (unsigned long)(tach_display_rpm_x10 / 10),
       (unsigned long)(tach_display_rpm_x10 % 10), (unsigned)tach_display_hz,
@@ -2188,6 +2383,10 @@ void loop() {
       txFree() >= TELEMETRY_LINE_CAPACITY) {
     appendTelemetry();  // old servers ignore the additional CRC field
     last_telemetry_ms = now;
+  }
+  if (zero_reply_id && (uint32_t)(now - zero_reply_started) < 5000UL &&
+      (uint32_t)(now - zero_reply_last) >= 200 && txFree() >= 96) {
+    if (appendFullZeroReply()) zero_reply_last = now;
   }
   txPump();
 }

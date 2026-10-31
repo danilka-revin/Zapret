@@ -118,8 +118,14 @@ struct Board {
   // EEPROM платы (ATmega2560 — 4 КиБ, здесь хватает 1 КиБ): ноль, наклон
   // потенциометра и т.п.
   uint8_t eeprom[1024] = {0};
+  // Negative = normal EEPROM; zero simulates power loss / a failed write.
+  int eeprom_writes_left = -1;
   uint8_t eeprom_read(uint16_t address) { return eeprom[address & 1023]; }
-  void eeprom_write(uint16_t address, uint8_t value) { eeprom[address & 1023] = value; }
+  void eeprom_write(uint16_t address, uint8_t value) {
+    if (eeprom_writes_left == 0) return;
+    if (eeprom_writes_left > 0) --eeprom_writes_left;
+    eeprom[address & 1023] = value;
+  }
   void (*setup_fn)() = nullptr;
   void (*loop_fn)() = nullptr;
   void (*isr_fn)() = nullptr;

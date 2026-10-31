@@ -24,7 +24,7 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-from . import drivers as drv
+from . import drivers as drv, usb_guard
 from .probe import bauds_for_plan, probe_ports, scores_for_plan
 
 #: Как часто пересматривать план, если ничего не получается (с).
@@ -183,6 +183,7 @@ class LidarSupervisor(Node):
         self._last_error = ""
         self.installed = drv.installed_packages(self._prefixes())
         self.process: Optional[subprocess.Popen] = None
+        self._port_lock = None
         self.driver: Optional[drv.Driver] = None
         self.driver_port = ""
         self.driver_baud = 0
@@ -377,6 +378,12 @@ class LidarSupervisor(Node):
                                   prefix=prefix, install=install, executable=executable)
         env = dict(os.environ)
         env.setdefault("TURTLEBOT3_MODEL", "burger")
+        token = usb_guard.claim(item.port) if item.driver.needs_port else -1
+        if token is None or (item.driver.needs_port and not usb_guard.permitted(item.port)):
+            usb_guard.release(token)
+            self._remember(item.driver.name, item.port, "порт занят или ещё не классифицирован")
+            return False
+        self._port_lock = token
         try:
             self.process = subprocess.Popen(  # noqa: S603 — argv собран из таблицы
                 argv, env=env, start_new_session=True,
@@ -386,6 +393,8 @@ class LidarSupervisor(Node):
         except OSError as exc:
             self._remember(item.driver.name, item.port, "не запустился: %s" % exc)
             self.process = None
+            usb_guard.release(self._port_lock)
+            self._port_lock = None
             return False
         self.driver = item.driver
         self.driver_port = item.port
@@ -430,6 +439,8 @@ class LidarSupervisor(Node):
         """Останавливает драйвер (вместе с группой процессов: он мог spawn'ить детей)."""
         process, self.process = self.process, None
         if process is None:
+            usb_guard.release(getattr(self, "_port_lock", None))
+            self._port_lock = None
             return
         try:
             if process.poll() is None:
@@ -446,6 +457,8 @@ class LidarSupervisor(Node):
                     process.stdout.close()
             except Exception:  # noqa: BLE001
                 pass
+            usb_guard.release(getattr(self, "_port_lock", None))
+            self._port_lock = None
 
     # ------------------------------ события -------------------------------- #
 

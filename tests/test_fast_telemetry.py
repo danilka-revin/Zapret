@@ -94,3 +94,15 @@ def test_v21_full_frame_requires_valid_checksum_but_old_frames_remain_supported(
             altered = bytearray(valid.encode("ascii"))
             altered[index] ^= 1 << bit
             assert backend.parse_master_line(altered.decode("latin-1"), module="FL") is None, (index, bit)
+
+
+def test_fw23_eeprom_fault_is_crc_protected_in_compact_frame(backend):
+    values = fast_values()
+    values[0] = 23
+    values[3] |= 0x4000
+    values.insert(1, 4)  # wire identity RR
+    line = fast_line(backend, values)
+    result = backend.parse_master_line(line)
+    assert result["mod"] == "RR" and result["fullZeroFault"] is True
+    corrupted = line.replace(f" {values[4]} ", f" {values[4] ^ 0x4000} ", 1)
+    assert corrupted != line and backend.parse_master_line(corrupted) is None

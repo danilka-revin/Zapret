@@ -94,6 +94,8 @@ def _safe_next(target: str | None) -> str | None:
 def create_app(config: Config | None = None) -> Flask:
     """Фабрика приложения — так его удобно поднимать и в тестах, и в бою."""
     config = config or Config.from_env()
+    if not config.testing and config.slam_source == "master":
+        os.environ["RC_USB_DISCOVERY_MODE"] = "1"
     app = Flask(__name__)
 
     # Панель «Логи» на бортовом экране показывает настоящий журнал процесса:

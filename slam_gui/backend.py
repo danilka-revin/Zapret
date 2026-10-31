@@ -59,7 +59,7 @@ import sys
 import threading
 import time
 import webbrowser
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -315,21 +315,32 @@ def _valid_telemetry_crc(payload, checksum):
         return False
 
 
-def parse_fast_wheel_line(line, module):
-    """fw21 compact complete snapshot; a bad or partial frame changes nothing."""
-    if module not in MODULE_TITLES or len(line) > 160 or not line.startswith("@F "):
+def parse_fast_wheel_line(line, module=None):
+    """Checked complete snapshot; fw22 carries the wheel role inside its CRC."""
+    if len(line) > 160 or not line.startswith("@F "):
         return None
     payload, sep, checksum = line.rpartition(" ")
     if not sep or not _valid_telemetry_crc(payload, checksum):
         return None
     parts = payload.split(" ")
-    if len(parts) != 19 or parts[0] != "@F" or any(
+    if len(parts) not in (19, 20) or parts[0] != "@F" or any(
             not re.fullmatch(r"-?[0-9]+", part) for part in parts[1:]):
         return None
     try:
+        values = list(map(int, parts[1:]))
+        firmware = values[0]
+        if len(parts) == 20:
+            # FL/FR/RL/RR are wire identities, not paths or order of detection.
+            role = {1: "FL", 2: "FR", 3: "RL", 4: "RR"}.get(values.pop(1))
+            if firmware < 22 or role is None or (module is not None and module != role):
+                return None
+            module = role
+        elif firmware != 21 or module not in MODULE_TITLES:
+            # Old compact records have no role and can never identify a port.
+            return None
         (firmware, deg, tgt, status, drive, drive_max, servo, rpm10, hz, ppr,
-         edges, recent, brake, neutral, neutral_lock, live_id, live_seq, uptime) = map(int, parts[1:])
-    except ValueError:
+         edges, recent, brake, neutral, neutral_lock, live_id, live_seq, uptime) = values
+    except (ValueError, IndexError):
         return None
     if not (21 <= firmware <= 255 and -(2**31) <= deg < 2**31 and -(2**31) <= tgt < 2**31
             and 0 <= status <= 0xFFFF and status & 0x40 and status & 0x2000
@@ -348,6 +359,7 @@ def parse_fast_wheel_line(line, module):
         "manualZero": zeroed and home == "manual", "rpm": None, "drivePercent": drive,
         "cycle": bool(status & 0x10), "calib": bool(status & 0x04), "opto": bool(status & 0x08),
         "calibError": (status >> 8) & 0x0F, "firmware": firmware,
+        "fullZeroFault": bool(status & 0x4000) if firmware >= 23 else None,
         "pot": bool(status & 0x80), "potMode": bool(status & 0x1000), "tach": False,
         "driveMaxPercent": drive_max, "driveDutyPermille": servo * 1000 // 180,
         "driveServoValue": servo, "tachPpr": None, "tachHz": None,
@@ -355,6 +367,31 @@ def parse_fast_wheel_line(line, module):
         "scCount": edges, "scRecent": bool(recent), "uptimeMs": uptime, "brakeId": brake,
         "neutralId": neutral, "neutralLocked": bool(neutral_lock), "liveId": live_id, "liveSeq": live_seq,
     }
+
+
+def parse_full_zero_reply(line):
+    """One checked fw23 response; never merge it with a safety snapshot."""
+    text = (line or "").strip()
+    if not text.startswith("@Z ") or len(text) > 96:
+        return None
+    payload, sep, checksum = text.rpartition(" ")
+    if not sep or not re.fullmatch(r"[0-9A-Fa-f]{4}", checksum):
+        return None
+    try:
+        if crc16(payload.encode("ascii")) != int(checksum, 16):
+            return None
+        parts = payload.split()
+        if len(parts) != 7 or parts[0] != "@Z" or any(not re.fullmatch(r"-?[0-9]+", p) for p in parts[1:]):
+            return None
+        fw, role, req, status, stored, proposed = map(int, parts[1:])
+    except (UnicodeError, ValueError):
+        return None
+    if (not 23 <= fw <= 255 or role not in MODULE_NAMES or not 0 < req < 0x7FFFFFFF or
+            status not in range(1, 7) or not -2667 <= stored <= 2667 or
+            not -(2**31) <= proposed < 2**31):
+        return None
+    return {"module": MODULE_NAMES[role], "firmware": fw, "id": req,
+            "status": status, "storedSteps": stored, "proposedSteps": proposed}
 
 
 def parse_master_line(line, module=None):
@@ -368,21 +405,30 @@ def parse_master_line(line, module=None):
     if not line.startswith(TLM_PREFIX):
         return None
     fields = {}
+    duplicates = set()
     for token in line[len(TLM_PREFIX):].split():
         key, sep, value = token.partition("=")
         if sep:
+            if key in fields:
+                duplicates.add(key)
             fields[key] = value
     try:
-        module = module or fields["mod"].upper()
         angle = float(fields["deg"])
         target = float(fields.get("tgt", "0"))
         firmware = int(fields["fw"]) if "fw" in fields else None
-        # v21 full frames are also checked. An older board without a CRC stays
-        # supported; if a CRC field exists it must be correct at any version.
+        # v21+ full frames are checked; an old unprotected frame never
+        # identifies a port in automatic mode (enforced by the link worker).
         if (firmware is not None and firmware >= 21) or "crc" in fields:
             payload, sep, checksum = line.rpartition(" crc=")
             if not sep or " crc=" in payload or not _valid_telemetry_crc(payload, checksum):
                 return None
+        if firmware is not None and firmware >= 22:
+            role = fields.get("mod", "")
+            if duplicates or role not in MODULE_TITLES or (module is not None and module != role):
+                return None
+            module = role
+        else:
+            module = module or fields["mod"].upper()
         separate_sc = firmware is not None and firmware >= SC_SEPARATE_FIELDS_FIRMWARE
         # SC v16+ не подменяет исторические rpm/tach. Одометрия v17 явно
         # использует scCount/scPpr, поэтому старые потребители не активируются.
@@ -431,6 +477,21 @@ def parse_master_line(line, module=None):
                    if firmware is not None and firmware >= 20 else None)
         live_seq = (display_field("live_seq", int, lambda value: 0 <= value < 0x7FFFFFFF)
                     if firmware is not None and firmware >= 20 else None)
+        if firmware is not None and firmware >= 22:
+            required = {"mod", "deg", "tgt", "moving", "cal", "cycle", "calib", "opto", "home",
+                        "err", "drive", "fw", "pot", "pm", "tach", "dmax", "sv", "duty", "sc_rpm",
+                        "sc_hz", "sc_ppr", "sc_count", "sc_recent", "brake_id", "neutral_id",
+                        "neutral_lock", "live_id", "live_seq", "t", "crc"}
+            if (not required.issubset(fields) or any(fields[k] not in {"0", "1"}
+                    for k in ("moving", "cal", "cycle", "calib", "opto", "pot", "tach"))
+                    or fields["pm"] not in {"0", "1"} or drive_percent is None
+                    or calib_error is None or drive_max is None or drive_servo is None
+                    or sc_rpm is None or sc_ppr is None or sc_count is None or sc_recent is None
+                    or uptime_ms is None or brake_id is None or neutral_id is None or neutral_lock is None
+                    or live_id is None or live_seq is None):
+                return None
+        if firmware is not None and firmware >= 23 and fields.get("zfault") not in {"0", "1"}:
+            return None
         for key, value in (("tach", tach),):
             if key in fields and value is None:
                 return None
@@ -470,6 +531,7 @@ def parse_master_line(line, module=None):
             "opto": fields.get("opto") == "1",
             "calibError": calib_error,
             "firmware": firmware,
+            "fullZeroFault": (fields["zfault"] == "1") if firmware is not None and firmware >= 23 else None,
             # pot=1 — потенциометр A0 откалиброван (q), доводка положения включена.
             # Поле появилось в прошивке v2 после руля; старые кадры его не содержат.
             "pot": fields.get("pot") == "1",
@@ -542,9 +604,11 @@ class _WheelLink:
     def __init__(self, path):
         self.path = path
         self.device = os.path.realpath(path)
+        self.fingerprint = None
         self.rx = bytearray()
         self.rx_discard = False
         self.module = None               # опознанное колесо (FL/FR/RL/RR)
+        self.legacy_wheel = False        # wheel protocol without a checked role
         self.commands = queue.Queue(maxsize=16)
         # One dedicated writer waits on this queue while the reader blocks on
         # telemetry. Disconnecting the reader stops the writer before reopening.
@@ -561,12 +625,12 @@ _UNCLAIMED = object()
 
 
 class MasterSource:
-    """Четыре USB-колеса, только ручное назначение ``module_ports``.
+    """Four USB wheels; automatic mode accepts only a checked fw22 identity.
 
-    Пустой порт отключает колесо. Не выбранные оператором устройства не
-    открываются, имена плат и ответы @ID не определяют назначение порта.
-    Свежая телеметрия @TLM всё ещё обязательна для команд; межпроцессный
-    замок, остановка тяги и watchdog не зависят от имени колеса в прошивке.
+    Discovery is passive: no commands are sent to an unidentified device.
+    Duplicate or changed identities latch a fault and stop all known wheels.
+    ``module_ports`` remains an explicit low-level legacy/test interface; the
+    onboard application uses automatic mode, never the old assignments.
     """
 
     name = "master"
@@ -596,15 +660,24 @@ class MasterSource:
     MAX_LINE_BYTES = 1024
     #: Как часто менеджер пересматривает список портов-кандидатов.
     RESCAN_S = 2.0
+    AUTO_RESCAN_S = 0.25  # promptly notice newly attached/replaced USB devices
     #: Как часто обновляем отметку «здесь колесо» (её срок жизни — 60 с).
     TAG_REFRESH_S = 15.0
 
     def __init__(self, port=None, baud=115200, on_message=None, on_status=None,
                  port_provider=None, probe=None, claim=None, release=None,
                  yield_to_lidar=None, tag_module=None, untag_module=None,
-                 module_ports=None):
-        # Legacy positional ports/providers are deliberately NOT candidates.
-        # Without a wheel-to-port assignment, never open any device.
+                 module_ports=None, auto_discovery=False, blocked_ports=None,
+                 publish_discovery=None):
+        self.auto_discovery = bool(auto_discovery)
+        self.port_provider = port_provider if self.auto_discovery else None
+        self.blocked_ports = blocked_ports if self.auto_discovery else None
+        self.publish_discovery = publish_discovery if self.auto_discovery else None
+        self._publish_lock = threading.Lock()
+        # Manual routing is retained only for callers explicitly opting out of
+        # auto discovery; production never mixes an unverified mapping with it.
+        if self.auto_discovery and module_ports:
+            raise ValueError("Автопоиск нельзя совмещать с ручным назначением колёс")
         self.module_ports = {}
         seen = set()
         for module, path in (module_ports or {}).items():
@@ -639,6 +712,15 @@ class MasterSource:
         # Резервирование нейтрали запрещает отправку всех команд движения до
         # подтверждённого возврата тормоза на четырёх платах.
         self._neutral_inhibit = False
+        # A durable pending marker prevents driving after an interrupted
+        # multi-board EEPROM commit, even across an onboard-server restart.
+        from robot_control.full_zero import pending_path
+        self._full_zero_pending_path = pending_path()
+        self._full_zero_inhibit = self._full_zero_pending_path.exists()
+        self._full_zero_pending = self._full_zero_inhibit
+        self._full_zero_context = threading.local()
+        self._full_zero_acks = {}
+        self._full_zero_request_id = 0
         # Random starting point avoids treating telemetry from a previous
         # server process as acknowledgement of its first STOP.
         self._brake_id = secrets.randbelow(0x7FFFFFFE) + 1
@@ -675,6 +757,10 @@ class MasterSource:
         self._serial = None
         self._spawning = set()
         self._cooldown = {}              # порт → время следующей попытки открыть
+        self._unknown_devices = {}       # real path → stat fingerprint after passive probe
+        self._bms_results = {}           # real path → (fingerprint, is_bms)
+        self.identity_fault = ""         # latched until restart after a conflict
+        self._discovery_stops = 0       # prevent re-enabling while STOP is being queued
         #: Пока True, порты не открываются. Нужно только для ручной прошивки
         #: утилитой (`scripts/flash_firmware.sh`): avrdude не может открыть порт,
         #: который читает программа. Сама программа не прошивает ничего.
@@ -819,12 +905,183 @@ class MasterSource:
                        (entry[0].get("neutralId") != 0 or entry[0].get("neutralLocked") is not False)
                        for entry in (getattr(self, "frames", None) or {}).values())
 
+    def _full_zero_memory_fault(self):
+        # Called with or without the command gate; preserve gate → state lock order.
+        with self.lock:
+            return any(entry and entry[0].get("fullZeroFault") is True
+                       for entry in (getattr(self, "frames", None) or {}).values())
+
     def _neutral_blocks_motion(self):
-        return bool(getattr(self, "_neutral_inhibit", False) or self.observed_neutral())
+        context = getattr(self, "_full_zero_context", None)
+        wizard = bool(getattr(self, "_full_zero_inhibit", False) and
+                      not getattr(context, "allowed", False))
+        return bool(wizard or getattr(self, "_neutral_inhibit", False) or self.observed_neutral())
+
+    @contextmanager
+    def _full_zero_allowed(self):
+        context = self._full_zero_context
+        previous = getattr(context, "allowed", False)
+        context.allowed = True
+        try:
+            yield
+        finally:
+            context.allowed = previous
+
+    def begin_full_zero(self):
+        """Reserve every motion path before issuing a fresh tagged STOP."""
+        with getattr(self, "_manual_motion_lock", nullcontext()):
+            with self._commands_lock:
+                if getattr(self, "_neutral_inhibit", False) or self.observed_neutral():
+                    return {"ok": False, "reason": "neutral_locked"}
+                if not self.serial_ready.is_set():
+                    return {"ok": False, "reason": "serial_unavailable"}
+                if getattr(self, "_full_zero_session", False):
+                    return {"ok": False, "reason": "full_zero_active"}
+                self._full_zero_session = True
+                self._full_zero_inhibit = True
+            # Do not hold the command gate across the runner's cancellation.
+            # Once reserved, a failed STOP is *not* permission to move: keep
+            # the interlock until a fresh brake from all four is confirmed.
+            try:
+                self._cancel_maneuver("full_zero")
+                result = self.brake_for_keyboard()  # s q + tagged b, including steering
+            except Exception:  # noqa: BLE001 — retain the fail-closed reservation
+                result = {"ok": False, "reason": "brake_unconfirmed"}
+            if not result.get("ok"):
+                result["reserved"] = True
+            return result
+
+    def full_zero_calibrate(self):
+        with self._full_zero_allowed():
+            return self.calibrate_module("ALL")
+
+    def full_zero_steer(self, module, angle, request_id):
+        # Put the move and a tagged idle query in one ordered per-wheel write.
+        # A stale target echo alone cannot confirm a repeated 0.1° adjustment.
+        # steer_module cancels a maneuver before taking the command gate;
+        # holding that gate here would invert the maneuver-tick lock order.
+        with self._full_zero_allowed():
+            return self.steer_module(module, angle, _full_zero_probe=request_id)
+
+    def full_zero_move_probe(self, module, request_id, angle=None):
+        if (module not in MODULE_TITLES or type(request_id) is not int or
+                not 0 < request_id < 0x7FFFFFFF or
+                (angle is not None and (type(angle) not in (int, float) or
+                                        not math.isfinite(angle) or abs(angle) > 20))):
+            return {"ok": False, "reason": "payload"}
+        with self._commands_lock, self._full_zero_allowed():
+            if not getattr(self, "_full_zero_session", False) or not self.serial_ready.is_set():
+                return {"ok": False, "reason": "serial_unavailable"}
+            if self._neutral_blocks_motion():
+                return {"ok": False, "reason": "neutral_locked"}
+            if self._full_zero_memory_fault():
+                return {"ok": False, "reason": "full_zero_eeprom_fault"}
+            now = time.time()
+            with self.lock:
+                links = [link for link in self.links.values() if link.module == module]
+                entry = self.frames.get(module)
+                if len(links) != 1 or not entry or now - entry[1] >= self.DRIVE_STALE_S:
+                    return {"ok": False, "reason": "module_offline"}
+                if ((entry[0].get("firmware") or 0) < 23 or
+                        type(entry[0].get("fullZeroFault")) is not bool):
+                    return {"ok": False, "reason": "firmware_update_required"}
+                link = links[0]
+                command = (("w %.1f\n" % angle) if angle is not None else "")
+                command += "zq %d\n" % request_id
+                try:
+                    # Set the ID while the state lock is held, before the
+                    # writer can cause an ACK to be parsed by the reader.
+                    self._full_zero_request_id = request_id
+                    self._full_zero_acks = {}
+                    link.commands.put_nowait(command.encode("ascii"))
+                except queue.Full:
+                    return {"ok": False, "reason": "command_queue_full"}
+        return {"ok": True, "id": request_id}
+
+    def full_zero_request(self, operation, request_id):
+        """Send zq/zc only to four verified live roles, with distinct ACK IDs."""
+        if operation not in {"zq", "zc"} or type(request_id) is not int or not 0 < request_id < 0x7FFFFFFF:
+            return {"ok": False, "reason": "payload"}
+        with self._commands_lock:
+            if not getattr(self, "_full_zero_session", False) or not self.serial_ready.is_set():
+                return {"ok": False, "reason": "serial_unavailable"}
+            if getattr(self, "_neutral_inhibit", False) or self.observed_neutral():
+                return {"ok": False, "reason": "neutral_locked"}
+            now = time.time()
+            with self.lock:
+                links = {link.module: link for link in self.links.values() if link.module}
+                frames = dict(self.frames)
+            if set(links) != set(MODULE_TITLES) or len(self.links) < len(MODULE_TITLES):
+                return {"ok": False, "reason": "module_offline"}
+            if any(m not in frames or now - frames[m][1] >= self.DRIVE_STALE_S or
+                   (frames[m][0].get("firmware") or 0) < 23 for m in MODULE_TITLES):
+                return {"ok": False, "reason": "firmware_update_required"}
+            if any(type(frames[m][0].get("fullZeroFault")) is not bool or
+                   frames[m][0]["fullZeroFault"] for m in MODULE_TITLES):
+                return {"ok": False, "reason": "full_zero_eeprom_fault"}
+            if any(links[m].commands.full() for m in MODULE_TITLES):
+                return {"ok": False, "reason": "command_queue_full"}
+            with self.lock:
+                self._full_zero_request_id = request_id
+                self._full_zero_acks = {}
+            command = ("%s %d\n" % (operation, request_id)).encode("ascii")
+            try:
+                for module in MODULE_TITLES:
+                    links[module].commands.put_nowait(command)
+            except queue.Full:
+                # It may be a partial commit; the controller retains its journal.
+                self._brake_all()
+                return {"ok": False, "reason": "command_queue_full"}
+        return {"ok": True, "id": request_id}
+
+    def full_zero_acks(self, request_id):
+        with self.lock:
+            if self._full_zero_request_id != request_id:
+                return {}
+            return dict(self._full_zero_acks)
+
+    def full_zero_mark_pending(self):
+        from robot_control.full_zero import write_pending
+        try:
+            write_pending(self._full_zero_pending_path)
+        except OSError:
+            # replace() can have succeeded even if directory fsync failed.
+            self._full_zero_pending = self._full_zero_pending_path.exists()
+            return {"ok": False, "reason": "journal_unavailable"}
+        self._full_zero_pending = True
+        return {"ok": True}
+
+    def full_zero_clear_pending(self):
+        from robot_control.full_zero import clear_pending
+        try:
+            clear_pending(self._full_zero_pending_path)
+        except OSError:
+            return {"ok": False, "reason": "journal_unavailable"}
+        self._full_zero_pending = False
+        return {"ok": True}
+
+    def stop_full_zero(self):
+        # Revoke any in-flight wizard context before clearing motion queues.
+        with self._commands_lock:
+            self._full_zero_session = False
+            self._full_zero_inhibit = True
+            return self.brake_for_keyboard()
+
+    def finish_full_zero(self):
+        with self._commands_lock:
+            self._full_zero_session = False
+            self._full_zero_inhibit = bool(getattr(self, "_full_zero_pending", False))
 
     def _queue_motion(self, command):
         """Проверка нейтрали и постановка в очередь атомарны с её включением."""
         with getattr(self, "_commands_lock", nullcontext()):
+            context = getattr(self, "_full_zero_context", None)
+            if getattr(context, "allowed", False) and not getattr(self, "_full_zero_session", False):
+                return {"ok": False, "reason": "full_zero_stopped"}
+            if getattr(self, "auto_discovery", False) and not self.serial_ready.is_set():
+                return {"ok": False, "reason": "serial_unavailable"}
+            if self._full_zero_memory_fault():
+                return {"ok": False, "reason": "full_zero_eeprom_fault"}
             if self._neutral_blocks_motion():
                 return {"ok": False, "reason": "neutral_locked"}
             try:
@@ -916,7 +1173,7 @@ class MasterSource:
         return {"ok": True, "queued": True, "module": module,
                 "offline": sorted(set(targets) - set(fresh))}
 
-    def steer_module(self, module, angle, now=None):
+    def steer_module(self, module, angle, now=None, *, _full_zero_probe=None):
         """Поставить в очередь только поворот одного откалиброванного модуля."""
         module = str(module or "").upper()
         try:
@@ -957,8 +1214,14 @@ class MasterSource:
             return {"ok": False, "reason": "wheel_moving"}
 
         # Отдельная команда поворота одного модуля, без команды тяги.
-        command = ("w %s %.1f\n" % (module, angle)).encode("ascii")
-        result = self._queue_motion(command)
+        if _full_zero_probe is not None:
+            context = getattr(self, "_full_zero_context", None)
+            if not getattr(context, "allowed", False):
+                return {"ok": False, "reason": "full_zero_stopped"}
+            result = self.full_zero_move_probe(module, _full_zero_probe, angle=angle)
+        else:
+            command = ("w %s %.1f\n" % (module, angle)).encode("ascii")
+            result = self._queue_motion(command)
         if not result["ok"]:
             return result
         return {"ok": True, "queued": True, "module": module, "angle": round(angle, 1)}
@@ -1019,13 +1282,19 @@ class MasterSource:
         with self.lock:
             frames = dict(self.frames)
         ready = self.serial_ready.is_set()
+        memory_fault = any(entry and entry[0].get("fullZeroFault") is True
+                           for entry in frames.values())
         per_module = {}
         for module in MODULE_TITLES:
             entry = frames.get(module)
             if not ready:
                 reason = "serial_unavailable"
+            elif getattr(self, "_full_zero_inhibit", False):
+                reason = "full_zero_active"
             elif entry is None or now - entry[1] >= self.DRIVE_STALE_S:
                 reason = "module_offline"
+            elif memory_fault:
+                reason = "full_zero_eeprom_fault"
             elif (entry[0].get("firmware") or 0) < DRIVE_DIRECT_FIRMWARE:
                 reason = "servo_firmware_required"
             else:
@@ -1067,8 +1336,12 @@ class MasterSource:
 
         if not self.serial_ready.is_set():
             reason = "serial_unavailable"
+        elif getattr(self, "_full_zero_inhibit", False):
+            reason = "full_zero_active"
         elif len(fresh_frames) != len(MODULE_TITLES):
             reason = "module_offline"
+        elif any(frame.get("fullZeroFault") is True for frame in fresh_frames.values()):
+            reason = "full_zero_eeprom_fault"
         elif any(frame.get("drivePercent") is None for frame in fresh_frames.values()):
             reason = "drive_firmware_required"
         elif any(not frame.get("cal") for frame in fresh_frames.values()):
@@ -1090,13 +1363,18 @@ class MasterSource:
         # колеса не запрещает — иначе кнопки «вперёд/назад» в карточке стояли
         # бы серыми, пока соседнее колесо не выставлено.
         per_module = {}
+        memory_fault = any(entry and entry[0].get("fullZeroFault") is True for entry in frames.values())
         for module in MODULE_TITLES:
             frame = fresh_frames.get(module)
             why = ""
             if not self.serial_ready.is_set():
                 why = "serial_unavailable"
+            elif getattr(self, "_full_zero_inhibit", False):
+                why = "full_zero_active"
             elif frame is None:
                 why = "module_offline"
+            elif memory_fault:
+                why = "full_zero_eeprom_fault"
             elif frame.get("drivePercent") is None:
                 why = "drive_firmware_required"
             elif not frame.get("cal"):
@@ -1165,6 +1443,10 @@ class MasterSource:
             # «t» — тяга; «d» в прошивке — поворот на угол, как в проверенном скетче.
             command = ("t %d\n" % target).encode("ascii")
         with getattr(self, "_commands_lock", nullcontext()):
+            if target != 0 and not self.serial_ready.is_set():
+                return {"ok": False, "reason": "serial_unavailable"}
+            if target != 0 and self._full_zero_memory_fault():
+                return {"ok": False, "reason": "full_zero_eeprom_fault"}
             if target != 0 and self._neutral_blocks_motion():
                 return {"ok": False, "reason": "neutral_locked"}
             if target == 0:
@@ -1218,9 +1500,15 @@ class MasterSource:
         if target != 0:
             with self.lock:
                 entry = self.frames.get(module)
+                memory_fault = any(item and item[0].get("fullZeroFault") is True
+                                   for item in self.frames.values())
+            if memory_fault:
+                return {"ok": False, "reason": "full_zero_eeprom_fault"}
             if entry is None or now - entry[1] >= self.DRIVE_STALE_S:
                 return {"ok": False, "reason": "module_offline"}
             frame = entry[0]
+            if frame.get("fullZeroFault") is True:
+                return {"ok": False, "reason": "full_zero_eeprom_fault"}
             if frame.get("drivePercent") is None:
                 return {"ok": False, "reason": "drive_firmware_required"}
             if not frame.get("cal"):
@@ -1232,6 +1520,10 @@ class MasterSource:
         # пропускает), а сервер всё равно шлёт её лишь на этот порт.
         command = ("t %s %d\n" % (module, target)).encode("ascii")
         with getattr(self, "_commands_lock", nullcontext()):
+            if target != 0 and not self.serial_ready.is_set():
+                return {"ok": False, "reason": "serial_unavailable"}
+            if target != 0 and self._full_zero_memory_fault():
+                return {"ok": False, "reason": "full_zero_eeprom_fault"}
             if target != 0 and self._neutral_blocks_motion():
                 return {"ok": False, "reason": "neutral_locked"}
             try:
@@ -1284,6 +1576,10 @@ class MasterSource:
                 direct += " b"
             command = ((direct + "\n") if value else ("b %s\n" % module)).encode("ascii")
             with getattr(self, "_commands_lock", nullcontext()):
+                if value and not self.serial_ready.is_set():
+                    return {"ok": False, "reason": "serial_unavailable"}
+                if value and self._full_zero_memory_fault():
+                    return {"ok": False, "reason": "full_zero_eeprom_fault"}
                 if value and self._neutral_blocks_motion():
                     return {"ok": False, "reason": "neutral_locked"}
                 if value:
@@ -1550,7 +1846,7 @@ class MasterSource:
             if self.maneuvers is not None and self.maneuvers.status()["active"]:
                 return {"ok": False, "reason": "maneuver_busy"}
             with getattr(self, "_commands_lock", nullcontext()):
-                if getattr(self, "_neutral_inhibit", False):
+                if getattr(self, "_neutral_inhibit", False) or getattr(self, "_full_zero_inhibit", False):
                     return {"ok": False, "reason": "neutral_locked"}
                 if not self.serial_ready.is_set():
                     return {"ok": False, "reason": "serial_unavailable"}
@@ -1616,6 +1912,9 @@ class MasterSource:
             if any(m not in frames or now - frames[m][1] >= self.DRIVE_STALE_S for m in MODULE_TITLES):
                 self._brake_all()
                 return {"ok": False, "reason": "module_offline"}
+            if any(frames[m][0].get("fullZeroFault") is True for m in MODULE_TITLES):
+                self._brake_all()
+                return {"ok": False, "reason": "full_zero_eeprom_fault"}
             if any((frames[m][0].get("firmware") or 0) < 20 or
                    type(frames[m][0].get("liveId")) is not int or
                    type(frames[m][0].get("liveSeq")) is not int for m in MODULE_TITLES):
@@ -1732,9 +2031,9 @@ class MasterSource:
                     continue
                 try:
                     routed = command
-                    if target and self._assigned_module(link.path):
-                        # Порт уже определяет колесо: имя в команде лишнее, а
-                        # прошивка ждёт «w 12.5» / «t 8» без него.
+                    if target:
+                        # The link is already tied to a verified wheel; strip
+                        # its address for the board's local command grammar.
                         parts = bytes(command).decode("ascii").split()
                         routed = (" ".join([parts[0]] + parts[2:]) + "\n").encode("ascii")
                     if self._is_servo_value(routed):
@@ -1798,23 +2097,227 @@ class MasterSource:
         return next((m for m, p in getattr(self, "module_ports", {}).items()
                      if os.path.realpath(p) == real), None)
 
-    def _link_line(self, link, line):
-        module = self._assigned_module(link.path)
-        if module is None:
-            return False
-        # Role comes from the selected port, never from mod= or @ID.
-        # Validate actual telemetry before enabling commands to that port.
-        if not self.feed(line, module=module):
-            return False
+    @staticmethod
+    def _device_fingerprint(path):
+        try:
+            st = os.stat(path)
+            return (st.st_dev, st.st_ino, st.st_rdev, st.st_ctime_ns)
+        except OSError:
+            return None
+
+    def _begin_discovery_stop_locked(self, reason, latch=False):
+        """Invalidate routing atomically with readers, dispatch and enqueue."""
+        self._discovery_stops += 1
+        self.serial_ready.clear()
+        if latch:
+            with self.lock:
+                if not self.identity_fault:
+                    self.identity_fault = reason
+                self.frames.clear()
+        self._discard_pending_commands()
+
+    def _discovery_stop(self, reason, *, latch=False, begun=False):
+        """Block new commands and stop every *identified* board on a topology fault."""
+        if not begun:
+            with self._commands_lock:
+                self._begin_discovery_stop_locked(reason, latch)
+        # Do not hold _commands_lock while waiting for the maneuver lock: its
+        # tick can itself be trying to enqueue a command under _commands_lock.
+        try:
+            self._cancel_maneuver("usb_identity")
+        finally:
+            with self._commands_lock:
+                self._discard_pending_commands()
+                with self.lock:
+                    links = [link for link in self.links.values() if link.module]
+                    self.drive_percent = 0
+                    self.drive_modules = {}
+                    self.servo_commands = {}
+                    self.drive_last_command = 0.0
+                for link in links:
+                    try:
+                        link.commands.put_nowait(b"s q\nb\n")
+                    except queue.Full:
+                        pass
+                self._discovery_stops -= 1
+        self._note_status("error" if latch else "warn", reason)
+
+    def _refresh_auto_readiness(self):
+        """Motion waits for every current USB candidate to be classified."""
+        if not self.auto_discovery:
+            return
+        with self._commands_lock:
+            with self.lock:
+                links = list(self.links.values())
+                by_device = {link.device: link for link in links}
+                candidates = list(self.candidates)
+                unknown = dict(self._unknown_devices)
+                bms_results = dict(self._bms_results)
+                fault = self.identity_fault
+                legacy = any(link.legacy_wheel for link in links)
+                known = any(link.module for link in links)
+            identities = {(os.path.realpath(path), self._device_fingerprint(path)) for path in candidates}
+            resolved = all(not link.module or (link.device, link.fingerprint) in identities for link in links)
+            for path in candidates:
+                real = os.path.realpath(path)
+                link = by_device.get(real)
+                if link is not None and link.module:
+                    continue
+                fingerprint = self._device_fingerprint(path)
+                if (fingerprint is None or unknown.get(real) != fingerprint or
+                        real not in bms_results or bms_results[real][0] != fingerprint):
+                    resolved = False
+                    break
+            bms_count = sum(1 for real, fingerprint in identities
+                            if real in bms_results and bms_results[real] == (fingerprint, True))
+            if known and resolved and bms_count <= 1 and not legacy and not fault and not self._discovery_stops:
+                self.serial_ready.set()
+            else:
+                self.serial_ready.clear()
+
+    def auto_probe_candidates_for_bms(self):
+        """Only ports already passively checked for wheels may receive JBD reads."""
+        if not self.auto_discovery:
+            return []
         with self.lock:
-            fresh = link.module is None
-            self.modules[module] = link.path
-            link.module = module
-            if self.port is None:
-                self.port = link.path
-        self.serial_ready.set()
+            candidates = list(self.candidates)
+            unknown = dict(self._unknown_devices)
+        return [path for path in candidates if self._device_fingerprint(path) is not None
+                and unknown.get(os.path.realpath(path)) == self._device_fingerprint(path)]
+
+    def auto_bms_results(self):
+        with self.lock:
+            candidates = list(self.candidates)
+            results = dict(self._bms_results)
+        return {path: results[os.path.realpath(path)][1] for path in candidates
+                if os.path.realpath(path) in results and
+                results[os.path.realpath(path)][0] == self._device_fingerprint(path)}
+
+    def record_auto_bms_result(self, path, fingerprint, is_bms):
+        """Mark a completed JBD probe only if the USB device did not change."""
+        real = os.path.realpath(path)
+        with self.lock:
+            if (fingerprint is None or self._unknown_devices.get(real) != fingerprint or
+                    self._device_fingerprint(path) != fingerprint):
+                return False
+            self._bms_results[real] = (fingerprint, bool(is_bms))
+        self._publish_auto_discovery()
+        self._refresh_auto_readiness()
+        return True
+
+    def _publish_auto_discovery(self):
+        """Cross-process allowlist: unknown ports proven not to be wheels/BMS."""
+        if not self.auto_discovery or self.publish_discovery is None:
+            return
+        with self._publish_lock:
+            with self.lock:
+                candidates = list(self.candidates)
+                unknown = dict(self._unknown_devices)
+                checked = dict(self._bms_results)
+            entries = []
+            for path in candidates:
+                real = os.path.realpath(path)
+                fingerprint = self._device_fingerprint(path)
+                if fingerprint is not None and unknown.get(real) == fingerprint:
+                    result = checked.get(real)
+                    is_bms = result[1] if result and result[0] == fingerprint else None
+                    entries.append((path, fingerprint, is_bms))
+            try:
+                self.publish_discovery(entries)
+            except Exception as exc:  # no allowlist is safer than a guessed port
+                self.last_error = "Не удалось опубликовать результаты USB-поиска: %s" % exc
+
+    def _link_line(self, link, line):
+        if (line or "").startswith("@Z "):
+            ack = parse_full_zero_reply(line)
+            with self.lock:
+                if (not ack or not link.module or ack["module"] != link.module or
+                        self.links.get(link.path) is not link or
+                        ack["id"] != getattr(self, "_full_zero_request_id", 0)):
+                    return False
+                entry = self.frames.get(link.module)
+                if not entry or (entry[0].get("firmware") or 0) < 23:
+                    return False
+                self._full_zero_acks[link.module] = ack
+            return True
+        if not getattr(self, "auto_discovery", False):
+            module = self._assigned_module(link.path)
+            if module is None or not self.feed(line, module=module):
+                return False
+            with self.lock:
+                fresh = link.module is None
+                self.modules[module] = link.path
+                link.module = module
+                if self.port is None:
+                    self.port = link.path
+            self.serial_ready.set()
+            if fresh:
+                self._note_status("ok", "мастер на связи: %s · колесо %s" % (link.path, module))
+            return True
+
+        # fw22 role and state are both inside the same validated CRC frame.
+        frame = parse_master_line(line)
+        if frame is None or (frame.get("firmware") or 0) < 22:
+            # Identify older wheel protocols only to reserve the port, never to
+            # assign a position or send it a command. An unprotected old frame
+            # can at worst block motion; it can never enable it.
+            legacy = parse_master_line(line, module=link.module or "FL")
+            if legacy and (legacy.get("firmware") or 0) < 22:
+                if link.module and not self.identity_fault:
+                    self._discovery_stop("%s: изменилась прошивка/роль колеса" % link.path, latch=True)
+                elif not link.legacy_wheel:
+                    link.legacy_wheel = True
+                    self._discovery_stop("%s: старая прошивка колеса; обновите до fw22" % link.path)
+                return True
+            text = (line or "").strip()
+            if (link.module or link.legacy_wheel) and text.startswith("# "):
+                self._note_message(text[2:], time.time())
+            return False
+
+        module = frame["mod"]
+        fault = ""
+        fresh = False
+        memory_fault_started = False
+        with self._commands_lock:
+            with self.lock:
+                fresh = link.module is None
+                old = link.module
+                duplicate = next((other.path for other in self.links.values()
+                                  if other is not link and other.module == module), None)
+                if self.identity_fault:
+                    # Stop a newly discovered wheel once; do not repeatedly
+                    # clear STOP from queues for every subsequent frame.
+                    if fresh:
+                        fault = self.identity_fault
+                elif old and old != module:
+                    fault = "%s: роль колеса изменилась %s → %s" % (link.path, old, module)
+                elif link.legacy_wheel:
+                    fault = "%s: прошивка изменилась на открытом порту" % link.path
+                elif duplicate:
+                    fault = "Две платы сообщают %s: %s и %s" % (module, duplicate, link.path)
+                link.module = module  # verified wheel: include it in emergency STOP
+                if not fault and not self.identity_fault:
+                    old_frame = self.frames.get(module)
+                    memory_fault_started = (frame.get("fullZeroFault") is True and
+                                            (not old_frame or old_frame[0].get("fullZeroFault") is not True))
+                    self.modules[module] = link.path
+                    self.frames[module] = (frame, time.time())
+                    if self.port is None:
+                        self.port = link.path
+            if fault:
+                if not self.identity_fault:
+                    fault += "; исправьте и перезапустите программу"
+                self._begin_discovery_stop_locked(fault, latch=True)
+            elif memory_fault_started:
+                # Revoke queued steering and traction at the first bad frame;
+                # subsequent motion checks use this same gate and fault state.
+                self.brake_for_keyboard()
+        if fault:
+            self._discovery_stop(fault, latch=True, begun=True)
+            return True
+        self._refresh_auto_readiness()
         if fresh:
-            self._note_status("ok", "мастер на связи: %s · колесо %s (ручной порт)" % (link.path, module))
+            self._note_status("ok", "автопоиск: %s · колесо %s · fw%d" % (link.path, module, frame["firmware"]))
         return True
 
     @staticmethod
@@ -1846,23 +2349,60 @@ class MasterSource:
 
     # ------------------------------------------------------------ потоки портов #
     def _candidate_ports(self):
-        """Проверить наличие только вручную назначенных портов, без USB-поиска."""
-        ports = list(self.module_ports.values())
+        """Enumerate USB serial devices; opening and probing happen under locks."""
+        if self.auto_discovery:
+            try:
+                ports = list(self.port_provider() if self.port_provider else [])
+                blocked = set(self.blocked_ports() if self.blocked_ports else ())
+                blocked |= {os.path.realpath(p) for p in blocked}
+            except Exception as exc:  # discovery must fail closed
+                self.last_error = "Не удалось перечислить USB: %s" % exc
+                self._discovery_stop(self.last_error, latch=True)
+                return []
+        else:
+            ports = list(self.module_ports.values())
+            blocked = set()
+        with self.lock:
+            known_unknown = dict(self._unknown_devices) if self.auto_discovery else {}
         out, seen = [], set()
         for path in ports:
             path = str(path or "").strip()
             if not path or not os.path.exists(path):
                 continue
-            try:
-                real = os.path.realpath(path)
-            except OSError:
-                real = path
+            real = os.path.realpath(path)
             if real in seen:
+                continue
+            # A BMS/lidar which we already classified remains part of the USB
+            # topology when its owner takes the lock. Removing it here loses
+            # its classification and makes the two owners repeatedly reset it.
+            blocked_now = path in blocked or real in blocked
+            if blocked_now and known_unknown.get(real) != self._device_fingerprint(path):
                 continue
             seen.add(real)
             out.append(path)
-        with self.lock:
-            self.candidates = list(out)
+        reason = "USB-состав изменился: останавливаю и проверяю устройства"
+        stop = False
+        with getattr(self, "_commands_lock", nullcontext()):
+            with self.lock:
+                if self.auto_discovery:
+                    topology = {(os.path.realpath(p), self._device_fingerprint(p)) for p in out}
+                    old = getattr(self, "_usb_topology", None)
+                    changed = old is not None and old != topology
+                    self._usb_topology = topology
+                    self._unknown_devices = {real: fingerprint for real, fingerprint in self._unknown_devices.items()
+                                             if (real, fingerprint) in topology}
+                    self._bms_results = {real: result for real, result in self._bms_results.items()
+                                         if (real, result[0]) in topology}
+                else:
+                    changed = False
+                self.candidates = list(out)
+            if changed and self.serial_ready.is_set():
+                self._begin_discovery_stop_locked(reason)
+                stop = True
+        if stop:
+            self._discovery_stop(reason, begun=True)
+        if changed:
+            self._publish_auto_discovery()
         return out
 
     def _lidar_needs(self, port):
@@ -1915,9 +2455,7 @@ class MasterSource:
         now = time.monotonic()
         if not candidates and not self.links:
             self.serial_ready.clear()
-            self._note_status(
-                "warn",
-                "колёса: назначенные USB-порты недоступны — проверьте ручной выбор портов")
+            self._note_status("warn", "колёса: USB-устройства не найдены")
             return
         waiting_for_lidar = False
         for candidate in candidates:
@@ -1930,6 +2468,9 @@ class MasterSource:
                 busy.update(os.path.realpath(p) for p in self._spawning)
                 if device in busy:
                     continue
+                if (self.auto_discovery and
+                        self._unknown_devices.get(device) == self._device_fingerprint(candidate)):
+                    continue  # already passively probed; do not keep resetting unknown devices
                 if self._cooldown.get(candidate, 0.0) > now:
                     continue
             if self._lidar_needs(candidate):
@@ -1944,45 +2485,64 @@ class MasterSource:
             link = _WheelLink(candidate)
             threading.Thread(target=self._link_worker, args=(link,), daemon=True).start()
         if waiting_for_lidar and not self._spawning and not self.links:
-            self._note_status("warn", "колёса: лидар ищет свой порт — жду")
+            self._note_status("warn", "колёса: лидар использует порт — жду")
+        self._refresh_auto_readiness()
 
     def _link_worker(self, link):
-        """Читать только назначенный порт; готовность — по свежей @TLM."""
+        """Passively identify a wheel before starting its command writer."""
         serial = self._serial
         dev = None
         writer = None
         failure = None
         token = self._claim(link.path)
         identified = False
+        fingerprint = self._device_fingerprint(link.path)
         try:
-            if token is None:
-                # Замок держит лидар или второй процесс робота: порт не наш,
-                # ждём молча (сообщение «лидар ищет порт» уже сказано выше).
+            if token is None or (self.auto_discovery and (token is _UNCLAIMED or token == -1)):
+                # Automatic probing is forbidden without the shared lock: even
+                # a failed open could toggle DTR on somebody else's device.
+                if token is not None:
+                    self.last_error = "Недоступен общий замок USB-порта %s" % link.path
                 with self.lock:
                     self._cooldown[link.path] = time.monotonic() + self.RETRY_S
                 return
+            if self.auto_discovery and (fingerprint is None or os.path.realpath(link.path) != link.device):
+                raise OSError("USB-порт изменился до открытия")
             # exclusive: второй процесс не может открыть тот же UART и читать
             # его вперемешку (строки телеметрии рвутся, команды теряются).
             # Bound a stalled write so that a broken USB device cannot leave
             # its writer blocked forever; firmware watchdog remains active.
             dev = serial.Serial(link.path, self.baud, timeout=0.2, write_timeout=0.2, exclusive=True)
+            if self.auto_discovery:
+                opened = os.fstat(dev.fileno())
+                if (fingerprint != (opened.st_dev, opened.st_ino, opened.st_rdev, opened.st_ctime_ns) or
+                        fingerprint != self._device_fingerprint(link.path) or
+                        os.path.realpath(link.path) != link.device):
+                    raise OSError("USB-порт изменился во время открытия")
+                link.fingerprint = fingerprint
             link.serial = dev
             with self.lock:
                 self.links[link.path] = link
-            # Ждём свежую телеметрию после возможного сброса при открытии.
+            # No bytes are written to a candidate until its identity is
+            # validated; opening a serial adapter may nevertheless toggle DTR.
             deadline = time.monotonic() + self.PROBE_S
-            while not self._stop and link.module is None and time.monotonic() < deadline:
+            while not self._stop and link.module is None and not link.legacy_wheel and time.monotonic() < deadline:
                 raw = self._read_link_chunk(dev)
                 if raw:
                     self._link_bytes(link, raw)
-            if link.module is None:
-                self._note_status("warn", "порт %s: нет @TLM — проверю снова; проверьте питание USB и прошивку" % link.path)
+            if link.module is None and not link.legacy_wheel:
+                if self.auto_discovery and fingerprint is not None and fingerprint == self._device_fingerprint(link.path):
+                    with self.lock:
+                        self._unknown_devices[link.device] = fingerprint
+                elif not self.auto_discovery:
+                    self._note_status("warn", "порт %s: нет телеметрии колеса" % link.path)
                 return
             identified = True
-            # Do not make outbound commands wait for the next @TLM (or the
-            # read timeout). No writer is started before valid telemetry.
-            writer = threading.Thread(target=self._link_writer, args=(link, dev), daemon=True)
-            writer.start()
+            # A legacy wheel is held and tagged to protect it from other USB
+            # probes, but has no usable position and never gets a writer.
+            if link.module is not None:
+                writer = threading.Thread(target=self._link_writer, args=(link, dev), daemon=True)
+                writer.start()
             # Отметка «здесь колесо»: лидар такой порт не перебирает — его
             # открытие сбрасывает плату и рвёт телеметрию.
             self._tag(link.path)
@@ -1993,6 +2553,10 @@ class MasterSource:
             next_tag = last_telemetry + self.TAG_REFRESH_S
             while not self._stop:
                 raw = self._read_link_chunk(dev)
+                if (self.auto_discovery and
+                        (os.path.realpath(link.path) != link.device or
+                         self._device_fingerprint(link.path) != link.fingerprint)):
+                    raise OSError("USB-устройство изменилось")
                 if link.writer_error is not None:
                     raise OSError("ошибка записи USB: %s" % link.writer_error)
                 if raw and self._link_bytes(link, raw):
@@ -2019,20 +2583,27 @@ class MasterSource:
                 except Exception:         # noqa: BLE001 — порт уже мёртв
                     pass
             lost_module = None
-            with self.lock:
-                self.links.pop(link.path, None)
-                self._spawning.discard(link.path)
-                self._cooldown[link.path] = time.monotonic() + self.RETRY_S
-                if link.module and self.modules.get(link.module) == link.path:
-                    self.modules.pop(link.module, None)
-                    self.frames.pop(link.module, None)
-                    lost_module = link.module
-                if not self.modules:
-                    self.serial_ready.clear()
-                    self.port = None
-            if lost_module and not self._stop:
-                # Clear stale telemetry and brake the other wheels immediately;
-                # do not wait for the stopped writer or diagnostic callbacks.
+            stop_begun = False
+            with self._commands_lock:
+                with self.lock:
+                    self.links.pop(link.path, None)
+                    self._spawning.discard(link.path)
+                    self._cooldown[link.path] = time.monotonic() + self.RETRY_S
+                    if link.module and self.modules.get(link.module) == link.path:
+                        self.modules.pop(link.module, None)
+                        self.frames.pop(link.module, None)
+                        lost_module = link.module
+                    if not self.modules:
+                        self.serial_ready.clear()
+                        self.port = None
+                if lost_module and not self._stop and self.auto_discovery:
+                    self._begin_discovery_stop_locked("колесо %s: связь потеряна" % lost_module)
+                    stop_begun = True
+            if stop_begun:
+                # A lost auto-identified link invalidates the routing snapshot;
+                # stop steering as well as traction before trying any new port.
+                self._discovery_stop("колесо %s: связь потеряна" % lost_module, begun=True)
+            elif lost_module and not self._stop and not self.auto_discovery:
                 self._cancel_maneuver("module_offline")
                 if self._brake_for_lost_module(lost_module):
                     self._brake_all()
@@ -2050,6 +2621,7 @@ class MasterSource:
                 self._tag(link.path, on=False)
             if lost_module and not self._stop:
                 self._note_status("warn", "колесо %s: порт %s пропал" % (lost_module, link.path))
+            self._refresh_auto_readiness()
 
     def _reader(self):
         try:
@@ -2059,16 +2631,19 @@ class MasterSource:
             self._note_status("error", "мастер: pyserial не установлен — порты колёс выключены")
             return
         self._serial = serial
-        next_scan = next_maneuver = 0.0
+        next_scan = next_maneuver = next_publish = 0.0
         while not self._stop:
             # Clear BEFORE draining: a concurrent put after the drain remains
             # visible to wait(), so no command can miss its wakeup.
             self._dispatch_wakeup.clear()
             now = time.monotonic()
             if now >= next_scan:
-                next_scan = now + self.RESCAN_S
+                next_scan = now + (self.AUTO_RESCAN_S if self.auto_discovery else self.RESCAN_S)
                 if not self._hold_ports:      # прошивка: USB занят avrdude
                     self._open_new_links()
+            if self.auto_discovery and now >= next_publish:
+                next_publish = now + 1.0
+                self._publish_auto_discovery()
             self._fanout_commands()
             now = time.monotonic()
             if now >= next_maneuver:
@@ -2107,6 +2682,7 @@ class MasterSource:
                                "opto": frame.get("opto"), "calibError": error or 0,
                                "calibErrorText": CALIB_ERRORS.get(error) if error else None,
                                "firmware": frame.get("firmware"),
+                               "fullZeroFault": frame.get("fullZeroFault"),
                                "pot": frame.get("pot", False),
                                "potMode": frame.get("potMode"),
                                # SC отдельно от старых rpm/tach; знак не измеряется.
@@ -2171,7 +2747,12 @@ class MasterSource:
                 "configured": getattr(self, "configured_port", port),
                 "active": active,
                 "candidates": candidates,
-                "error": getattr(self, "last_error", "") or None,
+                "error": (getattr(self, "identity_fault", "") or
+                          (getattr(self, "last_error", "") if not ready or not ready.is_set() else "") or None),
+                "auto": bool(getattr(self, "auto_discovery", False)),
+                "ready": bool(ready and ready.is_set()),
+                "legacy": [link.path for link in getattr(self, "links", {}).values()
+                           if getattr(link, "legacy_wheel", False)],
                 "modules": modules,
                 "open": open_ports,
             }

@@ -557,15 +557,14 @@
         </header>
 
         <details id="wheel-port-settings" class="bms-setup">
-          <summary>USB-порты колёс · ручное назначение</summary>
-          <p>Для каждого колеса выберите имя его порта: <code>/dev/ttyUSB0</code>, <code>/dev/ttyACM0</code> и т. п. Автоопределение отключено. «Не подключено» оставляет колесо отключённым. Имена в прошивке не используются. Номера портов могут измениться после переподключения USB.</p>
-          <p><b>Прошивку плат заливают вручную</b> — из Arduino IDE файлом <code>motor_wheel_*.ino</code> своего колеса (копии лежат на рабочем столе). Экран только открывает порты для связи: ни кнопки, ни автопрошивки в программе нет.</p>
+          <summary>USB-устройства · автоматическое определение колёс</summary>
+          <p>Программа сама находит каждую плату по имени FL/FR/RL/RR в защищённой телеметрии. Если имена совпадают или старая прошивка не сообщает имя, движение блокируется.</p>
+          <p><b>Один раз прошейте каждую плату fw22 с её настоящим именем.</b> Определить, правильно ли плата физически установлена, по USB невозможно: проверьте это на вывешенных колёсах с независимым E-STOP.</p>
           <div id="wheel-port-fields" class="cam-settings-grid"></div>
           <div class="cam-settings-actions">
-            <button id="wheel-ports-refresh" type="button">Обновить список USB</button>
-            <button id="wheel-ports-save" type="button" class="primary" disabled>Сохранить порты</button>
+            <button id="wheel-ports-refresh" type="button">Обновить состояние</button>
           </div>
-          <p id="wheel-ports-msg" role="status">Остановите робот перед изменением. После сохранения перезапустите программу для применения.</p>
+          <p id="wheel-ports-msg" role="status">Проверяю USB-устройства…</p>
         </details>
 
         <section class="steer-modes" aria-labelledby="steer-modes-title">
@@ -606,8 +605,11 @@
 
         <section class="steer-calib-bar" aria-label="Калибровка руля по оптодатчику">
           <div><b>Ноль руля — по оптодатчику D18</b>
-            <span>Колесо ищет флажок в пределах ±135° (ход руля 270°): сначала вправо, затем влево. Подходит к каждой кромке по три раза и встаёт в середину флажка по среднему. После включения Arduino выставьте колёса прямо руками (±30°). Колёса не должны упираться, рядом — никого.</span></div>
-          <button id="steer-calib-all" class="btn-steer btn-steer--calib" type="button" disabled>Калибровать все колёса</button>
+            <span>Колесо ищет флажок: сначала вправо до 125°, затем влево до 250° от достигнутой точки. Подходит к каждой кромке по три раза и возвращается в сохранённый полный ноль (если он задан). Перед запуском выставьте колёса примерно прямо и убедитесь, что на всём пути нет упоров или людей.</span></div>
+          <div class="full-zero-open-actions">
+            <button id="steer-calib-all" class="btn-steer btn-steer--calib" type="button" disabled>Калибровать все колёса</button>
+            <button id="full-zero-open" class="btn-steer btn-steer--full-zero" type="button" aria-haspopup="dialog" aria-controls="full-zero-modal">Откалибровать полный ноль</button>
+          </div>
         </section>
 
         <details class="steer-fine" id="steer-fine">
@@ -1048,6 +1050,83 @@
     </div>
   </div>
 
+  <div id="full-zero-modal" class="full-zero-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="full-zero-title" aria-describedby="full-zero-safety">
+    <div class="full-zero-backdrop" aria-hidden="true"></div>
+    <section class="full-zero-card">
+      <header class="full-zero-head">
+        <div><span class="full-zero-eyebrow">РУЛЕВЫЕ МОДУЛИ · FL / FR / RL / RR</span>
+          <h2 id="full-zero-title">Калибровка полного нуля</h2>
+          <p>Выставьте каждое колесо параллельно оси корпуса и сохраните положение на его плате.</p></div>
+        <button id="full-zero-close" class="full-zero-close" type="button" aria-label="Остановить настройку и закрыть">✕</button>
+      </header>
+      <div class="full-zero-body">
+        <div class="full-zero-warning" id="full-zero-safety"><b>Перед началом</b>
+          Зафиксируйте робота и вывесите колёса. Уберите людей и предметы, приготовьте независимый E-STOP.
+          Выставьте колёса примерно прямо; при поиске флажка они могут повернуться далеко вправо и влево —
+          убедитесь в запасе хода. Открытие мастера останавливает тягу, а поиск начинается только по кнопке.
+        </div>
+        <div class="full-zero-progress"><span class="full-zero-step">01</span>
+          <div><b>Опорная калибровка</b><small>Сначала дождитесь остановки и подтверждения всех плат.</small></div>
+          <button id="full-zero-calibrate" class="full-zero-primary" type="button" disabled>Калибровать по датчикам</button>
+        </div>
+        <div class="full-zero-progress full-zero-progress--second"><span class="full-zero-step">02</span>
+          <div><b>Точная подстройка</b><small>Шаг команды 0,1°; физическая точность зависит от датчика и механики.</small></div>
+        </div>
+        <div class="full-zero-wheels" aria-label="Индивидуальная настройка колёс">
+          <article class="full-zero-wheel" data-full-zero-wheel="FL">
+            <div class="full-zero-wheel-name"><b>FL</b><small>Переднее левое</small></div>
+            <div class="full-zero-wheel-value"><span>сейчас</span><strong id="full-zero-angle-FL">—</strong><small id="full-zero-state-FL">ожидание</small></div>
+            <div class="full-zero-wheel-actions">
+              <button type="button" data-full-zero-adjust="FL" data-delta="-1" aria-label="FL: уменьшить на один градус" disabled>−1°</button>
+              <button type="button" data-full-zero-adjust="FL" data-delta="-0.1" aria-label="FL: уменьшить на одну десятую градуса" disabled>−0,1°</button>
+              <button type="button" data-full-zero-adjust="FL" data-delta="0.1" aria-label="FL: увеличить на одну десятую градуса" disabled>+0,1°</button>
+              <button type="button" data-full-zero-adjust="FL" data-delta="1" aria-label="FL: увеличить на один градус" disabled>+1°</button>
+            </div>
+          </article>
+          <article class="full-zero-wheel" data-full-zero-wheel="FR">
+            <div class="full-zero-wheel-name"><b>FR</b><small>Переднее правое</small></div>
+            <div class="full-zero-wheel-value"><span>сейчас</span><strong id="full-zero-angle-FR">—</strong><small id="full-zero-state-FR">ожидание</small></div>
+            <div class="full-zero-wheel-actions">
+              <button type="button" data-full-zero-adjust="FR" data-delta="-1" aria-label="FR: уменьшить на один градус" disabled>−1°</button>
+              <button type="button" data-full-zero-adjust="FR" data-delta="-0.1" aria-label="FR: уменьшить на одну десятую градуса" disabled>−0,1°</button>
+              <button type="button" data-full-zero-adjust="FR" data-delta="0.1" aria-label="FR: увеличить на одну десятую градуса" disabled>+0,1°</button>
+              <button type="button" data-full-zero-adjust="FR" data-delta="1" aria-label="FR: увеличить на один градус" disabled>+1°</button>
+            </div>
+          </article>
+          <article class="full-zero-wheel" data-full-zero-wheel="RL">
+            <div class="full-zero-wheel-name"><b>RL</b><small>Заднее левое</small></div>
+            <div class="full-zero-wheel-value"><span>сейчас</span><strong id="full-zero-angle-RL">—</strong><small id="full-zero-state-RL">ожидание</small></div>
+            <div class="full-zero-wheel-actions">
+              <button type="button" data-full-zero-adjust="RL" data-delta="-1" aria-label="RL: уменьшить на один градус" disabled>−1°</button>
+              <button type="button" data-full-zero-adjust="RL" data-delta="-0.1" aria-label="RL: уменьшить на одну десятую градуса" disabled>−0,1°</button>
+              <button type="button" data-full-zero-adjust="RL" data-delta="0.1" aria-label="RL: увеличить на одну десятую градуса" disabled>+0,1°</button>
+              <button type="button" data-full-zero-adjust="RL" data-delta="1" aria-label="RL: увеличить на один градус" disabled>+1°</button>
+            </div>
+          </article>
+          <article class="full-zero-wheel" data-full-zero-wheel="RR">
+            <div class="full-zero-wheel-name"><b>RR</b><small>Заднее правое</small></div>
+            <div class="full-zero-wheel-value"><span>сейчас</span><strong id="full-zero-angle-RR">—</strong><small id="full-zero-state-RR">ожидание</small></div>
+            <div class="full-zero-wheel-actions">
+              <button type="button" data-full-zero-adjust="RR" data-delta="-1" aria-label="RR: уменьшить на один градус" disabled>−1°</button>
+              <button type="button" data-full-zero-adjust="RR" data-delta="-0.1" aria-label="RR: уменьшить на одну десятую градуса" disabled>−0,1°</button>
+              <button type="button" data-full-zero-adjust="RR" data-delta="0.1" aria-label="RR: увеличить на одну десятую градуса" disabled>+0,1°</button>
+              <button type="button" data-full-zero-adjust="RR" data-delta="1" aria-label="RR: увеличить на один градус" disabled>+1°</button>
+            </div>
+          </article>
+        </div>
+        <div class="full-zero-message" id="full-zero-message" role="status" aria-live="polite">Проверяем связь…</div>
+        <p class="full-zero-hint">Поправка относительно датчика ограничена ±20°. При повторной оптокалибровке
+          колёса сами вернутся в сохранённый ноль; от одного включения питания они не двигаются.</p>
+      </div>
+      <footer class="full-zero-footer">
+        <button id="full-zero-cancel" class="full-zero-cancel" type="button">СТОП и отменить</button>
+        <button id="full-zero-estop" class="full-zero-cancel" type="button">E-STOP</button>
+        <button id="full-zero-retry" class="full-zero-secondary" type="button" hidden>Начать заново</button>
+        <button id="full-zero-save" class="full-zero-primary" type="button" disabled>Сохранить все четыре</button>
+      </footer>
+    </section>
+  </div>
+
   <script src="/robot_model.js"></script><script src="lidar_view.js"></script>
   <script src="steer_presets.js"></script>
   <script src="viewport.js"></script>
@@ -1058,6 +1137,7 @@
   <script src="keyboard.js"></script>
   <script src="neutral.js"></script>
   <script src="robot.js"></script>
+  <script src="full_zero.js"></script>
   <script src="wheel_settings.js"></script>
   <script src="battery.js"></script>
   <script src="lidar_settings.js"></script>
