@@ -70,11 +70,9 @@
     text('bms-updated', data
       ? 'Измерено: ' + new Date(data.updatedAt * 1000).toLocaleString('ru-RU') + (available ? '' : ' · последние известные данные')
       : (transportOk && !configured
-        ? (snapshot && snapshot.auto
-          ? 'Автопоиск JBD BMS: проверьте питание, USB-UART и TX/RX/GND.'
-          : (window.RCRemoteControls
-            ? 'BMS ещё не подключена: настройте порт на бортовом экране → «АКБ» → «Подключение BMS».'
-            : 'BMS ещё не подключена: нажмите «Подключение BMS», выберите порт и «Сохранить и подключить».'))
+        ? (window.RCRemoteControls
+          ? 'BMS ещё не подключена: настройте порт на бортовом экране → «АКБ» → «Подключение BMS».'
+          : 'BMS ещё не подключена: нажмите «Подключение BMS», выберите порт и «Сохранить и подключить».')
         : 'Нет измерений: проверьте кабель USB-UART и питание BMS.'));
     const report = $('bms-report');
     report.setAttribute('aria-disabled', available ? 'false' : 'true');
@@ -85,7 +83,7 @@
     if (!page.hidden && live) live.textContent = available ? (snapshot.complete ? '● BMS' : 'НЕ ВСЕ БАНКИ') : 'НЕТ ДАННЫХ BMS';
     const setupButton = $('bms-setup-open');
     if (setupButton) {
-      setupButton.hidden = Boolean(snapshot && snapshot.auto);
+      setupButton.hidden = false;
       setupButton.classList.toggle('attention', transportOk && (!configured || !available));
     }
     if (transportOk && !configured && !page.hidden && !setupAutoOpened && snapshot.setupAvailable) {
@@ -328,7 +326,7 @@
   // ------------------------------------------------- подключение BMS (порт)
   const ROLE_TEXT = {
     bms: 'BMS', master: 'мастер руля', lidar: 'лидар', chassis: 'шасси',
-    busy: 'занят', arduino: 'Arduino?', free: 'свободен'
+    busy: 'занят', arduino: 'Arduino?', free: 'свободен', checking: 'проверка USB'
   };
 
   function setupMessage(message, tone) {
@@ -346,8 +344,12 @@
       : 'порт не выбран');
     const ports = Array.isArray(setupData.ports) ? setupData.ports : [];
     if (!selectedPort) {
-      const preferred = ports.find((item) => item.role === 'bms') || ports.find((item) => item.role === 'free');
-      if (preferred) selectedPort = preferred.port;
+      const preferred = ports.find((item) => item.role === 'bms');
+      if (preferred) {
+        selectedPort = preferred.port;
+        const input = $('bms-port-manual');
+        if (input) input.value = selectedPort;
+      }
     }
     const key = JSON.stringify([ports, selectedPort, setupBusy]);
     if (key === setupHtmlKey) return;
@@ -358,7 +360,7 @@
       return;
     }
     ports.forEach((item) => {
-      const locked = ['master', 'lidar', 'chassis'].indexOf(item.role) >= 0;
+      const locked = ['master', 'lidar', 'chassis', 'busy', 'checking', 'arduino'].indexOf(item.role) >= 0;
       const row = make('li', 'role-' + item.role + (item.port === selectedPort ? ' selected' : ''));
       const label = make('label');
       const radio = document.createElement('input');
@@ -369,6 +371,8 @@
       radio.disabled = locked || setupBusy;
       radio.addEventListener('change', () => {
         selectedPort = item.port;
+        const input = $('bms-port-manual');
+        if (input) input.value = selectedPort;
         setupHtmlKey = '';
         renderSetup();
       });
@@ -382,7 +386,7 @@
 
   function setBusy(busy) {
     setupBusy = busy;
-    ['bms-probe', 'bms-scan', 'bms-save', 'bms-disable'].forEach((id) => {
+    ['bms-probe', 'bms-save', 'bms-disable'].forEach((id) => {
       const button = $(id);
       if (button) button.disabled = busy || (setupData && setupData.available === false);
     });
@@ -416,7 +420,7 @@
   }
 
   async function probeSelected() {
-    if (!selectedPort) return setupMessage('Выберите порт в списке.', 'warn');
+    if (!selectedPort) return setupMessage('Выберите порт в списке или введите путь.', 'warn');
     setBusy(true);
     setupMessage('Проверяю ' + selectedPort + '…', '');
     try {
@@ -430,34 +434,13 @@
     }
   }
 
-  async function scanPorts() {
-    setBusy(true);
-    setupMessage('Ищу BMS на свободных портах (мастер, лидар и Arduino пропускаются)…', '');
-    try {
-      const { result } = await post('api/battery/scan', {});
-      const found = Array.isArray(result.found) ? result.found : [];
-      if (found.length) {
-        selectedPort = found[0];
-        setupMessage('BMS найдена: ' + found.join(', ') + '. Проверьте выбор и нажмите «Сохранить и подключить».', 'ok');
-      } else {
-        const tried = Array.isArray(result.results) ? result.results.length : 0;
-        setupMessage('BMS не найдена: проверено портов ' + tried + '. Проверьте кабель TX/RX/GND и питание BMS.', 'error');
-      }
-    } catch (error) {
-      setupMessage(error.message, 'error');
-    } finally {
-      setBusy(false);
-      void loadSetup();
-    }
-  }
-
   async function savePort(port) {
     setBusy(true);
     setupMessage(port ? 'Сохраняю ' + port + ' и подключаюсь…' : 'Отключаю BMS…', '');
     try {
       const { response, result } = await post('api/battery/port', { port });
       if (!response.ok || !result.ok) throw new Error(result.error || 'Не удалось сохранить порт.');
-      setupMessage(port ? 'Сохранено в .env (RC_BMS_PORT). Подключение к BMS — данные появятся через пару секунд.'
+      setupMessage(port ? 'Сохранено в .env (RC_BMS_PORT). Жду проверку USB и ответ выбранной BMS.'
         : 'BMS отключена, RC_BMS_PORT очищен.', 'ok');
     } catch (error) {
       setupMessage(error.message, 'error');
@@ -487,9 +470,14 @@
   }
   bind('bms-setup-open', () => openSetup(!setupOpen));
   bind('bms-probe', () => { void probeSelected(); });
-  bind('bms-scan', () => { void scanPorts(); });
+  const portInput = $('bms-port-manual');
+  if (portInput && portInput.addEventListener) portInput.addEventListener('input', () => {
+    selectedPort = portInput.value.trim();
+    setupHtmlKey = '';
+    renderSetup();
+  });
   bind('bms-save', () => {
-    if (!selectedPort) return setupMessage('Выберите порт в списке.', 'warn');
+    if (!selectedPort) return setupMessage('Выберите порт в списке или введите путь.', 'warn');
     void savePort(selectedPort);
   });
   bind('bms-disable', () => {

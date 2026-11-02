@@ -39,30 +39,11 @@ class NoAnswer(ProtocolError):
     """Плата промолчала (а не отказала статусом 0x80)."""
 
 
-_auto_port_lock = threading.Lock()
-_auto_port = ""
-
-
-def active_auto_port():
-    """BMS port validated and held by the onboard process, if any."""
-    with _auto_port_lock:
-        return _auto_port
-
-
-def _set_auto_port(port):
-    global _auto_port
-    with _auto_port_lock:
-        _auto_port = str(port or "")
-
-
 def reserved_ports():
+    """Reserve the explicitly configured BMS for the other USB consumers."""
     from .lidar import detected_bms_ports
     ports = set(detected_bms_ports())
-    port = active_auto_port()
-    # In automatic mode an old /dev/ttyUSBx setting is not evidence that the
-    # same device is still the BMS after USB enumeration changes.
-    if not port and os.environ.get("RC_USB_DISCOVERY_MODE") != "1":
-        port = os.environ.get("RC_BMS_PORT", "").strip()
+    port = os.environ.get("RC_BMS_PORT", "").strip()
     if port:
         ports.update((port, os.path.realpath(port)))
     return ports
@@ -262,7 +243,8 @@ class BatteryManager:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
-        self._auto_source = None
+        self._manual_source = None
+        self._requires_wheel_check = False
         self._sample = None
         self._error = "Ожидание BMS" if port else NOT_CONFIGURED
         self._connected_since = None
@@ -287,17 +269,15 @@ class BatteryManager:
             timeout=0.05, write_timeout=0.8, xonxoff=False, rtscts=False, dsrdtr=False,
         )
 
-    def enable_auto(self, source):
-        """Use only the wheel owner's passively checked USB candidates."""
-        self._auto_source = source
-        self.port = ""
-        self._error = "Автопоиск BMS: жду проверки USB-портов колёс"
+    def use_manual_discovery(self, source):
+        """Require the wheel owner's passive check before using the chosen port."""
+        self._manual_source = source
+        self._requires_wheel_check = True
 
     def start(self):
-        if (self.port or self._auto_source is not None) and not (self._thread and self._thread.is_alive()):
+        if self.port and not (self._thread and self._thread.is_alive()):
             self._stop.clear()
-            target = self._auto_loop if self._auto_source is not None else self._loop
-            self._thread = threading.Thread(target=target, name="jbd-bms", daemon=True)
+            self._thread = threading.Thread(target=self._loop, name="jbd-bms", daemon=True)
             self._thread.start()
             atexit.register(self.stop)
 
@@ -307,11 +287,14 @@ class BatteryManager:
             self._thread.join(timeout=3)
 
     def reconfigure(self, port):
-        """Сменить порт на ходу (страница «Подключение BMS»): поток перезапускается."""
+        """Change the selected BMS port and restart only its polling thread."""
         port = (port or "").strip()
-        if self._auto_source is not None:
-            raise ValueError("BMS определяется автоматически; ручное назначение отключено")
+        old_port = self.port
         self.stop()
+        if self._thread and self._thread.is_alive():
+            raise ValueError("Предыдущее подключение BMS ещё не остановилось")
+        if self._manual_source is not None and old_port and os.path.realpath(old_port) != os.path.realpath(port):
+            self._manual_source.forget_manual_bms_port(old_port)
         with self._lock:
             self.port = port
             self._sample = None
@@ -427,121 +410,71 @@ class BatteryManager:
             "thresholdsState": thresholds_state,
         }
 
-    def _scan_auto_candidates(self):
-        """Complete JBD classification on wheel-checked ports, without guessing."""
-        from . import bms_setup
-        source = self._auto_source
-        candidates = source.auto_probe_candidates_for_bms()
-        checked = source.auto_bms_results()
-        for port in candidates:
-            if self._stop.is_set():
-                break
-            if port in checked:
-                continue
-            fingerprint = source._device_fingerprint(port)
-            result = bms_setup.probe_port(port, timeout=0.8)
-            # Busy/permission/disconnect are not a negative classification.
-            if result.get("ok") and not result.get("current"):
-                source.record_auto_bms_result(port, fingerprint, bool(result.get("found")))
-        return [path for path, found in source.auto_bms_results().items() if found]
-
-    def _auto_loop(self):
+    def _loop(self):
         from .lidar import publish_bms_port, try_lock_port, unlock_port
-        transport = None
-        fd = None
-        current = ""
+        source = self._manual_source
         try:
             while not self._stop.is_set():
+                transport = None
+                fd = None
                 try:
-                    matches = self._scan_auto_candidates()
-                    if len(matches) > 1:
-                        raise ProtocolError("Найдено несколько JBD BMS: подключение неоднозначно")
-                    wanted = matches[0] if matches else ""
-                    if current and wanted != current:
-                        raise ProtocolError("USB-порт BMS изменился; повторяю автопоиск")
-                    if not wanted:
-                        with self._lock:
-                            self._error = "Автопоиск BMS: устройство JBD пока не найдено"
-                        self._stop.wait(1)
-                        continue
-                    if transport is None:
-                        fd = try_lock_port(wanted)
-                        if fd is None or fd == -1:
-                            raise OSError("Порт BMS занят или общий USB-замок недоступен")
-                        if self._auto_source.auto_bms_results().get(wanted) is not True:
-                            raise OSError("USB-порт BMS изменился")
-                        with self._lock:
-                            self.port = wanted
-                            self._reset_extras()
-                            self._connected_since = None
-                        transport = self._opener()
-                        # Revalidate both JBD replies after obtaining ownership;
-                        # the port could have changed since the initial probe.
-                        self.poll(transport)
-                        current = wanted
-                        _set_auto_port(current)
+                    # Publish the selected port even while waiting: other
+                    # processes must never actively probe a configured BMS.
+                    if self._requires_wheel_check:
+                        publish_bms_port(self.port)
+                        if source is None or not source.manual_bms_port_allowed(self.port):
+                            with self._lock:
+                                self._error = ("Жду проверки выбранного USB-порта; "
+                                               "порт колеса или лидара назначить BMS нельзя")
+                            self._stop.wait(0.5)
+                            continue
+                        fingerprint = source._device_fingerprint(self.port)
                     else:
+                        fingerprint = None
+                    fd = try_lock_port(self.port)
+                    if fd is None or (source is not None and fd == -1):
+                        raise OSError("Порт BMS занят или общий USB-замок недоступен")
+                    if source is not None and (not source.manual_bms_port_allowed(self.port) or
+                                               source._device_fingerprint(self.port) != fingerprint):
+                        raise OSError("USB-порт BMS изменился до открытия")
+                    transport = self._opener()
+                    if source is not None:
+                        opened = os.fstat(transport.fileno())
+                        if (fingerprint != (opened.st_dev, opened.st_ino, opened.st_rdev, opened.st_ctime_ns) or
+                                source._device_fingerprint(self.port) != fingerprint or
+                                not source.manual_bms_port_allowed(self.port)):
+                            raise OSError("USB-порт BMS изменился во время открытия")
+                    log.info("BMS: подключение к %s, JBD 9600 8N1", self.port)
+                    with self._lock:
+                        self._reset_extras()
+                        self._connected_since = None
+                    while not self._stop.is_set():
+                        if source is not None and (source._device_fingerprint(self.port) != fingerprint or
+                                                   not source.manual_bms_port_allowed(self.port)):
+                            raise OSError("USB-порт BMS изменился")
                         self.poll(transport)
-                    publish_bms_port(current)
-                    self.poll_extras(transport)
-                    self._stop.wait(1)
-                except Exception as exc:  # noqa: BLE001 — safely release and retry
+                        if source is not None:
+                            # Both basic and cell replies have been verified;
+                            # silence or a partial JBD response proves nothing.
+                            if not source.confirm_manual_bms(self.port, fingerprint):
+                                raise OSError("USB-порт BMS изменился после ответа")
+                            publish_bms_port(self.port)
+                        self.poll_extras(transport)
+                        self._stop.wait(1)
+                except Exception as exc:  # noqa: BLE001 — release and retry chosen port only
                     with self._lock:
                         self._error = str(exc) or type(exc).__name__
-                        self.port = ""
-                        self._connected_since = None
-                    log.warning("BMS автопоиск: %s", exc)
-                    if transport is not None:
-                        try:
-                            transport.close()
-                        except Exception:  # noqa: BLE001
-                            pass
-                    transport = None
-                    unlock_port(fd)
-                    fd = None
-                    current = ""
-                    _set_auto_port("")
-                    publish_bms_port(None)
-                    self._stop.wait(3)
-        finally:
-            if transport is not None:
-                try:
-                    transport.close()
-                except Exception:  # noqa: BLE001
-                    pass
-            unlock_port(fd)
-            _set_auto_port("")
-            publish_bms_port(None)
-
-    def _loop(self):
-        from .lidar import try_lock_port, unlock_port
-        while not self._stop.is_set():
-            transport = None
-            fd = None
-            try:
-                fd = try_lock_port(self.port)
-                if fd is None:
-                    raise OSError("Порт BMS занят другим процессом")
-                transport = self._opener()
-                log.info("BMS: подключение к %s, JBD 9600 8N1", self.port)
-                with self._lock:
-                    self._reset_extras()
-                    self._connected_since = None
-                while not self._stop.is_set():
-                    self.poll(transport)
-                    self.poll_extras(transport)
-                    self._stop.wait(1)
-            except Exception as exc:
-                with self._lock:
-                    self._error = str(exc)
-                log.warning("BMS: %s", exc)
-            finally:
-                try:
-                    if transport is not None:
-                        transport.close()
+                    log.warning("BMS: %s", exc)
                 finally:
-                    unlock_port(fd)
-            self._stop.wait(3)
+                    try:
+                        if transport is not None:
+                            transport.close()
+                    finally:
+                        unlock_port(fd)
+                self._stop.wait(1 if source is not None else 3)
+        finally:
+            if self._requires_wheel_check:
+                publish_bms_port(None)
 
     def snapshot(self, now=None):
         now = time.time() if now is None else now
@@ -559,7 +492,7 @@ class BatteryManager:
             sample.update(self.extras())
         with self._lock:
             since = self._connected_since
-        return {"configured": bool(self.port), "auto": self._auto_source is not None, "connected": connected,
+        return {"configured": bool(self.port), "auto": False, "connected": connected,
                 "complete": complete, "reason": reason, "ageS": age, "data": sample,
                 "port": self.port or None, "connectedSince": since if connected else None}
 

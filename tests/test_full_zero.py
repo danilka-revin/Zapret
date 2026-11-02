@@ -103,6 +103,14 @@ class FourBoards:
         self.acks = {m: {"module": m, "status": status, "storedSteps": values[m] if status == 2 else 0,
                          "proposedSteps": values[m]} for m in modules}
 
+    def full_zero_reset_faults(self, modules, brake_id, req):
+        assert self._full_zero_pending and self.journal.exists()
+        assert brake_id == self.brake
+        self.calls.append(("reset_fault", tuple(modules)))
+        self.requests.append(("reset_fault", req))
+        self.acks = {}
+        return {"ok": True, "id": req}
+
     def full_zero_mark_pending(self):
         self.calls.append("journal")
         write_pending(self.journal)
@@ -347,12 +355,83 @@ def test_failed_initial_brake_retains_interlock_until_fresh_stop(setup):
     assert not boards._full_zero_inhibit and not control.ticket()[1]
 
 
-def test_corrupt_eeprom_report_prevents_wizard(setup):
+def test_corrupt_eeprom_has_explicit_recovery_before_optical_calibration(setup):
     control, boards, _ = setup
     boards.motors["FL"]["fullZeroFault"] = True
+    boards.motors["RR"]["fullZeroFault"] = True
     result, status = control.handle({"action": "begin"})
-    assert status == 409 and result["reason"] == "eeprom_error"
-    assert "begin" not in boards.calls
+    assert status == 200 and result["phase"] == "braking"
+    token = result["token"]
+    result, _ = call(control, token, "status")
+    assert result["phase"] == "fault" and result["faultyModules"] == ["FL", "RR"]
+    assert boards._full_zero_inhibit and not boards.journal.exists()
+    result, status = call(control, token, "calibrate")
+    assert status == 409 and "calibrate" not in boards.calls
+    result, status = call(control, token, "reset_fault", confirm=False)
+    assert status == 409 and not boards.journal.exists()
+    result, status = call(control, token, "reset_fault", confirm=True)
+    assert status == 200 and result["phase"] == "resetting" and boards.journal.exists()
+    assert boards.calls.index("journal") < boards.calls.index(("reset_fault", ("FL", "RR")))
+    # A clear flag alone is insufficient: both boards must reply to the new
+    # tagged zq *after* their reset, and normal motion remains inhibited.
+    boards.motors["FL"]["fullZeroFault"] = False
+    boards.motors["RR"]["fullZeroFault"] = False
+    result, _ = call(control, token, "status")
+    assert result["phase"] == "resetting" and boards._full_zero_inhibit
+    boards.acks = {"FL": {"status": 3}}
+    result, _ = call(control, token, "status")
+    assert result["phase"] == "resetting"
+    boards.acks["RR"] = {"status": 3}
+    result, _ = call(control, token, "status")
+    assert result["phase"] == "ready" and result["pendingRecovery"]
+    homed(control, boards, token)
+    call(control, token, "save")
+    boards.acknowledge(1)
+    call(control, token, "status")
+    boards.acknowledge(2)
+    result, _ = call(control, token, "status")
+    assert result["phase"] == "saved" and not boards.journal.exists()
+    assert not boards._full_zero_inhibit
+
+
+def test_eeprom_recovery_requires_restart_when_faulted_board_is_homed(setup):
+    control, boards, _ = setup
+    boards.motors["FL"].update(fullZeroFault=True, homed=True, homeSource="opto")
+    result, _ = control.handle({"action": "begin"})
+    token = result["token"]
+    assert call(control, token, "status")[0]["phase"] == "fault"
+    result, code = call(control, token, "reset_fault", confirm=True)
+    assert code == 409 and result["reason"] == "eeprom_reboot_required"
+    assert not boards.journal.exists() and not any(isinstance(c, tuple) for c in boards.calls)
+
+
+def test_failed_eeprom_reset_ack_keeps_recovery_latch_after_restart(setup):
+    control, boards, _ = setup
+    boards.motors["RL"]["fullZeroFault"] = True
+    result, _ = control.handle({"action": "begin"})
+    token = result["token"]
+    assert call(control, token, "status")[0]["phase"] == "fault"
+    call(control, token, "reset_fault", confirm=True)
+    boards.acks = {"RL": {"status": 6}}
+    result, _ = call(control, token, "status")
+    assert result["phase"] == "stopping" and result["reason"] == "eeprom_reset_unconfirmed"
+    result, _ = call(control, token, "status")
+    assert result["phase"] == "recovery" and result["pendingRecovery"]
+    rebooted = FourBoards(boards.journal)
+    assert rebooted._full_zero_inhibit and rebooted._full_zero_pending
+
+
+def test_eeprom_recovery_never_sends_reset_if_journal_fails(setup, monkeypatch):
+    control, boards, _ = setup
+    boards.motors["FR"]["fullZeroFault"] = True
+    result, _ = control.handle({"action": "begin"})
+    token = result["token"]
+    assert call(control, token, "status")[0]["phase"] == "fault"
+    monkeypatch.setattr(boards, "full_zero_mark_pending", lambda: {"ok": False})
+    result, status = call(control, token, "reset_fault", confirm=True)
+    assert status == 409 and result["reason"] == "journal_unavailable"
+    assert not any(isinstance(c, tuple) and c[0] == "reset_fault" for c in boards.calls)
+    assert boards._full_zero_inhibit
 
 
 def test_fault_on_one_fw23_board_inhibits_all_direct_servo(monkeypatch, tmp_path):
@@ -576,3 +655,94 @@ def test_repeated_fine_step_waits_for_fresh_idle_ack_and_requeries_busy(setup):
     boards.acks = {"FR": {"status": 1}}
     result, _ = call(control, token, "status")
     assert result["phase"] == "adjust"
+
+
+def test_new_eeprom_fault_prevents_pending_marker_removal(monkeypatch, tmp_path):
+    from robot_control import slam
+    backend = slam.load_backend()
+    path = tmp_path / "recovery.pending"
+    monkeypatch.setenv("RC_FULL_ZERO_PENDING", str(path))
+    source = backend.MasterSource(auto_discovery=True, port_provider=lambda: [])
+    try:
+        assert source.full_zero_mark_pending()["ok"] and path.exists()
+        with source.lock:
+            source.frames["FR"] = ({"fullZeroFault": True}, time.time())
+        result = source.full_zero_clear_pending()
+        assert result == {"ok": False, "reason": "eeprom_error"}
+        assert path.exists() and source._full_zero_pending and source._full_zero_fault_latched
+    finally:
+        source._stop = True
+        source._dispatch_wakeup.set()
+
+
+def test_late_fault_journal_worker_cannot_recreate_cleared_marker(monkeypatch, tmp_path):
+    backend = slam.load_backend()
+    path = tmp_path / "late.pending"
+    monkeypatch.setenv("RC_FULL_ZERO_PENDING", str(path))
+    source = backend.MasterSource(auto_discovery=True, port_provider=lambda: [])
+    started, release = threading.Event(), threading.Event()
+    source._full_zero_fault_epoch = 1
+
+    def delayed():
+        started.set()
+        release.wait(5)
+        source._persist_detected_full_zero_fault(1)
+
+    worker = threading.Thread(target=delayed)
+    worker.start()
+    try:
+        assert started.wait(1)
+        # Model a later complete four-board save resolving epoch 1 while its
+        # fault journal thread has not yet started disk work.
+        assert source.full_zero_mark_pending()["ok"] and path.exists()
+        assert source.full_zero_clear_pending()["ok"] and not path.exists()
+        release.set()
+        worker.join(5)
+        assert not worker.is_alive() and not path.exists()
+        assert not source._full_zero_pending
+    finally:
+        release.set()
+        worker.join(5)
+        source._stop = True
+        source._dispatch_wakeup.set()
+
+
+def test_fault_during_slow_journal_clear_can_stop_and_restores_marker(monkeypatch, tmp_path):
+    from robot_control import full_zero
+    backend = slam.load_backend()
+    path = tmp_path / "slow-clear.pending"
+    monkeypatch.setenv("RC_FULL_ZERO_PENDING", str(path))
+    source = backend.MasterSource(auto_discovery=True, port_provider=lambda: [])
+    assert source.full_zero_mark_pending()["ok"]
+    started, release = threading.Event(), threading.Event()
+    original_clear = full_zero.clear_pending
+    def slow_clear(journal):
+        started.set()
+        assert release.wait(5)
+        return original_clear(journal)
+    monkeypatch.setattr(full_zero, "clear_pending", slow_clear)
+    result = []
+    worker = threading.Thread(target=lambda: result.append(source.full_zero_clear_pending()))
+    worker.start()
+    try:
+        assert started.wait(2)
+        # A blocked disk must not hold the gate needed to detect a new fault or
+        # dispatch STOP. This frame arrives while the old marker is being removed.
+        assert source._commands_lock.acquire(timeout=1)
+        try:
+            source._full_zero_fault_epoch += 1
+            source._full_zero_inhibit = True
+            with source.lock:
+                source.frames["FL"] = ({"fullZeroFault": True}, time.time())
+        finally:
+            source._commands_lock.release()
+        release.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        assert result == [{"ok": False, "reason": "eeprom_error"}]
+        assert path.exists() and source._full_zero_pending and source._full_zero_fault_latched
+    finally:
+        release.set()
+        worker.join(5)
+        source._stop = True
+        source._dispatch_wakeup.set()

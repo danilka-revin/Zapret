@@ -1998,6 +1998,8 @@ body.swipe-open .kiosk {
 .bms-setup > header b { color: var(--text); font-size: 17px; }
 .bms-setup > header span { color: var(--muted); font-size: 13px; font-weight: 700; }
 .bms-setup-hint { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+#bms-port-manual { box-sizing: border-box; width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg-2); color: var(--text); font: 14px/1.3 var(--mono); }
+#bms-port-manual:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 .bms-port-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
 .bms-port-list li { border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg-2); }
 .bms-port-list li.empty { padding: 10px 12px; color: var(--muted); font-size: 14px; }
@@ -2192,3 +2194,10 @@ body[data-remote-view="motors"] .remote-drive-panel small { display: block; marg
   .full-zero-progress .full-zero-primary { width: 100%; }
   .full-zero-footer { flex-wrap: wrap; }
 }
+
+/* Явное восстановление повреждённой записи полного нуля. */
+.full-zero-recovery { border: 1px solid #d68b3a; border-radius: 12px; padding: 12px 14px; background: rgba(214, 139, 58, .12); color: var(--text); }
+.full-zero-recovery[hidden] { display: none; }
+.full-zero-recovery p { margin: 6px 0; line-height: 1.4; }
+.full-zero-recovery button { margin-top: 6px; padding: 10px 14px; border: 1px solid #d68b3a; border-radius: 9px; background: var(--panel); color: var(--text); font: inherit; font-weight: 800; cursor: pointer; }
+.full-zero-recovery button:disabled { opacity: .5; cursor: not-allowed; }

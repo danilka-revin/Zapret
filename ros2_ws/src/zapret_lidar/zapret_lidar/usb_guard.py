@@ -1,7 +1,8 @@
 """Shared USB classification/lock used by the ROS lidar supervisor.
 
 In automatic wheel mode, no port is probed until the onboard owner has
-passively excluded a wheel and completed a negative read-only JBD probe.
+passively excluded a wheel and positively identified a checksummed lidar stream.
+An explicitly selected BMS is always excluded.
 The same per-device flock is held while a probe or ROS driver owns the UART.
 """
 from __future__ import annotations
@@ -35,7 +36,7 @@ def checked_lidar_ports() -> set[str]:
                 continue
             os.kill(pid, 0)
             for item in data.get("ports") or []:
-                if not isinstance(item, dict) or item.get("bms") is not False:
+                if not isinstance(item, dict) or item.get("lidar") is not True:
                     continue
                 port = item.get("port")
                 if not isinstance(port, str) or not port:
@@ -47,6 +48,29 @@ def checked_lidar_ports() -> set[str]:
                 if (item.get("device") == os.path.realpath(port) and
                         item.get("fingerprint") == [st.st_dev, st.st_ino, st.st_rdev, st.st_ctime_ns]):
                     ports.add(os.path.realpath(port))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return ports - reserved_bms_ports()
+
+
+def reserved_bms_ports() -> set[str]:
+    """Respect both launch-time settings and the live onboard reservation."""
+    configured = (os.environ.get("RC_BMS_PORT") or "").strip()
+    ports = {os.path.realpath(configured)} if configured else set()
+    directory = Path(os.environ.get("RC_USB_DISCOVERY_DIR") or "data/ports")
+    for record in directory.glob("bms-state-*.json"):
+        try:
+            data = json.loads(record.read_text("utf-8"))
+            pid = int(data["pid"])
+            if pid <= 0 or time.time() - float(data["at"]) > TTL_S:
+                continue
+            os.kill(pid, 0)
+            port = data["port"]
+            st = os.stat(port)
+            real = os.path.realpath(port)
+            if (data.get("device") == real and
+                    data.get("fingerprint") == [st.st_dev, st.st_ino, st.st_rdev, st.st_ctime_ns]):
+                ports.add(real)
         except (OSError, ValueError, KeyError, TypeError):
             continue
     return ports

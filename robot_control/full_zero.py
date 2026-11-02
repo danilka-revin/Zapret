@@ -94,6 +94,7 @@ class FullZeroControl:
     CAL_TIMEOUT_S = 125.0
     MOVE_TIMEOUT_S = 10.0
     REPLY_TIMEOUT_S = 5.0
+    RESET_TIMEOUT_S = 8.0
 
     def __init__(self, source, estop, neutral, navigation_active=lambda: False,
                  clock=time.monotonic):
@@ -112,6 +113,7 @@ class FullZeroControl:
         self._last_contact = 0.0
         self._seen = set()
         self._pending_move = None
+        self._reset_targets = set()
         self._move_query_at = 0.0
         # A random initial sequence avoids reusing an ACK from a previous
         # process; subsequent IDs never repeat during an ordinary session.
@@ -136,7 +138,7 @@ class FullZeroControl:
     def _number(value):
         return type(value) in (int, float) and math.isfinite(value)
 
-    def _snapshot(self, *, allow_motion=False, require_home=False):
+    def _snapshot(self, *, allow_motion=False, require_home=False, allow_fault=False):
         source = self._source()
         if source is not self._owner:
             return None, "source_changed"
@@ -159,7 +161,9 @@ class FullZeroControl:
                 return None, "module_offline"
             if type(motor.get("firmware")) is not int or motor["firmware"] < 23:
                 return None, "firmware_update_required"
-            if type(motor.get("fullZeroFault")) is not bool or motor["fullZeroFault"]:
+            if type(motor.get("fullZeroFault")) is not bool:
+                return None, "eeprom_error"
+            if motor["fullZeroFault"] and not allow_fault:
                 return None, "eeprom_error"
             if (type(motor.get("neutralLocked")) is not bool or motor["neutralLocked"] or
                     type(motor.get("neutralId")) is not int or motor["neutralId"] != 0):
@@ -199,7 +203,7 @@ class FullZeroControl:
                     if motor.get("id") in MODULES:
                         motors[motor["id"]] = {k: motor.get(k) for k in
                             ("online", "angle", "targetAngle", "moving", "calibrating", "homed",
-                             "homeSource", "calibError", "firmware")}
+                             "homeSource", "calibError", "firmware", "fullZeroFault")}
             except Exception:  # noqa: BLE001
                 pass
         response = {"ok": ok, "phase": self._phase, "reason": self._reason or None,
@@ -207,6 +211,7 @@ class FullZeroControl:
                     "acknowledged": sorted(m for m, ack in self._last_acks.items()
                                            if ack.get("status") == 2),
                     "pendingRecovery": bool(getattr(self._owner or self._source(), "_full_zero_pending", False)),
+                    "faultyModules": sorted(m for m, data in motors.items() if data.get("fullZeroFault") is True),
                     "maxOffsetDeg": MAX_OFFSET_DEG}
         if include_token:
             response["token"] = self._token
@@ -251,13 +256,13 @@ class FullZeroControl:
                 return reject("navigation_active")
             required = ("begin_full_zero", "full_zero_calibrate", "full_zero_steer",
                         "full_zero_move_probe", "full_zero_request", "full_zero_acks",
-                        "full_zero_mark_pending", "full_zero_clear_pending",
+                        "full_zero_mark_pending", "full_zero_clear_pending", "full_zero_reset_faults",
                         "stop_full_zero", "finish_full_zero")
             if not all(callable(getattr(source, name, None)) for name in required):
                 return reject("control_not_supported")
             # Before reserving, require four live, correctly versioned boards.
             self._owner = source
-            _, error = self._snapshot(allow_motion=True)
+            _, error = self._snapshot(allow_motion=True, allow_fault=True)
             if error and error not in {"module_busy", "wheel_moving"}:
                 self._owner = None
                 return reject(error)
@@ -285,6 +290,7 @@ class FullZeroControl:
             self._brake_id, self._stage_at, self._last_contact = result["brakeId"], now, now
             self._seen, self._last_acks, self._expected = set(), {}, {}
             self._pending_move = None
+            self._reset_targets = set()
             self._start_watch()
             return self._respond(include_token=True), 200
 
@@ -319,7 +325,7 @@ class FullZeroControl:
             return
         now = self._clock()
         if phase == "stopping":
-            motors, error = self._snapshot(allow_motion=False)
+            motors, error = self._snapshot(allow_motion=False, allow_fault=True)
             if (not error and self._brake_id and
                     all(motors[m]["brakeId"] == self._brake_id for m in MODULES)):
                 self._owner.finish_full_zero()
@@ -342,7 +348,9 @@ class FullZeroControl:
             return
         allow_motion = phase in {"calibrating", "adjusting"}
         require_home = phase in {"adjust", "adjusting", "checking", "saving"}
-        motors, error = self._snapshot(allow_motion=allow_motion, require_home=require_home)
+        allow_fault = phase in {"braking", "fault", "resetting"}
+        motors, error = self._snapshot(allow_motion=allow_motion, require_home=require_home,
+                                       allow_fault=allow_fault)
         if error:
             # During the initial STOP a busy wheel can legitimately be settling.
             if phase == "braking" and error in {"module_busy", "wheel_moving"} and now - self._stage_at < self.BRAKE_TIMEOUT_S:
@@ -351,7 +359,7 @@ class FullZeroControl:
             return
         if phase == "braking":
             if all(motors[m]["brakeId"] == self._brake_id for m in MODULES):
-                self._phase = "ready"
+                self._phase = "fault" if any(motors[m]["fullZeroFault"] for m in MODULES) else "ready"
             elif now - self._stage_at > self.BRAKE_TIMEOUT_S:
                 self._abort("brake_unconfirmed")
             return
@@ -359,7 +367,25 @@ class FullZeroControl:
         if any(motors[m]["brakeId"] != self._brake_id for m in MODULES):
             self._abort("brake_changed")
             return
-        if phase == "calibrating":
+        if phase == "fault":
+            # A fault can disappear after a board power-cycle. Keep the session
+            # reserved, and only offer optical calibration once all flags clear.
+            if not any(motors[m]["fullZeroFault"] for m in MODULES):
+                self._phase, self._reason = "ready", ""
+        elif phase == "resetting":
+            acks = self._owner.full_zero_acks(self._request_id)
+            if any(ack.get("status") != 3 for ack in acks.values()):
+                self._abort("eeprom_reset_unconfirmed")
+            elif (self._reset_targets.issubset(acks) and
+                  all(not motors[m]["fullZeroFault"] and not motors[m]["homed"]
+                      for m in self._reset_targets) and
+                  not any(motors[m]["fullZeroFault"] for m in MODULES)):
+                # Journal remains until all four wheels are optically homed,
+                # aligned and have confirmed the new EEPROM values.
+                self._phase, self._reason = "ready", ""
+            elif now - self._stage_at > self.RESET_TIMEOUT_S:
+                self._abort("eeprom_reset_unconfirmed")
+        elif phase == "calibrating":
             for module in MODULES:
                 if motors[module].get("calibrating"):
                     self._seen.add(module)
@@ -437,8 +463,9 @@ class FullZeroControl:
                        acks[m].get("proposedSteps") != self._expected[m] for m in MODULES):
                     self._abort("partial_save")
                     return
-                if not self._owner.full_zero_clear_pending().get("ok"):
-                    self._abort("journal_unavailable")
+                cleared = self._owner.full_zero_clear_pending()
+                if not cleared.get("ok"):
+                    self._abort(cleared.get("reason", "journal_unavailable"))
                     return
                 self._owner.finish_full_zero()
                 self._motion_ticket = (self._motion_ticket[0], False)
@@ -463,6 +490,33 @@ class FullZeroControl:
                 return self._respond(), 200
             if action == "cancel" and set(body) == {"action", "token"}:
                 self._abort("cancelled")
+                return self._respond(), 200
+            if (action == "reset_fault" and set(body) == {"action", "token", "confirm"} and
+                    body.get("confirm") is True and self._phase == "fault"):
+                motors, error = self._snapshot(allow_fault=True)
+                if error:
+                    self._abort(error)
+                    return self._respond(ok=False), 409
+                targets = {m for m in MODULES if motors[m]["fullZeroFault"]}
+                # fw23 only permits zr before a wheel has been homed. Never
+                # silently erase a saved offset or bypass an EEPROM fault.
+                if not targets:
+                    return {"ok": False, "reason": "invalid_phase"}, 409
+                if any(motors[m]["homed"] for m in targets):
+                    self._reason = "eeprom_reboot_required"
+                    return self._respond(ok=False), 409
+                # Any subset of resets may reach the hardware. Persist the
+                # global recovery interlock BEFORE sending the first one.
+                if not self._owner.full_zero_mark_pending().get("ok"):
+                    self._reason = "journal_unavailable"
+                    return self._respond(ok=False), 409
+                self._reset_targets = targets
+                self._next_request_id()
+                result = self._owner.full_zero_reset_faults(sorted(targets), self._brake_id, self._request_id)
+                if not result.get("ok"):
+                    self._abort(result.get("reason", "eeprom_reset_unconfirmed"))
+                    return self._respond(ok=False), 409
+                self._phase, self._stage_at, self._reason = "resetting", self._clock(), ""
                 return self._respond(), 200
             if action == "calibrate" and set(body) == {"action", "token"} and self._phase == "ready":
                 result = self._owner.full_zero_calibrate()

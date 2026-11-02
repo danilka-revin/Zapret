@@ -737,6 +737,7 @@ def test_lds01_scan_reaches_both_screens_over_http(monkeypatch, client, operator
     monkeypatch.setenv("RC_LIDAR_PEER_URLS", "")
     worker_manager = LidarManager()
     worker = threading.Thread(target=worker_manager._serial_worker, daemon=True)
+    previous = LidarManager._instance
     LidarManager._instance = worker_manager
     worker.start()
     try:
@@ -759,7 +760,7 @@ def test_lds01_scan_reaches_both_screens_over_http(monkeypatch, client, operator
     finally:
         worker_manager.stop()
         worker.join(timeout=3.0)
-        LidarManager._instance = None
+        LidarManager._instance = previous
         stop.set()
         thread.join(timeout=2.0)
         os.close(slave)

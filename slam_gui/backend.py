@@ -668,7 +668,8 @@ class MasterSource:
                  port_provider=None, probe=None, claim=None, release=None,
                  yield_to_lidar=None, tag_module=None, untag_module=None,
                  module_ports=None, auto_discovery=False, blocked_ports=None,
-                 publish_discovery=None):
+                 publish_discovery=None, passive_lidar_probe=None):
+        self.passive_lidar_probe = passive_lidar_probe if auto_discovery else None
         self.auto_discovery = bool(auto_discovery)
         self.port_provider = port_provider if self.auto_discovery else None
         self.blocked_ports = blocked_ports if self.auto_discovery else None
@@ -718,6 +719,14 @@ class MasterSource:
         self._full_zero_pending_path = pending_path()
         self._full_zero_inhibit = self._full_zero_pending_path.exists()
         self._full_zero_pending = self._full_zero_inhibit
+        # Once observed, a memory fault survives cancellation/replacement in
+        # this process until all four boards have confirmed a new full zero.
+        self._full_zero_fault_latched = False
+        # Fault detection and operator actions can mark the journal on
+        # different threads; serialize those writes with final removal.
+        self._full_zero_journal_lock = threading.RLock()
+        self._full_zero_fault_epoch = 0
+        self._full_zero_recovered_epoch = 0
         self._full_zero_context = threading.local()
         self._full_zero_acks = {}
         self._full_zero_request_id = 0
@@ -757,8 +766,9 @@ class MasterSource:
         self._serial = None
         self._spawning = set()
         self._cooldown = {}              # порт → время следующей попытки открыть
-        self._unknown_devices = {}       # real path → stat fingerprint after passive probe
-        self._bms_results = {}           # real path → (fingerprint, is_bms)
+        self._unknown_devices = {}       # real path → fingerprint after passive probe
+        self._unknown_checked_at = {}     # real path → monotonic check time
+        self._bms_results = {}           # real path → (fingerprint, BMS=True / lidar=False)
         self.identity_fault = ""         # latched until restart after a conflict
         self._discovery_stops = 0       # prevent re-enabling while STOP is being queued
         #: Пока True, порты не открываются. Нужно только для ручной прошивки
@@ -1040,24 +1050,121 @@ class MasterSource:
                 return {}
             return dict(self._full_zero_acks)
 
+    def full_zero_reset_faults(self, modules, brake_id, request_id):
+        """Explicit, journalled fw23 service reset, targeted only to faulty wheels.
+
+        zr's existing firmware interlocks still apply. A tagged zq follows it
+        in the same FIFO; status 3 verifies a healthy EEPROM and no set zero.
+        """
+        if (not isinstance(modules, list) or not modules or
+                any(not isinstance(module, str) or module not in MODULE_TITLES for module in modules) or
+                len(modules) != len(set(modules)) or
+                type(brake_id) is not int or brake_id <= 0 or
+                type(request_id) is not int or not 0 < request_id < 0x7FFFFFFF):
+            return {"ok": False, "reason": "payload"}
+        with self._commands_lock:
+            if (not getattr(self, "_full_zero_session", False) or
+                    not getattr(self, "_full_zero_pending", False) or not self.serial_ready.is_set()):
+                return {"ok": False, "reason": "serial_unavailable"}
+            if getattr(self, "_neutral_inhibit", False) or self.observed_neutral():
+                return {"ok": False, "reason": "neutral_locked"}
+            now = time.time()
+            with self.lock:
+                links = {link.module: link for link in self.links.values() if link.module}
+                frames = dict(self.frames)
+            if set(links) != set(MODULE_TITLES):
+                return {"ok": False, "reason": "module_offline"}
+            for module in MODULE_TITLES:
+                entry = frames.get(module)
+                if not entry or now - entry[1] >= self.DRIVE_STALE_S:
+                    return {"ok": False, "reason": "module_offline"}
+                frame = entry[0]
+                if (type(frame.get("firmware")) is not int or frame["firmware"] < 23 or
+                        type(frame.get("fullZeroFault")) is not bool):
+                    return {"ok": False, "reason": "firmware_update_required"}
+                if (frame.get("brakeId") != brake_id or frame.get("drivePercent") != 0 or
+                        frame.get("moving") is not False or frame.get("calib") is not False or
+                        frame.get("cycle") is not False or frame.get("neutralLocked") is not False or
+                        frame.get("neutralId") != 0 or frame.get("scRecent") is not False or
+                        not isinstance(frame.get("scRpm"), (int, float)) or
+                        not 0 <= frame["scRpm"] <= 1):
+                    return {"ok": False, "reason": "brake_unconfirmed"}
+            if any(frames[m][0].get("fullZeroFault") is not True for m in modules):
+                return {"ok": False, "reason": "eeprom_reset_unconfirmed"}
+            if any(frames[m][0].get("cal") is not False for m in modules):
+                return {"ok": False, "reason": "eeprom_reboot_required"}
+            if any(links[m].commands.full() for m in modules):
+                return {"ok": False, "reason": "command_queue_full"}
+            with self.lock:
+                self._full_zero_request_id = request_id
+                self._full_zero_acks = {}
+            command = ("zr CONFIRM\nzq %d\n" % request_id).encode("ascii")
+            try:
+                for module in modules:
+                    links[module].commands.put_nowait(command)
+            except queue.Full:
+                # Some resets may already be queued: retain the pending latch.
+                return {"ok": False, "reason": "command_queue_full"}
+        return {"ok": True, "id": request_id}
+
+    def _persist_detected_full_zero_fault(self, epoch):
+        # A delayed worker must not recreate a marker after a fully confirmed
+        # save has already resolved the fault that scheduled it.
+        with self._full_zero_journal_lock:
+            if epoch <= self._full_zero_recovered_epoch:
+                return
+            try:
+                result = self.full_zero_mark_pending()
+            except Exception:  # noqa: BLE001 — the in-memory inhibit remains
+                result = {"ok": False}
+        if not result.get("ok"):
+            self._note_status("error", "Ошибка памяти полного нуля: журнал не записан; "
+                              "блокировка пока только в памяти процесса")
+
     def full_zero_mark_pending(self):
         from robot_control.full_zero import write_pending
-        try:
-            write_pending(self._full_zero_pending_path)
-        except OSError:
-            # replace() can have succeeded even if directory fsync failed.
-            self._full_zero_pending = self._full_zero_pending_path.exists()
-            return {"ok": False, "reason": "journal_unavailable"}
-        self._full_zero_pending = True
-        return {"ok": True}
+        with self._full_zero_journal_lock:
+            try:
+                write_pending(self._full_zero_pending_path)
+            except OSError:
+                # replace() can have succeeded even if directory fsync failed.
+                self._full_zero_pending = self._full_zero_pending_path.exists()
+                return {"ok": False, "reason": "journal_unavailable"}
+            self._full_zero_pending = True
+            return {"ok": True}
 
     def full_zero_clear_pending(self):
         from robot_control.full_zero import clear_pending
-        try:
-            clear_pending(self._full_zero_pending_path)
-        except OSError:
-            return {"ok": False, "reason": "journal_unavailable"}
-        self._full_zero_pending = False
+        # Called only after four matching commit ACKs. Never hold the command
+        # gate during disk I/O: a fresh fault must be able to dispatch STOP.
+        # The epoch detects a fault reported while unlink/fsync was in flight.
+        with self._full_zero_journal_lock:
+            with self._commands_lock:
+                if self._full_zero_memory_fault():
+                    self._full_zero_fault_latched = True
+                    return {"ok": False, "reason": "eeprom_error"}
+                epoch = self._full_zero_fault_epoch
+            try:
+                clear_pending(self._full_zero_pending_path)
+            except OSError:
+                return {"ok": False, "reason": "journal_unavailable"}
+            with self._commands_lock:
+                fault_changed = (self._full_zero_fault_epoch != epoch or
+                                 self._full_zero_memory_fault())
+                if fault_changed:
+                    self._full_zero_fault_latched = True
+                else:
+                    self._full_zero_pending = False
+                    self._full_zero_fault_latched = False
+                    self._full_zero_recovered_epoch = epoch
+            if fault_changed:
+                # We may have just unlinked the old marker. Recreate it before
+                # releasing the journal lock; the fault handler can STOP in
+                # parallel and also has its own retrying persistence worker.
+                restored = self.full_zero_mark_pending()
+                if not restored.get("ok"):
+                    return {"ok": False, "reason": "journal_unavailable"}
+                return {"ok": False, "reason": "eeprom_error"}
         return {"ok": True}
 
     def stop_full_zero(self):
@@ -1070,7 +1177,11 @@ class MasterSource:
     def finish_full_zero(self):
         with self._commands_lock:
             self._full_zero_session = False
-            self._full_zero_inhibit = bool(getattr(self, "_full_zero_pending", False))
+            # Cancelling before recovery must not clear the chassis-wide
+            # interlock while a board still reports corrupt EEPROM.
+            self._full_zero_inhibit = bool(getattr(self, "_full_zero_pending", False) or
+                                           getattr(self, "_full_zero_fault_latched", False) or
+                                           self._full_zero_memory_fault())
 
     def _queue_motion(self, command):
         """Проверка нейтрали и постановка в очередь атомарны с её включением."""
@@ -1289,12 +1400,12 @@ class MasterSource:
             entry = frames.get(module)
             if not ready:
                 reason = "serial_unavailable"
+            elif memory_fault:
+                reason = "full_zero_eeprom_fault"
             elif getattr(self, "_full_zero_inhibit", False):
                 reason = "full_zero_active"
             elif entry is None or now - entry[1] >= self.DRIVE_STALE_S:
                 reason = "module_offline"
-            elif memory_fault:
-                reason = "full_zero_eeprom_fault"
             elif (entry[0].get("firmware") or 0) < DRIVE_DIRECT_FIRMWARE:
                 reason = "servo_firmware_required"
             else:
@@ -1336,12 +1447,12 @@ class MasterSource:
 
         if not self.serial_ready.is_set():
             reason = "serial_unavailable"
+        elif any(frame.get("fullZeroFault") is True for frame in fresh_frames.values()):
+            reason = "full_zero_eeprom_fault"
         elif getattr(self, "_full_zero_inhibit", False):
             reason = "full_zero_active"
         elif len(fresh_frames) != len(MODULE_TITLES):
             reason = "module_offline"
-        elif any(frame.get("fullZeroFault") is True for frame in fresh_frames.values()):
-            reason = "full_zero_eeprom_fault"
         elif any(frame.get("drivePercent") is None for frame in fresh_frames.values()):
             reason = "drive_firmware_required"
         elif any(not frame.get("cal") for frame in fresh_frames.values()):
@@ -1942,7 +2053,9 @@ class MasterSource:
     def brake_for_keyboard(self):
         """Cancel steering as well as traction before replanning keyboard input."""
         if not self.serial_ready.is_set():
-            self._brake_all()
+            # Even with incomplete discovery, stop both axes on every already
+            # identified board. Unidentified ports must not receive commands.
+            self._brake_all(stop_steering=True)
             return {"ok": False, "reason": "serial_unavailable"}
         with getattr(self, "_commands_lock", nullcontext()):
             self._discard_pending_commands()
@@ -1961,7 +2074,7 @@ class MasterSource:
                 try:
                     link.commands.put_nowait(command)
                 except queue.Full:
-                    self._brake_all()
+                    self._brake_all(stop_steering=True)
                     return {"ok": False, "reason": "command_queue_full"}
         return {"ok": True, "brakeId": brake_id}
 
@@ -1980,7 +2093,7 @@ class MasterSource:
             self._brake_all(brake_id)
         return {"ok": True, "brakeId": brake_id}
 
-    def _brake_all(self, brake_id=None):
+    def _brake_all(self, brake_id=None, *, stop_steering=False):
         """Тормоз на все порты; старый heartbeat не должен идти после СТОП."""
         with getattr(self, "_commands_lock", nullcontext()):
             self._discard_pending_commands()
@@ -1993,6 +2106,8 @@ class MasterSource:
                 self.servo_commands = {}
                 self.drive_last_command = 0.0
             command = ("b %d\n" % brake_id).encode("ascii") if brake_id is not None else b"b\n"
+            if stop_steering:
+                command = b"s q\n" + command
             for link in links:
                 try:
                     link.commands.put_nowait(command)
@@ -2175,8 +2290,31 @@ class MasterSource:
             else:
                 self.serial_ready.clear()
 
-    def auto_probe_candidates_for_bms(self):
-        """Only ports already passively checked for wheels may receive JBD reads."""
+    def manual_bms_port_allowed(self, path):
+        """Only the selected, passively wheel-checked non-lidar can receive JBD."""
+        real = os.path.realpath(path)
+        fingerprint = self._device_fingerprint(path)
+        with self.lock:
+            result = self._bms_results.get(real)
+            return bool(fingerprint is not None and
+                        self._unknown_devices.get(real) == fingerprint and
+                        (result is None or result == (fingerprint, True)))
+
+    def forget_manual_bms_port(self, path):
+        """A deselected BMS must not keep an old classification alive."""
+        real = os.path.realpath(path)
+        with self.lock:
+            result = self._bms_results.get(real)
+            removed = bool(result and result[1] is True)
+            if removed:
+                self._bms_results.pop(real, None)
+        if removed:
+            self._discovery_stop("Изменён выбранный порт BMS: USB проверяются заново")
+        self._publish_auto_discovery()
+        self._refresh_auto_readiness()
+
+    def passively_checked_unknown_ports(self):
+        """Ports already passively checked for wheels (no probe is initiated)."""
         if not self.auto_discovery:
             return []
         with self.lock:
@@ -2185,7 +2323,7 @@ class MasterSource:
         return [path for path in candidates if self._device_fingerprint(path) is not None
                 and unknown.get(os.path.realpath(path)) == self._device_fingerprint(path)]
 
-    def auto_bms_results(self):
+    def peripheral_identities(self):
         with self.lock:
             candidates = list(self.candidates)
             results = dict(self._bms_results)
@@ -2193,20 +2331,21 @@ class MasterSource:
                 if os.path.realpath(path) in results and
                 results[os.path.realpath(path)][0] == self._device_fingerprint(path)}
 
-    def record_auto_bms_result(self, path, fingerprint, is_bms):
-        """Mark a completed JBD probe only if the USB device did not change."""
+    def confirm_manual_bms(self, path, fingerprint):
+        """Record both validated JBD replies, without overriding a lidar."""
         real = os.path.realpath(path)
         with self.lock:
             if (fingerprint is None or self._unknown_devices.get(real) != fingerprint or
-                    self._device_fingerprint(path) != fingerprint):
+                    self._device_fingerprint(path) != fingerprint or
+                    self._bms_results.get(real) == (fingerprint, False)):
                 return False
-            self._bms_results[real] = (fingerprint, bool(is_bms))
+            self._bms_results[real] = (fingerprint, True)
         self._publish_auto_discovery()
         self._refresh_auto_readiness()
         return True
 
     def _publish_auto_discovery(self):
-        """Cross-process allowlist: unknown ports proven not to be wheels/BMS."""
+        """Publish positively identified peripherals and still-unknown ports."""
         if not self.auto_discovery or self.publish_discovery is None:
             return
         with self._publish_lock:
@@ -2278,6 +2417,7 @@ class MasterSource:
         fault = ""
         fresh = False
         memory_fault_started = False
+        memory_fault_epoch = 0
         with self._commands_lock:
             with self.lock:
                 fresh = link.module is None
@@ -2309,12 +2449,33 @@ class MasterSource:
                     fault += "; исправьте и перезапустите программу"
                 self._begin_discovery_stop_locked(fault, latch=True)
             elif memory_fault_started:
-                # Revoke queued steering and traction at the first bad frame;
-                # subsequent motion checks use this same gate and fault state.
+                # Revoke queued steering/traction and retain a chassis-wide
+                # latch even if this faulty wheel later disappears from USB.
+                self._full_zero_fault_latched = True
+                self._full_zero_fault_epoch += 1
+                memory_fault_epoch = self._full_zero_fault_epoch
+                self._full_zero_inhibit = True
                 self.brake_for_keyboard()
+            elif fresh and self._full_zero_inhibit:
+                # A board can be identified after the fault/STOP was first
+                # observed. Stop its steering too before its writer starts.
+                try:
+                    link.commands.put_nowait(b"s q\nb\n")
+                except queue.Full:
+                    self._brake_all(stop_steering=True)
         if fault:
             self._discovery_stop(fault, latch=True, begun=True)
             return True
+        if memory_fault_started:
+            # STOP and the in-memory gate are already set. Persist outside the
+            # serial-reader thread: during first identification the wheel's
+            # writer may not have started yet, and fsync must not delay STOP.
+            try:
+                threading.Thread(target=self._persist_detected_full_zero_fault,
+                                 args=(memory_fault_epoch,), daemon=True).start()
+            except RuntimeError:
+                self._note_status("error", "Не удалось запустить запись журнала ошибки памяти; "
+                                  "блокировка пока только в памяти процесса")
         self._refresh_auto_readiness()
         if fresh:
             self._note_status("ok", "автопоиск: %s · колесо %s · fw%d" % (link.path, module, frame["firmware"]))
@@ -2468,9 +2629,17 @@ class MasterSource:
                 busy.update(os.path.realpath(p) for p in self._spawning)
                 if device in busy:
                     continue
-                if (self.auto_discovery and
-                        self._unknown_devices.get(device) == self._device_fingerprint(candidate)):
-                    continue  # already passively probed; do not keep resetting unknown devices
+                fingerprint = self._device_fingerprint(candidate)
+                known_unknown = (self.auto_discovery and fingerprint is not None and
+                                 self._unknown_devices.get(device) == fingerprint)
+                classified = (fingerprint is not None and
+                              self._bms_results.get(device, (None,))[0] == fingerprint)
+                if known_unknown:
+                    checked_at = self._unknown_checked_at.get(device, 0)
+                    if classified or now - checked_at < 10.0:
+                        continue
+                    # Retry silent/unknown peripherals passively; no writes.
+                    self._unknown_devices.pop(device, None)
                 if self._cooldown.get(candidate, 0.0) > now:
                     continue
             if self._lidar_needs(candidate):
@@ -2531,9 +2700,20 @@ class MasterSource:
                 if raw:
                     self._link_bytes(link, raw)
             if link.module is None and not link.legacy_wheel:
+                detected_lidar = False
+                if self.auto_discovery and self.passive_lidar_probe is not None and not self._stop:
+                    try:
+                        # No commands to unidentified peripherals. A silent or
+                        # unrecognised device must remain unclassified.
+                        detected_lidar = bool(self.passive_lidar_probe(dev, lambda: self._stop))
+                    except Exception as exc:  # noqa: BLE001 — unknown is not safe
+                        self._note_status("warn", "пассивная проверка лидара %s: %s" % (link.path, exc))
                 if self.auto_discovery and fingerprint is not None and fingerprint == self._device_fingerprint(link.path):
                     with self.lock:
                         self._unknown_devices[link.device] = fingerprint
+                        self._unknown_checked_at[link.device] = time.monotonic()
+                        if detected_lidar:
+                            self._bms_results[link.device] = (fingerprint, False)
                 elif not self.auto_discovery:
                     self._note_status("warn", "порт %s: нет телеметрии колеса" % link.path)
                 return

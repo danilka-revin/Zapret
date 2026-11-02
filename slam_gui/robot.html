@@ -198,11 +198,12 @@
 
         <section id="bms-setup" class="bms-setup" hidden aria-label="Подключение BMS">
           <header><b>Подключение JBD BMS</b><span id="bms-setup-current">порт не выбран</span></header>
-          <p class="bms-setup-hint">BMS подключается к USB через переходник USB-UART: TX платы → RX переходника, RX → TX, GND → GND, 9600 8N1. Выберите порт и нажмите «Проверить» — будет одно чтение данных, в BMS ничего не записывается. Порты мастера руля и лидара здесь не открываются.</p>
+          <p class="bms-setup-hint">BMS подключается через USB-UART: TX → RX, RX → TX, GND → GND, 9600 8N1. Вручную выберите или введите именно её порт (лучше /dev/serial/by-id/…). Автопоиска BMS нет. «Проверить» читает только выбранный порт. Дождитесь проверки колёс; их порты и обнаруженный лидар назначить нельзя.</p>
+          <label for="bms-port-manual">Порт BMS вручную</label>
+          <input id="bms-port-manual" type="text" placeholder="/dev/serial/by-id/…" autocomplete="off" spellcheck="false">
           <ul id="bms-port-list" class="bms-port-list"><li>Список портов загружается…</li></ul>
           <div class="bms-setup-actions">
             <button id="bms-probe" type="button">Проверить выбранный</button>
-            <button id="bms-scan" type="button">Найти автоматически</button>
             <button id="bms-save" type="button" class="primary">Сохранить и подключить</button>
             <button id="bms-disable" type="button" class="quiet">Отключить BMS</button>
           </div>
@@ -1064,6 +1065,14 @@
           Зафиксируйте робота и вывесите колёса. Уберите людей и предметы, приготовьте независимый E-STOP.
           Выставьте колёса примерно прямо; при поиске флажка они могут повернуться далеко вправо и влево —
           убедитесь в запасе хода. Открытие мастера останавливает тягу, а поиск начинается только по кнопке.
+        </div>
+        <div id="full-zero-fault" class="full-zero-recovery" hidden>
+          <b>Нужна повторная настройка памяти полного нуля</b>
+          <p id="full-zero-fault-detail">На одной из плат повреждена или не распознана запись.</p>
+          <p>Восстановление удалит сохранённые поправки только на отмеченных платах.
+            Затем обязательно откалибруйте и заново сохраните все четыре колеса;
+            до этого тяга останется заблокирована.</p>
+          <button id="full-zero-reset-fault" type="button">Восстановить память и настроить заново</button>
         </div>
         <div class="full-zero-progress"><span class="full-zero-step">01</span>
           <div><b>Опорная калибровка</b><small>Сначала дождитесь остановки и подтверждения всех плат.</small></div>

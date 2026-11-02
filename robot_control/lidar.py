@@ -1212,13 +1212,14 @@ def ports_state_dir() -> Path:
 
 
 def publish_usb_scan(checked: Iterable[tuple[str, tuple[int, int, int], Optional[bool]]]) -> None:
-    """Publish passive wheel checks and JBD results to the other processes.
+    """Publish passive wheel and positive peripheral identities to other processes.
 
     A stale/missing record grants no access. Fingerprints prevent a new USB
     device reusing the old tty name from inheriting the old classification.
     """
     entries = [{"port": path, "device": os.path.realpath(path), "fingerprint": list(fingerprint),
-                "bms": is_bms} for path, fingerprint, is_bms in checked]
+                "bms": is_bms, "lidar": is_bms is False}
+               for path, fingerprint, is_bms in checked]
     _write_state_file(ports_state_dir() / ("usb-scan-%d.json" % os.getpid()),
                       {"pid": os.getpid(), "at": time.time(), "ports": entries})
 
@@ -1261,14 +1262,14 @@ def detected_bms_ports() -> set[str]:
 
 
 def checked_usb_ports(*, lidar_only: bool = False) -> list[str]:
-    """Live unchanged passive checks; lidar also requires a negative JBD probe."""
+    """Live unchanged checks; ``lidar_only`` requires a positive lidar stream."""
     result = []
     for path in sorted(ports_state_dir().glob("usb-scan-*.json")):
         data = _read_state_file(path, LIDAR_STATE_TTL_S)
         if not data:
             continue
         for entry in data.get("ports") or []:
-            if not isinstance(entry, dict) or (lidar_only and entry.get("bms") is not False):
+            if not isinstance(entry, dict) or (lidar_only and entry.get("lidar") is not True):
                 continue
             port = entry.get("port")
             if not isinstance(port, str) or not port:
@@ -2219,6 +2220,33 @@ def open_serial(serial_module, port: str, baud: int):
 # ============================================================================
 # Менеджер лидара
 # ============================================================================
+
+def passive_lidar_probe(ser, stopped=lambda: False, timeout=1.5) -> bool:
+    """Identify a streaming LDS-01/LD06 by multiple valid checksummed frames.
+
+    Called while the wheel owner holds the UART lock after listening for wheel
+    telemetry. This changes the receive speed but never transmits. Silence,
+    invalid CRC, or a device that requires a start command remain unknown.
+    """
+    if stopped():
+        return False
+    ser.baudrate = LDS01_BAUD  # LD06 uses the same baud rate
+    ser.reset_input_buffer()
+    lds = Lds01Stream(crc_bad_limit=1_000_000_000)
+    ld = Ld06Stream(crc_bad_limit=1_000_000_000)
+    deadline = time.monotonic() + timeout
+    lds_points = ld_points = 0
+    while not stopped() and time.monotonic() < deadline:
+        chunk = ser.read(1024)
+        if not chunk:
+            continue
+        lds_points += sum(len(points) for points, _ in lds.feed(chunk))
+        ld_points += sum(len(points) for points, _ in ld.feed(chunk))
+        if (lds.crc_ok >= 6 and lds_points >= 20) or (ld.crc_ok >= 6 and ld_points >= 20):
+            return True
+    return False
+
+
 class LidarManager:
     """Менеджер лидара: собирает данные из ROS 2, USB/serial или HTTP API."""
 
@@ -2655,7 +2683,7 @@ class LidarManager:
         )
         if os.environ.get("RC_USB_DISCOVERY_MODE") == "1":
             # Never send lidar motor/scan commands to an unclassified USB
-            # device. The owner first listens for wheels and probes JBD BMS.
+            # device. The owner first confirms a checksummed streaming lidar.
             allowed_paths = checked_lidar_ports()
             allowed = {os.path.realpath(p) for p in allowed_paths}
             ports = [p for p in ports if os.path.realpath(p) in allowed]

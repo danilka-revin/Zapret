@@ -528,13 +528,10 @@ def test_port_roles_protect_master_and_lidar(tmp_path, monkeypatch):
     assert bms_setup.probe_port(str(master))["error"].startswith("это порт мастера")
     with pytest.raises(ValueError):
         bms_setup.apply_port(BatteryManager(), str(master), env_path=tmp_path / ".env")
-    probed = []
-    result = bms_setup.scan_ports(probe=lambda port: probed.append(port) or {"port": port, "found": port == str(free)},
-                                  ports=[{"port": str(master), "role": "master", "note": ""},
-                                         {"port": str(free), "role": "free", "note": ""},
-                                         {"port": str(busy), "role": "busy", "note": ""}])
-    assert probed == [str(free)] and result["found"] == [str(free)]
-    assert [item["port"] for item in result["skipped"]] == [str(master), str(busy)]
+    # A chassis/lidar conflict is rejected even for a direct API caller.
+    monkeypatch.setattr(bms_setup, "_chassis_ports", lambda: {str(free)})
+    with pytest.raises(ValueError, match="колеса"):
+        bms_setup.apply_port(BatteryManager(), str(free), env_path=tmp_path / ".env")
 
 
 def test_save_port_rewrites_only_bms_line(tmp_path):
@@ -601,14 +598,17 @@ def test_setup_endpoints_are_available_without_pin_and_reconfigure(battery_app, 
     assert body["setupAvailable"] is True and body["port"] == "/dev/fake"
     monkeypatch.setattr(bms_setup, "describe_ports", lambda: [{"port": "/dev/ttyUSB7", "role": "free", "note": "свободен"}])
     monkeypatch.setattr(bms_setup, "probe_port", lambda port: {"ok": True, "found": True, "port": port, "summary": "JBD"})
-    monkeypatch.setattr(bms_setup, "scan_ports", lambda: {"ok": True, "found": [], "results": [], "skipped": []})
     setup = client.get("/api/battery/setup").get_json()
     assert setup["available"] and setup["ports"][0]["port"] == "/dev/ttyUSB7"
     assert setup["requiresPin"] is False
 
+    manager = battery_app.extensions["rc_battery"]
+    if manager._requires_wheel_check:
+        from types import SimpleNamespace
+        manager._manual_source = SimpleNamespace(manual_bms_port_allowed=lambda port: True)
     probe = client.post("/api/battery/probe", json={"port": "/dev/ttyUSB7"})
     assert probe.status_code == 200 and probe.get_json()["found"]
-    assert client.post("/api/battery/scan", json={}).status_code == 200
+    assert client.post("/api/battery/scan", json={}).status_code == 410
     applied = []
     monkeypatch.setattr(bms_setup, "apply_port", lambda manager, port: applied.append(port) or {"ok": True, "port": port})
     saved = client.post("/api/battery/port", json={"port": "/dev/ttyUSB7"})
