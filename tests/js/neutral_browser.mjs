@@ -33,8 +33,17 @@ const request = async (path, body, marker = 'drive') => {
   return {status: response.status, body: await response.json()};
 };
 const active = () => wait(data => data.neutral.active && data.motors.every(m => m.neutralId > 0));
-const braked = () => wait(data => data.neutral.phase === 'idle' && data.motors.every(m =>
-  m.neutralId === 0 && m.neutralLocked === false && m.drivePercent === 0));
+const braked = async () => {
+  const data = await wait(snapshot => snapshot.neutral.phase === 'idle' && snapshot.motors.every(m =>
+    m.neutralId === 0 && m.neutralLocked === false && m.drivePercent === 0));
+  // Server telemetry can reach idle before the UI's next state poll. A second
+  // click on the still-stale "restore" button must not be mistaken for BEGIN.
+  await page.waitForFunction(() => {
+    const button = document.getElementById('neutral-toggle');
+    return button && !button.disabled && button.textContent.includes('Снять тормоз');
+  });
+  return data;
+};
 
 try {
   if (remote) {
