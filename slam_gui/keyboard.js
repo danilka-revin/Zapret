@@ -42,8 +42,11 @@
     const status = $('keyboard-status');
     const state = {enabled: false, enabling: false, token: null, sequence: 0,
       generation: 0, keys: new Set(), timer: null, running: null, planning: false,
-      drivePending: false, pingPending: false, lastTick: 0, lastDrive: 0, lastPing: 0,
-      chain: Promise.resolve(), retirement: Promise.resolve()};
+      drivePending: null, pingPending: false, lastTick: 0, lastDrive: 0, lastPing: 0,
+      brake: null, pendingPlan: null, beginning: Promise.resolve(), retirement: Promise.resolve()};
+    // Firmware accepts a fresh tagged brake for up to 6 s. Use a smaller
+    // browser-side bound to leave time for the permit and serial delivery.
+    const BRAKE_REUSE_MS = 4000;
     const reasons = {
       keyboard_expired: 'Управление просрочено; включите WASD заново.',
       keyboard_session: 'WASD прервано другой командой; включите заново.',
@@ -124,11 +127,21 @@
       state.keys.clear();
       state.running = null;
       state.planning = false;
+      state.brake = null;
+      state.pendingPlan = null;
+      state.drivePending = null;
       if (state.timer) clearInterval(state.timer);
       state.timer = null;
       updateButton();
       show(message || 'WASD выключено; тяга снята.');
-      return retire(token, sequence, keepalive);
+      retire(token, sequence, keepalive);
+      return waitForStop();
+    }
+    function waitForStop() {
+      // A BEGIN may return a session after disable() was called. Wait for its
+      // END attempt before another mode reserves the wheels (e.g. full-zero).
+      // A timed-out request can still arrive later and brake, which is safe.
+      return Promise.all([state.beginning, state.retirement]).then(() => state.retirement);
     }
     function fail(error) {
       const reason = error && error.message || 'command_failed';
@@ -182,9 +195,25 @@
       }
       return null;
     }
-    async function sendWhenStopped(gen, action, values) {
+    function freshBrake(brake) {
+      if (!brake) return false;
+      const age = Date.now() - brake.at;
+      return age >= 0 && age < BRAKE_REUSE_MS;
+    }
+    function stopBarrier() {
+      if (freshBrake(state.brake)) return state.brake;
+      const barrier = {at: Date.now(), promise: null};
+      // STOP is never queued behind an older motion request. If another key
+      // changes while this STOP is in flight, it shares the same barrier:
+      // no newer command can start until that STOP has completed.
+      barrier.promise = send('stop').then((result) => ({result}), (error) => ({error}));
+      state.brake = barrier;
+      return barrier;
+    }
+    async function sendWhenStopped(gen, action, values, brake) {
       const end = Date.now() + 6000;
       while (valid(gen)) {
+        if (brake && !freshBrake(brake)) return {brakeExpired: true};
         try { return await send(action, values); }
         catch (error) {
           // The server may have a newer SC sample than the browser. Keep the
@@ -197,19 +226,26 @@
       return null;
     }
     async function heartbeat(gen, current, permit) {
-      if (!valid(gen) || state.drivePending) return;
-      state.drivePending = true;
+      if (!valid(gen) || (state.drivePending && state.drivePending.gen === gen)) return;
+      const pending = {gen, current, speed: speedValue()};
+      state.drivePending = pending;
       state.lastDrive = Date.now();
       try {
-        await send('live', {percent: current.direction * speedValue(), angles: current.angles, permit: permit || ''});
+        await send('live', {percent: current.direction * pending.speed, angles: current.angles, permit: permit || ''});
       } catch (error) {
         if (valid(gen)) fail(error);
       } finally {
-        state.drivePending = false;
-        // Coalesce fast key changes while one HTTP heartbeat is in flight.
-        if (valid(gen) && state.running && state.running !== current) void heartbeat(gen, state.running, '');
+        // An old reply must never clear a newer generation's in-flight drive.
+        if (state.drivePending === pending) {
+          state.drivePending = null;
+          if (valid(gen) && state.running &&
+              (state.running !== current || speedValue() !== pending.speed)) {
+            void heartbeat(gen, state.running, '');
+          }
+        }
       }
     }
+
     function tick() {
       if (!state.enabled) return;
       const now = Date.now(), gen = state.generation;
@@ -223,7 +259,8 @@
       if (state.running) {
         // The onboard lease checks each board's sequence and steering progress;
         // being between the old and new target is expected during a live turn.
-        if (!state.drivePending && now - state.lastDrive >= 180) void heartbeat(gen, state.running, '');
+        if ((!state.drivePending || state.drivePending.gen !== gen) && now - state.lastDrive >= 120)
+          void heartbeat(gen, state.running, '');
       } else if (!state.planning && !state.pingPending && now - state.lastPing >= 1000) {
         state.pingPending = true;
         state.lastPing = now;
@@ -233,84 +270,128 @@
     }
     async function enable() {
       if (state.enabled || state.enabling) { disable(); return; }
+      const previousBegin = state.beginning;
       const gen = ++state.generation;
       state.enabling = true;
       updateButton();
       show('Останавливаем другую тягу и открываем управление…');
-      try {
-        await options.stopManual();
-        if (gen !== state.generation) return;
-        const error = snapshotError(options.getState());
-        if (error) throw new Error(error);
-        const result = await post({action: 'begin'});
-        if (gen !== state.generation) { retire(result.session, 1, false); return; }
-        state.token = result.session;
-        state.sequence = 0;
-        state.enabled = true;
-        state.enabling = false;
-        if (options.onReady) options.onReady();
-        state.lastTick = state.lastPing = Date.now();
-        state.timer = setInterval(tick, 150);
-        updateButton();
-        show('WASD включено · удерживайте клавиши.');
-      } catch (error) {
-        if (gen === state.generation) fail(error);
-      }
+      const opening = (async () => {
+        try {
+          // Let previous BEGIN/END attempts settle before opening a new lease.
+          // On timeout an old STOP may still arrive later and brake fail-safe.
+          await previousBegin;
+          await state.retirement;
+          if (gen !== state.generation) return;
+          await options.stopManual();
+          if (gen !== state.generation) return;
+          const error = snapshotError(options.getState());
+          if (error) throw new Error(error);
+          const beginAt = Date.now();
+          const result = await post({action: 'begin'});
+          if (gen !== state.generation) { await retire(result.session, 1, false); return; }
+          state.token = result.session;
+          state.sequence = 0;
+          state.brake = Number.isInteger(result.brakeId) && result.brakeId > 0
+            ? {at: beginAt, promise: Promise.resolve({result})} : null;
+          state.enabled = true;
+          state.enabling = false;
+          if (options.onReady) options.onReady();
+          state.lastTick = state.lastPing = Date.now();
+          state.timer = setInterval(tick, 50);
+          updateButton();
+          show('WASD включено · удерживайте клавиши.');
+          if (state.keys.size) replan();
+        } catch (error) {
+          if (gen === state.generation) fail(error);
+        }
+      })();
+      state.beginning = opening;
+      await opening;
     }
+
     function replan() {
       if (!state.enabled) return;
       const desired = plan(state.keys, mode ? mode.value : 'crab');
+      const preparing = state.pendingPlan;
+      if (state.planning && preparing && preparing.gen === state.generation &&
+          IDS.every((id) => desired.angles[id] === preparing.angles[id])) {
+        if (desired.direction === preparing.direction ||
+            (!preparing.arming && preparing.direction === 0 && desired.direction !== 0)) {
+          // Pressing gas while the selected steering target is still being
+          // reached should not cancel and restart that exact same movement.
+          preparing.direction = desired.direction;
+          return;
+        }
+      }
       if (state.running && desired.direction && desired.direction === state.running.direction) {
         const changed = IDS.some((id) => desired.angles[id] !== state.running.angles[id]);
         if (changed) {
           state.running = desired;
           show('Рулим на ходу · удерживайте стрелку.');
-          if (!state.drivePending) void heartbeat(state.generation, desired, '');
+          if (!state.drivePending || state.drivePending.gen !== state.generation)
+            void heartbeat(state.generation, desired, '');
         }
         return;
       }
       const gen = ++state.generation;
       state.running = null;
       state.planning = true;
-      show(desired ? 'Остановка перед изменением углов…' : 'Останавливаемся…');
-      // Do not wait for an older request before issuing STOP. A higher sequence
-      // makes every older request harmless even if the network reorders them.
-      const stopping = send('stop').then((result) => ({result}), (error) => ({error}));
-      state.chain = state.chain.catch(() => {}).then(async () => {
-        const stopReply = await stopping;
+      const pending = {gen, angles: desired.angles, direction: desired.direction, arming: false};
+      state.pendingPlan = pending;
+      show('Остановка перед изменением углов…');
+      // STOP is sent immediately if a command may have moved a wheel. While
+      // it is pending, subsequent key changes share that same STOP; this avoids
+      // a late old STOP braking a new session after HTTP reordering.
+      const barrier = stopBarrier();
+      void (async () => {
+        const stopReply = await barrier.promise;
         if (!valid(gen)) return;
         if (stopReply.error) throw stopReply.error;
-        if (!desired) { state.planning = false; show('Тяга снята · WASD включено.'); return; }
         const brakeId = stopReply.result.brakeId;
         if (!Number.isInteger(brakeId) || brakeId <= 0) throw new Error('brake_firmware_required');
         let data = await waitFor(gen, (current) => stopped(current) &&
           IDS.every((id) => motorMap(current)[id].brakeId === brakeId), 6000);
         if (!data || !valid(gen)) return;
         const sentSteer = IDS.some((id) => Math.abs(motorMap(data)[id].angle - desired.angles[id]) > 1.0);
-        if (sentSteer) await sendWhenStopped(gen, 'steer_all', {angles: desired.angles});
+        if (sentSteer) {
+          // A new key/release must STOP this potentially moving steering.
+          if (state.brake === barrier) state.brake = null;
+          await sendWhenStopped(gen, 'steer_all', {angles: desired.angles});
+        }
         if (!valid(gen)) return;
         const sentAt = Date.now();
         show('Ждём подтверждения углов всех колёс…');
         data = await waitFor(gen, (current) => (!sentSteer || options.freshAt() > sentAt) && arrived(current, desired.angles), 6000);
         if (!data || !valid(gen)) return;
-        if (!desired.direction) {
+        if (!pending.direction) {
+          if (freshBrake(barrier)) state.brake = barrier;
+          state.pendingPlan = null;
           state.planning = false;
           show('Руль выставлен · без тяги.');
           return;
         }
-        // An older heartbeat may still be awaiting its response. Do not spend
-        // the short-lived start permit until it has finished or timed out.
-        while (valid(gen) && state.drivePending) await delay(30);
-        if (!valid(gen)) return;
-        // A server-issued short-lived permit bounds delayed FIRST drive packets.
-        const arm = await sendWhenStopped(gen, 'arm', {direction: desired.direction, angles: desired.angles});
+        // Reuse only while the firmware's brake-start window remains fresh.
+        if (!freshBrake(barrier)) {
+          state.brake = null;
+          state.pendingPlan = null;
+          replan();
+          return;
+        }
+        // Once a permit is requested, release must issue a new STOP to revoke
+        // even an in-flight permit; old replies are generation-fenced.
+        state.brake = null;
+        pending.arming = true;
+        const arm = await sendWhenStopped(gen, 'arm', {direction: pending.direction, angles: desired.angles}, barrier);
         if (!valid(gen) || !arm) return;
-        state.running = desired;
+        if (arm.brakeExpired) { state.pendingPlan = null; replan(); return; }
+        const running = {angles: desired.angles, direction: pending.direction};
+        state.pendingPlan = null;
+        state.running = running;
         state.planning = false;
         state.lastTick = Date.now();
-        await heartbeat(gen, desired, arm.permit);
+        await heartbeat(gen, running, arm.permit);
         if (valid(gen) && state.running) show('Движение · удерживайте клавиши.');
-      }).catch((error) => { if (valid(gen)) fail(error); });
+      })().catch((error) => { if (valid(gen)) fail(error); });
     }
     function keyCode(event) {
       if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown'].includes(event.code)) return event.code;
@@ -321,39 +402,86 @@
     function editable(target) {
       return !!(target && (target.isContentEditable || (target.closest && target.closest('input, textarea, select, [contenteditable="true"]'))));
     }
+    panel.addEventListener('keydown', (event) => {
+      if ((!state.enabled && !state.enabling) || event.key !== 'Escape' || !editable(event.target)) return;
+      // Handle this before the enclosing screen's document-level Esc handler;
+      // leaving a setting should not close the whole screen and disable WASD.
+      event.preventDefault();
+      event.stopPropagation();
+      event.target.blur();
+      show('Настройка завершена · удерживайте стрелку для тяги.');
+    });
     window.addEventListener('keydown', (event) => {
-      if (!state.enabled || document.hidden || event.ctrlKey || event.altKey || event.metaKey || editable(event.target)) return;
+      if ((!state.enabled && !state.enabling) || document.hidden || event.ctrlKey || event.altKey || event.metaKey) return;
+      if (editable(event.target)) {
+        // Never turn a keyboard edit in an input/select into unexpected motion.
+        if (keyCode(event)) show('Фокус в поле настройки · выйдите из него или нажмите Esc для управления.');
+        return;
+      }
       const code = keyCode(event);
       if (!code) return;
       event.preventDefault();
       if (event.repeat || state.keys.has(code)) return;
       state.keys.add(code);
-      replan();
+      // A key pressed while BEGIN is in flight starts only if it is still
+      // held after enabling and the usual brake/telemetry checks complete.
+      if (state.enabled) replan();
     });
     window.addEventListener('keyup', (event) => {
       const code = keyCode(event);
-      if (!state.enabled || !code || !state.keys.has(code)) return;
+      if ((!state.enabled && !state.enabling) || !code || !state.keys.has(code)) return;
       event.preventDefault();
       state.keys.delete(code);
-      replan();
+      if (state.enabled) replan();
     });
     if (button) button.addEventListener('click', () => { void enable(); });
     const stop = $('keyboard-stop');
     if (stop) stop.addEventListener('click', () => disable('СТОП · WASD выключено.'));
-    if (mode) mode.addEventListener('change', () => {
-      if (!state.enabled) return;
-      state.keys.clear();
-      replan();
-    });
-    if (speed) speed.addEventListener('input', () => {
-      const output = $('keyboard-speed-value');
-      if (output) output.textContent = String(speedValue());
-    });
+    let modeUsedPointer = false;
+    if (mode) {
+      mode.addEventListener('pointerdown', () => { modeUsedPointer = true; });
+      mode.addEventListener('pointercancel', () => { modeUsedPointer = false; });
+      // A dismissed mouse menu followed by keyboard editing must not turn a
+      // second editing arrow into traction by blurring the select midway.
+      mode.addEventListener('keydown', () => { modeUsedPointer = false; });
+      mode.addEventListener('blur', () => { modeUsedPointer = false; });
+      mode.addEventListener('change', () => {
+        const usedPointer = modeUsedPointer;
+        modeUsedPointer = false;
+        if (!state.enabled && !state.enabling) return;
+        state.keys.clear();
+        if (state.enabled) replan();
+        if (usedPointer && document.activeElement === mode) mode.blur();
+      });
+    }
+    if (speed) {
+      // Release even if a mouse/touch drag ends outside the slider. Keyboard
+      // users keep ordinary range editing and can leave the field with Esc.
+      let speedPointer = null;
+      speed.addEventListener('pointerdown', (event) => { speedPointer = event.pointerId; });
+      const finishPointer = (event) => {
+        if (event.pointerId !== speedPointer) return;
+        speedPointer = null;
+        if ((state.enabled || state.enabling) && document.activeElement === speed) speed.blur();
+      };
+      // The swipe panel stops bubbling pointer events from controls, so use
+      // capture to see both the slider and releases outside it.
+      window.addEventListener('pointerup', finishPointer, true);
+      window.addEventListener('pointercancel', finishPointer, true);
+      speed.addEventListener('input', () => {
+        const output = $('keyboard-speed-value');
+        if (output) output.textContent = String(speedValue());
+        if (state.enabled && state.running &&
+            (!state.drivePending || state.drivePending.gen !== state.generation)) {
+          void heartbeat(state.generation, state.running, '');
+        }
+      });
+    }
     window.addEventListener('blur', () => { if (state.enabled || state.enabling) disable('Потерян фокус · WASD выключено.'); });
     window.addEventListener('pagehide', () => { if (state.enabled || state.enabling) disable('Страница закрыта · WASD выключено.', true); });
     document.addEventListener('visibilitychange', () => { if (document.hidden && (state.enabled || state.enabling)) disable('Вкладка скрыта · WASD выключено.', true); });
     updateButton();
-    return {disable, waitForStop: () => state.retirement, isActive: () => state.enabled || state.enabling,
+    return {disable, waitForStop, isActive: () => state.enabled || state.enabling,
       session: () => state.token,
       stateChanged: () => { if (state.enabled) { const error = snapshotError(options.getState()); if (error) fail(new Error(error)); } }};
   }

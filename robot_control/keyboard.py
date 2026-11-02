@@ -37,6 +37,11 @@ class KeyboardControl:
         self._estop = estop
         self._clock = clock
         self._lock = threading.RLock()
+        # STOP must be advertised without waiting for the motion gate or the
+        # potentially blocked request holding _lock. The short fence lock is
+        # never held while acquiring _lock or while talking to hardware.
+        self._stop_lock = threading.Lock()
+        self._stop_fence = None
         self._token = None
         self._sequence = 0
         self._last_activity = 0.0
@@ -78,7 +83,8 @@ class KeyboardControl:
             return {"ok": False, "reason": "command_failed"}, 503
 
     def _clear(self):
-        self._token = None
+        with self._stop_lock:
+            self._token = None
         self._running = False
         self._direction = self._percent = 0
         self._angles = None
@@ -96,7 +102,55 @@ class KeyboardControl:
                 self._clear()
                 self._brake()
 
-    def _fail(self, reason, status=409):
+    def preempt_stop(self, body):
+        """Fence a validated STOP before its immediate, out-of-gate brake.
+
+        A heartbeat already holding the motion gate can otherwise see that
+        brake as a manual override and revoke the session before STOP arrives.
+        The final tagged STOP still executes under the gate. This does not
+        weaken global STOP, E-STOP, deadlines, or stale-sequence checks.
+        """
+        if (not isinstance(body, dict) or set(body) != {"action", "session", "sequence"} or
+                not isinstance(body.get("action"), str) or body["action"] not in {"stop", "end"} or
+                not isinstance(body.get("session"), str) or
+                type(body.get("sequence")) is not int or body["sequence"] <= 0):
+            return False
+        token, sequence = body["session"], body["sequence"]
+        with self._stop_lock:
+            # Session/sequence updates also use this short lock. Never wait
+            # behind the motion command that STOP is preempting.
+            if token != self._token or sequence <= self._sequence:
+                return False
+            old = self._stop_fence
+            if old is None or old[0] != token or sequence > old[1]:
+                self._stop_fence = (token, sequence, True)
+                return True
+        return False
+
+    def finish_preempted_stop(self, body):
+        if not isinstance(body, dict):
+            return
+        with self._stop_lock:
+            fence = self._stop_fence
+            if fence and (body.get("session"), body.get("sequence")) == fence[:2]:
+                self._stop_fence = (fence[0], fence[1], False)
+
+    def _preempted_locked(self, body):
+        fence = self._stop_fence
+        return bool(fence and body["session"] == fence[0] and
+                    (fence[2] or body["sequence"] <= fence[1]))
+
+    def is_preempted(self, body):
+        if (not isinstance(body, dict) or not isinstance(body.get("action"), str) or
+                body["action"] in {"stop", "end", "begin"} or not isinstance(body.get("session"), str) or
+                type(body.get("sequence")) is not int):
+            return False
+        with self._stop_lock:
+            return self._preempted_locked(body)
+
+    def _fail(self, reason, status=409, *, body=None):
+        if self.is_preempted(body):
+            return {"ok": False, "reason": "stale_command"}, 409
         self._clear()
         self._brake()
         return {"ok": False, "reason": reason}, status
@@ -221,19 +275,19 @@ class KeyboardControl:
 
     def _handle_live(self, body, snapshot, now, deadline):
         if set(body) != {"action", "session", "sequence", "percent", "angles", "permit"}:
-            return self._fail("payload", 400)
+            return self._fail("payload", 400, body=body)
         percent, angles, sequence = body.get("percent"), body.get("angles"), body["sequence"]
         if (type(percent) is not int or not 1 <= abs(percent) <= 100 or
                 not isinstance(angles, dict) or set(angles) != set(MODULES) or
                 not all(self._number(angles[m]) and abs(angles[m]) <= 100 for m in MODULES) or
                 sequence >= 0x7FFFFFFF):
-            return self._fail("invalid_drive", 400)
+            return self._fail("invalid_drive", 400, body=body)
         drive, motors = snapshot
         if any(type(motors[m].get("firmware")) is not int or motors[m]["firmware"] < 20 or
                type(motors[m].get("liveId")) is not int or not 0 <= motors[m]["liveId"] < 0x7FFFFFFF or
                type(motors[m].get("liveSeq")) is not int or not 0 <= motors[m]["liveSeq"] < 0x7FFFFFFF
                for m in MODULES):
-            return self._fail("live_firmware_required")
+            return self._fail("live_firmware_required", body=body)
         direction = 1 if percent > 0 else -1
         first = not self._running
         if first:
@@ -241,32 +295,34 @@ class KeyboardControl:
             if (not permit or not isinstance(body.get("permit"), str) or
                     body["permit"] != permit["value"] or now > permit["expires"] or
                     direction != permit["direction"] or angles != permit["angles"]):
-                return self._fail("keyboard_expired")
+                return self._fail("keyboard_expired", body=body)
             error = self._target_ready(snapshot, angles, first=True)
         else:
             if not self._live or direction != self._direction:
-                return self._fail("module_busy")
+                return self._fail("module_busy", body=body)
             if drive.get("commandedPercent") != self._percent:
-                return self._fail("manual_override")
+                return self._fail("manual_override", body=body)
             error = self._live_progress(snapshot, now)
         if not error:
             error = self._sensor_progress(motors, now, first=first)
         if error:
-            return self._fail(error)
+            return self._fail(error, body=body)
         sender = getattr(self._source(), "keyboard_live", None)
         if not callable(sender):
-            return self._fail("live_firmware_required")
+            return self._fail("live_firmware_required", body=body)
         # No delayed UART heartbeat may outlive its HTTP command/lease.
         deadline = min(deadline if deadline is not None else time.monotonic() + 0.5,
                        time.monotonic() + 0.5)
         if deadline <= time.monotonic():
-            return self._fail("command_expired", 408)
+            return self._fail("command_expired", 408, body=body)
+        if self.is_preempted(body):
+            return {"ok": False, "reason": "stale_command"}, 409
         try:
             result = sender(self._brake_id, sequence, percent, angles, deadline)
         except Exception:  # noqa: BLE001 — stop on broken transport
-            return self._fail("command_failed", 503)
+            return self._fail("command_failed", 503, body=body)
         if not result.get("ok"):
-            return self._fail(result.get("reason", "command_failed"), 503)
+            return self._fail(result.get("reason", "command_failed"), 503, body=body)
         if not first and angles != self._angles:
             self._live_angles_since = now
         self._running = self._live = True
@@ -296,10 +352,14 @@ class KeyboardControl:
                 source = self._source()
                 if not getattr(source, "supports_drive", False) or not getattr(source, "supports_individual_steer", False):
                     return {"ok": False, "reason": "control_not_supported"}, 409
-                self._token = secrets.token_urlsafe(24)
-                self._sequence = 0
+                with self._stop_lock:
+                    self._token = secrets.token_urlsafe(24)
+                    self._sequence = 0
                 self._last_activity = now
-                return {"ok": True, "session": self._token}, 200
+                # The browser can reuse this freshly issued STOP instead of
+                # sending another one on the first arrow press. It must still
+                # wait for all four matching brake ACKs and request a permit.
+                return {"ok": True, "session": self._token, "brakeId": self._brake_id}, 200
 
             if action not in {"stop", "end", "ping", "steer", "steer_all", "arm", "drive", "live"}:
                 return {"ok": False, "reason": "invalid_action"}, 400
@@ -308,13 +368,17 @@ class KeyboardControl:
             sequence = body.get("sequence")
             if type(sequence) is not int or sequence <= 0:
                 return {"ok": False, "reason": "payload"}, 400
-            if sequence <= self._sequence:
-                return {"ok": False, "reason": "stale_command"}, 409
-            self._sequence = sequence
+            # Accepting a new sequence and registering a STOP fence must be
+            # atomic; otherwise a newer packet can overtake the final STOP.
+            with self._stop_lock:
+                if (sequence <= self._sequence or
+                        (action not in {"stop", "end"} and self._preempted_locked(body))):
+                    return {"ok": False, "reason": "stale_command"}, 409
+                self._sequence = sequence
 
             if action in {"stop", "end"}:
                 if set(body) != {"action", "session", "sequence"}:
-                    return self._fail("payload", 400)
+                    return self._fail("payload", 400, body=body)
                 self._running = False
                 self._angles = None
                 self._permit = None
@@ -331,27 +395,29 @@ class KeyboardControl:
                 return result, status
 
             if self._estop():
-                return self._fail("estop")
+                return self._fail("estop", body=body)
             if now - self._last_activity > self.IDLE_TTL or (self._running and now - self._last_drive > self.DRIVE_TTL):
-                return self._fail("keyboard_expired")
+                return self._fail("keyboard_expired", body=body)
             self._last_activity = now
             if action == "ping":
                 if set(body) != {"action", "session", "sequence"}:
-                    return self._fail("payload", 400)
+                    return self._fail("payload", 400, body=body)
                 return {"ok": True}, 200
 
             snapshot, error = self._snapshot()
             if error:
-                return self._fail(error)
+                return self._fail(error, body=body)
+            if self.is_preempted(body):
+                return {"ok": False, "reason": "stale_command"}, 409
             if action == "steer_all":
                 if set(body) != {"action", "session", "sequence", "angles"}:
-                    return self._fail("payload", 400)
+                    return self._fail("payload", 400, body=body)
                 angles = body.get("angles")
                 if (not isinstance(angles, dict) or set(angles) != set(MODULES) or
                         not all(self._number(angles[m]) and abs(angles[m]) <= 100 for m in MODULES)):
-                    return self._fail("invalid_angle", 400)
+                    return self._fail("invalid_angle", 400, body=body)
                 if self._running or any(snapshot[1][m].get("moving") for m in MODULES):
-                    return self._fail("module_busy")
+                    return self._fail("module_busy", body=body)
                 self._permit = None
                 error = self._steering_ready(snapshot)
                 if error == "wheel_moving":
@@ -360,50 +426,56 @@ class KeyboardControl:
                     # fresh sequenced retry; never issue a partial steer here.
                     return {"ok": False, "reason": error, "retryable": True}, 409
                 if error:
-                    return self._fail(error)
+                    return self._fail(error, body=body)
                 sent = []
                 # One sequenced request avoids four serial network round-trips;
                 # each wheel is still checked and independently acknowledged.
                 for module in MODULES:
+                    if self.is_preempted(body):
+                        return {"ok": False, "reason": "stale_command"}, 409
                     if abs(snapshot[1][module]["angle"] - angles[module]) <= 1.0:
                         continue
                     result, status = self._steer(self._source(), {"module": module, "angle": angles[module]})
                     if not result.get("ok"):
-                        return self._fail(result.get("reason", "command_failed"), status)
+                        return self._fail(result.get("reason", "command_failed"), status, body=body)
                     sent.append(module)
                 return {"ok": True, "sent": sent}, 200
 
             if action == "steer":
                 if set(body) != {"action", "session", "sequence", "module", "angle"}:
-                    return self._fail("payload", 400)
+                    return self._fail("payload", 400, body=body)
                 module, angle = body.get("module"), body.get("angle")
                 if module not in MODULES or not self._number(angle) or abs(angle) > 100:
-                    return self._fail("invalid_angle", 400)
+                    return self._fail("invalid_angle", 400, body=body)
                 if self._running:
-                    return self._fail("module_busy")
+                    return self._fail("module_busy", body=body)
                 self._permit = None
                 error = self._steering_ready(snapshot)
                 if error:
-                    return self._fail(error)
+                    return self._fail(error, body=body)
+                if self.is_preempted(body):
+                    return {"ok": False, "reason": "stale_command"}, 409
                 result, status = self._steer(self._source(), {"module": module, "angle": angle})
                 if not result.get("ok"):
-                    return self._fail(result.get("reason", "command_failed"), status)
+                    return self._fail(result.get("reason", "command_failed"), status, body=body)
                 return result, status
 
             if action == "arm":
                 if set(body) != {"action", "session", "sequence", "direction", "angles"}:
-                    return self._fail("payload", 400)
+                    return self._fail("payload", 400, body=body)
                 angles, direction = body.get("angles"), body.get("direction")
                 if (self._running or type(direction) is not int or direction not in (-1, 1) or
                         not isinstance(angles, dict) or set(angles) != set(MODULES) or
                         not all(self._number(angles[m]) and abs(angles[m]) <= 100 for m in MODULES)):
-                    return self._fail("invalid_angle", 400)
+                    return self._fail("invalid_angle", 400, body=body)
                 error = self._target_ready(snapshot, angles, first=True)
                 if error == "wheel_moving":
                     self._permit = None
                     return {"ok": False, "reason": error, "retryable": True}, 409
                 if error:
-                    return self._fail(error)
+                    return self._fail(error, body=body)
+                if self.is_preempted(body):
+                    return {"ok": False, "reason": "stale_command"}, 409
                 nonce = secrets.token_urlsafe(18)
                 self._permit = {"value": nonce, "expires": now + self.START_PERMIT_TTL,
                                 "angles": dict(angles), "direction": direction}
@@ -412,31 +484,33 @@ class KeyboardControl:
             if action == "live":
                 return self._handle_live(body, snapshot, now, deadline)
             if self._live:
-                return self._fail("module_busy")
+                return self._fail("module_busy", body=body)
             if set(body) != {"action", "session", "sequence", "percent", "angles", "permit"}:
-                return self._fail("payload", 400)
+                return self._fail("payload", 400, body=body)
             percent, angles = body.get("percent"), body.get("angles")
             if type(percent) is not int or not 1 <= abs(percent) <= 100 or not isinstance(angles, dict) or set(angles) != set(MODULES):
-                return self._fail("invalid_drive", 400)
+                return self._fail("invalid_drive", 400, body=body)
             if not all(self._number(angles[m]) and abs(angles[m]) <= 100 for m in MODULES):
-                return self._fail("invalid_angle", 400)
+                return self._fail("invalid_angle", 400, body=body)
             direction = 1 if percent > 0 else -1
             if self._running and (direction != self._direction or angles != self._angles):
-                return self._fail("module_busy")
+                return self._fail("module_busy", body=body)
             if not self._running:
                 permit = self._permit
                 if (not permit or not isinstance(body.get("permit"), str) or
                         body["permit"] != permit["value"] or now > permit["expires"] or
                         direction != permit["direction"] or angles != permit["angles"]):
-                    return self._fail("keyboard_expired")
+                    return self._fail("keyboard_expired", body=body)
             error = self._target_ready(snapshot, angles, first=not self._running)
             if not error:
                 error = self._sensor_progress(snapshot[1], now, first=not self._running)
             if error:
-                return self._fail(error)
+                return self._fail(error, body=body)
+            if self.is_preempted(body):
+                return {"ok": False, "reason": "stale_command"}, 409
             result, status = self._drive(self._source(), {"percent": percent})
             if not result.get("ok"):
-                return self._fail(result.get("reason", "command_failed"), status)
+                return self._fail(result.get("reason", "command_failed"), status, body=body)
             self._running = True
             self._permit = None
             self._direction = direction

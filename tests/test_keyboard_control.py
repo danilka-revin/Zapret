@@ -325,6 +325,18 @@ def test_expired_keyboard_request_cannot_acquire_or_restart_lease(kiosk_client):
     assert source.commanded == 0
 
 
+def test_keyboard_runtime_in_javascript():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    import pytest
+    if not shutil.which('node'):
+        pytest.skip('node needed to test the browser state machine')
+    result = subprocess.run([shutil.which('node'), str(Path(__file__).parent / 'js/keyboard_runtime.js')],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_keyboard_plans_in_javascript():
     import shutil
     import subprocess
@@ -657,3 +669,247 @@ def test_global_stop_finishes_after_an_inflight_live_request(kiosk_client, monke
     assert results['live']['ok'] and results['stop'] == 500
     assert source.commanded == 0, 'final STOP under the gate must follow the in-flight live packet'
     assert app.extensions['rc_keyboard']._token is None
+
+
+def test_keyboard_stop_preempts_an_inflight_heartbeat_without_losing_session(kiosk_client):
+    """The early brake must not make the superseded heartbeat revoke the lease."""
+    class RacingWheels(LiveWheels):
+        def __init__(self):
+            super().__init__()
+            self.hold_snapshot = False
+            self.in_snapshot = threading.Event()
+            self.release_snapshot = threading.Event()
+            self.early_brake = threading.Event()
+
+        def read(self):
+            if self.hold_snapshot:
+                self.in_snapshot.set()
+                assert self.release_snapshot.wait(2)
+                self.hold_snapshot = False
+            return super().read()
+
+        def _brake_all(self):
+            self.commanded = 0
+            self.early_brake.set()
+
+    app = kiosk_client.application
+    source = RacingWheels()
+    app.extensions['rc_slam'].source = source
+    headers = {'X-Robot-Control': 'drive', 'X-Robot-Command-Deadline': str(time.time() + 0.5)}
+    token = kiosk_client.post('/api/kiosk_keyboard', json={'action': 'begin'}, headers=headers).json['session']
+    permit = kiosk_client.post('/api/kiosk_keyboard', headers=headers, json={
+        'action': 'arm', 'session': token, 'sequence': 1, 'direction': 1, 'angles': straight()}).json['permit']
+    packet = {'action': 'live', 'session': token, 'sequence': 2, 'percent': 20,
+              'angles': straight(), 'permit': permit}
+    assert kiosk_client.post('/api/kiosk_keyboard', headers=headers, json=packet).json['ok']
+    source.pulses()
+    source.hold_snapshot = True
+    results = {}
+
+    def live_request():
+        with app.test_client() as client:
+            results['live'] = client.post('/api/kiosk_keyboard', headers=headers,
+                                          json={**packet, 'sequence': 3, 'permit': ''}).json
+
+    def stop_request():
+        with app.test_client() as client:
+            results['stop'] = client.post('/api/kiosk_keyboard', headers=headers,
+                                          json={'action': 'stop', 'session': token, 'sequence': 4}).json
+
+    live_thread = threading.Thread(target=live_request)
+    stop_thread = threading.Thread(target=stop_request)
+    live_thread.start()
+    try:
+        assert source.in_snapshot.wait(1)
+        stop_thread.start()
+        assert source.early_brake.wait(1), 'keyboard STOP must brake before the in-flight heartbeat finishes'
+    finally:
+        source.release_snapshot.set()
+        live_thread.join(2)
+        if stop_thread.ident is not None:
+            stop_thread.join(2)
+    assert not live_thread.is_alive() and not stop_thread.is_alive()
+    assert results['live']['reason'] == 'stale_command', results
+    assert results['stop']['ok'] and results['stop']['brakeId'] > 0, results
+    assert source.commanded == 0
+    # A new permit is still required; a stale packet cannot restart traction.
+    result = kiosk_client.post('/api/kiosk_keyboard', headers=headers,
+                               json={**packet, 'sequence': 3, 'permit': ''}).json
+    assert result['reason'] == 'stale_command' and source.commanded == 0
+    arm = kiosk_client.post('/api/kiosk_keyboard', headers=headers, json={
+        'action': 'arm', 'session': token, 'sequence': 5, 'direction': 1, 'angles': straight()}).json
+    assert arm['reason'] == 'wheel_moving' and source.commanded == 0, arm
+    for motor in source.motors.values():
+        motor.update(scRpm=0, scRecent=False)
+    arm = kiosk_client.post('/api/kiosk_keyboard', headers=headers, json={
+        'action': 'arm', 'session': token, 'sequence': 6, 'direction': -1, 'angles': straight()}).json
+    assert arm['ok'], arm
+    result = kiosk_client.post('/api/kiosk_keyboard', headers=headers,
+                               json={**packet, 'sequence': 7, 'percent': -20, 'permit': arm['permit']}).json
+    assert result['ok'] and source.commanded == -20, result
+    result = kiosk_client.post('/api/kiosk_keyboard', headers=headers,
+                               json={'action': 'stop', 'session': token, 'sequence': 8}).json
+    assert result['ok'] and source.commanded == 0, result
+
+
+def test_stop_fence_blocks_overtaking_commands_only_for_its_own_session():
+    source, clock = LiveWheels(), Clock()
+    ctl = controller(source, clock)
+    token = begin(ctl)
+    assert start_live(ctl, token)[0]['ok']
+    stop = {'action': 'stop', 'session': token, 'sequence': 4}
+    for invalid in (None, {}, {**stop, 'session': 'not-the-owner'},
+                    {**stop, 'sequence': True}, {**stop, 'sequence': 2},
+                    {**stop, 'action': []}, {**stop, 'extra': 1}):
+        assert not ctl.preempt_stop(invalid)
+    assert ctl.preempt_stop(stop)
+    source.drive(0)  # emulate the route's immediate best-effort brake
+    # Even newer commands may not get ahead of the pending final STOP.
+    for sequence in (3, 4, 5):
+        result, _ = send(ctl, token, sequence, 'live', percent=20, angles=straight())
+        assert result['reason'] == 'stale_command' and source.commanded == 0
+    assert ctl.handle(stop)[0]['ok']
+    ctl.finish_preempted_stop(stop)
+    assert send(ctl, token, 3, 'live', percent=20, angles=straight())[0]['reason'] == 'stale_command'
+    assert send(ctl, token, 5, 'arm', direction=1, angles=straight())[0]['ok']
+    # Old fences and old-session STOPs cannot affect a newly opened session.
+    new_token = begin(ctl)
+    assert not ctl.preempt_stop({**stop, 'sequence': 999})
+    assert send(ctl, new_token, 1, 'arm', direction=1, angles=straight())[0]['ok']
+
+
+def test_stop_fence_does_not_override_estop_or_expired_new_commands(kiosk_client):
+    from robot_control import estop
+    source = LiveWheels()
+    app = kiosk_client.application
+    app.extensions['rc_slam'].source = source
+    hdr = {'X-Robot-Control': 'drive', 'X-Robot-Command-Deadline': str(time.time() + 0.5)}
+    token = kiosk_client.post('/api/kiosk_keyboard', json={'action': 'begin'}, headers=hdr).json['session']
+    controller = app.extensions['rc_keyboard']
+    stop = {'action': 'stop', 'session': token, 'sequence': 2}
+    assert controller.preempt_stop(stop)
+    expired = {**hdr, 'X-Robot-Command-Deadline': str(time.time() - 1)}
+    old = {'action': 'arm', 'session': token, 'sequence': 1, 'direction': 1, 'angles': straight()}
+    reply = kiosk_client.post('/api/kiosk_keyboard', json=old, headers=expired)
+    assert reply.status_code == 409 and reply.json['reason'] == 'stale_command'
+    assert kiosk_client.post('/api/kiosk_keyboard', json=stop, headers=hdr).json['ok']
+    controller.finish_preempted_stop(stop)
+    # The STOP never permits starting through a latched E-STOP.
+    estop.latch('keyboard-stop-fence-test')
+    try:
+        result = kiosk_client.post('/api/kiosk_keyboard', headers=hdr, json={**old, 'sequence': 3}).json
+        assert result['reason'] == 'estop' and source.commanded == 0
+        assert kiosk_client.post('/api/kiosk_keyboard', headers=hdr,
+                                 json={**old, 'sequence': 4}).json['reason'] == 'keyboard_session'
+    finally:
+        estop.release()
+    token = kiosk_client.post('/api/kiosk_keyboard', json={'action': 'begin'}, headers=hdr).json['session']
+    arm = {**old, 'session': token, 'sequence': 1}
+    assert kiosk_client.post('/api/kiosk_keyboard', json=arm, headers=expired).status_code == 408
+    assert kiosk_client.post('/api/kiosk_keyboard', json=arm, headers=hdr).json['reason'] == 'keyboard_session'
+    assert source.commanded == 0
+
+
+def test_stop_preempts_remaining_wheels_of_inflight_steer_all(kiosk_client):
+    class RacingSteer(LiveWheels):
+        def __init__(self):
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.early_brake = threading.Event()
+
+        def steer_module(self, module, angle):
+            result = super().steer_module(module, angle)
+            if module == 'FL':
+                self.started.set()
+                assert self.release.wait(2)
+            return result
+
+        def _brake_all(self):
+            self.commanded = 0
+            self.early_brake.set()
+
+    app, source = kiosk_client.application, RacingSteer()
+    app.extensions['rc_slam'].source = source
+    hdr = {'X-Robot-Control': 'drive', 'X-Robot-Command-Deadline': str(time.time() + 0.5)}
+    token = kiosk_client.post('/api/kiosk_keyboard', json={'action': 'begin'}, headers=hdr).json['session']
+    results = {}
+
+    def steer():
+        with app.test_client() as client:
+            results['steer'] = client.post('/api/kiosk_keyboard', headers=hdr, json={
+                'action': 'steer_all', 'session': token, 'sequence': 1,
+                'angles': {m: 25 for m in MODULES}}).json
+
+    def stop():
+        with app.test_client() as client:
+            results['stop'] = client.post('/api/kiosk_keyboard', headers=hdr, json={
+                'action': 'stop', 'session': token, 'sequence': 2}).json
+
+    a, b = threading.Thread(target=steer), threading.Thread(target=stop)
+    a.start()
+    try:
+        assert source.started.wait(1)
+        b.start()
+        assert source.early_brake.wait(1)
+    finally:
+        source.release.set()
+        a.join(2)
+        if b.ident is not None:
+            b.join(2)
+    assert not a.is_alive() and not b.is_alive()
+    assert results['steer']['reason'] == 'stale_command' and results['stop']['ok'], results
+    assert [call[1] for call in source.calls if call[0] == 'steer'] == ['FL']
+    assert source.commanded == 0
+
+
+def test_overlapping_stop_fences_do_not_release_early():
+    source, clock = LiveWheels(), Clock()
+    ctl = controller(source, clock)
+    token = begin(ctl)
+    first = {'action': 'stop', 'session': token, 'sequence': 1}
+    latest = {'action': 'stop', 'session': token, 'sequence': 3}
+    assert ctl.preempt_stop(first) and ctl.preempt_stop(latest)
+    assert ctl.handle(first)[0]['ok']
+    ctl.finish_preempted_stop(first)
+    assert send(ctl, token, 4, 'arm', direction=1, angles=straight())[0]['reason'] == 'stale_command'
+    assert ctl.handle(latest)[0]['ok']
+    ctl.finish_preempted_stop(latest)
+    assert send(ctl, token, 4, 'arm', direction=1, angles=straight())[0]['ok']
+
+
+def test_stop_registration_is_atomic_with_newer_sequence_acceptance():
+    # If the newer command wins, STOP was already stale. If STOP wins, no
+    # newer sequence may overtake it and make the final tagged brake stale.
+    for _ in range(30):
+        source, clock = LiveWheels(), Clock()
+        ctl = controller(source, clock)
+        token = begin(ctl)
+        stop = {'action': 'stop', 'session': token, 'sequence': 4}
+        ready_a, ready_b = threading.Event(), threading.Event()
+        results = {}
+
+        def register_stop():
+            ready_a.set()
+            results['stop'] = ctl.preempt_stop(stop)
+
+        def accept_newer():
+            ready_b.set()
+            results['ping'] = send(ctl, token, 5, 'ping')[0]
+
+        ctl._stop_lock.acquire()
+        a, b = threading.Thread(target=register_stop), threading.Thread(target=accept_newer)
+        try:
+            a.start()
+            b.start()
+            assert ready_a.wait(1) and ready_b.wait(1)
+        finally:
+            ctl._stop_lock.release()
+            a.join(2)
+            b.join(2)
+        assert not a.is_alive() and not b.is_alive()
+        assert results['stop'] is not results['ping']['ok'], results
+        if results['stop']:
+            assert results['ping']['reason'] == 'stale_command'
+            assert ctl.handle(stop)[0]['ok']
+            ctl.finish_preempted_stop(stop)

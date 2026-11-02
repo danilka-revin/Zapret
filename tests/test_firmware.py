@@ -678,6 +678,8 @@ def test_latched_drive_in_real_browser_through_all_four_simulated_usb_boards(sim
 )
 @pytest.mark.parametrize("script,follow,success", [
     ("keyboard_browser.mjs", True, "four simulated USB boards: OK"),
+    ("keyboard_throttle_browser.mjs", True, "WASD arrow throttle responsiveness: OK"),
+    ("keyboard_throttle_safety_browser.mjs", True, "WASD keyboard safety + focus + delayed requests: OK"),
     ("keyboard_no_sc_browser.mjs", False, "WASD missing SC: stopped"),
 ])
 def test_wasd_in_real_browser_through_all_four_simulated_usb_boards(simulator, kiosk_client, tmp_path,

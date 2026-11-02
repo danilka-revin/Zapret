@@ -651,6 +651,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         global_stop = (request.path != "/api/kiosk_drive" or body.get("module") in (None, "ALL", "all")
                        or arrival_locked or zero_locked)
         if is_stop and global_stop and request.headers.get(STEERING_COMMAND_HEADER) == marker:
+            if request.path == "/api/kiosk_keyboard" and keyboard.preempt_stop(body):
+                g.keyboard_preempt = body
             brake = getattr(getattr(state, "source", None), "_brake_all", None)
             if callable(brake):
                 try:
@@ -691,6 +693,9 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     @app.teardown_request
     def release_neutral_motion_gate(_error):
+        if getattr(g, "keyboard_preempt", None):
+            keyboard.finish_preempted_stop(g.keyboard_preempt)
+            g.keyboard_preempt = None
         if getattr(g, "neutral_motion_gate", False):
             g.neutral_motion_gate = False
             motion_gate.release()
@@ -1156,12 +1161,16 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                 if not math.isfinite(expires) or expires < now or expires > now + 0.75:
                     raise ValueError("expired or clock skew")
             except (TypeError, ValueError):
+                if keyboard.is_preempted(body):
+                    return jsonify(ok=False, reason="stale_command"), 409
                 keyboard.interrupt()
                 return jsonify(ok=False, reason="command_expired"), 408
 
         def send_keyboard():
             # Время могло истечь, пока навигация освобождала моторы.
             if expires is not None and time.time() > expires:
+                if keyboard.is_preempted(body):
+                    return {"ok": False, "reason": "stale_command"}, 409
                 keyboard.interrupt()
                 return {"ok": False, "reason": "command_expired"}, 408
             deadline = (time.monotonic() + max(0.0, expires - time.time())
@@ -1171,6 +1180,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         # Сервер навигации освобождает тягу прежде чем разрешить WASD.
         sent = navigation.manual_override(send_keyboard, wait_for_exit=action not in {"stop", "end"})
         if sent is None:
+            if keyboard.is_preempted(body):
+                return jsonify(ok=False, reason="stale_command"), 409
             keyboard.interrupt()
             return jsonify(ok=False, reason="navigation_stopping"), 409
         result, status = sent
