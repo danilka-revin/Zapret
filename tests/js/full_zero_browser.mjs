@@ -57,10 +57,15 @@ try {
   await page.waitForFunction(() => !document.querySelector('#full-zero-save').disabled, null, {timeout: 40000});
   for (const [id, delta] of [['FL', '0.1'], ['FR', '-0.1'], ['RL', '1'], ['RR', '-1']]) {
     const button = page.locator(`[data-full-zero-adjust="${id}"][data-delta="${delta}"]`);
+    const sent = page.waitForRequest(req => {
+      try { const body = req.postDataJSON(); return body.action === 'adjust' && body.module === id && body.delta === Number(delta); }
+      catch (_) { return false; }
+    }, {timeout: 10000});
     await button.click();
+    await sent;
     await page.waitForFunction(() => !document.querySelector('#full-zero-save').disabled, null, {timeout: 10000});
   }
-  assert(actions.some(body => body.action === 'adjust' && body.module === 'FL' && body.delta === 0.1));
+  assert(actions.some(body => body.action === 'adjust' && body.module === 'FL' && body.delta === 0.1), JSON.stringify(actions));
   assert(actions.some(body => body.action === 'adjust' && body.module === 'FR' && body.delta === -0.1));
   await page.locator('#full-zero-save').click();
   await page.waitForFunction(() => document.querySelector('#full-zero-message').textContent.includes('все четыре платы подтвердили'), null, {timeout: 12000});
@@ -85,7 +90,10 @@ try {
 
   // Exercise error presentation and late-response handling independently of
   // the real simulator: these HTTP replies deliberately model a partial save.
-  let begins = 0, calibrations = 0, mockPhase = 'ready';
+  let begins = 0, calibrations = 0, mockPhase = 'ready', faultMode = false;
+  let delayNextStatus = false, notifyStatus, releaseStatus;
+  const statusStarted = new Promise(resolve => { notifyStatus = resolve; });
+  const statusGate = new Promise(resolve => { releaseStatus = resolve; });
   const mockMotors = Object.fromEntries(['FL', 'FR', 'RL', 'RR'].map(id =>
     [id, {online: true, firmware: 23, angle: 0, targetAngle: 0}]));
   const result = (phase, extra = {}) => ({ok: true, phase, motors: mockMotors,
@@ -93,7 +101,15 @@ try {
   await page.route(remote ? '**/api/control/full_zero' : '**/api/kiosk_full_zero', async route => {
     const request = route.request().postDataJSON();
     let data, status = 200;
-    if (request.action === 'begin') {
+    if (faultMode && request.action === 'begin') {
+      mockPhase = 'fault';
+      data = result('fault', {token: 'fault-session', faultyModules: ['FR'],
+        motors: {...mockMotors, FR: {...mockMotors.FR, fullZeroFault: true}}});
+    } else if (faultMode && request.action === 'reset_fault') {
+      assert.equal(request.confirm, true);
+      mockPhase = 'ready';
+      data = result('ready', {faultyModules: []});
+    } else if (request.action === 'begin') {
       begins += 1;
       if (begins === 1) { status = 409; data = {ok: false, reason: 'module_offline', pendingRecovery: true}; }
       else { mockPhase = 'ready'; data = result(mockPhase, {token: 'simulated-session'}); }
@@ -106,18 +122,43 @@ try {
       data = result(mockPhase, {ok: false, reason: 'partial_save', acknowledged: ['FL', 'FR']});
     } else if (request.action === 'status') {
       if (mockPhase === 'stopping') mockPhase = 'recovery';
-      data = result(mockPhase, {reason: mockPhase === 'recovery' ? 'partial_save' : null});
+      const phaseAtRequest = mockPhase;
+      if (delayNextStatus) {
+        delayNextStatus = false;
+        notifyStatus();
+        await statusGate; // return the old phase only after an operator click
+      }
+      data = result(phaseAtRequest, {reason: phaseAtRequest === 'recovery' ? 'partial_save' : null,
+        ...(faultMode && phaseAtRequest === 'fault' ? {faultyModules: ['FR'],
+          motors: {...mockMotors, FR: {...mockMotors.FR, fullZeroFault: true}}} : {})});
     } else { data = result('idle'); }
     try { await route.fulfill({status, contentType: 'application/json', body: JSON.stringify(data)}); }
     catch (_) { /* browser may cancel the intentionally delayed reply */ }
   });
   await page.locator('#full-zero-open').click();
   await page.waitForFunction(() => !document.querySelector('#full-zero-retry').hidden, null, {timeout: 8000});
-  assert.match(await page.locator('#full-zero-message').innerText(), /частичным.*движение заблокировано/);
+  assert.match(await page.locator('#full-zero-message').innerText(), /движение заблокировано.*Нет свежей связи/);
   await page.locator('#full-zero-retry').click();
   await page.waitForFunction(() => !document.querySelector('#full-zero-calibrate').disabled, null, {timeout: 8000});
-  await page.locator('#full-zero-calibrate').click();
+  // A delayed status poll must neither disable nor swallow the user's click,
+  // and its stale reply must not replace the newer calibration result.
+  delayNextStatus = true;
+  await Promise.race([statusStarted, new Promise((_, reject) => setTimeout(() => reject(new Error('status did not start')), 8000))]);
+  try {
+    assert.equal(await page.locator('#full-zero-calibrate').isDisabled(), false);
+    const previous = actions.filter(item => item.action === 'calibrate').length;
+    await page.evaluate(() => document.querySelector('#full-zero-calibrate').click());
+    const deadline = Date.now() + 2000;
+    while (actions.filter(item => item.action === 'calibrate').length === previous && Date.now() < deadline) {
+      await page.waitForTimeout(50);
+    }
+    assert.equal(actions.filter(item => item.action === 'calibrate').length, previous + 1,
+      'operator click blocked behind status');
+  } finally { releaseStatus(); }
   await page.waitForFunction(() => !document.querySelector('#full-zero-save').disabled, null, {timeout: 8000});
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator('#full-zero-save').isDisabled(), false);
+
   await page.locator('#full-zero-save').click();
   await page.waitForFunction(() => document.querySelector('#full-zero-message').textContent.includes('движение заблокировано'), null, {timeout: 8000});
   assert.equal(await page.locator('#full-zero-save').isDisabled(), true);
@@ -130,10 +171,31 @@ try {
   await page.locator('#full-zero-cancel').click();
   await page.waitForTimeout(900);
   assert.equal(await page.locator('#full-zero-modal').isHidden(), true);
+
+  // EEPROM reset is a separate, explicit destructive confirmation, not an
+  // automatic side effect of opening the wizard or pressing calibrate.
+  faultMode = true;
+  await page.locator('#full-zero-open').click();
+  await page.waitForSelector('#full-zero-fault:not([hidden])');
+  assert.match(await page.locator('#full-zero-fault-detail').innerText(), /FR/);
+  assert.equal(await page.locator('#full-zero-calibrate').isDisabled(), true);
+  assert.match(await page.locator('#full-zero-state-FR').innerText(), /ошибка памяти/);
+  page.once('dialog', dialog => { assert.match(dialog.message(), /FR/); void dialog.dismiss(); });
+  await page.locator('#full-zero-reset-fault').click();
+  await page.waitForTimeout(200);
+  assert.equal(actions.filter(body => body.action === 'reset_fault').length, 0);
+  page.once('dialog', dialog => { assert.match(dialog.message(), /все четыре/); void dialog.accept(); });
+  await page.locator('#full-zero-reset-fault').click();
+  await page.waitForFunction(() => !document.querySelector('#full-zero-calibrate').disabled, null, {timeout: 8000});
+  assert(actions.some(body => body.action === 'reset_fault' && body.confirm === true));
+  assert.equal(await page.locator('#full-zero-fault').isHidden(), true);
+  await page.locator('#full-zero-cancel').click();
   assert.deepEqual(errors, []);
-  console.log('Chromium: calibration, 0.1° adjustments, four EEPROM ACKs, partial save and delayed STOP passed');
+  console.log('Chromium: calibration, adjustments, EEPROM ACKs, partial save, STOP and explicit fault reset passed');
 } catch (error) {
   console.error(error);
+  console.error('Recent full-zero requests:', JSON.stringify(actions.slice(-20)));
+  try { console.error('Full-zero message:', await page.locator('#full-zero-message').innerText()); } catch (_) {}
   process.exitCode = 1;
 } finally {
   // Chromium/Playwright can retain a transport during in-flight intercepted

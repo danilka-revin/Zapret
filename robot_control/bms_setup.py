@@ -1,20 +1,9 @@
-"""Подключение JBD BMS с экрана робота: список портов, проверка, автопоиск, сохранение.
+"""Manual JBD BMS port selection, a single-port check and .env persistence.
 
-Раньше порт BMS задавался только руками в ``.env`` (``RC_BMS_PORT``), а пока его
-нет, страница «АКБ» показывала пустоту. Теперь на самой странице можно:
-
-* увидеть все USB/serial-порты робота и чем каждый занят (мастер руля, лидар,
-  модули шасси, другой процесс);
-* проверить выбранный порт: одно чтение регистра 0x03 на 9600 8N1 — тот же
-  запрос, что шлёт телеметрия, никакой записи в BMS;
-* найти BMS автоматически среди свободных портов;
-* сохранить порт в ``.env`` (атомарно, остальные строки не трогаются) и сразу
-  подключиться — без перезапуска сервера.
-
-Порт мастера руля, лидара и модулей шасси не открывается ни при проверке, ни
-при автопоиске. Открытие любого другого порта может перезагрузить Arduino на
-нём (линия DTR), поэтому порты, похожие на Arduino, автопоиск пропускает, а
-проверка и сохранение доступны без PIN на бортовом экране.
+Confirmed wheel/lidar ports are rejected, and master mode requires the wheel
+owner's passive check and a shared lock. An unresponsive device is not proof
+of identity: the operator must physically verify the selected USB-UART.
+Opening a serial port can reset an Arduino via DTR even without a write.
 """
 
 from __future__ import annotations
@@ -27,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .battery import NoAnswer, ProtocolError, extract_frames, parse_snapshot, read_request, reserved_ports
+from .battery import NoAnswer, ProtocolError, extract_frames, parse_snapshot, read_request
 
 #: USB VID плат Arduino (официальные и частые клоны с собственным USB).
 ARDUINO_VIDS = {0x2341, 0x2A03, 0x1B4F, 0x239A, 0x2886}
@@ -80,8 +69,9 @@ def master_ports() -> set[str]:
 
 
 def _lidar_ports() -> set[str]:
-    from .lidar import lidar_active_port, lidar_reserved_ports
-    ports = set() if os.environ.get("RC_USB_DISCOVERY_MODE") == "1" else set(lidar_reserved_ports())
+    from .lidar import checked_lidar_ports, lidar_active_port, lidar_reserved_ports
+    ports = (set(checked_lidar_ports()) if os.environ.get("RC_USB_DISCOVERY_MODE") == "1"
+             else set(lidar_reserved_ports()))
     active = lidar_active_port()
     if active:
         ports |= {active, _real(active)}
@@ -111,8 +101,9 @@ def candidate_paths() -> list[str]:
 def describe_ports(paths: Iterable[str] | None = None,
                    locked: Callable[[str], bool] | None = None) -> list[dict[str, Any]]:
     """Порты с ролями: bms / master / lidar / chassis / busy / arduino / free."""
-    from .lidar import port_locked_by_other
+    from .lidar import checked_usb_ports, port_locked_by_other
     locked = locked or port_locked_by_other
+    checked = {_real(path) for path in checked_usb_ports()} if os.environ.get("RC_USB_DISCOVERY_MODE") == "1" else None
     configured = (os.environ.get(ENV_KEY) or "").strip()
     configured_real = _real(configured) if configured else ""
     master, lidar, chassis = master_ports(), _lidar_ports(), _chassis_ports()
@@ -127,14 +118,16 @@ def describe_ports(paths: Iterable[str] | None = None,
         ) if part and part != "n/a").strip()
         if description in (os.path.basename(real), os.path.basename(path)):
             description = ""          # pyserial повторяет имя порта — это не описание
-        if configured and real == configured_real:
-            role, note = "bms", "порт BMS из настроек"
-        elif path in master or real in master:
+        if path in master or real in master:
             role, note = "master", "мастер руля (RC_SLAM_PORT) — не трогаем"
         elif path in lidar or real in lidar:
             role, note = "lidar", "лидар — не трогаем"
         elif path in chassis or real in chassis:
             role, note = "chassis", "модуль шасси — не трогаем"
+        elif configured and real == configured_real:
+            role, note = "bms", "выбранный порт BMS"
+        elif checked is not None and real not in checked:
+            role, note = "checking", "ожидание проверки колёс"
         elif locked(path):
             role, note = "busy", "занят другим процессом"
         elif vid in ARDUINO_VIDS:
@@ -200,11 +193,6 @@ def probe_port(port: str, *, opener: Callable[[str], Any] | None = None,
         return {"ok": False, "port": port, "found": False, "error": "это порт модуля шасси — не трогаем"}
     fd = try_lock_port(port)
     if fd is None or (fd == -1 and os.environ.get("RC_USB_DISCOVERY_MODE") == "1"):
-        from .battery import active_auto_port
-        current = active_auto_port()
-        if current and real == _real(current):
-            return {"ok": True, "port": port, "found": True, "current": True,
-                    "error": "", "summary": "этот порт уже читает BMS (текущее подключение)"}
         return {"ok": False, "port": port, "found": False, "error": "порт занят или общий USB-замок недоступен"}
     transport = None
     basic = None
@@ -214,7 +202,18 @@ def probe_port(port: str, *, opener: Callable[[str], Any] | None = None,
             if real not in {_real(path) for path in checked_usb_ports()}:
                 return {"ok": False, "port": port, "found": False,
                         "error": "USB-устройство изменилось во время проверки"}
+        fingerprint = None
+        if os.environ.get("RC_USB_DISCOVERY_MODE") == "1":
+            st = os.stat(port)
+            fingerprint = (st.st_dev, st.st_ino, st.st_rdev, st.st_ctime_ns)
         transport = (opener or _open_serial)(port)
+        if fingerprint is not None:
+            opened = os.fstat(transport.fileno())
+            st = os.stat(port)
+            if (fingerprint != (opened.st_dev, opened.st_ino, opened.st_rdev, opened.st_ctime_ns) or
+                    fingerprint != (st.st_dev, st.st_ino, st.st_rdev, st.st_ctime_ns) or
+                    real != _real(port) or real in {_real(p) for p in _chassis_ports() | _lidar_ports()}):
+                raise OSError("USB-устройство изменилось во время открытия")
         time.sleep(0.05)
         basic = _exchange(transport, 0x03, timeout)
         cells = _exchange(transport, 0x04, timeout)
@@ -238,21 +237,6 @@ def probe_port(port: str, *, opener: Callable[[str], Any] | None = None,
                 transport.close()
         finally:
             unlock_port(fd)
-
-
-def scan_ports(*, probe: Callable[[str], dict[str, Any]] | None = None,
-               ports: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Автопоиск: проверить свободные порты (не мастер, не лидар, не Arduino)."""
-    probe = probe or probe_port
-    described = describe_ports() if ports is None else ports
-    results, skipped = [], []
-    for item in described:
-        if item["role"] in ("free", "bms"):
-            results.append(probe(item["port"]))
-        else:
-            skipped.append({"port": item["port"], "role": item["role"], "note": item["note"]})
-    found = [result["port"] for result in results if result.get("found")]
-    return {"ok": True, "found": found, "results": results, "skipped": skipped}
 
 
 def env_file_path() -> Path:
@@ -306,8 +290,6 @@ def save_port(port: str, env_path: Path | None = None) -> str:
 
 def apply_port(manager, port: str, env_path: Path | None = None) -> dict[str, Any]:
     """Проверить, сохранить в .env и сразу переподключить BMS (пустой порт — отключить)."""
-    if getattr(manager, "_auto_source", None) is not None:
-        raise ValueError("BMS определяется автоматически; ручное назначение отключено")
     port = (port or "").strip()
     if port:
         if not os.path.exists(port):
@@ -317,12 +299,35 @@ def apply_port(manager, port: str, env_path: Path | None = None) -> dict[str, An
             raise ValueError("это порт мастера руля (RC_SLAM_PORT)")
         if port in _lidar_ports() or real in _lidar_ports():
             raise ValueError("это порт лидара")
+        if port in _chassis_ports() or real in _chassis_ports():
+            raise ValueError("это порт колеса")
+        if getattr(manager, "_requires_wheel_check", False):
+            source = getattr(manager, "_manual_source", None)
+            if source is None or not source.manual_bms_port_allowed(port):
+                raise ValueError("порт ещё не проверен или занят колесом/лидаром")
+        from .lidar import port_locked_by_other
+        old = getattr(manager, "port", "") or ""
+        if (not old or _real(old) != real) and port_locked_by_other(port):
+            raise ValueError("порт занят другим процессом")
+    previous_env = os.environ.get(ENV_KEY)
     save_port(port, env_path)
     if port:
         os.environ[ENV_KEY] = port
     else:
         os.environ.pop(ENV_KEY, None)
-    manager.reconfigure(port)
+    try:
+        manager.reconfigure(port)
+    except Exception:
+        # Keep the persisted setting and process environment consistent if the
+        # previous polling thread cannot stop. Motion remains fail-closed.
+        try:
+            save_port(previous_env or "", env_path)
+        finally:
+            if previous_env is None:
+                os.environ.pop(ENV_KEY, None)
+            else:
+                os.environ[ENV_KEY] = previous_env
+        raise
     return {"ok": True, "port": port or None, "saved": True,
             "battery": manager.snapshot()}
 

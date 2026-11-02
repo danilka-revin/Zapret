@@ -20,6 +20,28 @@ PASSWORD = "correct-horse-battery"
 FAST_ITERATIONS = 1_000  # тесты не должны тормозить на PBKDF2
 
 
+@pytest.fixture(scope="session", autouse=True)
+def idle_lidar_singleton_for_tests():
+    """App/API tests must not leave a real USB scanner running for the suite.
+
+    Tests of the actual worker create/start their own managers explicitly. A
+    background singleton from an unrelated HTTP test can otherwise steal a
+    later PTY's lock when /dev/pts/N is reused.
+    """
+    from robot_control.lidar import LidarManager
+    previous = LidarManager._instance
+    instance = LidarManager()
+    LidarManager._instance = instance
+    try:
+        yield
+    finally:
+        current = LidarManager._instance
+        if current is not None and current is not instance and current is not previous:
+            current.stop()
+        instance.stop()
+        LidarManager._instance = previous
+
+
 @pytest.fixture(autouse=True)
 def isolated_estop_latch(tmp_path, monkeypatch):
     """Защёлка E-STOP — файл; тесты не должны трогать реальный data/estop.json."""

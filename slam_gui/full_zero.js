@@ -9,12 +9,15 @@
   const calibrate = $('full-zero-calibrate');
   const save = $('full-zero-save');
   const retry = $('full-zero-retry');
+  const faultPanel = $('full-zero-fault');
+  const resetFault = $('full-zero-reset-fault');
   const message = $('full-zero-message');
   const adjustButtons = Array.from(modal.querySelectorAll('[data-full-zero-adjust]'));
   let token = null;
   let phase = 'opening';
   let last = {};
-  let busy = false;
+  let busy = false; // operator command in flight; status polls never disable buttons
+  let statusRequest = null;
   let timer = null;
   let previousFocus = null;
   let errorText = '';
@@ -47,7 +50,9 @@
     steering_unconfirmed: 'Поворот не подтверждён телеметрией. Настройка остановлена.',
     offset_limit: 'Поправка от оптодатчика превышает ±20°. Проверьте положение флажка и механики.',
     eeprom_error: 'Плата сообщила об ошибке памяти или несовпадении роли. Проверьте плату.',
-    full_zero_eeprom_fault: 'Ошибка памяти полного нуля на одной из плат: проверьте все платы.',
+    full_zero_eeprom_fault: 'Ошибка памяти полного нуля. Откройте мастер и выполните восстановление.',
+    eeprom_reboot_required: 'Перезапустите питание отмеченной платы и откройте мастер заново; перед этим закрепите робота и вывесите колёса.',
+    eeprom_reset_unconfirmed: 'Плата не подтвердила восстановление памяти. Проверьте связь и EEPROM; движение остаётся заблокированным.',
     preflight_unconfirmed: 'Не все платы подтвердили проверку. Новая запись в этом запросе не начиналась.',
     partial_save: 'Запись подтверждена не всеми платами. Движение заблокировано; повторите мастер со всеми четырьмя платами.',
     journal_unavailable: 'Не удалось надёжно записать журнал на бортовой компьютер. Движение может оставаться заблокированным.',
@@ -64,6 +69,8 @@
   const messages = {
     opening: 'Останавливаем предыдущие команды и проверяем связь…',
     braking: 'Ожидаем свежего подтверждения тормоза от четырёх плат…',
+    fault: 'Проверьте отмеченные платы и подтвердите восстановление памяти, затем настройте все колёса заново.',
+    resetting: 'Восстанавливаем память отмеченных плат и ожидаем подтверждения. Не отключайте питание.',
     ready: 'Тормоз подтверждён. Убедитесь, что рядом никого нет, и запустите оптокалибровку.',
     calibrating: 'Идёт поиск флажков и подход к сохранённому нулю. Не приближайтесь к колёсам.',
     adjust: 'Подправьте каждое колесо по физической оси корпуса, затем сохраните все четыре.',
@@ -81,6 +88,12 @@
     const data = last || {};
     const saved = phase === 'saved';
     calibrate.disabled = busy || phase !== 'ready';
+    faultPanel.hidden = phase !== 'fault';
+    resetFault.disabled = busy || phase !== 'fault';
+    const faulty = Array.isArray(data.faultyModules) ? data.faultyModules : [];
+    $('full-zero-fault-detail').textContent = faulty.length
+      ? 'Платы с ошибкой памяти: ' + faulty.join(', ') + '.'
+      : 'На одной из плат повреждена или не распознана запись.';
     save.disabled = busy || phase !== 'adjust';
     adjustButtons.forEach((button) => { button.disabled = busy || phase !== 'adjust'; });
     retry.hidden = !(['idle', 'recovery', 'failed'].includes(phase) || (phase === 'connection' && !token));
@@ -89,7 +102,7 @@
       ? 'Закрыть' : 'СТОП и отменить';
     const issue = errorText || (data.reason && reasons[data.reason]) || '';
     const recovery = data.pendingRecovery && phase !== 'saved'
-      ? 'Внимание: предыдущее сохранение могло быть частичным, движение заблокировано. ' : '';
+      ? 'Внимание: восстановление или сохранение не завершено, движение заблокировано. ' : '';
     message.textContent = recovery + (issue || messages[phase] || 'Проверяем состояние…');
     message.dataset.tone = saved && !issue ? 'success' : (issue || phase === 'recovery' || phase === 'connection' ? 'error' : 'normal');
     const seen = Array.isArray(data.calibratingSeen) ? data.calibratingSeen : [];
@@ -101,6 +114,8 @@
       $('full-zero-angle-' + id).textContent = angle;
       let label = 'ожидание';
       if (motor.online === false) label = 'нет связи';
+      else if (motor.fullZeroFault === true) label = 'ошибка памяти';
+      else if (phase === 'resetting') label = 'проверка памяти';
       else if (phase === 'calibrating') label = motor.calibrating ? 'поиск датчика' : (seen.includes(id) ? 'калибровка завершена' : 'ждём начала');
       else if (phase === 'adjusting' && motor.moving) label = 'поворачивается';
       else if (phase === 'checking') label = 'проверка';
@@ -112,13 +127,23 @@
     });
   }
 
+  function abortStatus() {
+    if (statusRequest) statusRequest.controller.abort();
+    statusRequest = null;
+  }
+
   async function send(action, extra) {
     const sentGeneration = generation;
-    busy = true;
-    errorText = '';
-    render();
-    const payload = Object.assign({action}, action === 'begin' ? {} : {token}, extra || {});
+    const isStatus = action === 'status';
+    if (isStatus && (busy || statusRequest)) return null;
+    if (!isStatus) abortStatus();
     const controller = new AbortController();
+    const request = {controller};
+    if (isStatus) statusRequest = request;
+    else busy = true;
+    errorText = '';
+    if (!isStatus) render();
+    const payload = Object.assign({action}, action === 'begin' ? {} : {token}, extra || {});
     const timeout = setTimeout(() => controller.abort(), 3000);
     try {
       const response = await fetch('api/kiosk_full_zero', {
@@ -131,6 +156,9 @@
         if (action === 'begin' && data.token) cancelDetached(data.token);
         return null;
       }
+      // An operator command supersedes an older status response. The server
+      // still validates the command against its own current state.
+      if (isStatus && statusRequest !== request) return null;
       if (data.phase) { last = data; phase = data.phase; }
       else if (typeof data.pendingRecovery === 'boolean') last = {...last, pendingRecovery: data.pendingRecovery};
       if (action === 'begin' && data.token) token = data.token;
@@ -143,26 +171,35 @@
       }
       return data;
     } catch (_error) {
-      if (sentGeneration === generation) {
+      if (sentGeneration === generation && (!isStatus || statusRequest === request)) {
         phase = 'connection';
         errorText = messages.connection;
       }
       return null;
     } finally {
       clearTimeout(timeout);
-      if (sentGeneration === generation) { busy = false; render(); }
+      if (isStatus) {
+        if (statusRequest === request) {
+          statusRequest = null;
+          if (sentGeneration === generation) render();
+        }
+      } else if (sentGeneration === generation) {
+        busy = false;
+        render();
+      }
     }
   }
 
   function startPolling() {
     if (timer) clearInterval(timer);
     timer = setInterval(() => {
-      if (!modal.hidden && token && !busy && phase !== 'saved') void send('status');
+      if (!modal.hidden && token && !busy && !statusRequest && phase !== 'saved') void send('status');
     }, 400);
   }
 
   async function begin() {
     const startedGeneration = ++generation;
+    abortStatus();
     token = null; last = {}; phase = 'opening'; errorText = ''; busy = false; render();
     try {
       if (window.RCPrepareFullZero) await window.RCPrepareFullZero();
@@ -181,6 +218,7 @@
     const session = token;
     const needsStop = !['saved', 'idle', 'recovery'].includes(phase);
     ++generation;
+    abortStatus();
     if (timer) clearInterval(timer);
     timer = null;
     modal.hidden = true;
@@ -200,6 +238,14 @@
   $('full-zero-close').addEventListener('click', () => { void close(); });
   $('full-zero-cancel').addEventListener('click', () => { void close(); });
   retry.addEventListener('click', () => { if (!busy) void begin(); });
+  resetFault.addEventListener('click', () => {
+    if (busy || phase !== 'fault') return;
+    const boards = Array.isArray(last.faultyModules) ? last.faultyModules.join(', ') : 'отмеченные';
+    const warning = 'Сбросить сохранённые поправки полного нуля на платах ' + boards + '?\n\n' +
+      'Закрепите раму, вывесите колёса и подготовьте независимый E-STOP. ' +
+      'После сброса нужно откалибровать и сохранить все четыре колеса заново.';
+    if (typeof window.confirm === 'function' && window.confirm(warning)) void send('reset_fault', {confirm: true});
+  });
   calibrate.addEventListener('click', () => { if (!busy && phase === 'ready') void send('calibrate'); });
   save.addEventListener('click', () => { if (!busy && phase === 'adjust') void send('save'); });
   adjustButtons.forEach((button) => button.addEventListener('click', () => {

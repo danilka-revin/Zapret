@@ -1207,6 +1207,21 @@ static int run_pty(const char* link_base) {
   board_fr.phys = 2500;
   board_rl.phys = 40;
   board_rr.phys = -9000;
+  // Test-only initial EEPROM corruption, applied before the firmware boots.
+  if (const char* bad_zero = std::getenv("RC_SIM_BAD_ZERO")) {
+    const std::string selected = std::string(",") + bad_zero + ",";
+    for (sim::Board* board : all_boards()) {
+      if (selected.find(std::string(",") + board->name + ",") != std::string::npos)
+        board->eeprom[16] = 0x42;  // non-empty invalid full-zero slot
+    }
+  }
+  // Simulate an EEPROM that remains unwritable during service recovery.
+  if (const char* failed_eeprom = std::getenv("RC_SIM_EEPROM_FAIL")) {
+    const std::string selected = std::string(",") + failed_eeprom + ",";
+    for (sim::Board* board : all_boards())
+      if (selected.find(std::string(",") + board->name + ",") != std::string::npos)
+        board->eeprom_writes_left = 0;
+  }
   boot(all_boards());
   // Тест может независимо подать на четыре входа фиксированные частоты SC.
   // По умолчанию переходов нет, модель зависимости от Servo не создаётся.

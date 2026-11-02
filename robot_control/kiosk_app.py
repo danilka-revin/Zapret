@@ -500,8 +500,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     @app.get("/api/battery")
     def api_battery():
         snap = battery.snapshot()
-        # Automatic mode does not offer a manual port selector.
-        snap["setupAvailable"] = not snap.get("auto", False)
+        snap["setupAvailable"] = True
         return jsonify({"ok": True, "battery": snap}), 200, {"Cache-Control": "no-store"}
 
     @app.get("/api/battery/report.csv")
@@ -522,6 +521,9 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     def api_battery_probe():
         body = request.get_json(silent=True) or {}
         port = str(body.get("port") or "").strip()
+        if (port and battery._requires_wheel_check and
+                (battery._manual_source is None or not battery._manual_source.manual_bms_port_allowed(port))):
+            return jsonify({"ok": False, "error": "Порт ещё не проверен или занят колесом/лидаром"}), 409
         result = bms_setup.probe_port(port)
         eventlog.record("info" if result.get("found") else "warn",
                         "BMS: проверка %s — %s" % (port or "?", result.get("summary") or result.get("error")
@@ -531,10 +533,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     @app.post("/api/battery/scan")
     def api_battery_scan():
-        result = bms_setup.scan_ports()
-        eventlog.record("info", "BMS: автопоиск — найдено %d: %s" % (
-            len(result["found"]), ", ".join(result["found"]) or "нет"), source="АКБ")
-        return jsonify(result)
+        return jsonify({"ok": False, "error": "Автопоиск BMS отключён: выберите порт вручную"}), 410
 
     @app.post("/api/battery/port")
     def api_battery_port():
@@ -568,16 +567,13 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         log.error("киоск: не удалось подключить источник: %s", exc)
         state = None
     app.extensions["rc_slam"] = state
+    if config.slam_source == "master":
+        wheel_source = getattr(state, "source", None)
+        battery.use_manual_discovery(wheel_source if getattr(wheel_source, "auto_discovery", False) else None)
+        if not getattr(wheel_source, "auto_discovery", False):
+            log.error("BMS: жду владельца проверки USB-портов колёс")
     if not config.testing:
-        if config.slam_source == "master":
-            wheel_source = getattr(state, "source", None)
-            if getattr(wheel_source, "auto_discovery", False):
-                battery.enable_auto(wheel_source)
-                battery.start()
-            else:
-                log.error("BMS: автопоиск запрещён без владельца проверки колёс")
-        else:
-            battery.start()
+        battery.start()
 
     def note_case_pin_result(result: dict, *, where: str) -> None:
         """Журналировать PIN кейса без самого кода и без обещаний авторизации руля."""

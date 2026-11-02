@@ -1299,7 +1299,7 @@ def test_real_pyserial_reads_lds01_from_tty(monkeypatch):
         started = time.monotonic()
         while not stop.is_set():
             allowed = int((time.monotonic() - started) * 23040.0)     # 10 бит на байт
-            while written["count"] < allowed and not stop.is_set():
+            while written["count"] * lidar.LDS01_PACKET_LEN < allowed and not stop.is_set():
                 try:
                     os.write(master, encode_lds01_packet(written["count"] % 60, 1.5))
                 except BlockingIOError:
@@ -1342,13 +1342,19 @@ def test_real_pyserial_reads_lds01_from_tty(monkeypatch):
         try:
             # Первый виток после подключения может быть неполным (порт открыли
             # в середине кадра) — ждём полный виток, как на экране робота
-            assert wait_for(
-                lambda: len(manager.get_scan() or []) == 360, timeout=8.0
-            )
+            complete = {}
+            def complete_revolution():
+                points = manager.get_scan() or []
+                if len(points) != 360 or len({round(math.degrees(p["a"]), 1) for p in points}) != 360:
+                    return False
+                complete["points"] = points
+                return True
+            assert wait_for(complete_revolution, timeout=8.0)
             status = manager.get_status()
             assert status["connected"] is True
             assert status["detected"]["protocol"] == "lds01"
-            scan = manager.get_scan()
+            # Validate the same snapshot, not a later partially received scan.
+            scan = complete["points"]
             assert len({round(math.degrees(p["a"]), 1) for p in scan}) == 360
             assert min(p["r"] for p in scan) == 1.5
         finally:

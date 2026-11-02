@@ -967,7 +967,7 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
         return mod.MasterPeerSource(peer_kiosk_url())
     if mode == "master":
         from .master_port import serial_ports, autodiscovery_reserved_ports
-        from .lidar import publish_usb_scan
+        from .lidar import publish_usb_scan, passive_lidar_probe
 
         # Old RC_WHEEL_*_PORT settings are deliberately ignored. Identity is
         # proven anew from fw22 CRC telemetry after each open/reconnect.
@@ -976,6 +976,7 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
             port_provider=serial_ports,
             blocked_ports=autodiscovery_reserved_ports,
             publish_discovery=publish_usb_scan,
+            passive_lidar_probe=passive_lidar_probe,
             on_message=note_master_message,
             on_status=note_master_status,
             claim=try_lock_port,
