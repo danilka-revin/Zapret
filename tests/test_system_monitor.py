@@ -230,10 +230,10 @@ def test_api_system_is_read_only_and_never_cached(kiosk_client, monkeypatch):
     payload = {'ok': True, 'data': {'hostname': 'onboard', 'status': 'ok', 'stale': False},
                'refreshing': False, 'error': None}
     monkeypatch.setattr(monitor, 'snapshot', lambda: payload)
-    response = kiosk_client.get('/api/system')
+    response = kiosk_client.get('/api/pc_state')
     assert response.status_code == 200 and response.json == payload
     assert response.headers['Cache-Control'] == 'no-store'
-    assert kiosk_client.post('/api/system').status_code == 405
+    assert kiosk_client.post('/api/pc_state').status_code == 405
 
 
 def test_connections_payload_includes_temperature_for_the_screen(kiosk_client, monkeypatch):
@@ -287,14 +287,14 @@ def test_operator_app_serves_and_proxies_the_pc_state(client, operator, kiosk_cl
         return reply
 
     monkeypatch.setattr(map_peer, 'urlopen', forward)
-    response = client.get('/api/system')
+    response = client.get('/api/pc_state')
     assert response.status_code == 200 and response.json == payload
     assert response.headers['Cache-Control'] == 'no-store'
-    assert calls == ['http://onboard.example:8090/api/system']
+    assert calls == ['http://onboard.example:8090/api/pc_state']
     # Офлайн-борт: прокси отвечает 503, а не пустыми нулями.
     monkeypatch.setattr(map_peer, 'urlopen', lambda *a, **kw: (_ for _ in ()).throw(URLError('offline')))
-    assert client.get('/api/system').status_code == 503
-    assert client.post('/api/system').status_code == 405
+    assert client.get('/api/pc_state').status_code == 503
+    assert client.post('/api/pc_state').status_code == 405
 
 
 def test_pc_chip_javascript():

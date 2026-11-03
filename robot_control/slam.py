@@ -1299,7 +1299,7 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
 
     bp.add_url_rule("/robot.html", endpoint="kiosk_page", view_func=kiosk_screen)
 
-    @bp.get("/api/system")
+    @bp.get("/api/pc_state")
     def api_system():
         """Состояние бортового компьютера для маленького индикатора на экране.
 

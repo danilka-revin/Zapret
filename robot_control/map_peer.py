@@ -168,5 +168,5 @@ def proxy_connections(origin: str):
 
 def proxy_system(origin: str):
     """Temperature and load of the onboard computer, read-only, cached on board."""
-    return _forward_json(origin, '/api/system', methods={'GET'},
+    return _forward_json(origin, '/api/pc_state', methods={'GET'},
                          limit=MAX_REPLY_BYTES, timeout=2.0)

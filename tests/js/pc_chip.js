@@ -1,6 +1,6 @@
 'use strict';
 // Индикатор бортового компьютера на экране киоска: только текст и подсказка,
-// никаких запросов кроме GET /api/system, честное «ПК —» без датчиков.
+// никаких запросов кроме GET /api/pc_state, честное «ПК —» без датчиков.
 const assert = require('assert');
 const fs = require('fs');
 const vm = require('vm');
@@ -87,14 +87,14 @@ const READING = {
   assert.strictEqual(chip.className, 'chip pc-chip none');
   assert.match(chip.title, /Данные устарели/);
 
-  // Опрос: ровно один GET /api/system без тела и без кэша.
+  // Опрос: ровно один GET /api/pc_state без тела и без кэша.
   payload = READING;
   chip.className = '';
-  await Chip.poll(chip, 'api/system');
+  await Chip.poll(chip, 'api/pc_state');
   await flush();
   assert.strictEqual(chip.textContent, 'ЦП 80 °C · ОЗУ 46 %');
   assert.strictEqual(calls.length, 1);
-  assert.strictEqual(calls[0][0], 'api/system');
+  assert.strictEqual(calls[0][0], 'api/pc_state');
   assert.strictEqual(calls[0][1].cache, 'no-store');
   assert(!calls[0][1].method && !calls[0][1].body);
   assert(!/\bPOST\b|\bPUT\b/.test(JSON.stringify(calls[0][1])));
@@ -107,8 +107,8 @@ const READING = {
 
   // start() подписывается на видимость вкладки и не дублирует таймер.
   fail = false; payload = READING; calls = [];
-  Chip.start(chip, 'api/system');
-  Chip.start(chip, 'api/system');
+  Chip.start(chip, 'api/pc_state');
+  Chip.start(chip, 'api/pc_state');
   await flush();
   assert.strictEqual(calls.length, 1, 'двойной start не должен слать два запроса');
 

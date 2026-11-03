@@ -1,7 +1,7 @@
 /* Индикатор бортового компьютера для бортового экрана.
  *
  * Показывает температуру процессора и занятую память в одном тихом чипе
- * топбара. Данные приходят с борта: GET /api/system читает /proc и /sys и
+ * топбара. Данные приходят с борта: GET /api/pc_state читает /proc и /sys и
  * отдаёт кэш. Датчика может не быть — тогда честно «ПК —», а не ноль.
  * Модуль ничего не пишет и не включает: только текст, класс и подсказка.
  */
@@ -89,7 +89,7 @@
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     if (controller) options.signal = controller.signal;
     const timeout = controller ? setTimeout(function () { controller.abort(); }, 3000) : null;
-    return fetch(url || 'api/system', options)
+    return fetch(url || 'api/pc_state', options)
       .then(function (response) {
         if (!response.ok) throw new Error('http ' + response.status);
         return response.json();

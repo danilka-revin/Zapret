@@ -503,7 +503,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         response.headers["Cache-Control"] = "no-store"
         return response
 
-    @app.get("/api/system")
+    @app.get("/api/pc_state")
     def api_system():
         # Только чтение: температура, память, диск и загрузка процессора.
         response = jsonify(system.snapshot())
