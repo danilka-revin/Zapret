@@ -46,6 +46,10 @@ class Motors:
         self.calls.append(('pot_mode', action))
         return {'ok': True}
 
+    def set_pot_hold(self, action):
+        self.calls.append(('pot_hold', action))
+        return {'ok': True, 'queued': True, 'potHold': action == 'on'}
+
     def drive(self, percent):
         self.calls.append(('drive', percent))
         return {'ok': True, 'percent': percent}
@@ -126,6 +130,9 @@ def test_controls_page_reuses_full_motor_ui(client, operator):
     ('zero', {'module': 'FL'}, 'steering', ('zero', 'FL')),
     ('calibrate', {'module': 'ALL'}, 'steering', ('calibrate', 'ALL')),
     ('pot_mode', {'action': 'on'}, 'steering', ('pot_mode', 'on')),
+    # Активное удержание угла идёт тем же маршрутом руления (fw24, ph 0|1).
+    ('pot_hold', {'action': 'on'}, 'steering', ('pot_hold', 'on')),
+    ('pot_hold', {'action': 'off'}, 'steering', ('pot_hold', 'off')),
     # Манёвры: старт/стоп пресета и правка его чисел идут как команды руления.
     ('maneuver', {'action': 'start', 'name': 'forward'}, 'steering',
      ('maneuver', 'start', 'forward')),
@@ -166,6 +173,23 @@ def test_onboard_rejections_remain_effective(client, operator, transport):
     assert response.status_code == 409 and response.json['reason'] == 'estop'
     assert client.post('/api/control/drive', json={'percent': 0},
                        headers=headers(client, 'drive')).status_code == 200
+
+
+def test_pot_hold_needs_csrf_and_the_steering_header(client, operator, transport):
+    """Удержание двигает колесо: без CSRF и заголовка команды его не отправить."""
+    login(client)
+    body = {'action': 'on'}
+    assert client.post('/api/control/pot_hold', json=body,
+                       headers={'X-Robot-Control': 'steering'}).json['reason'] == 'csrf_required'
+    assert client.post('/api/control/pot_hold', json=body,
+                       headers={'X-CSRF-Token': client.get('/api/control/session').json['csrfToken']}
+                       ).json['reason'] == 'request_header_required'
+    assert client.get('/api/control/pot_hold').status_code == 405
+    assert transport[1] == []          # ни один отказ не дошёл до борта
+    response = client.post('/api/control/pot_hold', json=body, headers=headers(client))
+    assert response.status_code == 200 and response.json['ok']
+    assert transport[0].calls[-1] == ('pot_hold', 'on')
+    assert transport[1][-1][0] == 'http://127.0.0.1:8090/api/kiosk_pot_hold'
 
 
 def test_offline_owner_fails_closed(client, operator, monkeypatch):

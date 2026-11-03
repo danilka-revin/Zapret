@@ -152,6 +152,24 @@ const float POT_CAL_MIN_COUNTS_PER_DEG = 1.5f;   // проверка правд�
 const float POT_CAL_MAX_COUNTS_PER_DEG = 8.0f;
 const uint32_t POT_CAL_TIMEOUT_MS = 30000UL;
 
+// ---- активное удержание угла (команда ph, fw24) ----
+// Доводка выше выравнивает колесо ОДИН раз после поворота. Удержание — то же
+// сравнение с потенциометром, но продолжается всё время, пока оно включено:
+// отвели колесо рукой — оно само возвращается к заданному углу. Порог шире
+// доводки и с подтверждением, чтобы шум АЦП не раскачивал мотор; шаг медленный
+// (18 °/с): оператор видит, что колесо едет, и успевает убрать руку.
+const float POT_HOLD_DEADBAND_DEG = 2.0f;        // мёртвая зона удержания
+const uint16_t POT_HOLD_CONFIRM_MS = 400;        // смещение должно продержаться
+const uint16_t POT_HOLD_STEP_PERIOD_US = 400;    // ≈ 18 °/с (2500 шагов/с)
+const float POT_HOLD_MAX_DEG = 15.0f;            // больше — колесо двинули руками
+const uint8_t POT_HOLD_MAX_PASSES = 6;           // подходов подряд, дальше пауза
+const uint16_t POT_HOLD_PAUSE_MS = 3000;         // пауза после серии подходов
+// Счётчик шагов привязывается к датчику только в пределах доверия, как в
+// updateFeedback. Удержание разрешает себе ещё мёртвую зону: ручной сдвиг на
+// 2…15° оно само возвращает, и расхождение шагов с датчиком равно этому сдвигу,
+// а не вранью датчика. Больше — уже расхождение, и удержание выключается.
+const float POT_HOLD_REATTACH_DEG = POT_TRUST_DEG + POT_HOLD_DEADBAND_DEG;
+
 // Наклон потенциометра — свойство железа, а не сессии: между включениями он не
 // меняется. Без сохранения доводка после каждой перезагрузки молча выключалась
 // (pot_calibrated = false), колесо снова ехало вслепую, и пропущенные шаги
@@ -180,6 +198,8 @@ uint8_t zero_reply_operation = 0;
 // Короткое отдельное сообщение в существующем CRC-протоколе.
 uint8_t wheelIdentityCode();
 uint16_t telemetryCrc16(const char* data, uint16_t size);
+// Удержание угла (ph) выключают калибровки и ноль — их код идёт раньше.
+void stopPotHold();
 
 // ---- тяга BLDC: драйвер RioRand ZS-Z11H (hoverboard-мотор) ----
 // Штатная библиотека Servo выдаёт на вход P сигнал около 50 Гц. Значение
@@ -214,7 +234,8 @@ const uint32_t TACH_MIN_SILENCE_US = 300000UL;
 // v20: отдельное защищённое руление на ходу для клавиатурного режима.
 // v21: короткая полная телеметрия с CRC и совместимый подробный кадр.
 // Старое поле tach остаётся выключенным для совместимости со старым сервером.
-const uint8_t FIRMWARE_PROTOCOL = 23;          // сохранённый полный ноль + CRC role ID
+// v24: команда ph — активное удержание угла по потенциометру, бит 0x8000 и ph=
+const uint8_t FIRMWARE_PROTOCOL = 24;          // ph (удержание угла) в телеметрии
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -281,6 +302,10 @@ const uint16_t STATUS_POT_MODE = 0x1000;  // режим с потенциоме�
 const uint16_t STATUS_FULL_ZERO_FAULT = 0x4000;  // сохранённая поправка не заслуживает доверия
 const uint16_t STATUS_POT_MODE_SUPPORTED = 0x2000;
 const uint16_t STATUS_POT = 0x80;      // потенциометр откалиброван, доводка включена
+// fw24: активное удержание угла (ph 1). Биты 8–11 заняты кодом ошибки
+// калибровки (err=), поэтому 0x0100–0x0800 свободными НЕ были; свободен старший
+// 0x8000 — он и занят удержанием.
+const uint16_t STATUS_POT_HOLD = 0x8000;
 // биты 8–11: код ошибки калибровки; биты 12–15 — режим потенциометра.
 // Счётчик кадров в состояние НЕ входит: в v3 это отдельное поле кадра.
 
@@ -750,6 +775,16 @@ bool feedback_pending = false;            // после поворота ждё�
 uint8_t feedback_passes = 0;
 uint32_t feedback_wait_ms = 0;
 int32_t feedback_target_step = 0;
+// Активное удержание угла (ph). Цель удержания — намеренная команда (w/d/h/g),
+// а не текущее положение: доводка и удержание её не переписывают.
+bool pot_hold = false;                    // ph 1; после старта платы — выключено
+int32_t pot_hold_target_step = 0;         // угол, который держим
+uint8_t pot_hold_passes = 0;              // подходов подряд без результата
+uint16_t pot_hold_retries = 0;            // сколько раз упирались в POT_HOLD_MAX_PASSES
+uint32_t pot_hold_wait_ms = 0;            // пауза после остановки перед замером
+uint32_t pot_hold_scan_ms = 0;            // не читать АЦП чаще POT_SAMPLE_PERIOD_MS
+uint32_t pot_hold_confirm_ms = 0;         // с какого времени смещение подтверждается
+uint32_t pot_hold_pause_until_ms = 0;     // пауза после серии подходов
 
 bool potRawOnRail(int16_t raw) {
   return raw <= POT_RAIL_MARGIN || raw >= POT_ADC_MAX - POT_RAIL_MARGIN;
@@ -866,6 +901,19 @@ void potBootNote() {
   }
 }
 
+// p показывает и удержание: включено ли, какой угол держим и сколько подходов.
+void potPrintHoldStatus() {
+  if (!pot_hold) {
+    note(PSTR("Удержание угла: выключено (ph 1 — включить)"));
+    return;
+  }
+  char target[16];
+  formatDegrees(pot_hold_target_step, target, sizeof(target));
+  note(PSTR("Удержание угла: включено · цель %s° · подходов %u/%u · попыток %u"),
+       target, (unsigned)pot_hold_passes, (unsigned)POT_HOLD_MAX_PASSES,
+       (unsigned)pot_hold_retries);
+}
+
 void potPrintStatus() {
   if (!pot_enabled) { note(PSTR("Без потенциометра: угол по шагам")); return; }
   potMeasureRaw();                     // p — свежий замер, а не фильтр с задержкой
@@ -917,6 +965,7 @@ bool startPotCalibration() {
   feedback_pending = false;
   resume_allowed = false;
   move_report_pending = false;
+  stopPotHold();           // q (калибровка датчика) выключает удержание
   pot_cal_ok = false;
   pot_cal_started_ms = millis();
   note(PSTR("Калибровка потенциометра: 0°, −%d°, +%d°..."),
@@ -1080,6 +1129,194 @@ void updateFeedback() {
 }
 
 // ---------------------------------------------------------------------------
+// Активное удержание угла (команда ph, fw24).
+//
+// Доводка выравнивает колесо один раз после поворота и на этом заканчивается:
+// отвели колесо рукой — оно остаётся там. Удержание продолжает сравнение с
+// потенциометром всё время, пока оно включено, и медленно возвращает колесо к
+// заданному углу (18 °/с): оператор видит движение и успевает убрать руку.
+//
+// Решение принимается только по АЦП и только при готовом датчике (pm 1 + q +
+// ноль). Ход идёт через общий startMotor(), поэтому s, b, watchdog 650 мс и
+// E-STOP гасят удержание теми же путями, что и любой поворот.
+
+// Цель удержания — намеренная команда (w/d/h/g), а не текущее положение:
+// поправка удержания её не переписывает.
+bool potHoldAllowed() {
+  return pot_hold && pot_enabled && pot_calibrated && pot_zero_valid && !pot_railed &&
+         !motorBusy() && !feedback_pending && drive_percent == 0 &&
+         calib_state == CAL_IDLE && pot_cal_state == POT_CAL_IDLE && !cycle_active &&
+         !neutral_active && !neutral_inhibit;
+}
+
+// Выключить удержание и вернуть цель намеренной команды.
+void stopPotHold() {
+  if (!pot_hold) return;
+  pot_hold = false;
+  pot_hold_passes = 0;
+  pot_hold_retries = 0;
+  pot_hold_confirm_ms = 0;
+  pot_hold_wait_ms = 0;
+  pot_hold_pause_until_ms = 0;
+  if (!motorBusy()) {
+    noInterrupts();
+    target_step = pot_hold_target_step;
+    interrupts();
+  }
+}
+
+// ph 1: включить удержание. Калибровку, в отличие от pm, НЕ сбрасывает.
+bool startPotHold() {
+  if (!pot_enabled) {
+    note(PSTR("Удержание: сначала pm 1 — включить потенциометр"));
+    return false;
+  }
+  if (!pot_calibrated || !pot_zero_valid) {
+    note(PSTR("Удержание: нужен ноль руля и калибровка q — без датчика его нет"));
+    return false;
+  }
+  potMeasureRaw();
+  if (pot_railed) {
+    note(PSTR("потенциометр A0: %d — на краю, проверьте провод"), (int)pot_raw);
+    return false;
+  }
+  const int32_t target = targetNow();
+  const float error = potAngleDeg() - (float)target / STEPS_PER_DEGREE;
+  if (fabsf(error) > POT_HOLD_MAX_DEG) {
+    char text[16];
+    formatFixed(lroundf(error * 100.0f), 2, text, sizeof(text));
+    note(PSTR("Удержание: колесо отличается от цели на %s° — сначала w или h"), text);
+    return false;
+  }
+  pot_hold = true;
+  pot_hold_target_step = target;
+  pot_hold_passes = 0;
+  pot_hold_retries = 0;
+  pot_hold_confirm_ms = 0;
+  pot_hold_wait_ms = 0;
+  pot_hold_pause_until_ms = 0;
+  pot_hold_scan_ms = millis();
+  char angle[16];
+  formatDegrees(target, angle, sizeof(angle));
+  note(PSTR("Удержание включено: держу %s° — колесо возвращается само"), angle);
+  return true;
+}
+
+void updatePotHold() {
+  if (!pot_hold) return;
+  // Режим потенциометра или калибровку сбросили — держать больше нечего.
+  if (!pot_enabled || !pot_calibrated || !pot_zero_valid ||
+      calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE || cycle_active) {
+    stopPotHold();
+    return;
+  }
+  // Тяга, нейтраль и чужая калибровка удержание приостанавливают, но не выключают.
+  if (motorBusy() || feedback_pending || drive_percent != 0 ||
+      neutral_active || neutral_inhibit) {
+    pot_hold_wait_ms = 0;
+    pot_hold_confirm_ms = 0;
+    return;
+  }
+  if (!potHoldAllowed()) return;
+  const uint32_t now = millis();
+  if ((int32_t)(now - pot_hold_pause_until_ms) < 0) return;   // пауза серии подходов
+  if ((uint32_t)(now - pot_hold_scan_ms) < POT_SAMPLE_PERIOD_MS) return;
+  pot_hold_scan_ms = now;
+  if (pot_hold_wait_ms == 0) {
+    pot_hold_wait_ms = now + POT_CORRECTION_SETTLE_MS;
+    if (pot_hold_wait_ms == 0) pot_hold_wait_ms = 1;
+    return;
+  }
+  if ((int32_t)(now - pot_hold_wait_ms) < 0) return;          // механика успокаивается
+
+  potMeasureRaw();
+  if (pot_railed) return;                    // край датчика — не наша забота
+  const float actual = potAngleDeg();
+  const float wanted = (float)pot_hold_target_step / STEPS_PER_DEGREE;
+  const float error = actual - wanted;
+  const float magnitude = fabsf(error);
+
+  // Потолок реакции: такой сдвиг — это уже рука оператора, а не люфт. Догонять
+  // его медленным ходом опасно (колесо поедет под рукой) — выключаемся.
+  if (magnitude > POT_HOLD_MAX_DEG) {
+    char text[16];
+    formatFixed(lroundf(magnitude * 100.0f), 2, text, sizeof(text));
+    note(PSTR("Удержание: сдвинуто вручную на %s° (> %d°) — отключено, повторите команду"),
+         text, (int)POT_HOLD_MAX_DEG);
+    stopPotHold();
+    return;
+  }
+
+  if (magnitude <= POT_HOLD_DEADBAND_DEG) {
+    pot_hold_confirm_ms = 0;
+    // Один контрольный замер после остановки: колесо на месте. Счётчик шагов
+    // привязываем к датчику в пределах доверия (как в updateFeedback): ручной
+    // сдвиг датчик объясняет, а расхождение больше POT_HOLD_REATTACH_DEG — нет,
+    // и тогда честнее выключить удержание, чем молча переписать положение.
+    const float step_angle = (float)stepNow() / STEPS_PER_DEGREE;
+    const float gap = actual - step_angle;
+    if (fabsf(gap) > POT_RESYNC_DEG) {
+      if (fabsf(gap) <= POT_HOLD_REATTACH_DEG) {
+        noInterrupts();
+        current_step = degreesToSteps(actual);
+        interrupts();
+      } else {
+        char text[16];
+        formatFixed(lroundf(gap * 100.0f), 2, text, sizeof(text));
+        note(PSTR("Потенциометр: расхождение %s° — удержание отключено; проверьте колесо или q"), text);
+        stopPotHold();
+        return;
+      }
+    }
+    pot_hold_passes = 0;
+    noInterrupts();
+    target_step = pot_hold_target_step;
+    interrupts();
+    return;
+  }
+
+  // Смещение должно продержаться POT_HOLD_CONFIRM_MS: шум АЦП и толчок корпуса
+  // не должны раскачивать мотор.
+  if (pot_hold_confirm_ms == 0) {
+    pot_hold_confirm_ms = now;
+    if (pot_hold_confirm_ms == 0) pot_hold_confirm_ms = 1;
+    return;
+  }
+  if ((int32_t)(now - pot_hold_confirm_ms) < (int32_t)POT_HOLD_CONFIRM_MS) return;
+
+  // Шаги должны вести колесо. Если счётчик ушёл от цели дальше потолка, а
+  // датчик всё ещё спорит, колесо не едет: упор, заклинивание или рука на
+  // колесе. Дальше толкать нельзя — выключаемся с тем же сообщением о
+  // расхождении, что и доводка.
+  if (labs(stepNow() - pot_hold_target_step) > degreesToSteps(POT_HOLD_MAX_DEG)) {
+    char text[16];
+    formatFixed(lroundf(error * 100.0f), 2, text, sizeof(text));
+    note(PSTR("Потенциометр: расхождение %s° — удержание отключено; проверьте колесо или q"), text);
+    stopPotHold();
+    return;
+  }
+
+  if (pot_hold_passes >= POT_HOLD_MAX_PASSES) {
+    // Колесо не идёт (упор, заклинивание, рука на колесе): пауза и счётчик,
+    // а не бесконечная серия подходов.
+    pot_hold_passes = 0;
+    pot_hold_confirm_ms = 0;
+    if (pot_hold_retries < 0xFFFF) ++pot_hold_retries;
+    pot_hold_pause_until_ms = now + POT_HOLD_PAUSE_MS;
+    note(PSTR("Удержание: %u подходов подряд без результата — пауза %u мс, попыток %u"),
+         (unsigned)POT_HOLD_MAX_PASSES, (unsigned)POT_HOLD_PAUSE_MS,
+         (unsigned)pot_hold_retries);
+    return;
+  }
+  const int32_t correction = degreesToSteps(-error);
+  if (correction == 0) return;
+  ++pot_hold_passes;
+  pot_hold_confirm_ms = 0;
+  startMotor(stepNow() + correction, POT_HOLD_STEP_PERIOD_US, OPTO_WATCH_NONE);
+  pot_hold_wait_ms = 0;
+}
+
+// ---------------------------------------------------------------------------
 // Калибровка по оптодатчику. Флажок находится быстрым ходом в пределах ±125°
 // от старта (вправо 125°, потом влево 250°; упор потенциометра — ±130°).
 // Затем каждая кромка снимается
@@ -1128,6 +1365,7 @@ bool startCalibration() {
   resume_allowed = false;
   move_report_pending = false;
   feedback_pending = false;
+  stopPotHold();           // k обнуляет ноль — держать прежний угол нельзя
   zero_set = false;
   pot_zero_valid = false;
   home_source = HOME_NONE;
@@ -1353,6 +1591,12 @@ void startPlainMove(int32_t target, bool report) {
   feedback_target_step = target;
   feedback_passes = 0;
   feedback_wait_ms = 0;
+  // Намеренная команда задаёт угол, который держит удержание (ph), если оно
+  // включено. Поправки доводки и удержания цель не переписывают.
+  pot_hold_target_step = target;
+  pot_hold_passes = 0;
+  pot_hold_confirm_ms = 0;
+  pot_hold_pause_until_ms = 0;   // новая команда снимает паузу серии подходов
   startMotor(target, STEP_PERIOD_US, OPTO_WATCH_NONE);
   resume_allowed = true;
   move_report_pending = report && motorBusy();
@@ -1421,11 +1665,13 @@ bool setZeroHere() {
   }
   cycle_active = false;
   feedback_pending = false;
+  stopPotHold();          // z задаёт новое начало отсчёта — держать старое нельзя
   haltMotor();
   noInterrupts();
   current_step = 0;
   target_step = 0;
   interrupts();
+  pot_hold_target_step = 0;
   zero_set = true;
   home_source = HOME_MANUAL;
   calib_error = CAL_OK;
@@ -1557,6 +1803,9 @@ void applyDriveCommand(int8_t percent) {
 }
 
 void stopDriveLocal() {
+  // STOP, b, нейтраль, watchdog 650 мс и E-STOP сервера гасят активное
+  // удержание угла: оно не отдельный путь движения, а тот же startMotor().
+  stopPotHold();
   // In live mode STOP/watchdog must also cancel a steering move; a delayed
   // heartbeat from that session must not restart either actuator.
   if (live_id != 0) {
@@ -1640,6 +1889,7 @@ uint16_t moduleStatus() {
   if (cycle_active) status |= STATUS_CYCLE;
   if (zero_set && home_source == HOME_OPTO) status |= STATUS_HOME_OPTO;
   if (potFeedbackAllowed()) status |= STATUS_POT;
+  if (pot_hold) status |= STATUS_POT_HOLD;   // fw24: активное удержание угла
   status |= STATUS_POT_MODE_SUPPORTED;  // поддержка переключения режима
   if (pot_enabled) status |= STATUS_POT_MODE;
   if (full_zero_storage_fault) status |= STATUS_FULL_ZERO_FAULT;
@@ -1657,6 +1907,7 @@ void printModuleStatus() {
   note(PSTR("Текущий: %s° | Целевой: %s° [%s] · ноль %s · датчик %s · тяга %d%%"),
        current, target, state, zero, optoActive() ? "закрыт" : "свободен", (int)drive_percent);
   potPrintStatus();
+  potPrintHoldStatus();
   printDriveInfo();
 }
 
@@ -1665,6 +1916,8 @@ void printModuleStatus() {
 // плату можно проверить на столе отдельно от остальных.
 //   k | calib      калибровка по оптодатчику
 //   q              калибровка потенциометра A0: 0°, −60°, +60° (доводка по датчику)
+//   ph 0|1         активное удержание угла по потенциометру (после старта — 0)
+//   pm 0|1         режим потенциометра (сбрасывает калибровку q)
 //   z | zero       ноль в текущем положении (вручную)
 //   h              в ноль           s   стоп всего (руль, калибровка, цикл, тяга)
 //   g              продолжить поворот, прерванный s
@@ -1681,6 +1934,7 @@ void stopEverything(bool quiet) {
   if (calib_state != CAL_IDLE) failCalibration(CAL_ERR_ABORTED);
   cycle_active = false;
   haltMotor();
+  stopPotHold();          // s выключает активное удержание так же, как доводку
   stopDriveLocal();
   move_report_pending = false;
   feedback_pending = false;
@@ -1764,6 +2018,7 @@ void handleModuleCommand(char* line) {
   }
 
   if (strcasecmp_P(command, PSTR("zr")) == 0) {
+    stopPotHold();          // сервисная правка нуля: держать прежний угол нельзя
     // Явное сервисное восстановление только после повреждения памяти/смены
     // роли, на неподвижной плате без нуля. Не принимать случайную команду.
     if (!arg1 || strcmp(arg1, "CONFIRM") || arg2 || extra || !full_zero_storage_fault ||
@@ -1777,6 +2032,7 @@ void handleModuleCommand(char* line) {
     note(full_zero_storage_fault ? PSTR("ОШИБКА: EEPROM полного нуля не очищена") :
                                   PSTR("Повреждённая память полного нуля очищена; выполните k и настройку заново"));
   } else if (strcasecmp_P(command, PSTR("zq")) == 0 || strcasecmp_P(command, PSTR("zc")) == 0) {
+    stopPotHold();          // поправка полного нуля меняет отсчёт шагов
     long id = 0;
     if (!arg1 || arg2 || extra || !parseLongToken(arg1, &id) || id <= 0 || id >= 2147483647L) return;
     handleFullZeroRequest((uint32_t)id, strcasecmp_P(command, PSTR("zc")) == 0);
@@ -1792,6 +2048,7 @@ void handleModuleCommand(char* line) {
     }
     const bool enabled = arg1[0] == '1';
     if (enabled != pot_enabled) {
+      stopPotHold();          // смена режима сбрасывает калибровку — и удержание
       pot_enabled = enabled;
       pot_calibrated = false;
       pot_zero_valid = false;
@@ -1801,6 +2058,29 @@ void handleModuleCommand(char* line) {
       if (enabled) potMeasureRaw();  // ноль АЦП измерит q в положении 0°
     }
     note(pot_enabled ? PSTR("С потенциометром: q для доводки") : PSTR("Без потенциометра: угол по шагам"));
+  } else if (strcasecmp_P(command, PSTR("ph")) == 0) {
+    // Активное удержание угла (fw24). Отдельная команда, потому что pm
+    // сбрасывает калибровку: частый переключатель «доводка вкл/выкл» так
+    // непригоден. Условия те же, что у pm: не busy и не на ходу.
+    if (!arg1 || arg2 || (strcmp(arg1, "0") && strcmp(arg1, "1"))) {
+      note(PSTR("Шаблон: ph 0|1")); return;
+    }
+    // Выключение не ждёт «сначала s»: пока удержание само подтягивает угол,
+    // плата занята, и запрет оставил бы оператора без выключателя.
+    if (arg1[0] == '0') {
+      if (pot_hold) {
+        stopPotHold();
+        note(PSTR("Удержание выключено"));
+      } else {
+        note(PSTR("Удержание и так выключено"));
+      }
+      return;
+    }
+    if (motorBusy() || drive_percent != 0 || calib_state != CAL_IDLE ||
+        pot_cal_state != POT_CAL_IDLE || cycle_active) {
+      note(PSTR("Удержание: сначала s — идёт движение или калибровка")); return;
+    }
+    startPotHold();            // отказ печатает причину, калибровку не трогает
   } else if (strcasecmp_P(command, PSTR("q")) == 0) {
     startPotCalibration();
   } else if (strcasecmp_P(command, PSTR("s")) == 0) {
@@ -1977,6 +2257,7 @@ void handleModuleCommand(char* line) {
       return;
     }
     if (!neutral_active) {
+      stopPotHold();                      // нейтраль — удержание выключено
       driveWriteServo(0);
       driveSetStop(true);                 // выходы выключены до снятия тормоза
       driveSetBrake(false);
@@ -2047,6 +2328,7 @@ void steeringLoop() {
   updateCycle();
   updateMoveReport();
   updateFeedback();
+  updatePotHold();   // активное удержание угла (ph), только после доводки
   txPump();
 }
 // ============================ STEERING CORE END ============================
@@ -2097,9 +2379,10 @@ uint8_t classifyModuleToken(const char* token) {
 }
 
 void printHelp() {
-  note(PSTR("команды: k, q, c [°], c c, d [°] [f/b], h, s, g, z, p, ?"));
+  note(PSTR("команды: k, q, ph 1|0, c [°], c c, d [°] [f/b], h, s, g, z, p, ?"));
   note(PSTR("поворот: w [FL] 12.5 | w zero | w calib · тяга: v [FL] 0…%u [f/b], b"),
        (unsigned)DRIVE_DIRECT_MAX_VALUE);
+  note(PSTR("удержание угла: ph 1 — включить, ph 0 — выключить (нужны pm 1 и q)"));
   note(PSTR("Servo D3; SC D19: %u переходов/об, счётчик без направления"), (unsigned)TACH_EDGES_PER_REV);
 }
 
@@ -2187,12 +2470,13 @@ void appendTelemetry() {
   // Старый сервер по-прежнему видит tach=0; новый может явно использовать
   // sc_count для одометрии, не смешивая его с историческим rpm/tach.
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@TLM mod=%s deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u drive=%d fw=%u pot=%d pm=%d zfault=%d tach=0 dmax=%u sv=%u duty=%u sc_rpm=%lu.%lu sc_hz=%u sc_ppr=%u sc_count=%lu sc_recent=%u brake_id=%lu neutral_id=%lu neutral_lock=%u live_id=%lu live_seq=%lu t=%lu"),
+      PSTR("@TLM mod=%s deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u drive=%d fw=%u pot=%d pm=%d ph=%d zfault=%d tach=0 dmax=%u sv=%u duty=%u sc_rpm=%lu.%lu sc_hz=%u sc_ppr=%u sc_count=%lu sc_recent=%u brake_id=%lu neutral_id=%lu neutral_lock=%u live_id=%lu live_seq=%lu t=%lu"),
       MODULE_ID, deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
       (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
       home, (unsigned)((status >> 8) & 0x0F), (int)drive_percent, (unsigned)FIRMWARE_PROTOCOL,
       (status & STATUS_POT) ? 1 : 0,
       (status & STATUS_POT_MODE_SUPPORTED) ? ((status & STATUS_POT_MODE) ? 1 : 0) : -1,
+      (status & STATUS_POT_HOLD) ? 1 : 0,
       (status & STATUS_FULL_ZERO_FAULT) ? 1 : 0,
       (unsigned)DRIVE_MAX_PERCENT, (unsigned)drive_servo_value,
       (unsigned)driveValuePermille(), (unsigned long)(tach_display_rpm_x10 / 10),

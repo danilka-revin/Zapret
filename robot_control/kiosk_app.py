@@ -80,6 +80,7 @@ from robot_control.slam import (
     dispatch_drive_command,
     dispatch_steering_calibration,
     dispatch_pot_mode,
+    dispatch_pot_hold,
     dispatch_maneuver,
     dispatch_maneuver_config,
     engage_estop,
@@ -631,7 +632,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     motion_gate = threading.RLock()
     motion_routes = {
         "/api/kiosk_neutral", "/api/kiosk_drive", "/api/kiosk_keyboard", "/api/kiosk_steer",
-        "/api/kiosk_zero", "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_maneuver",
+        "/api/kiosk_zero", "/api/kiosk_calibrate", "/api/kiosk_pot_mode",
+        "/api/kiosk_pot_hold", "/api/kiosk_maneuver",
         "/api/kiosk_maneuver_config", "/api/navigation/start", "/api/navigation/resume",
         "/api/navigation/cancel", "/api/navigation/estop", "/api/estop", "/api/estop/release",
         "/api/system/stop",
@@ -719,7 +721,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         # Отзыв под тем же замком не даст запоздавшему heartbeat снова поехать.
         if request.method == "POST" and request.path in {
             "/api/kiosk_drive", "/api/kiosk_steer", "/api/kiosk_zero",
-            "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_maneuver",
+            "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_pot_hold",
+            "/api/kiosk_maneuver",
             "/api/estop", "/api/navigation/start", "/api/navigation/resume",
             "/api/navigation/cancel", "/api/navigation/estop", "/api/system/stop",
         }:
@@ -1081,6 +1084,21 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         result, status = dispatch_pot_mode(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
+    @app.post("/api/kiosk_pot_hold")
+    def api_kiosk_pot_hold():
+        """Активное удержание угла (ph 0/1) со всех четырёх плат.
+
+        Как и смена режима потенциометра, это команда руления: заголовок
+        X-Robot-Control обязателен, маршрут отменяется, PIN на киоске не нужен.
+        """
+        if state is None:
+            return jsonify({"ok": False, "reason": "serial_unavailable"}), 503
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        navigation.cancel("Активное удержание угла — маршрут остановлен.")
+        result, status = dispatch_pot_hold(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
     @app.post("/api/kiosk_maneuver")
     def api_kiosk_maneuver():
         """Манёвр-пресет тяги: «метр вперёд», «развернуться на 90°» (start/stop).
@@ -1419,7 +1437,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         })
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
-    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
+    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js",
+                     "pot_hold.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "map_view.js",
                      "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):

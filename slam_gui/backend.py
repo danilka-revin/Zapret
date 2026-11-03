@@ -97,6 +97,12 @@ DRIVE_ABS_MAX_PERCENT = 100
 #: Прямое управление с бортового экрана (команда v, Servo.write без пересчёта).
 DRIVE_DIRECT_MAX_VALUE = 150
 DRIVE_DIRECT_FIRMWARE = 15
+#: Активное удержание угла по потенциометру: команда ``ph 0|1`` и бит состояния
+#: 0x8000 / поле ``ph=`` появились в fw24. Старые платы удержания не знают —
+#: экран обязан показать «нужна прошивка», а не выдать выключенное за «выкл.».
+POT_HOLD_FIRMWARE = 24
+#: Бит состояния @TLM/@F «удержание включено» (firmware/motor_wheel).
+STATUS_POT_HOLD = 0x8000
 #: Разброс углов, при котором экран называет колёса ровными. Тягу он больше не
 #: блокирует: ездить можно на любом угле (0° — прямо, 45° — краб, 90° — боком),
 #: число осталось только для подсказки «колёса стоят ровно / под углом».
@@ -360,7 +366,9 @@ def parse_fast_wheel_line(line, module=None):
         "cycle": bool(status & 0x10), "calib": bool(status & 0x04), "opto": bool(status & 0x08),
         "calibError": (status >> 8) & 0x0F, "firmware": firmware,
         "fullZeroFault": bool(status & 0x4000) if firmware >= 23 else None,
-        "pot": bool(status & 0x80), "potMode": bool(status & 0x1000), "tach": False,
+        "pot": bool(status & 0x80), "potMode": bool(status & 0x1000),
+        "potHold": bool(status & STATUS_POT_HOLD) if firmware >= POT_HOLD_FIRMWARE else None,
+        "tach": False,
         "driveMaxPercent": drive_max, "driveDutyPermille": servo * 1000 // 180,
         "driveServoValue": servo, "tachPpr": None, "tachHz": None,
         "scRpm": rpm10 / 10.0, "scHz": hz if hz <= TACH_HZ_MAX else None, "scPpr": ppr,
@@ -482,6 +490,10 @@ def parse_master_line(line, module=None):
                         "err", "drive", "fw", "pot", "pm", "tach", "dmax", "sv", "duty", "sc_rpm",
                         "sc_hz", "sc_ppr", "sc_count", "sc_recent", "brake_id", "neutral_id",
                         "neutral_lock", "live_id", "live_seq", "t", "crc"}
+            # fw24 обязана присылать ph=: поле и бит удержания — часть одного
+            # кадра, и «нет поля» значит «плата не та», а не «выключено».
+            if firmware >= POT_HOLD_FIRMWARE:
+                required.add("ph")
             if (not required.issubset(fields) or any(fields[k] not in {"0", "1"}
                     for k in ("moving", "cal", "cycle", "calib", "opto", "pot", "tach"))
                     or fields["pm"] not in {"0", "1"} or drive_percent is None
@@ -491,6 +503,8 @@ def parse_master_line(line, module=None):
                     or live_id is None or live_seq is None):
                 return None
         if firmware is not None and firmware >= 23 and fields.get("zfault") not in {"0", "1"}:
+            return None
+        if firmware is not None and firmware >= POT_HOLD_FIRMWARE and fields.get("ph") not in {"0", "1"}:
             return None
         for key, value in (("tach", tach),):
             if key in fields and value is None:
@@ -536,6 +550,10 @@ def parse_master_line(line, module=None):
             # Поле появилось в прошивке v2 после руля; старые кадры его не содержат.
             "pot": fields.get("pot") == "1",
             "potMode": fields.get("pm") == "1" if fields.get("pm") in {"0", "1"} else None,
+            # potHold — активное удержание угла (ph). None у прошивок до fw24:
+            # переключатель на экране остаётся заблокированным, а не «выключенным».
+            "potHold": (fields.get("ph") == "1") if (firmware is not None and
+                        firmware >= POT_HOLD_FIRMWARE and fields.get("ph") in {"0", "1"}) else None,
             # Тяга (ZS-Z11H): None у старой прошивки без этих полей.
             "tach": tach,
             "driveMaxPercent": drive_max,
@@ -1247,6 +1265,46 @@ class MasterSource:
             return {"ok": False, "reason": "invalid_action"}
         result = self._queue_motion(command)
         return {"ok": True, "queued": True} if result["ok"] else result
+
+    def set_pot_hold(self, action, now=None):
+        """Активное удержание угла по потенциометру всех четырёх плат: ``ph 0/1``.
+
+        Отличие от ``set_pot_mode``: режим и калибровка ``q`` не сбрасываются,
+        поэтому переключателем можно пользоваться сколько угодно раз. Включение
+        требует прошивку fw24 (иначе плата молча проигнорирует неизвестную
+        команду), режим с потенциометром и выполненную калибровку: без датчика
+        удержание невозможно, и экран не должен выдавать его за включённое.
+        """
+        if not self.serial_ready.is_set():
+            return {"ok": False, "reason": "serial_unavailable"}
+        now = time.time() if now is None else now
+        with self.lock:
+            frames = dict(self.frames)
+            drive_active = self._module_drive_active()
+        if any(mid not in frames or now - frames[mid][1] >= self.STALE_S for mid in MODULE_TITLES):
+            return {"ok": False, "reason": "module_offline"}
+        values = [frames[mid][0] for mid in MODULE_TITLES]
+        # Прошивка до fw24 не знает ph: для 'off' это тоже отказ, иначе экран
+        # показал бы «выключено», не получив подтверждения от платы.
+        if any((f.get("firmware") or 0) < POT_HOLD_FIRMWARE for f in values):
+            return {"ok": False, "reason": "firmware_update_required"}
+        if action not in {"on", "off"}:
+            return {"ok": False, "reason": "invalid_action"}
+        if action == "on":
+            if drive_active or any(f.get("moving") or f.get("calib") or f.get("cycle")
+                                   or (f.get("drivePercent") or 0) != 0 for f in values):
+                return {"ok": False, "reason": "module_busy"}
+            if any(f.get("potMode") is False for f in values):
+                return {"ok": False, "reason": "pot_mode_off"}
+            # pot=1 — датчик откалиброван командой q и ноль руля задан.
+            if any(not f.get("pot") for f in values):
+                return {"ok": False, "reason": "pot_not_calibrated"}
+        # Выключение проходит и на ходу, и без калибровки: пока удержание само
+        # подтягивает угол, плата занята, и запрет «идёт движение» оставил бы
+        # оператора без выключателя. Ничего опасного ph 0 не делает.
+        command = b"ph 1\n" if action == "on" else b"ph 0\n"
+        result = self._queue_motion(command)
+        return {"ok": True, "queued": True, "potHold": action == "on"} if result["ok"] else result
 
     def calibrate_module(self, module, now=None):
         """Калибровка по оптодатчику одного модуля (FL/FR/RL/RR) или всех (ALL).
@@ -2865,6 +2923,7 @@ class MasterSource:
                                "fullZeroFault": frame.get("fullZeroFault"),
                                "pot": frame.get("pot", False),
                                "potMode": frame.get("potMode"),
+                               "potHold": frame.get("potHold"),
                                # SC отдельно от старых rpm/tach; знак не измеряется.
                                "tach": frame.get("tach"),
                                "driveMaxPercent": frame.get("driveMaxPercent"),
@@ -2885,7 +2944,8 @@ class MasterSource:
                 motors.append({"id": mid, "title": MODULE_TITLES[mid], "angle": None,
                                "targetAngle": None, "rpm": None, "temp": None,
                                "drivePercent": None, "homed": None, "online": False, "fault": None,
-                               "pot": None, "tach": None, "driveMaxPercent": None,
+                               "pot": None, "potMode": None, "potHold": None,
+                               "tach": None, "driveMaxPercent": None,
                                "driveDutyPermille": None, "driveServoValue": None, "tachHz": None,
                                "scRpm": None, "scHz": None, "scPpr": None, "scCount": None, "scRecent": None,
                                "brakeId": None, "neutralId": None, "neutralLocked": None,

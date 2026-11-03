@@ -3,7 +3,9 @@
 * Пины, уровни и скорости берутся из скетча, проверенного на железе
   (firmware/reference/steering_tested) — расхождение ловится здесь, а не на роботе.
 * I²C вырезан: каждое колесо — своя плата на своём USB, fw22+ сообщает
-  CRC-защищённую роль; fw23 сохраняет поправку полного нуля в EEPROM.
+  CRC-защищённую роль; fw23 сохраняет поправку полного нуля в EEPROM;
+  fw24 добавляет активное удержание угла по потенциометру (команда ``ph``,
+  бит состояния 0x8000 и поле ``ph=``).
 * tests/firmware_sim — хост-симуляция четырёх плат (TB6600, оптодатчик D18):
   калибровка из разных положений, ошибки датчика, команды монитора, тяга и
   watchdog. Нужен g++; без него тест пропускается.
@@ -175,7 +177,7 @@ def test_firmware_transmits_its_wheel_role_in_checked_telemetry():
     # Addressed commands remain compatible; the server verifies the role
     # before sending anything to an automatically discovered port.
     assert 'classifyModuleToken' in text
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '23'
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '24'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
@@ -194,7 +196,7 @@ def test_telemetry_period_and_safety_fields_are_present():
     assert "telemetryCrc16" in text
     # Диагностический канал SC отделён от полей старой одометрии.
     for field in ("deg=", "tgt=", "moving=", "cal=", "cycle=", "calib=",
-                  "opto=", "home=", "err=", "drive=", "fw=", "pot=", "pm=", "t=",
+                  "opto=", "home=", "err=", "drive=", "fw=", "pot=", "pm=", "ph=", "t=",
                   "tach=0", "dmax=", "sv=", "duty=", "sc_rpm=", "sc_hz=", "sc_ppr=", "sc_count=", "sc_recent=", "live_id=", "live_seq="):
         assert field in text, field
     telemetry = re.search(r'PSTR\("(@TLM [^"\n]+)', text).group(1)
@@ -267,6 +269,46 @@ def test_pot_correction_cannot_drag_the_wheel_after_a_lying_sensor():
     # обе причины, а не отправлять оператора перекалибровывать исправный датчик.
     assert "доводка отключена; проверьте колесо или q" in core
     assert "нужна q" not in core
+
+
+def test_pot_hold_is_a_separate_command_and_loop():
+    """Активное удержание угла: команда ph, отдельная петля и честные пределы.
+
+    ``pm`` для частого переключателя не годится — он сбрасывает калибровку q.
+    Удержание живёт своим флагом, идёт через общий ``startMotor`` (значит, s,
+    watchdog и E-STOP гасят его теми же путями) и имеет собственные пороги.
+    """
+    text = _text(WHEEL)
+    core = _core(WHEEL)
+    assert "POT_HOLD_DEADBAND_DEG" in core
+    assert float(_const(core, "POT_HOLD_DEADBAND_DEG")) == 2.0
+    assert int(_const(core, "POT_HOLD_CONFIRM_MS")) == 400
+    assert int(_const(core, "POT_HOLD_STEP_PERIOD_US")) == 400
+    assert float(_const(core, "POT_HOLD_MAX_DEG")) == 15.0
+    assert int(_const(core, "POT_HOLD_MAX_PASSES")) == 6
+    # Команда ph 0|1 и флаг, который после старта платы выключен.
+    assert 'strcasecmp_P(command, PSTR("ph"))' in core
+    assert 'PSTR("Шаблон: ph 0|1")' in core
+    assert "bool pot_hold = false;" in core
+    # Петля вызывается из steeringLoop рядом с доводкой.
+    loop = core[core.index("void steeringLoop()"):]
+    loop = loop[:loop.index("\n}\n")]
+    assert "updateFeedback();" in loop and "updatePotHold();" in loop
+    # Удержание начинает ход только через общий startMotor().
+    hold = core[core.index("void updatePotHold()"):]
+    hold = hold[:hold.index("\n}\n")]
+    assert "startMotor(" in hold and "POT_HOLD_STEP_PERIOD_US" in hold
+    assert "digitalWrite(STEP_PUL_PIN" not in hold
+    # Stop/b/нейтраль и калибровки гасят удержание, а не приостанавливают.
+    assert "stopPotHold();" in core
+    assert core.count("stopPotHold()") >= 6
+    # Калибровку ph, в отличие от pm, не сбрасывает.
+    enable = core[core.index("bool startPotHold()"):]
+    enable = enable[:enable.index("\n}\n")]
+    assert "pot_calibrated = false" not in enable and "pot_zero_valid = false" not in enable
+    # Биты: удержание занимает свободный старший 0x8000, а не 0x0200 из кода
+    # ошибки калибровки (8–11), иначе err= врал бы.
+    assert int(_const(core, "STATUS_POT_HOLD"), 0) == 0x8000
 
 
 def test_pot_slope_survives_reboot_via_eeprom():
@@ -347,7 +389,7 @@ def test_fast_and_full_simulated_frames_encode_the_same_instant(simulator):
     fast = backend.parse_master_line(short, module="FR")
     slow = backend.parse_master_line(full, module="FR")
     assert fast is not None and fast == slow
-    assert fast["firmware"] == 23 and fast["mod"] == "FR" and fast["liveId"] == 42 and fast["liveSeq"] == 3
+    assert fast["firmware"] == 24 and fast["mod"] == "FR" and fast["liveId"] == 42 and fast["liveSeq"] == 3
     assert backend.parse_master_line(short) == fast
     assert backend.parse_master_line(full) == slow
     assert backend.parse_master_line(short, module="FL") is None
@@ -381,7 +423,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 23 and frame["calibError"] == 0
+        assert frame["firmware"] == 24 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] is None
         assert frame["tach"] is False and frame["tachHz"] is None
         assert frame["scRpm"] == 0.0 and frame["scHz"] == 0 and frame["scPpr"] == 90

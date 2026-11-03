@@ -2786,6 +2786,8 @@
     });
 
     if (window.RCPotMode) window.RCPotMode.render(document.querySelector('.steer-calib-bar'), d, steeringAuthorized);
+    // Активное удержание угла: состояние — только из potHold телеметрии.
+    if (window.RCPotHold) window.RCPotHold.render(document.querySelector('.steer-calib-bar'), d, steeringAuthorized);
     const calibAll = $('steer-calib-all');
     if (calibAll) {
       const online = motors.filter((m) => m && m.online === true);
