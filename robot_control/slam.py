@@ -795,6 +795,8 @@ ASSETS = {
     "robot_model.js": "robot_model_js",
     "map.css": "map_css",
     "map_view.js": "map_view_js",
+    # автообследование: статус, пуск/стоп и визуальные ориентиры
+    "explore.js": "explore_js",
     "viewport.js": "viewport_js",
     "camera_view.js": "camera_view_js",
     "styles.css": "styles_css",
@@ -1252,7 +1254,8 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
 
     # The onboard process owns the map. The web process must never build a
     # second grid or race it when saving the same files.
-    from .map_peer import proxy_map, proxy_navigation
+    from .map_peer import (proxy_map, proxy_navigation, proxy_exploration,
+                          proxy_sensors, proxy_landmark_file)
 
     for suffix, methods in (("", ["GET"]), ("/settings", ["GET", "POST"]),
                             ("/reset", ["POST"]), ("/save", ["POST"])):
@@ -1317,6 +1320,75 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         if not navigation_control_allowed():
             return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
         return navigation_proxy("/estop")
+
+    # ---------- автообследование: те же вход, CSRF и владелец железа -------- #
+    def exploration_proxy(suffix):
+        return proxy_exploration(peer_kiosk_url().removesuffix("/api/kiosk_state"), suffix)
+
+    def sensors_proxy(suffix):
+        return proxy_sensors(peer_kiosk_url().removesuffix("/api/kiosk_state"), suffix)
+
+    def exploration_control_allowed():
+        if request.headers.get("X-Robot-Control") != "exploration":
+            return False
+        return csrf_header_ok is not None and bool(csrf_header_ok())
+
+    @bp.get("/api/exploration/status")
+    @guard
+    def api_exploration_status():
+        response = exploration_proxy("/status")
+        if isinstance(response, tuple):
+            response_obj, status_code = response[0], response[1]
+        else:
+            response_obj, status_code = response, response.status_code
+        if csrf_token_provider and getattr(response_obj, "is_json", False):
+            payload = response_obj.get_json(silent=True)
+            if isinstance(payload, dict):
+                payload["csrfToken"] = csrf_token_provider()
+                return jsonify(payload), status_code, {"Cache-Control": "no-store"}
+        return response
+
+    @bp.post("/api/exploration/start")
+    @guard
+    def api_exploration_start():
+        if not exploration_control_allowed():
+            return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
+        return exploration_proxy("/start")
+
+    @bp.post("/api/exploration/stop")
+    @guard
+    def api_exploration_stop():
+        if not exploration_control_allowed():
+            return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
+        return exploration_proxy("/stop")
+
+    @bp.get("/api/exploration/landmarks")
+    @guard
+    def api_exploration_landmarks():
+        return exploration_proxy("/landmarks")
+
+    @bp.post("/api/exploration/landmarks/clear")
+    @guard
+    def api_exploration_landmarks_clear():
+        if not exploration_control_allowed():
+            return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
+        return exploration_proxy("/landmarks/clear")
+
+    @bp.get("/api/exploration/landmark/<name>")
+    @guard
+    def api_exploration_landmark_file(name):
+        return proxy_landmark_file(
+            peer_kiosk_url().removesuffix("/api/kiosk_state"), name)
+
+    @bp.get("/api/sensors/layout")
+    @guard
+    def api_sensors_layout():
+        return sensors_proxy("/layout")
+
+    @bp.get("/api/kinect/status")
+    @guard
+    def api_kinect_status():
+        return sensors_proxy("/kinect")
 
     # --------- экран киоска на борту робота: без авторизации -------- #
     # Открывается локально в киоск-браузере на роботе; телеметрия публична,

@@ -579,3 +579,23 @@
 .map-wheel-colors legend { color: var(--map-text); font-weight: 700; padding: 0 5px; }
 .map-wheel-colors .map-note { margin: 0; line-height: 1.5; }
 .map-wheel-colors input[type="color"] { width: 100%; min-height: 40px; padding: 4px; background: var(--map-panel); border: 1px solid var(--map-line); border-radius: 8px; cursor: pointer; }
+
+/* ---- Автономное обследование (карта, маршрут) ---- */
+.explore-panel { margin-top: 10px; }
+.explore-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px 10px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.explore-kpis b { color: var(--text, #f3f3f3); font-weight: 600; }
+.explore-check { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; font-size: 12px; line-height: 1.4; }
+.explore-check input { margin-top: 2px; }
+.explore-meta { margin: 4px 0; font-size: 11px; opacity: .8; overflow-wrap: anywhere; }
+.explore-landmarks { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.explore-landmark { display: flex; gap: 6px; align-items: center; font-size: 11px; flex-wrap: wrap; }
+.explore-landmark img { width: 56px; height: 36px; object-fit: cover; border: 1px solid var(--line, #444); border-radius: 4px; }
+.explore-landmark span { min-width: 130px; }
+#explore-kinect.ok, #explore-enabled.ok, #explore-calibration.ok { color: #36c275; }
+#explore-kinect.bad, #explore-enabled.bad, #explore-calibration.bad { color: #e35d6a; }

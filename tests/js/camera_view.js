@@ -49,9 +49,11 @@ for (const filename of ['viewport.js','camera_view.js']) {
 }
 const camera = context.RCCameraView;
 camera.setActive(true);
-assert.equal(images.length,2);
+assert.equal(images.length,4,'four C930e cameras are polled');
 assert.match(images[0].src,/camera\/0\/frame/);
 assert.match(images[1].src,/camera\/1\/frame/);
+assert.match(images[2].src,/camera\/2\/frame/);
+assert.match(images[3].src,/camera\/3\/frame/);
 images[0].onerror(); images[1].onload();
 assert.equal(get('cam1-empty').hidden,false);
 assert.equal(get('cam2-empty').hidden,true);

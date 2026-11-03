@@ -89,12 +89,36 @@
 
           <p class="route-win-msg" id="route-win-msg" role="status" aria-live="polite">Укажите цель на карте или введите координаты X и Y.</p>
           <p class="nav-safety-note" id="nav-safety-note">Габариты робота 75×60×30 см, лидар установлен спереди (+35 см). Крабовый и прямой ход в пределах ±28°. Обход препятствия — до <b>3</b> попыток, остановленный маршрут продолжается кнопкой «Продолжить».</p>
+
+          <section class="nav-panel explore-panel" aria-label="Автономное обследование">
+            <header class="nav-panel-head">
+              <b>Автообследование</b>
+              <span id="explore-status" class="nav-status" data-phase="idle">ожидание</span>
+            </header>
+            <p class="nav-hint">Сам достраивает карту: лидар + Kinect 360, снимки с 4 камер. E-STOP и «Стоп» останавливают сразу.</p>
+            <div class="explore-kpis">
+              <span>Покрытие: <b id="explore-coverage">—</b></span>
+              <span>Шаги: <b id="explore-steps">—</b></span>
+              <span>Границы: <b id="explore-frontiers">—</b></span>
+              <span>Kinect: <b id="explore-kinect">—</b></span>
+              <span>Режим: <b id="explore-enabled">—</b></span>
+            </div>
+            <label class="explore-check"><input type="checkbox" id="explore-blind" /> Ближняя зона осмотрена</label>
+            <div class="nav-actions">
+              <button type="button" id="explore-start" class="map-btn map-btn--primary">Начать обследование</button>
+              <button type="button" id="explore-stop" class="map-btn map-btn--danger">Стоп</button>
+            </div>
+            <p class="nav-msg" id="explore-message" role="status" aria-live="polite">Обследование не запущено.</p>
+            <p class="explore-meta">Камеры: <span id="explore-cameras">—</span></p>
+            <p class="explore-meta">Калибровка: <span id="explore-calibration">—</span></p>
+            <div id="explore-landmarks" class="explore-landmarks"></div>
+          </section>
         </aside>
       </div>
     </section>
   </div>
 </main>
-<script src="/slam_auth.js"></script><script src="viewport.js"></script><script src="/robot_model.js"></script><script src="/lidar_view.js"></script><script src="map_view.js"></script>
+<script src="/slam_auth.js"></script><script src="viewport.js"></script><script src="/robot_model.js"></script><script src="/lidar_view.js"></script><script src="map_view.js"></script><script src="explore.js"></script>
 <script>
 const token = new URLSearchParams(location.search).get('st');
 if (token) {

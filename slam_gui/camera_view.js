@@ -11,7 +11,8 @@
   function init() {
     if (initialized) return;
     initialized = true;
-    for (const n of [1, 2]) {
+    // Четыре C930e: FL, RL, FR, RR. Первые две сохраняют старые id 0/1.
+    for (const n of [1, 2, 3, 4]) {
       const canvas = $('cam' + n + '-canvas');
       const view = $('cam' + n + '-view');
       if (!canvas || !view) continue;
@@ -79,9 +80,10 @@
     const dot = $('cam' + n + '-dot');
     if (dot) dot.classList.toggle('ok', live);
     const meta = $('cam' + n + '-meta');
+    const names = { 1: 'передней левой', 2: 'задней левой', 3: 'передней правой', 4: 'задней правой' };
     if (meta) meta.textContent = live
       ? camera.frame.naturalWidth + '×' + camera.frame.naturalHeight + ' · цифровой зум до 8×'
-      : 'ожидание камеры ' + (n === 1 ? 'передней' : 'задней');
+      : 'ожидание камеры ' + (names[n] || String(n));
   }
 
   function poll(camera) {
