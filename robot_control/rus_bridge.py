@@ -94,7 +94,10 @@ def plan_motion(kin: SwerveKinematics, vx: float, vy: float, wz: float, *,
     percent = int(round((sum(speeds) / len(speeds)) / mps_per_percent))
     if abs(percent) > max_drive_percent:
         return Plan(ok=False, reason="drive_limit")
-    steer = {name: round(common_deg, 1) for name, _, _ in folded}
+    # rus_core/карта: +Y и положительный угол — влево (против часовой).
+    # Прошивка и WASD: положительный угол руля — вправо. Перевод обязателен
+    # и для переднего, и для заднего хода; знак тяги не меняем.
+    steer = {name: round(-common_deg, 1) for name, _, _ in folded}
     return Plan(ok=True, steer_deg=steer, percent=percent)
 
 

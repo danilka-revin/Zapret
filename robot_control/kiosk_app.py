@@ -728,11 +728,13 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             try:
                 manager = LidarManager.get_instance()
                 if manager is not None:
-                    stamp = manager.scan_stamp()
-                    points = manager.get_scan()
+                    scan_info = manager.get_scan_info()
+                    points, stamp = scan_info["points"], scan_info["stamp"]
                     if points and stamp and stamp != last_stamp:
                         last_stamp = stamp
-                        map_service.ingest(points)
+                        # Сохраняем время получения скана, не время окончания
+                        # медленного scan matching: устаревшая поза не свежая.
+                        map_service.ingest(points, stamp=stamp, trusted=scan_info["trusted"])
                 map_service.maybe_autosave()
             except Exception as exc:  # noqa: BLE001 — карта не должна ронять сервер
                 log.debug("карта лидара: %s", exc)

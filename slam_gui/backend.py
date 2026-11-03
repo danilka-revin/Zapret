@@ -3403,6 +3403,7 @@ class RosSource:
             self.scan_at = time.time()
             try:
                 from robot_control.lidar import LidarManager
+                from robot_control.ros_lidar import laserscan_stamp
                 LidarManager.get_instance().feed_scan_msg(
                     ranges=list(msg.ranges),
                     angle_min=float(msg.angle_min),
@@ -3411,6 +3412,7 @@ class RosSource:
                     range_min=float(msg.range_min),
                     range_max=float(msg.range_max),
                     source_label="ros",
+                    stamp=laserscan_stamp(msg),
                 )
             except Exception:
                 pass

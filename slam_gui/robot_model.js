@@ -137,7 +137,8 @@
     ctx.beginPath(); ctx.moveTo(.20 * k, 0); ctx.lineTo(-.08 * k, -.10 * k);
     ctx.lineTo(-.04 * k, 0); ctx.lineTo(-.08 * k, .10 * k); ctx.closePath(); ctx.fill();
     ctx.fillStyle = live.estop ? '#c0505a' : pal.edge;
-    ctx.beginPath(); ctx.arc(.35 * k, 0, Math.max(3, .045 * k), 0, Math.PI * 2); ctx.fill();
+    const lidarOffset = Number.isFinite(options.lidarOffsetM) ? options.lidarOffsetM : .35;
+    ctx.beginPath(); ctx.arc(lidarOffset * k, 0, Math.max(3, .045 * k), 0, Math.PI * 2); ctx.fill();
     ctx.restore();
     return live;
   }

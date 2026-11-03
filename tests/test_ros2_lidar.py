@@ -186,7 +186,9 @@ def test_ros_lidar_counts_points_and_reports_freshness():
 
     ros = RosLidar(on_scan, topic="/scan")
     assert ros.fresh() is False
-    assert ros.feed_laserscan(**laserscan(360)) == 360
+    stamp = time.time() - 0.1
+    assert ros.feed_laserscan(**laserscan(360), stamp=stamp) == 360
+    assert seen["stamp"] == stamp
     assert seen["source_label"] == "ros"
     assert seen["range_max"] == 12.0
     assert ros.fresh() is True
@@ -466,3 +468,13 @@ def test_kiosk_state_carries_ros_diagnostics_for_the_screen(client, operator):
     # Публичного статуса супервизора нет — значит, драйвер не запущен: подсказка
     # обязана вести к запуску драйвера, а не к «проверь кабель».
     assert "ros2_lidar.sh" in ros["hint"] or "ros2_setup.sh" in ros["hint"]
+
+
+def test_capture_timestamp_is_extracted_from_ros_header():
+    from types import SimpleNamespace as NS
+    from robot_control.ros_lidar import laserscan_stamp
+    sec = int(time.time())
+    assert laserscan_stamp(NS(header=NS(stamp=NS(sec=sec, nanosec=123456789)))) == pytest.approx(sec + 0.123456789)
+    assert laserscan_stamp(NS()) is None
+    assert laserscan_stamp(NS(header=NS(stamp=NS(sec=sec, nanosec=1_000_000_000)))) is None
+    assert laserscan_stamp(NS(header=NS(stamp=NS(sec=-1, nanosec=0)))) is None

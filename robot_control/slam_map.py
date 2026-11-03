@@ -69,6 +69,20 @@ MATCH_COARSE_POINTS = 32
 #: ложных UNKNOWN-клеток, мешающих выбору цели на карте.
 SCAN_STRIDE = 1
 
+# Поза скан-матчера относится к датчику, а путь/габарит — к центру корпуса.
+# Значение должно совпадать с RC_LIDAR_OFFSET_M в навигации.
+DEFAULT_LIDAR_OFFSET_M = 0.35
+
+
+def lidar_mount_offset() -> float:
+    try:
+        value = float(os.environ.get("RC_LIDAR_OFFSET_M", DEFAULT_LIDAR_OFFSET_M))
+    except (TypeError, ValueError):
+        return DEFAULT_LIDAR_OFFSET_M
+    if not math.isfinite(value):
+        return DEFAULT_LIDAR_OFFSET_M
+    return max(0.0, min(1.5, value))
+
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
@@ -229,6 +243,7 @@ class OccupancyGrid:
         max_range = settings.max_range
         min_range = settings.min_range
         touched = 0
+        hit_indices: set[int] = set()
         origin_x, origin_y = self.origin
         res = self.res
         width = self.width
@@ -277,6 +292,10 @@ class OccupancyGrid:
                 for index in range(1, steps):
                     fx += step_x
                     fy += step_y
+                    # В ближней слепой зоне датчик не подтверждает свободное
+                    # пространство. Не превращаем её автоматически в free.
+                    if distance * index / steps < min_range:
+                        continue
                     ix = int(fx)
                     iy = int(fy)
                     if not (0 <= ix < width and 0 <= iy < height):
@@ -296,7 +315,13 @@ class OccupancyGrid:
                     current = 0
                 value = 100.0 - (100.0 - current) * (1.0 - hit_step)
                 data[cell] = max(0, min(100, int(round(value))))
+                hit_indices.add(cell)
                 touched += 1
+        # Конец любого луча в этом скане — препятствие, даже если соседние
+        # лучи пересекли ту же клетку или выбран низкий параметр hit. Нельзя
+        # превращать наблюдаемое препятствие в свободную клетку в том же кадре.
+        for index in hit_indices:
+            data[index] = max(PGM_OCCUPIED_PCT, data[index])
         # Заполняем одиночные UNKNOWN-пропуски между расходящимися лучами,
         # если по противоположным сторонам уже подтверждено свободное место.
         if touched and min_ix < max_ix and min_iy < max_iy:
@@ -310,6 +335,12 @@ class OccupancyGrid:
                 for ix in range(x_start, x_end + 1):
                     idx = row + ix
                     if data[idx] != UNKNOWN:
+                        continue
+                    cell_x = origin_x + (ix + 0.5) * res
+                    cell_y = origin_y + (iy + 0.5) * res
+                    # Не восстанавливаем "свободу" внутри слепого круга из
+                    # интерполяции соседних лучей.
+                    if math.hypot(cell_x - px, cell_y - py) <= min_range + res * math.sqrt(0.5):
                         continue
                     left = data[idx - 1]
                     right = data[idx + 1]
@@ -467,12 +498,20 @@ class PoseEstimator:
         """
         current = self.robot_points(points)
         if not current:
+            self.quality = 0.0
+            self.matched = 0
             return self.pose
         if not enabled or not self.prev:
+            self.quality = 0.0
+            self.matched = 0
             self.prev = current
             return self.pose
         delta = self._match(self.prev, current)
-        if delta is not None:
+        if delta is None:
+            # Качество предыдущей успешной пары нельзя использовать для новой,
+            # которую сопоставить не удалось: карта может быть свежей, а поза — нет.
+            self.quality = 0.0
+        else:
             dx, dy, dyaw = delta
             px, py, yaw = self.pose
             cos_y, sin_y = math.cos(yaw), math.sin(yaw)
@@ -561,7 +600,11 @@ class PoseEstimator:
         if best is None:
             return None
         # Точный поиск вокруг лучшего — уже по полному набору точек.
+        # Стоимость и число совпадений грубой подвыборки несопоставимы с
+        # полным набором. Иначе идеальный неподвижный скан давал качество
+        # около 0.5 и не проходил предрейсовую проверку.
         base_dx, base_dy, base_dyaw = best
+        best_cost, best_hits = self._cost(buckets, source, *best)
         for dx in (-0.1, -0.05, 0.0, 0.05, 0.1):
             for dy in (-0.1, -0.05, 0.0, 0.05, 0.1):
                 for dyaw_deg in (-2.5, -1.25, 0.0, 1.25, 2.5):
@@ -657,6 +700,7 @@ class SlamMapService:
         self._settings = settings or MapSettings()
         self._grid = OccupancyGrid(self._settings)
         self._pose = PoseEstimator()
+        self._lidar_offset_m = lidar_mount_offset()
         self._directory = Path(directory) if directory is not None else None
         self._png_cache: Optional[bytes] = None
         self._dirty = True      # карта изменилась — файл пора перезаписать
@@ -670,6 +714,10 @@ class SlamMapService:
         # Монотонная ревизия для навигации: цель нужно перепланировать, если
         # карта изменилась между расчётом пути и отправкой моторам.
         self._revision = 0
+        # В карту можно подавать внешние API-сканы для визуализации, но их
+        # происхождение нельзя выдать за подтверждённый физический датчик.
+        self._trusted = True
+        self._navigation_integrity = True
 
     # -- настройки ---------------------------------------------------------- #
     @property
@@ -693,6 +741,12 @@ class SlamMapService:
             self._settings = new
             if geometry_changed:
                 self._grid = OccupancyGrid(new)
+                self._pose.reset()
+                self._scans = 0
+                self._points = 0
+                self._updated_at = 0.0
+                self._trusted = True
+                self._navigation_integrity = True
                 self._png_cache = None
                 self._dirty = True
                 self._png_stale = True
@@ -719,6 +773,12 @@ class SlamMapService:
                 with self._lock:
                     self._settings = MapSettings.from_dict(raw)
                     self._grid = OccupancyGrid(self._settings)
+                    self._pose.reset()
+                    self._scans = 0
+                    self._points = 0
+                    self._updated_at = 0.0
+                    self._trusted = True
+                    self._navigation_integrity = True
                     self._png_cache = None
                     self._dirty = True
                     self._png_stale = True
@@ -727,14 +787,24 @@ class SlamMapService:
             pass
 
     # -- скан --------------------------------------------------------------- #
-    def ingest(self, points: Sequence[dict], stamp: Optional[float] = None) -> bool:
+    def ingest(self, points: Sequence[dict], stamp: Optional[float] = None,
+               *, trusted: bool = True) -> bool:
         """Вписать скан в карту. True — карта изменилась."""
         if not points:
             return False
         with self._lock:
             settings = self._settings
-            pose = self._pose.update(points, enabled=settings.matching)
-            self._grid.insert_scan(pose, points, settings)
+            self._trusted = self._trusted and trusted is True
+            # Вернуть matching/decay обратно в настройках недостаточно: карта,
+            # уже испорченная их предыдущими значениями, требует сброса.
+            self._navigation_integrity = (self._navigation_integrity
+                                          and settings.matching and settings.decay == 0)
+            sensor = self._pose.update(points, enabled=settings.matching)
+            # Скан-матчер начинается в (0, 0) на оси датчика. Переносим весь
+            # его фрейм на начальный сдвиг лидара: центр корпуса на старте
+            # остаётся в (0, 0), а лучи исходят из переднего датчика.
+            sensor_pose = (sensor[0] + self._lidar_offset_m, sensor[1], sensor[2])
+            self._grid.insert_scan(sensor_pose, points, settings)
             self._scans += 1
             self._points += len(points)
             self._updated_at = time.time() if stamp is None else stamp
@@ -774,6 +844,8 @@ class SlamMapService:
             self._updated_at = time.time()
             self._scans = 0
             self._points = 0
+            self._trusted = True
+            self._navigation_integrity = True
             self._revision += 1
             saved = self.save() if save else {"ok": True, "paths": map_paths(self._directory)}
             return {"ok": True, "paths": saved.get("paths") or map_paths(self._directory),
@@ -809,6 +881,12 @@ class SlamMapService:
         self.save()
 
     # -- снимок для экрана -------------------------------------------------- #
+    def _body_pose(self) -> tuple[float, float, float]:
+        sensor_x, sensor_y, yaw = self._pose.pose
+        offset = self._lidar_offset_m
+        return (sensor_x + offset - offset * math.cos(yaw),
+                sensor_y - offset * math.sin(yaw), yaw)
+
     def png(self) -> bytes:
         with self._lock:
             if self._png_cache is None or self._png_stale:
@@ -820,7 +898,7 @@ class SlamMapService:
         """Всё, что нужно экрану: настройки, статистика, поза, картинка карты."""
         with self._lock:
             stats = self._grid.stats()
-            pose = self._pose.pose
+            pose = self._body_pose()
             payload = {
                 "ok": True,
                 "settings": self._settings.to_dict(),
@@ -830,6 +908,7 @@ class SlamMapService:
                 "origin": {"x": round(self._grid.origin[0], 3),
                            "y": round(self._grid.origin[1], 3)},
                 "quality": self._pose.quality,
+                "lidarOffsetM": self._lidar_offset_m,
                 "matched": self._pose.matched,
                 "scans": self._scans,
                 "points": self._points,
@@ -853,7 +932,7 @@ class SlamMapService:
         кодируется: путь рассчитывается по occupancy grid.
         """
         with self._lock:
-            pose = self._pose.pose
+            pose = self._body_pose()
             return {
                 "data": bytes(self._grid.data),
                 "width": self._grid.width,
@@ -867,5 +946,8 @@ class SlamMapService:
                 "points": self._points,
                 "updatedAt": self._updated_at,
                 "revision": self._revision,
+                "lidarOffsetM": self._lidar_offset_m,
+                "trusted": self._trusted,
+                "navigationIntegrity": self._navigation_integrity,
                 "settings": self._settings.to_dict(),
             }

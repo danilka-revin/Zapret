@@ -241,6 +241,7 @@ def test_lidar_check_suggests_stable_port_name(
 def real_payload(points: int = 360) -> dict:
     return {
         "ok": True, "connected": True, "demo": False, "source": "serial:ttyUSB1",
+        "scan_trusted": True,
         "points_count": points, "age_s": 0.1, "scan": [{"a": 0.0, "r": 1.5}] * points,
         "detected": {"port": "/dev/ttyUSB1", "protocol": "lds01", "baud": 230400,
                      "motor": "none"},
@@ -287,6 +288,24 @@ def test_web_check_accepts_real_scan_on_both_screens(api_server, capsys):
     assert "pyserial: 3.5" in out
 
 
+@pytest.mark.parametrize("trusted", [False, None, "true"])
+def test_web_check_rejects_visible_but_untrusted_scan(api_server, capsys, trusted):
+    url, state = api_server
+    state["payload"] = dict(real_payload(), source="api")
+    if trusted is None:
+        state["payload"].pop("scan_trusted")
+    else:
+        state["payload"]["scan_trusted"] = trusted
+    module = load_web_check()
+    assert module.main(["--only", "kiosk", "--kiosk-url", url, "--wait", "0"]) == 1
+    assert "скан виден, но источник или время не подтверждены" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("points", [0, -1, True, "360"])
+def test_web_check_requires_positive_integer_point_count(points):
+    assert not load_web_check().real_scan(dict(real_payload(), points_count=points))
+
+
 def test_web_check_rejects_demo_scan(api_server, capsys):
     url, state = api_server
     state["payload"] = dict(real_payload(), connected=False, demo=True, source="no_signal",
@@ -296,7 +315,8 @@ def test_web_check_rejects_demo_scan(api_server, capsys):
     assert module.main(["--console-url", url, "--kiosk-url", url, "--wait", "0"]) == 1
     out = capsys.readouterr().out
     assert "ДЕМО-скан вместо реального лидара" in out
-    assert "lidar_check.py --save-env" in out
+    assert "ros2_lidar.sh --status" in out
+    assert "активный перебор портов" in out
 
 
 def test_web_check_reports_missing_pyserial(api_server, capsys):

@@ -18,6 +18,7 @@ import pytest
 from robot_control import navigation as nav
 from robot_control.navigation import NavigationError, NavigationService, plan_grid_path, plan_route
 
+LIDAR_OFFSET_M = 0.35  # лидар закреплён впереди центра корпуса, как на роботе
 STEP_M = 0.1          # сколько метров проходит фальшивое шасси за один тик
 CLOCK_STEP = 0.2      # сколько «секунд» длится один тик в подставных часах
 
@@ -95,7 +96,11 @@ class FakeMap:
                 "points": 400,
                 "updatedAt": self.clock(),
                 "revision": self.revision,
-                "settings": {"min_range": 0.3},
+                # Карта настоящая: сопоставление включено, препятствия не забываются.
+                "trusted": True,
+                "navigationIntegrity": True,
+                "lidarOffsetM": 0.35,
+                "settings": {"min_range": 0.3, "matching": True, "decay": 0},
             }
 
 
@@ -108,48 +113,97 @@ class FakeLidar:
         self.stale = False
 
     def get_scan(self, max_age=None):
+        return self.get_scan_info(max_age).get("points")
+
+    def get_scan_info(self, max_age=None):
+        """Как отдаёт настоящий менеджер: точки витка и признак доверия."""
         if self.stale:
-            return None
+            return {"points": [], "trusted": False, "reason": "stale"}
         x, y, yaw = self.world.pose()
-        points = []
+        # Лидар стоит впереди центра корпуса: точки приходят относительно него.
+        sensor_x = x + LIDAR_OFFSET_M * math.cos(yaw)
+        sensor_y = y + LIDAR_OFFSET_M * math.sin(yaw)
+        # Полный виток: сервер требует плотный скан без больших пропусков.
+        points = [{"a": math.radians(deg), "r": 5.0} for deg in range(0, 360)]
         for ox, oy in self.obstacles:
-            dx, dy = ox - x, oy - y
+            dx, dy = ox - sensor_x, oy - sensor_y
             distance = math.hypot(dx, dy)
             if distance > 6.0:
                 continue
             angle = math.atan2(dy, dx) - yaw
             points.append({"a": math.atan2(math.sin(angle), math.cos(angle)),
                            "r": distance})
-        # Пустой скан означал бы «лидар устарел»: добавляем точку вне коридора.
-        points.append({"a": math.pi / 2.0, "r": 5.0})
-        return points
+        return {"points": points, "trusted": True, "reason": ""}
 
 
 class FakeSource:
-    """Источник шасси: телеметрия «готов» и журнал отправленной тяги."""
+    """Источник шасси: телеметрия четырёх колёс и журнал команд.
+
+    Исполнитель требует не просто «привод готов», а свежие кадры всех четырёх
+    плат: номер подтверждённого STOP, нулевую тягу, отсутствие движения и
+    растущий счётчик SC. Поэтому фальшивый источник публикует такие кадры так
+    же, как настоящий мастер.
+    """
 
     name = "master"
     supports_drive = True
     supports_individual_steer = True
+    STALE_S = 1.0
+    WHEELS = ("FL", "FR", "RL", "RR")
 
-    def __init__(self):
+    def __init__(self, clock=None):
+        self.clock = clock or time.time
         self.percent = 0
         self.commands: list[tuple] = []
-        self._lock = threading.Lock()
+        self.lock = threading.RLock()
+        self.brake_id = 3
+        self.counters = {name: 100 for name in self.WHEELS}
+        self.frames: dict[str, tuple[dict, float]] = {}
+        self._publish(0)
+
+    def _publish(self, percent: int, brake_id: int | None = None) -> None:
+        now = self.clock()
+        brake = self.brake_id if brake_id is None else brake_id
+        for name in self.WHEELS:
+            self.frames[name] = ({
+                "brakeId": brake,
+                "drivePercent": int(percent),
+                "cal": True,
+                "moving": False,
+                "calib": False,
+                "cycle": False,
+                "scRecent": bool(percent),
+                "firmware": 23,
+                "scCount": self.counters[name],
+                "scRpm": 0.4 if percent else 0.0,
+            }, now)
 
     def drive(self, percent, now=None):
-        with self._lock:
+        with self.lock:
             self.percent = int(percent)
             self.commands.append(("drive", int(percent)))
+            if percent:
+                for name in self.WHEELS:
+                    self.counters[name] = (self.counters[name] + 7) & 0xFFFFFFFF
+            self._publish(self.percent)
         return {"ok": True}
 
     def steer_module(self, name, deg, now=None):
-        with self._lock:
+        with self.lock:
             self.commands.append(("steer", name, deg))
         return {"ok": True}
 
+    def brake_for_keyboard(self, now=None):
+        """Barrier STOP: новая метка торможения и кадры «стоим» со всех плат."""
+        with self.lock:
+            self.brake_id += 1
+            self.percent = 0
+            self.commands.append(("brake", self.brake_id))
+            self._publish(0, brake_id=self.brake_id)
+            return {"ok": True, "brakeId": self.brake_id}
+
     def drive_status(self):
-        with self._lock:
+        with self.lock:
             percent = self.percent
         return {"canDrive": True, "available": True, "active": percent != 0,
                 "commandedPercent": percent, "reason": ""}
@@ -164,9 +218,11 @@ def rig(monkeypatch):
             monkeypatch.delenv("RC_NAV_DETOUR_ATTEMPTS", raising=False)
         else:
             monkeypatch.setenv("RC_NAV_DETOUR_ATTEMPTS", str(detours))
+        # Защитный радиус не меньше половины диагонали корпуса 75×60 см (0,48 м).
+        monkeypatch.setenv("RC_NAV_FOOTPRINT_M", "0.55")
         clock = FakeClock(clock_step)
         world = FakeMap(clock)
-        source = FakeSource()
+        source = FakeSource(clock)
         lidar = FakeLidar(world)
         robot = {"mode": "advance", "steps": 0, "brakes": [], "bridges": 0, "created": []}
 
@@ -331,7 +387,8 @@ def test_executor_stops_in_front_of_an_unknown_obstacle_when_detours_are_off(rig
 def test_executor_detours_around_an_obstacle_and_reaches_the_goal(rig):
     service, world, _source, lidar, robot = rig()
     # Объект сбоку от прямой линии: его можно объехать в пределах ±28°.
-    lidar.obstacles = [(0.9, 0.35)]
+    # Запас 0,55 м (квадрат габарита) требует держаться от него дальше.
+    lidar.obstacles = [(0.9, 0.45)]
     phases = []
     original = service._set_state
 
@@ -340,7 +397,7 @@ def test_executor_detours_around_an_obstacle_and_reaches_the_goal(rig):
         original(**fields)
 
     service._set_state = record  # type: ignore[method-assign]
-    start_to_goal(service, 1.6, 0.0)
+    start_to_goal(service, 2.0, 0.0)
     wait_idle(service)
 
     status = service.status()
@@ -349,7 +406,7 @@ def test_executor_detours_around_an_obstacle_and_reaches_the_goal(rig):
     detours = [item.get("detour") for item in phases if item.get("detour")]
     assert detours and detours[-1] >= 1
     assert "navigation_detour" in robot["brakes"]
-    assert world.pose()[0] > 1.4
+    assert world.pose()[0] > 1.8
 
 
 def test_executor_reports_that_a_detour_is_impossible(rig):
