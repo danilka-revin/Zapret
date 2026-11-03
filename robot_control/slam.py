@@ -562,6 +562,33 @@ def dispatch_pot_mode(source, body):
     return result, 200 if result.get("ok") else 409
 
 
+def dispatch_pot_hold(source, body):
+    """Активное удержание угла (ph 0/1) — отдельно от режима потенциометра.
+
+    Строгий payload: ровно ``{"action": "on"|"off"}``. E-STOP отклоняется до
+    любой работы с платами: удержание двигает колесо, а под защёлкой сервер
+    не отправляет ни одной команды движения.
+    """
+    if estop_latch.latched() is not None:
+        return {"ok": False, "reason": "estop"}, 409
+    if (not isinstance(body, dict) or set(body) != {"action"}
+            or not isinstance(body["action"], str) or body["action"] not in {"on", "off"}):
+        return {"ok": False, "reason": "payload"}, 400
+    command = getattr(source, "set_pot_hold", None)
+    if not callable(command):
+        return {"ok": False, "reason": "control_not_supported"}, 409
+    result = command(body["action"])
+    if result.get("ok"):
+        return result, 200
+    reason = result.get("reason", "command_failed")
+    status = 409
+    if reason in {"serial_unavailable", "module_offline"}:
+        status = 503
+    elif reason in {"payload", "invalid_action"}:
+        status = 400
+    return dict(result, ok=False, reason=reason), status
+
+
 def dispatch_steering_calibration(source, body):
     """Проверить payload и запустить калибровку по оптодатчику (модуль или ALL)."""
     result, status = _steering_calibration(source, body)
@@ -797,6 +824,8 @@ ASSETS = {
     # общие пресеты руления: одни и те же углы на киоске и веб-пульте
     "steer_presets.js": "steer_presets_js",
     "pot_mode.js": "pot_mode_js",
+    # переключатель активного удержания угла (ph): общий для киоска и пульта
+    "pot_hold.js": "pot_hold_js",
     "update.css": "update_css",
     "update.js": "update_js",
     # кнопка «Остановить всё»: пульт, бортовой экран, лидар и окно киоска
@@ -1426,6 +1455,15 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         if not steering_access_valid():
             return jsonify({"ok": False, "reason": "pin_required"}), 401
         result, status = dispatch_pot_mode(state.source, request.get_json(silent=True))
+        return jsonify(result), status
+
+    @bp.post("/api/kiosk_pot_hold")
+    def api_kiosk_pot_hold():
+        if request.headers.get(STEERING_COMMAND_HEADER) != STEERING_COMMAND_HEADER_VALUE:
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        if not steering_access_valid():
+            return jsonify({"ok": False, "reason": "pin_required"}), 401
+        result, status = dispatch_pot_hold(state.source, request.get_json(silent=True))
         return jsonify(result), status
 
     @bp.post("/api/kiosk_calibrate")

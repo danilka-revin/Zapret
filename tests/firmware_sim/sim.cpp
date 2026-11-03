@@ -531,6 +531,274 @@ static void scenario_pot_feedback() {
   CHECK(std::labs(FR::stepNow()) <= 10, "счётчик снова в нуле: %ld", (long)FR::stepNow());
 }
 
+// ---- активное удержание угла по потенциометру (ph, fw24) ----
+// Рука оператора: колесо поворачивается, а счётчик шагов об этом не знает.
+static void manual_shift(double degrees) {
+  board_fr.phys += (long)std::lround(degrees * board_fr.phys_per_degree);
+}
+
+// Колесо не идёт за шагами: вниз его держит упор (stall_phys выше текущего).
+static void block_wheel_downwards() {
+  board_fr.stall_enabled = true;
+  board_fr.stall_phys = board_fr.phys + 10;
+}
+
+static void scenario_pot_hold() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  CHECK(!FR::pot_hold, "после старта платы удержание выключено");
+  board_fr.serial.send("p");
+  sim::run_for_ms(5);
+  CHECK(has(board_fr, "Удержание угла: выключено"),
+        "p печатает выключенное удержание: %s", board_fr.serial.output.c_str());
+
+  board_fr.serial.output.clear();
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(FR::pot_hold, "ph 1 включает удержание: %s", board_fr.serial.output.c_str());
+  CHECK(has(board_fr, "Удержание включено"), "подтверждение включения");
+  CHECK((FR::moduleStatus() & FR::STATUS_POT_HOLD) != 0, "бит 0x8000 в состоянии модуля");
+  CHECK((FR::moduleStatus() & FR::STATUS_POT) != 0, "доводка после ph 1 не пропала");
+  CHECK((FR::moduleStatus() & 0x0F00) == 0, "флаг удержания не сдвинул код ошибки калибровки");
+  FastFrame fast;
+  sim::run_for_ms(40);
+  CHECK(latest_fast_frame(board_fr, &fast) && (fast.status & FR::STATUS_POT_HOLD),
+        "бит удержания в коротком кадре @F");
+  board_fr.serial.output.clear();
+  sim::run_for_ms(250);
+  CHECK(has(board_fr, " ph=1 "), "@TLM несёт ph=1: %s", board_fr.serial.output.c_str());
+  board_fr.serial.send("p");
+  sim::run_for_ms(5);
+  CHECK(has(board_fr, "Удержание угла: включено") && has(board_fr, "цель 0.00°"),
+        "p печатает включённое удержание: %s", board_fr.serial.output.c_str());
+
+  // Ручной сдвиг на 5°: колесо само возвращается в пределах ±1°.
+  board_fr.serial.output.clear();
+  board_fr.min_period_us = 1000000;
+  manual_shift(5.0);
+  sim::run_for_ms(60);
+  CHECK(std::fabs(FR::potAngleDeg()) > 4.5f, "сдвиг 5° виден датчику: %.2f", FR::potAngleDeg());
+  const long steps_before = board_fr.steps;
+  CHECK(wait_until([] { return !FR::motorBusy() && std::fabs(FR::potAngleDeg()) <= 1.0f; }, 8000),
+        "удержание вернуло колесо после сдвига 5°: %.2f°", FR::potAngleDeg());
+  CHECK(board_fr.steps > steps_before, "колесо действительно ехало, а не просто ждало");
+  sim::run_for_ms(150);          // контрольный замер и привязка счётчика
+  CHECK(FR::pot_hold, "после возврата удержание осталось включено");
+  CHECK(std::labs(FR::stepNow()) <= FR::degreesToSteps(1.5f),
+        "счётчик шагов снова совпадает с датчиком: %ld", (long)FR::stepNow());
+  CHECK(!has(board_fr, "сдвинуто вручную"), "сдвиг 5° не считается ручным уходом");
+  CHECK(!has(board_fr, "расхождение"), "датчик в пределах доверия — расхождения нет");
+  // Медленный ход удержания: 18 °/с, а не рабочие 75 °/с.
+  CHECK(board_fr.min_period_us >= 300, "шаг удержания медленный: %lld мкс",
+        (long long)board_fr.min_period_us);
+  check_signals(board_fr);
+
+  // Границы: 1.9° — ещё мёртвая зона, мотор не трогаем.
+  board_fr.serial.output.clear();
+  const long steps_in_deadband = board_fr.steps;
+  manual_shift(1.9);
+  sim::run_for_ms(1200);
+  CHECK(board_fr.steps == steps_in_deadband, "в мёртвой зоне шагов не прибавилось");
+  CHECK(!FR::motorBusy() && FR::pot_hold, "меньше 2° удержание не двигает колесо");
+  const long phys_in_deadband = board_fr.phys;
+  CHECK(std::labs(phys_in_deadband) > 100, "колесо осталось на месте: phys=%ld",
+        phys_in_deadband);
+  // Чуть больше порога — удержание снова догоняет.
+  manual_shift(0.5);
+  sim::run_for_ms(50);
+  CHECK(wait_until([] { return !FR::motorBusy() && std::fabs(FR::potAngleDeg()) <= 2.0f; }, 8000),
+        "сдвиг больше 2° снова догоняется: %.2f", FR::potAngleDeg());
+  CHECK(std::labs(board_fr.phys) < std::labs(phys_in_deadband), "мотор поехал за мёртвой зоной");
+
+  board_fr.serial.send("ph 0");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_hold, "ph 0 выключает удержание");
+  CHECK((FR::moduleStatus() & FR::STATUS_POT_HOLD) == 0, "бит удержания снят");
+}
+
+static void scenario_pot_hold_limit() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(FR::pot_hold, "удержание включено");
+
+  // Ручной сдвиг на 30° — за потолком реакции POT_HOLD_MAX_DEG.
+  board_fr.serial.output.clear();
+  manual_shift(30.0);
+  CHECK(wait_until([] { return !FR::pot_hold; }, 5000), "сдвиг 30° выключает удержание");
+  CHECK(has(board_fr, "сдвинуто вручную на"), "note о ручном сдвиге: %s",
+        board_fr.serial.output.c_str());
+  CHECK(has(board_fr, "повторите команду"), "note предлагает повторить команду");
+  CHECK((FR::moduleStatus() & FR::STATUS_POT_HOLD) == 0, "бит удержания снят");
+  const long phys = board_fr.phys;
+  sim::run_for_ms(300);
+  CHECK(board_fr.phys == phys, "колесо за рукой не погналось: phys=%ld", board_fr.phys);
+
+  // ph 1 при сдвинутом колесе отказывает: цель удержания — намеренная команда.
+  board_fr.serial.output.clear();
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_hold, "ph 1 при расхождении с целью отклонена");
+  CHECK(has(board_fr, "отличается от цели на"), "note с причиной: %s",
+        board_fr.serial.output.c_str());
+}
+
+// Колесо упёрлось и не идёт за шагами: удержание не толкает его бесконечно.
+static void scenario_pot_hold_stall() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(FR::pot_hold, "удержание включено");
+  manual_shift(3.0);
+  block_wheel_downwards();
+  board_fr.serial.output.clear();
+  CHECK(wait_until([] { return !FR::pot_hold; }, 20000),
+        "колесо не идёт — удержание выключается");
+  CHECK(has(board_fr, "расхождение"), "note о расхождении: %s", board_fr.serial.output.c_str());
+  CHECK(board_fr.steps_lost > 0, "модель действительно держала колесо: потерь %ld",
+        board_fr.steps_lost);
+}
+
+// Колесо едет, но до цели не доходит (люфт/помеха): 6 подходов, потом пауза.
+static void scenario_pot_hold_passes() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(FR::pot_hold, "удержание включено");
+  manual_shift(2.3);
+  block_wheel_downwards();
+  sim::run_for_ms(60);
+  board_fr.serial.output.clear();
+  CHECK(wait_until([] { return FR::pot_hold_retries > 0; }, 20000),
+        "после серии подходов — пауза и счётчик");
+  CHECK(has(board_fr, "подходов подряд без результата"),
+        "note о серии подходов: %s", board_fr.serial.output.c_str());
+  CHECK(FR::pot_hold, "пауза не выключает удержание: попыток %u",
+        (unsigned)FR::pot_hold_retries);
+  CHECK((FR::moduleStatus() & FR::STATUS_POT_HOLD) != 0, "бит удержания остался");
+  // В паузе мотор не дёргается: колесо стоит.
+  const long steps = board_fr.steps;
+  sim::run_for_ms(500);
+  CHECK(board_fr.steps == steps, "в паузе удержание не двигает колесо");
+}
+
+static void scenario_pot_hold_guard() {
+  boot({&board_fr});
+  calibrate_fr();                       // ноль есть, q нет
+  board_fr.serial.output.clear();
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_hold, "ph 1 без q отклонена");
+  CHECK(has(board_fr, "нужен ноль руля и калибровка q"), "note с причиной: %s",
+        board_fr.serial.output.c_str());
+  CHECK(FR::pot_zero_valid && !FR::pot_calibrated, "отказ ph не сбросил калибровку");
+
+  board_fr.serial.send("pm 0");
+  sim::run_for_ms(5);
+  board_fr.serial.output.clear();
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_hold, "без режима потенциометра удержания нет");
+  CHECK(has(board_fr, "сначала pm 1"), "note про pm 1: %s", board_fr.serial.output.c_str());
+
+  board_fr.serial.send("pm 1");
+  sim::run_for_ms(5);
+  calibrate_pot_fr();
+  board_fr.serial.send("ph 2");
+  sim::run_for_ms(5);
+  CHECK(has(board_fr, "Шаблон: ph 0|1"), "неверный аргумент ph отклонён");
+  board_fr.serial.send("ph 1 0");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_hold, "лишний аргумент ph отклонён");
+
+  board_fr.serial.send("w 10");
+  sim::run_for_ms(5);
+  board_fr.serial.output.clear();
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_hold, "ph 1 на ходу отклонена");
+  CHECK(has(board_fr, "сначала s"), "note про остановку: %s", board_fr.serial.output.c_str());
+  CHECK(wait_until(fr_settled, 3000), "поворот закончился");
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(FR::pot_hold, "после остановки ph 1 проходит");
+  CHECK(FR::pot_calibrated && FR::pot_zero_valid, "калибровка при включении сохранена");
+}
+
+static void scenario_pot_hold_stop() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  const char* commands[] = {"b", "z", "k", "q", "s"};
+  for (const char* command : commands) {
+    board_fr.serial.send("ph 1");
+    sim::run_for_ms(5);
+    CHECK(FR::pot_hold, "ph 1 включает удержание перед «%s»", command);
+    board_fr.serial.send(command);
+    sim::run_for_ms(5);
+    CHECK(!FR::pot_hold, "команда «%s» выключает удержание", command);
+    CHECK(wait_until(fr_settled, 30000), "«%s» закончилась", command);
+  }
+  // Нейтраль тоже выключает удержание (после подтверждённого b).
+  board_fr.serial.send("b 5");
+  sim::run_for_ms(2);
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(FR::pot_hold, "ph 1 включена перед нейтралью");
+  board_fr.serial.send("n 5");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_hold && FR::neutral_active, "нейтраль выключает удержание");
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_hold, "на нейтрали ph 1 не проходит");
+  board_fr.serial.send("s");
+  sim::run_for_ms(5);
+}
+
+// Выключение удержания не ждёт «сначала s»: пока колесо само подтягивает угол,
+// плата занята, и запрет оставил бы оператора без выключателя.
+static void scenario_pot_hold_off_busy() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(FR::pot_hold, "удержание включено перед ручным сдвигом");
+  board_fr.min_period_us = 1000000;
+  manual_shift(5.0);
+  CHECK(wait_until([] { return FR::motorBusy(); }, 4000),
+        "удержание начало подтягивать угол");
+  board_fr.serial.output.clear();
+  board_fr.serial.send("ph 0");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_hold, "ph 0 на ходу выключает удержание: %s",
+        board_fr.serial.output.c_str());
+  CHECK(has(board_fr, "Удержание выключено"), "подтверждение выключения");
+  CHECK(!has(board_fr, "сначала s"), "выключение не требует «сначала s»");
+  CHECK((FR::moduleStatus() & FR::STATUS_POT_HOLD) == 0, "бит удержания снят сразу");
+  CHECK(wait_until([] { return !FR::motorBusy(); }, 5000), "текущий подход закончился");
+  sim::run_for_ms(200);
+  const long steps_after = board_fr.steps;
+  manual_shift(5.0);
+  sim::run_for_ms(2000);
+  CHECK(board_fr.steps == steps_after, "после ph 0 колесо за рукой не едет");
+  // Включить на ходу по-прежнему нельзя — но и это не мешает выключению.
+  board_fr.serial.send("w 20");
+  sim::run_for_ms(2);
+  board_fr.serial.output.clear();
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_hold && has(board_fr, "сначала s"), "ph 1 на ходу отклонена");
+  CHECK(wait_until(fr_settled, 30000), "w 20 закончилась");
+}
+
 static void scenario_pot_mode() {
   boot({&board_fr});
   calibrate_fr();
@@ -877,7 +1145,7 @@ static void scenario_system_calibrate_all() {
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=23"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=24"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -994,7 +1262,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v23"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v24"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -2084,13 +2352,13 @@ static void scenario_full_zero_reboot() {
   board_fr.serial.send("zq 201");
   sim::run_for_ms(250);
   CHECK(FR::zero_reply_status == 1 && FR::zero_reply_id == 201, "preflight ready");
-  CHECK(has(board_fr, "@Z 23 2 201 1 "), "checked preflight returned");
+  CHECK(has(board_fr, "@Z 24 2 201 1 "), "checked preflight returned");
   board_fr.serial.send("zc 202");
   sim::run_for_ms(250);
   CHECK(FR::zero_reply_status == 2 && FR::full_zero_steps == physical && FR::stepNow() == 0,
         "EEPROM committed and coordinates rebased: %ld %ld %ld", (long)FR::full_zero_steps,
         physical, (long)FR::stepNow());
-  CHECK(has(board_fr, "@Z 23 2 202 2 "), "checked commit returned");
+  CHECK(has(board_fr, "@Z 24 2 202 2 "), "checked commit returned");
   const uint32_t generation = FR::full_zero_generation;
   board_fr.serial.send("zc 202"); // retry is idempotent
   sim::run_for_ms(2);
@@ -2265,6 +2533,13 @@ static const Scenario SCENARIOS[] = {
     {"pot_feedback", scenario_pot_feedback},
     {"pot_unplugged", scenario_pot_unplugged},
     {"pot_mode", scenario_pot_mode},
+    {"pot_hold", scenario_pot_hold},
+    {"pot_hold_limit", scenario_pot_hold_limit},
+    {"pot_hold_stall", scenario_pot_hold_stall},
+    {"pot_hold_passes", scenario_pot_hold_passes},
+    {"pot_hold_guard", scenario_pot_hold_guard},
+    {"pot_hold_stop", scenario_pot_hold_stop},
+    {"pot_hold_off_busy", scenario_pot_hold_off_busy},
     {"swing", scenario_swing},
     {"pause_resume", scenario_pause_resume},
     {"zero_manual", scenario_zero_manual},
