@@ -33,6 +33,8 @@
       </div>
       <div class="top-right">
         <span class="mode-pill" id="mode-pill">—</span>
+        <!-- Температура и загрузка самого бортового компьютера, не робота. -->
+        <span class="chip pc-chip" id="pc-chip" title="Состояние бортового компьютера">ПК —</span>
         <span class="chip" id="data-chip">ожидание</span>
         <!-- Функции киоска открыты без PIN; код спрашивается только при открытии кейса. -->
         <button id="k-ctrl-btn" class="k-ctrl-btn" type="button" aria-haspopup="dialog" aria-controls="ctrl-overlay" title="Открыть функции. PIN нужен только для открытия кейса.">
@@ -1145,6 +1147,7 @@
   <script src="steer_dial.js"></script>
   <script src="keyboard.js"></script>
   <script src="neutral.js"></script>
+  <script src="pc_chip.js"></script>
   <script src="robot.js"></script>
   <script src="full_zero.js"></script>
   <script src="wheel_settings.js"></script>

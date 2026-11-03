@@ -117,6 +117,21 @@ body {
   color: var(--muted);
   font-weight: 600;
 }
+/* Индикатор бортового компьютера: те же чипы, но чуть тише и с цифрами
+   фиксированной ширины, чтобы не дёргался топбар. */
+.pc-chip {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 7px 13px;
+  cursor: default;
+  min-width: 96px;
+  text-align: center;
+}
+.pc-chip.warn { color: var(--warn); }
+.pc-chip.err  { color: var(--err); }
+.pc-chip.none { color: var(--muted); }
+
 .chip.ok  { color: var(--ok);  border-color: #2e2e30; }
 .chip.warn { color: var(--warn); border-color: #3a3a3e; }
 .chip.err { color: var(--err); border-color: #6b2b2b; }

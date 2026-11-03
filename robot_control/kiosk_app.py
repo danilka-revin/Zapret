@@ -488,12 +488,25 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     app.extensions["rc_battery"] = battery
 
     from .connections import ConnectionsMonitor
-    connections = ConnectionsMonitor()
+    from .system_monitor import SystemMonitor, SystemState
+    # Один читатель /proc и /sys на процесс: экран «Подключения» и маленький
+    # индикатор на бортовом экране показывают одни и те же числа.
+    system_state = SystemState()
+    system = SystemMonitor(system_state)
+    app.extensions["rc_system"] = system
+    connections = ConnectionsMonitor(system=system_state)
     app.extensions["rc_connections"] = connections
 
     @app.get("/api/connections")
     def api_connections():
         response = jsonify(connections.snapshot())
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/api/system")
+    def api_system():
+        # Только чтение: температура, память, диск и загрузка процессора.
+        response = jsonify(system.snapshot())
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -1406,7 +1419,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         })
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
-    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js", "robot.css", "robot.js", "full_zero.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
+    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "map_view.js",
                      "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):

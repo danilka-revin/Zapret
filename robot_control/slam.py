@@ -783,6 +783,8 @@ ASSETS = {
     # страница киоска на борту робота (без авторизации)
     "robot.css": "robot_css",
     "robot.js": "robot_js",
+    # индикатор бортового компьютера (температура и загрузка) на экране киоска
+    "pc_chip.js": "pc_chip_js",
     "full_zero.js": "full_zero_js",
     "keyboard.js": "keyboard_js",
     "neutral.js": "neutral_js",
@@ -1296,6 +1298,16 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         return _send(KIOSK_PAGE)
 
     bp.add_url_rule("/robot.html", endpoint="kiosk_page", view_func=kiosk_screen)
+
+    @bp.get("/api/system")
+    def api_system():
+        """Состояние бортового компьютера для маленького индикатора на экране.
+
+        Читается на борту (/proc и /sys) и кэшируется там же; здесь только
+        пересылка, как у списка подключений. Секретов в ответе нет.
+        """
+        from .map_peer import proxy_system
+        return proxy_system(peer_kiosk_url().removesuffix("/api/kiosk_state"))
 
     @bp.get("/api/kiosk_state")
     def api_kiosk_state():

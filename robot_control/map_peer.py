@@ -164,3 +164,9 @@ def proxy_connections(origin: str):
     """Inventory belongs to the onboard computer, not the browser or web peer."""
     return _forward_json(origin, '/api/connections', methods={'GET'},
                          limit=MAX_NAV_REPLY_BYTES, timeout=1.0)
+
+
+def proxy_system(origin: str):
+    """Temperature and load of the onboard computer, read-only, cached on board."""
+    return _forward_json(origin, '/api/system', methods={'GET'},
+                         limit=MAX_REPLY_BYTES, timeout=2.0)

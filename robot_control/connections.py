@@ -11,6 +11,8 @@ import threading
 import time
 from pathlib import Path
 
+from .system_monitor import STALE_AFTER_S
+
 MAX_ITEMS = 256
 
 
@@ -221,26 +223,76 @@ class Inventory:
 
 class ConnectionsMonitor:
     """One cached reader per onboard process. HTTP and motor threads never wait on tools."""
-    def __init__(self, collector=None, interval=5):
+    def __init__(self, collector=None, interval=5, system=None, system_interval=None):
         self.collector = collector or Inventory().collect
         self.interval = interval
+        # Состояние бортового компьютера (температура, память) читается в том же
+        # фоновом потоке: отдельный опрос датчиков на каждый запрос не нужен.
+        self.system = system
+        self.system_interval = max(0.5, float(system_interval if system_interval else interval))
         self._lock = threading.Lock()
         self._data = None
         self._refreshing = False
         self._last_attempt = float('-inf')
         self._error = None
+        self._system_data = None
+        self._system_error = None
+        self._system_at = float('-inf')
 
     def snapshot(self):
         with self._lock:
-            if not self._refreshing and time.monotonic() - self._last_attempt >= self.interval:
-                self._refreshing = True
-                self._last_attempt = time.monotonic()
-                threading.Thread(target=self._refresh, name='connections-inventory', daemon=True).start()
-            return {'ok': True, 'data': copy.deepcopy(self._data),
-                    'refreshing': self._refreshing, 'error': self._error}
+            self._maybe_start()
+            data = copy.deepcopy(self._data)
+            system = copy.deepcopy(self._system_data)
+            refreshing, error = self._refreshing, self._error
+            system_error = self._system_error
+        # Компьютер может быть доступен, даже если опрос устройств упал целиком:
+        # тогда отдаём снимок без разделов, но с температурой и памятью.
+        if data is None and system is not None:
+            data = {'hostname': system.get('hostname') or '',
+                    'updatedAt': system.get('collectedAt'), 'sections': {}}
+        if data is not None:
+            data['system'] = system
+            data['systemError'] = system_error
+            if system is not None:
+                age = time.time() - float(system.get('collectedAt') or 0.0)
+                system['ageS'] = round(max(0.0, age), 1)
+                system['stale'] = age > STALE_AFTER_S
+        return {'ok': True, 'data': data, 'refreshing': refreshing, 'error': error}
 
-    def _refresh(self):
+    def _maybe_start(self):
+        """Запуск обновления под замком: один поток на инвентарь и датчики."""
+        now = time.monotonic()
+        with_system = self.system is not None and now - self._system_at >= self.system_interval
+        with_inventory = now - self._last_attempt >= self.interval
+        if self._refreshing or not (with_system or with_inventory):
+            return
+        self._refreshing = True
+        if with_inventory:
+            self._last_attempt = now
+        threading.Thread(target=self._refresh, args=(with_system, with_inventory),
+                         name='connections-inventory', daemon=True).start()
+
+    def _refresh_system(self):
+        if self.system is None:
+            return
+        self._system_at = time.monotonic()
         try:
+            data = self.system.collect()
+        except Exception:
+            with self._lock:
+                self._system_error = 'Не удалось прочитать состояние компьютера'
+            return
+        with self._lock:
+            self._system_data = data
+            self._system_error = None
+
+    def _refresh(self, with_system=True, with_inventory=True):
+        try:
+            if with_system:
+                self._refresh_system()
+            if not with_inventory:
+                return
             data = self.collector()
             with self._lock:
                 self._data = data
