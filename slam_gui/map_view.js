@@ -1401,7 +1401,7 @@
       for (const id of ['nav-goal-x', 'nav-goal-y', 'route-win-goal-x', 'route-win-goal-y']) if ($(id)) $(id).value = '';
       try { localStorage.removeItem(GOAL_STORAGE_KEY); } catch (err) {}
     }
-    for (const id of ['nav-start', 'route-win-start']) if ($(id)) $(id).disabled = true;
+    for (const id of ['nav-start', 'route-win-start', 'nav-resume', 'route-win-resume']) if ($(id)) $(id).disabled = true;
     setText($('nav-route-summary'), 'Точек: ' + state.routeGoals.length + ' · постройте маршрут');
     navigationMessage('Точки изменены. Постройте маршрут для проверки пути.', 'warn', true);
     draw();
@@ -1473,6 +1473,13 @@
       const cancel = $(id);
       if (cancel) cancel.disabled = !active || state.navigationBusy;
     }
+    // Продолжение остановленного маршрута: точки уже известны серверу, но
+    // каждая попытка снова проверяет карту и требует подтверждения оператора.
+    const canResumeNow = !!(status.canResume && !active && !state.navigationBusy);
+    for (const id of ['nav-resume', 'route-win-resume']) {
+      const resumeButton = $(id);
+      if (resumeButton) resumeButton.disabled = !canResumeNow;
+    }
     for (const id of ['nav-plan', 'route-win-plan']) {
       const planButton = $(id);
       if (planButton) planButton.disabled = active || state.navigationBusy;
@@ -1496,7 +1503,9 @@
     }
     const safety = $('nav-safety-note');
     if (safety) {
-      safety.textContent = 'Габариты 75×60×30 см, лидар спереди. Поворота на месте нет: допустимы только прямые/крабовые отрезки ±28°. Неизвестные клетки запрещены. ' +
+      safety.textContent = 'Габариты 75×60×30 см, лидар спереди. Поворота на месте нет: допустимы только прямые/крабовые отрезки ±28°. Неизвестные клетки запрещены. Препятствие в коридоре объезжается (попыток: ' +
+        (Number.isFinite(+status.detourLimit) ? status.detourLimit : 3) +
+        '), остановленный маршрут можно продолжить. ' +
         (status.enabled ? 'Автотяга разрешена конфигурацией, но требует актуальной готовности и подтверждения.'
           : 'Автотяга выключена по умолчанию.');
     }
@@ -1528,7 +1537,7 @@
         const badge = $(id);
         if (badge) { badge.textContent = 'нет связи'; badge.dataset.phase = 'error'; }
       }
-      for (const id of ['nav-start', 'route-win-start']) {
+      for (const id of ['nav-start', 'route-win-start', 'nav-resume', 'route-win-resume']) {
         const start = $(id);
         if (start) start.disabled = true;
       }
@@ -1676,6 +1685,54 @@
       if (state.navigationStatus) renderNavigationStatus(state.navigationStatus);
     }
     if (refreshAfter) await refreshNavigation();
+  }
+
+  async function resumeNavigation() {
+    const status = state.navigationStatus || {};
+    if (!status.canResume) {
+      navigationMessage('Нет остановленного маршрута для продолжения: постройте его заново.', 'warn', true);
+      return;
+    }
+    const plan = state.navigationPlan || status.plan;
+    const summary = plan
+      ? fmt(plan.distanceM, 2) + ' м, ' + (plan.waypoints || 0) + ' участков'
+      : 'сохранённый маршрут';
+    if (!window.confirm('Продолжить остановленный маршрут (' + summary + ')? Привод снова включится: проверьте зону и держите E-STOP доступным.')) return;
+    state.previewActive = false;
+    if (state.previewRaf) cancelAnimationFrame(state.previewRaf);
+    state.navigationBusy = true;
+    for (const id of ['nav-resume', 'route-win-resume']) {
+      const button = $(id);
+      if (button) button.disabled = true;
+    }
+    let refreshAfter = false;
+    try {
+      const body = await postNavigation('api/navigation/resume', {});
+      if (body.plan) state.navigationPlan = body.plan;
+      renderNavigationStatus(body.status || {});
+      navigationMessage((body.status && body.status.message) || 'Маршрут продолжен.', 'warn', true);
+      openRouteWindow();
+    } catch (err) {
+      const payload = err && err.payload;
+      if (payload && payload.code === 'plan_changed' && payload.plan) {
+        state.navigationPlan = payload.plan;
+        if (payload.status) renderNavigationStatus(payload.status);
+        else state.navigationStatus = null;
+        draw();
+        drawRouteWindow();
+        navigationMessage(err.message || 'Карта изменилась: проверьте обновлённый маршрут и нажмите «Продолжить» ещё раз.', 'warn', true);
+        refreshAfter = !payload.status;
+      } else {
+        navigationMessage('Продолжить не удалось: ' + (err.message || err), 'err', true);
+        refreshAfter = true;
+      }
+    } finally {
+      state.navigationBusy = false;
+      if (state.navigationStatus) renderNavigationStatus(state.navigationStatus);
+    }
+    if (refreshAfter) await refreshNavigation();
+    draw();
+    drawRouteWindow();
   }
 
   async function cancelNavigation() {
@@ -1851,6 +1908,10 @@
     for (const id of ['nav-cancel', 'route-win-cancel']) {
       const cancelButton = $(id);
       if (cancelButton) cancelButton.addEventListener('click', () => { void cancelNavigation(); });
+    }
+    for (const id of ['nav-resume', 'route-win-resume']) {
+      const resumeButton = $(id);
+      if (resumeButton) resumeButton.addEventListener('click', () => { void resumeNavigation(); });
     }
     for (const id of ['nav-estop', 'route-win-estop']) {
       const estopButton = $(id);

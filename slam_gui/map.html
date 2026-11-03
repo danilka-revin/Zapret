@@ -85,13 +85,14 @@
               <div class="nav-actions">
                 <button type="button" id="nav-plan" class="map-btn map-btn--primary">Построить маршрут</button>
                 <button type="button" id="nav-start" class="map-btn nav-start" disabled>Поехать</button>
+                <button type="button" id="nav-resume" class="map-btn" disabled>Продолжить</button>
                 <button type="button" id="nav-cancel" class="map-btn" disabled>Остановить маршрут</button>
                 <button type="button" id="nav-estop" class="map-btn map-btn--danger nav-estop" aria-label="Взвести аварийную остановку">E-STOP</button>
               </div>
               <button type="button" id="nav-preview" class="map-btn map-btn--route nav-open-win">▶ Предпросмотр пути</button>
               <p class="nav-route-summary" id="nav-route-summary">траектория не рассчитана</p>
               <p class="nav-msg" id="nav-msg" role="status" aria-live="polite">Навигация ещё не проверена.</p>
-              <p class="nav-safety-note" id="nav-safety-note">Габариты робота 75×60×30 см, лидар спереди. Текущая прошивка не умеет разворот на месте: доступны прямые/крабовые отрезки в пределах ±28°. Автотяга выключена по умолчанию.</p>
+              <p class="nav-safety-note" id="nav-safety-note">Габариты робота 75×60×30 см, лидар спереди. Текущая прошивка не умеет разворот на месте: доступны прямые/крабовые отрезки в пределах ±28°. Препятствие в коридоре исполнитель объезжает (несколько попыток), остановленный маршрут можно продолжить кнопкой «Продолжить». Автотяга выключена по умолчанию.</p>
             </section>
 
             <section id="map-settings" class="map-settings" hidden aria-label="Настройки карты">
@@ -226,6 +227,7 @@
               <div class="route-win-actions">
                 <button type="button" id="route-win-preview" class="map-btn map-btn--route">▶ Предпросмотр движения</button>
                 <button type="button" id="route-win-start" class="map-btn nav-start" disabled>Поехать</button>
+                <button type="button" id="route-win-resume" class="map-btn" disabled>Продолжить</button>
                 <button type="button" id="route-win-cancel" class="map-btn" disabled>Остановить маршрут</button>
                 <button type="button" id="route-win-estop" class="map-btn map-btn--danger nav-estop">E-STOP</button>
               </div>

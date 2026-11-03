@@ -227,6 +227,46 @@ def test_direct_map_click_builds_route_in_same_map(tmp_path):
     assert report["renderErrors"] == [], report["renderErrors"]
 
 
+def test_resume_button_restarts_a_blocked_route(tmp_path):
+    """Кнопка «Продолжить» появляется только по canResume и шлёт resume."""
+    plan = {
+        "ok": True,
+        "path": [{"x": 1.25, "y": -0.5}, {"x": 1.0, "y": 0.0}],
+        "goal": {"x": 1.0, "y": 0.0},
+        "goalRequested": {"x": 1.0, "y": 0.0},
+        "goalsRequested": [{"x": 1.0, "y": 0.0}],
+        "distanceM": 0.56,
+        "waypoints": 1,
+        "footprintM": 0.42,
+    }
+    payload = {
+        "snapshot": snapshot(), "paths": PATHS, "navigationTest": True,
+        "resumeTest": True,
+        "navigationStatus": {
+            "ok": True, "phase": "blocked", "message": "Препятствие в 0.50 м — остановка",
+            "canStart": False, "canResume": True, "enabled": True, "reason": "",
+            "plan": plan, "progress": 0.0, "csrfToken": "signed-test-token",
+        },
+        "navigationResumeReply": {
+            "ok": True,
+            "status": {
+                "ok": True, "phase": "starting", "message": "Продолжение маршрута.",
+                "canStart": False, "canResume": False, "enabled": True, "reason": "",
+                "plan": plan, "progress": 0.0, "csrfToken": "signed-test-token",
+            },
+        },
+    }
+    report = run(tmp_path, payload)
+    resume = report["navigation"]["resume"]
+    assert resume["disabledBefore"] is False, report["navigation"]
+    assert resume["calls"], resume
+    assert resume["calls"][0]["method"] == "POST"
+    assert resume["calls"][0]["url"].endswith("api/navigation/resume")
+    assert resume["phase"] == "запуск"
+    assert "Продолжение маршрута" in resume["message"]
+    assert report["renderErrors"] == [], report["renderErrors"]
+
+
 # ----------------------------------------------------------- свайп-навигация ---
 def run_map_swipe(tmp_path: Path) -> dict:
     """Прогон бортового экрана: свайп вправо на странице «камеры и логи»."""

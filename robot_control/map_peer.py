@@ -63,6 +63,7 @@ def proxy_navigation(origin: str, suffix: str):
         "/status": ({"GET"}, ""),
         "/plan": ({"POST"}, ""),
         "/start": ({"POST"}, "navigation"),
+        "/resume": ({"POST"}, "navigation"),
         "/cancel": ({"POST"}, "navigation"),
         "/estop": ({"POST"}, "navigation"),
     }

@@ -3,6 +3,10 @@
 Планировщик использует occupancy grid ``SlamMapService`` и не считает
 неизученные клетки свободными. Исполнитель намеренно ограничен возможностями
 прошивки Zapret: общая тяга всех колёс, одинаковый угол, без разворота на месте.
+Препятствие, которого нет на карте, но которое видит лидар, добавляется в
+планировщик временными клетками: робот тормозит и строит обход (до
+``RC_NAV_DETOUR_ATTEMPTS`` попыток), а остановленный маршрут можно продолжить
+без повторного выбора точек (``resume``).
 Поэтому путь состоит только из прямых/крабовых отрезков в секторе ±28° от
 текущего курса (запас до аппаратного предела ``STEER_LIMIT_DEG``, сейчас ±100°),
 с остановкой перед сменой угла. Автоматическая тяга выключена по умолчанию и требует явного включения и
@@ -46,6 +50,15 @@ DEFAULT_SPEED_MPS = 0.05
 DEFAULT_MAX_PERCENT = 4
 DEFAULT_SCAN_AGE_S = 1.0
 DEFAULT_WAYPOINT_TOLERANCE_M = 0.14
+#: Ближе этого препятствие в коридоре движения — только остановка, без обхода.
+IMMINENT_OBSTACLE_M = 0.35
+#: Более короткий участок не отправляется в тягу: планировщик мог поставить
+#: точку почти под корпусом, и такая команда лишь блокировала бы старт.
+MIN_SEGMENT_M = 0.10
+#: Сколько раз за поездку разрешено перестроить маршрут в обход препятствия,
+#: которое видит лидар, но которого ещё нет на карте. 0 — останавливаться сразу.
+DEFAULT_DETOUR_ATTEMPTS = 3
+MAX_DETOUR_ATTEMPTS = 5
 MAX_MAP_CELLS = 1_000_000
 MAX_PLAN_DISTANCE_M = 12.0
 MAX_PLAN_EXPANSIONS = 250_000
@@ -290,16 +303,98 @@ def _move_offsets(resolution: float, yaw: float, max_steer_deg: float) -> list[t
     return moves
 
 
+def _obstacle_cells(snapshot: dict, points: list[dict], yaw: float, footprint_m: float,
+                    body_angle: float, lookahead_m: float,
+                    half_width_m: float) -> set[tuple[int, int]]:
+    """Перевести точки скана впереди по курсу в клетки карты.
+
+    Нужно, чтобы учесть препятствие, которого ещё нет в occupancy grid: после
+    остановки эти клетки уходят в планировщик как временно занятые, и A* ищет
+    обход, а не повторяет тот же отрезок.
+    """
+    try:
+        width = int(snapshot["width"])
+        height = int(snapshot["height"])
+        resolution = float(snapshot["resolution"])
+        pose = snapshot["pose"]
+        pose_x = float(pose["x"])
+        pose_y = float(pose["y"])
+    except (KeyError, TypeError, ValueError):
+        return set()
+    if not (math.isfinite(resolution) and resolution > 0):
+        return set()
+    cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+    ux, uy = math.cos(body_angle), math.sin(body_angle)
+    radius = max(0, int(math.ceil(footprint_m / resolution)))
+    cells: set[tuple[int, int]] = set()
+    for point in points:
+        try:
+            angle = float(point["a"])
+            distance = float(point["r"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not math.isfinite(angle) or not math.isfinite(distance):
+            continue
+        if distance < 0.2 or distance > lookahead_m:
+            continue
+        body_x, body_y = distance * math.cos(angle), distance * math.sin(angle)
+        along = body_x * ux + body_y * uy
+        cross = abs(body_x * uy - body_y * ux)
+        if along < 0.2 or along > lookahead_m or cross > half_width_m:
+            continue
+        world_x = pose_x + cos_yaw * body_x - sin_yaw * body_y
+        world_y = pose_y + sin_yaw * body_x + cos_yaw * body_y
+        centre = _cell(snapshot, world_x, world_y)
+        if centre is None:
+            continue
+        cx, cy = centre
+        for ix in range(cx - radius, cx + radius + 1):
+            if not 0 <= ix < width:
+                continue
+            for iy in range(cy - radius, cy + radius + 1):
+                if not 0 <= iy < height:
+                    continue
+                if (ix - cx) ** 2 + (iy - cy) ** 2 > radius * radius:
+                    continue
+                cells.add((ix, iy))
+    return cells
+
+
+def _apply_extra_blocked(blocked: bytearray, snapshot: dict,
+                         extra_blocked: Optional[Any]) -> set[tuple[int, int]]:
+    """Пометить занятыми клетки динамических препятствий (миссия, не карта)."""
+    if not extra_blocked:
+        return set()
+    try:
+        width = int(snapshot["width"])
+        height = int(snapshot["height"])
+    except (KeyError, TypeError, ValueError):
+        return set()
+    reserved: set[tuple[int, int]] = set()
+    for cell in extra_blocked:
+        try:
+            ix, iy = int(cell[0]), int(cell[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if 0 <= ix < width and 0 <= iy < height:
+            blocked[iy * width + ix] = 1
+            reserved.add((ix, iy))
+    return reserved
+
+
 def plan_grid_path(snapshot: dict, goal_x: Any, goal_y: Any, *,
                    footprint_m: float = DEFAULT_FOOTPRINT_M,
                    max_steer_deg: float = PLAN_STEER_DEG,
                    max_segment_m: float = 1.0,
-                   max_distance_m: float = MAX_PLAN_DISTANCE_M) -> dict:
+                   max_distance_m: float = MAX_PLAN_DISTANCE_M,
+                   extra_blocked: Optional[Any] = None) -> dict:
     """A* по occupancy grid с ограниченными движениями шасси.
 
     UNKNOWN и промежуточная занятость не считаются свободными. Препятствия
     расширяются на footprint робота; пути с курсом за пределами ±28° от
-    переднего/заднего направления не выдаются.
+    переднего/заднего направления не выдаются. ``extra_blocked`` — клетки
+    препятствий, которые видит лидар, но которых ещё нет на карте: обход
+    строится вокруг них, а не по ним.
     """
     goal_x = _number(goal_x, "X")
     goal_y = _number(goal_y, "Y")
@@ -323,6 +418,13 @@ def plan_grid_path(snapshot: dict, goal_x: Any, goal_y: Any, *,
     goal_index = gy * width + gx
 
     blocked, _ = _inflated_blocked(snapshot, footprint_m, (start_x, start_y))
+    reserved = _apply_extra_blocked(blocked, snapshot, extra_blocked)
+    if (gx, gy) in reserved:
+        raise NavigationError(
+            "goal_obstacle",
+            "Цель занята препятствием, которое видит лидар; выберите другую точку",
+            409,
+        )
     if (values[goal_index] == 255 or values[goal_index] > FREE_MAX) and blocked[goal_index]:
         raise NavigationError("goal_not_free", "Цель должна быть на изученной свободной клетке", 409)
     start_index = sy * width + sx
@@ -492,14 +594,16 @@ def _route_goals(body: dict, x: float, y: float) -> list[dict]:
     return result
 
 
-def plan_route(snapshot: dict, goals: list[dict], *, footprint_m: float) -> dict:
+def plan_route(snapshot: dict, goals: list[dict], *, footprint_m: float,
+               extra_blocked: Optional[Any] = None) -> dict:
     """Plan every leg on the same map, preserving the chassis heading."""
     current = dict(snapshot)
     path = []
     distance = 0.0
     for index, goal in enumerate(goals):
         try:
-            leg = plan_grid_path(current, goal["x"], goal["y"], footprint_m=footprint_m)
+            leg = plan_grid_path(current, goal["x"], goal["y"], footprint_m=footprint_m,
+                                 extra_blocked=extra_blocked)
         except NavigationError as exc:
             raise NavigationError(exc.code, "Точка %d: %s" % (index + 1, exc.message), exc.status) from exc
         path.extend(leg["path"] if not path else leg["path"][1:])
@@ -572,6 +676,9 @@ def _obstacle_ahead(points: list[dict], body_angle: float,
 class NavigationService:
     """Серверный планировщик и опциональный ограниченный исполнитель пути."""
 
+    #: Фазы, из которых маршрут можно продолжить без выбора точек заново.
+    RESUMABLE_PHASES = {"planned", "blocked", "cancelled", "error"}
+
     def __init__(self, map_service, source, lidar_manager=None, *,
                  enabled: Optional[bool] = None, mps_per_percent: Optional[float] = None,
                  speed_mps: Optional[float] = None, max_drive_percent: Optional[int] = None,
@@ -599,6 +706,11 @@ class NavigationService:
         self.lidar_offset_m = _env_float("RC_LIDAR_OFFSET_M", DEFAULT_LIDAR_OFFSET_M, 0.0, 1.5)
         self.quality_min = _env_float("RC_NAV_QUALITY_MIN", DEFAULT_QUALITY_MIN, 0.30, 0.95)
         self.scan_age_s = _env_float("RC_NAV_SCAN_AGE_S", DEFAULT_SCAN_AGE_S, 0.3, 2.0)
+        try:
+            detours = int(os.environ.get("RC_NAV_DETOUR_ATTEMPTS", DEFAULT_DETOUR_ATTEMPTS))
+        except (TypeError, ValueError):
+            detours = DEFAULT_DETOUR_ATTEMPTS
+        self.max_detours = max(0, min(MAX_DETOUR_ATTEMPTS, detours))
         self.clock = clock
         self._lock = threading.RLock()
         # Сериализуем heartbeat автономии и команду STOP: после возврата из
@@ -612,6 +724,9 @@ class NavigationService:
         self._bridge: Optional[MasterBridge] = None
         self._plan: Optional[dict] = None
         self._goal: Optional[dict] = None
+        # Клетки препятствий, которые лидар увидел уже во время поездки: живут
+        # только в этой миссии и не пишутся в карту.
+        self._avoid_cells: set[tuple[int, int]] = set()
         self._state = {
             "phase": "idle", "message": "Цель не задана", "progress": 0.0,
             "waypoint": 0, "totalWaypoints": 0, "updatedAt": self.clock(),
@@ -757,11 +872,21 @@ class NavigationService:
         except Exception as exc:  # noqa: BLE001 — состояние не должно ронять экран
             reason = "Карта навигации недоступна: %s" % str(exc)[:160]
             diagnostics = {"checks": {}, "drive": {}, "mapAgeS": None, "poseQuality": 0.0}
+        phase = str(state.get("phase") or "")
+        resumable = (
+            not self.active
+            and phase in self.RESUMABLE_PHASES
+            and isinstance(plan, dict)
+            and isinstance(plan.get("goalsRequested"), list)
+            and bool(plan["goalsRequested"])
+        )
         state.update({
             "ok": True,
             "enabled": self.enabled,
             "available": bool(diagnostics.get("checks", {}).get("masterReady")),
             "canStart": bool(ready and plan and not self.active),
+            "canResume": bool(resumable),
+            "detourLimit": self.max_detours,
             "reason": reason,
             "diagnostics": diagnostics,
             "goal": dict(goal) if goal else None,
@@ -787,6 +912,11 @@ class NavigationService:
         goals = _route_goals(body, x, y)
         if self.active:
             raise NavigationError("navigation_active", "Сначала остановите текущую поездку", 409)
+        # Новый расчёт маршрута оператором снимает прежний обход: препятствие
+        # могло уехать, а старые запретные клетки не должны остаться навсегда.
+        with self._lock:
+            if not self.active:
+                self._avoid_cells = set()
         try:
             snapshot = self._snapshot()
             plan = plan_route(snapshot, goals, footprint_m=self.footprint_m)
@@ -824,6 +954,9 @@ class NavigationService:
             raise NavigationError("invalid_goal", "Цель должна содержать координаты X и Y", 400)
         x = _number(goal.get("x"), "X")
         y = _number(goal.get("y"), "Y")
+        # Продолжение остановленного маршрута (resume) сохраняет уже найденный
+        # обход: препятствие никуда не уехало. Новый старт его сбрасывает.
+        resume = bool(body.get("resume"))
         if self.active:
             raise NavigationError("navigation_active", "Навигация уже выполняется", 409)
         snapshot = self._snapshot()
@@ -841,8 +974,11 @@ class NavigationService:
         if (abs(float(preview_goal.get("x", math.inf)) - x) > 0.01
                 or abs(float(preview_goal.get("y", math.inf)) - y) > 0.01):
             raise NavigationError("plan_mismatch", "Цель отличается от проверенного маршрута; постройте новый план", 409)
+        with self._lock:
+            avoid = set(self._avoid_cells)
         try:
-            plan = plan_route(snapshot, goals, footprint_m=self.footprint_m)
+            plan = plan_route(snapshot, goals, footprint_m=self.footprint_m,
+                              extra_blocked=avoid)
         except NavigationError as exc:
             with self._lock:
                 if self._plan is preview:
@@ -855,6 +991,7 @@ class NavigationService:
             raise
         plan["goalRequested"] = {"x": round(x, 3), "y": round(y, 3)}
         if not _plans_equivalent(preview, plan):
+            action = "Продолжить" if resume else "Поехать"
             with self._lock:
                 self._plan = plan
                 self._goal = dict(plan["goal"])
@@ -868,15 +1005,16 @@ class NavigationService:
                 }
             raise NavigationError(
                 "plan_changed",
-                "Карта или поза изменились; новый маршрут показан на карте. Проверьте его и нажмите «Поехать» ещё раз.",
+                "Карта или поза изменились; новый маршрут показан на карте. "
+                "Проверьте его и нажмите «%s» ещё раз." % action,
                 409,
                 details={"plan": plan, "status": self.status()},
             )
         path = plan.get("path") or []
         segment_lengths = [math.hypot(b["x"] - a["x"], b["y"] - a["y"])
                            for a, b in zip(path, path[1:])]
-        if (len(path) < 2 or plan.get("distanceM", 0.0) < 0.10
-                or any(length < 0.10 for length in segment_lengths)):
+        if (len(path) < 2 or plan.get("distanceM", 0.0) < MIN_SEGMENT_M
+                or any(length < MIN_SEGMENT_M for length in segment_lengths)):
             raise NavigationError("goal_too_close",
                                   "Цель слишком близко или маршрут содержит участок короче 0,10 м",
                                   409)
@@ -895,12 +1033,18 @@ class NavigationService:
                 self._cancel = threading.Event()
                 self._plan = plan
                 self._goal = dict(plan["goal"])
+                if not resume:
+                    self._avoid_cells = set()
                 self._state = {
                     "phase": "starting",
-                    "message": "Запуск: повторная проверка скана, локализации и шасси.",
+                    "message": ("Продолжение маршрута: повторная проверка скана, локализации и шасси."
+                                if resume else
+                                "Запуск: повторная проверка скана, локализации и шасси."),
                     "progress": 0.0,
                     "waypoint": 0,
                     "totalWaypoints": plan["waypoints"],
+                    "detour": 0,
+                    "detourLimit": self.max_detours,
                     "updatedAt": self.clock(),
                 }
                 worker_goal = dict(plan["goal"])
@@ -912,6 +1056,59 @@ class NavigationService:
                 self._worker = worker
                 worker.start()
         return {"ok": True, "status": self.status()}, 202
+
+    def resume(self, body: Any = None) -> tuple[dict, int]:
+        """Продолжить остановленный или заблокированный маршрут.
+
+        Точки заново выбирать не нужно: берутся сохранённые, а уже пройденные
+        отбрасываются. Как и при обычном старте, свежий расчёт обязан совпасть
+        с тем, что оператор видел на карте: если карта или поза изменились,
+        возвращается ``plan_changed`` с новым путём, и запуск требует ещё одного
+        подтверждения. Сбросить найденный обход вручную можно кнопкой
+        «Построить маршрут».
+        """
+        if body is not None and not isinstance(body, dict):
+            raise NavigationError("invalid_goal", "Ожидается JSON-объект", 400)
+        if self.active:
+            raise NavigationError("navigation_active", "Навигация уже выполняется", 409)
+        with self._lock:
+            stored = dict(self._plan) if isinstance(self._plan, dict) else None
+            phase = str(self._state.get("phase") or "")
+        if stored is None or not isinstance(stored.get("goalsRequested"), list) \
+                or not stored["goalsRequested"]:
+            raise NavigationError("plan_required",
+                                  "Нет остановленного маршрута: постройте и проверьте новый", 409)
+        if phase not in self.RESUMABLE_PHASES:
+            raise NavigationError("not_resumable",
+                                  "Продолжить можно только остановленный или заблокированный маршрут",
+                                  409)
+        goals = []
+        for point in stored["goalsRequested"]:
+            try:
+                goals.append({"x": float(point["x"]), "y": float(point["y"])})
+            except (KeyError, TypeError, ValueError):
+                raise NavigationError("plan_required",
+                                      "Сохранённый маршрут повреждён: постройте его заново", 409)
+        # Пройденные точки не должны снова попасть в маршрут при продолжении.
+        try:
+            pose = self._snapshot().get("pose") or {}
+            here = (float(pose["x"]), float(pose["y"]))
+        except (KeyError, TypeError, ValueError, NavigationError):
+            here = None
+        if here is not None:
+            while len(goals) > 1 and math.hypot(goals[0]["x"] - here[0],
+                                                goals[0]["y"] - here[1]) <= DEFAULT_WAYPOINT_TOLERANCE_M:
+                goals.pop(0)
+        goal_requested = {"x": round(goals[-1]["x"], 3), "y": round(goals[-1]["y"], 3)}
+        with self._lock:
+            if self.active:
+                raise NavigationError("navigation_active", "Навигация уже выполняется", 409)
+            preview = dict(stored)
+            preview["goalsRequested"] = [dict(g) for g in goals]
+            preview["goalRequested"] = dict(goal_requested)
+            self._plan = preview
+            self._goal = dict(goal_requested)
+        return self.start({"goal": dict(goals[-1]), "goals": goals, "resume": True})
 
     def manual_override(self, send, *, wait_for_exit: bool = True):
         """Отдать тягу оператору после завершения автономного STOP.
@@ -1014,7 +1211,11 @@ class NavigationService:
                 self._bridge = bridge
             initial = self._fresh_snapshot(cancel)
             remaining_goals = [dict(g) for g in (confirmed_plan or {}).get("goalsRequested", [goal])]
-            plan = plan_route(initial, remaining_goals, footprint_m=self.footprint_m)
+            with self._lock:
+                avoid = set(self._avoid_cells)
+            plan = plan_route(initial, remaining_goals, footprint_m=self.footprint_m,
+                              extra_blocked=avoid)
+            detours_used = 0
             requested_goal = goal.get("requested") or {"x": goal["x"], "y": goal["y"]}
             plan["goalRequested"] = {"x": round(float(requested_goal["x"]), 3),
                                      "y": round(float(requested_goal["y"]), 3)}
@@ -1036,7 +1237,7 @@ class NavigationService:
             last_progress_at = self.clock()
             segment_index = 0
             self._set_state(phase="executing", message="Едем по рассчитанной траектории.",
-                            progress=0.0, waypoint=0,
+                            progress=0.0, waypoint=0, detour=detours_used,
                             totalWaypoints=plan["waypoints"], plan=plan)
 
             while not cancel.is_set():
@@ -1056,20 +1257,38 @@ class NavigationService:
 
                 # Перестраиваем путь от текущей позы: карта обновляется живым
                 # лидаром, а неизученное/новое препятствие не обходится вслепую.
-                plan = plan_route(snapshot, remaining_goals, footprint_m=self.footprint_m)
+                # Клетки уже найденных обходов остаются занятыми до конца поездки.
+                with self._lock:
+                    avoid = set(self._avoid_cells)
+                try:
+                    plan = plan_route(snapshot, remaining_goals, footprint_m=self.footprint_m,
+                                      extra_blocked=avoid)
+                except NavigationError as exc:
+                    if avoid:
+                        raise NavigationError(
+                            "detour_impossible",
+                            "Обход препятствия невозможен: " + exc.message, exc.status,
+                        ) from exc
+                    raise
                 requested_goal = goal.get("requested") or {"x": goal["x"], "y": goal["y"]}
                 plan["goalRequested"] = {"x": round(float(requested_goal["x"]), 3),
                                          "y": round(float(requested_goal["y"]), 3)}
                 with self._lock:
                     self._plan = plan
                 path = plan["path"]
+                # Точка ближе MIN_SEGMENT_M уже достигнута: не отправляем её в
+                # тягу (иначе короткий участок выглядел бы как ошибка плана).
+                while len(path) > 1 and math.hypot(
+                        float(path[1]["x"]) - current[0],
+                        float(path[1]["y"]) - current[1]) < MIN_SEGMENT_M:
+                    path = [path[0]] + path[2:]
                 if len(path) < 2:
                     raise NavigationError("no_path", "Остаток пути исчез после перепланирования", 409)
                 target = path[1]
                 dx = float(target["x"]) - current[0]
                 dy = float(target["y"]) - current[1]
                 segment_length = math.hypot(dx, dy)
-                if segment_length < 0.10:
+                if segment_length < MIN_SEGMENT_M:
                     raise NavigationError("waypoint_too_close",
                                           "Планировщик вернул слишком короткий участок; остановка вместо повторного цикла",
                                           409)
@@ -1127,12 +1346,48 @@ class NavigationService:
                     scan = self._scan()
                     if not scan:
                         raise NavigationError("lidar_stale", "Скан лидара устарел во время движения", 409)
+                    lookahead = max(0.55, self.speed_mps * 3.0 + 0.25)
+                    half_width = max(0.32, self.footprint_m + 0.05)
                     obstruction = _obstacle_ahead(
-                        scan, body_angle, max(0.55, self.speed_mps * 3.0 + 0.25),
-                        half_width_m=max(0.32, self.footprint_m + 0.05),
+                        scan, body_angle, lookahead, half_width_m=half_width,
                     )
                     if obstruction is not None:
-                        raise NavigationError("obstacle", "Лидар увидел препятствие в %.2f м — остановка" % obstruction, 409)
+                        # Совсем близко — только тормоз: объезд требует руля, а
+                        # руль в движении прошивка не переводит.
+                        if obstruction <= IMMINENT_OBSTACLE_M:
+                            raise NavigationError(
+                                "obstacle",
+                                "Препятствие в %.2f м — остановка, слишком близко для обхода"
+                                % obstruction, 409)
+                        added = _obstacle_cells(
+                            snapshot, scan, yaw, self.footprint_m,
+                            body_angle, lookahead, half_width,
+                        )
+                        added -= avoid
+                        if added:
+                            # Новое препятствие, которого нет на карте: тормозим
+                            # и строим обход вокруг него. Число попыток
+                            # ограничено, иначе робот кружил бы по одному кругу.
+                            if detours_used >= self.max_detours:
+                                raise NavigationError(
+                                    "obstacle",
+                                    "Лидар увидел препятствие в %.2f м — остановка (попытки обхода %d из %d)"
+                                    % (obstruction, detours_used, self.max_detours), 409)
+                            detours_used += 1
+                            with self._lock:
+                                self._avoid_cells |= added
+                                avoid = set(self._avoid_cells)
+                            self._brake(bridge, "navigation_detour")
+                            self._set_state(
+                                phase="executing",
+                                message="Препятствие в %.2f м: строю обход (%d из %d)."
+                                        % (obstruction, detours_used, self.max_detours),
+                                detour=detours_used, detourLimit=self.max_detours,
+                                waypoint=segment_index, totalWaypoints=plan["waypoints"],
+                            )
+                            break
+                        # Препятствие уже известно и учтено в текущем плане:
+                        # едем мимо него по рассчитанному обходу.
 
                     # Медленная тяга, рассчитанная только по измеренной калибровке.
                     vx, vy = body_x * self.speed_mps, body_y * self.speed_mps

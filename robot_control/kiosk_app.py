@@ -619,8 +619,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     motion_routes = {
         "/api/kiosk_neutral", "/api/kiosk_drive", "/api/kiosk_keyboard", "/api/kiosk_steer",
         "/api/kiosk_zero", "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_maneuver",
-        "/api/kiosk_maneuver_config", "/api/navigation/start", "/api/navigation/cancel",
-        "/api/navigation/estop", "/api/estop", "/api/estop/release",
+        "/api/kiosk_maneuver_config", "/api/navigation/start", "/api/navigation/resume",
+        "/api/navigation/cancel", "/api/navigation/estop", "/api/estop", "/api/estop/release",
         "/api/system/stop",
     }
 
@@ -707,8 +707,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if request.method == "POST" and request.path in {
             "/api/kiosk_drive", "/api/kiosk_steer", "/api/kiosk_zero",
             "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_maneuver",
-            "/api/estop", "/api/navigation/start", "/api/navigation/cancel", "/api/navigation/estop",
-            "/api/system/stop",
+            "/api/estop", "/api/navigation/start", "/api/navigation/resume",
+            "/api/navigation/cancel", "/api/navigation/estop", "/api/system/stop",
         }:
             # A global system STOP must retire live steering under the motion
             # gate too; the early best-effort brake alone can be overtaken by
@@ -791,6 +791,20 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         eventlog.record("ok", "автономная навигация запущена к (%.2f, %.2f) м" % (
             payload["status"].get("goal", {}).get("x", 0),
             payload["status"].get("goal", {}).get("y", 0)), source="навигация")
+        return jsonify(payload), status
+
+    @app.post("/api/navigation/resume")
+    def api_navigation_resume():
+        if request.headers.get("X-Robot-Control") != "navigation":
+            return jsonify({"ok": False, "reason": "request_header_required",
+                            "error": "Запрос без заголовка X-Robot-Control: navigation"}), 400
+        try:
+            payload, status = navigation.resume(request.get_json(silent=True))
+        except NavigationError as exc:
+            return jsonify(exc.payload()), exc.status
+        goal = payload["status"].get("goal") or {}
+        eventlog.record("ok", "маршрут навигации продолжен к (%.2f, %.2f) м" % (
+            goal.get("x", 0), goal.get("y", 0)), source="навигация")
         return jsonify(payload), status
 
     @app.post("/api/navigation/cancel")

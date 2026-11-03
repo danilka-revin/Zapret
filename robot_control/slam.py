@@ -1260,6 +1260,13 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
             return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
         return navigation_proxy("/start")
 
+    @bp.post("/api/navigation/resume")
+    @guard
+    def api_navigation_resume():
+        if not navigation_control_allowed():
+            return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
+        return navigation_proxy("/resume")
+
     @bp.post("/api/navigation/cancel")
     @guard
     def api_navigation_cancel():

@@ -141,6 +141,8 @@ global.dispatchEvent = () => true;
 global.requestAnimationFrame = () => 0;
 global.cancelAnimationFrame = () => {};
 global.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+/* Подтверждение запуска в браузере: в тесте всегда «да». */
+global.confirm = () => true;
 global.MutationObserver = class {
   constructor(callback) { this.callback = callback; }
   observe() {}
@@ -184,6 +186,9 @@ global.fetch = async (url, options) => {
   }
   if (/api\/navigation\/plan/.test(text)) {
     return reply(payload.navigationPlanReply || { ok: false, error: 'plan fixture missing' });
+  }
+  if (/api\/navigation\/resume/.test(text)) {
+    return reply(payload.navigationResumeReply || { ok: false, error: 'resume fixture missing' });
   }
   return reply(payload.snapshot || payload);
 };
@@ -281,7 +286,18 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
       byId('nav-clear-points').click();
       editedRoute = { added, invalidated, reordered, removed, cleared: byId('nav-point-list').children.length };
     }
+    let resume = null;
+    if (payload.resumeTest) {
+      resume = { disabledBefore: byId('nav-resume').disabled };
+      byId('nav-resume').click();
+      await sleep(20);
+      resume.disabledAfter = byId('nav-resume').disabled;
+      resume.calls = calls.filter((call) => call.url.indexOf('navigation/resume') >= 0);
+      resume.message = byId('nav-msg').textContent;
+      resume.phase = byId('nav-status').textContent;
+    }
     navigation = {
+      resume,
       editedRoute,
       goalX: byId('nav-goal-x').value,
       goalY: byId('nav-goal-y').value,
