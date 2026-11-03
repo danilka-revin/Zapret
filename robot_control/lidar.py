@@ -2274,6 +2274,8 @@ class LidarManager:
         self.scan: list[dict[str, float]] = []
         self.scan_at: float = 0.0
         self.source_type: str = "none"
+        self.scan_peer_source: Optional[str] = None
+        self.scan_time_trusted = False
         self.reason: str = "лидар: идёт поиск порта"
         self.hint: str = ""
         self.detected: Optional[dict[str, Any]] = None
@@ -2419,6 +2421,8 @@ class LidarManager:
             self.scan = []
             self.scan_at = 0.0
             self.source_type = "none"
+            self.scan_peer_source = None
+            self.scan_time_trusted = False
         self.detected = None
         self.last_error = ""
         self.tried = []
@@ -2524,7 +2528,9 @@ class LidarManager:
 
     # ----------------------------- приём данных ---------------------------- #
 
-    def feed_points(self, points: list[dict[str, float]], source_label: str = "api") -> int:
+    def feed_points(self, points: list[dict[str, float]], source_label: str = "api",
+                    *, stamp: Optional[float] = None, peer_source: Optional[str] = None,
+                    peer_time_trusted: bool = False) -> int:
         """Принимает готовый список точек [{'a': ..., 'r': ...}]."""
         valid: list[dict[str, float]] = []
         for p in points:
@@ -2542,10 +2548,13 @@ class LidarManager:
             except (ValueError, TypeError):
                 continue
 
-        self._adopt_scan(valid, source_label)
+        self._adopt_scan(valid, source_label, stamp=stamp, peer_source=peer_source,
+                         peer_time_trusted=peer_time_trusted)
         return len(valid)
 
-    def _adopt_scan(self, points: list[dict[str, float]], source_label: str) -> None:
+    def _adopt_scan(self, points: list[dict[str, float]], source_label: str,
+                    *, stamp: Optional[float] = None, peer_source: Optional[str] = None,
+                    peer_time_trusted: bool = False) -> None:
         """Кладёт скан, не давая крошечным обрывкам гасить свежую карту.
 
         Пока прежний скан свежий и здоров (≥ ``LIDAR_MIN_POINTS`` точек),
@@ -2561,9 +2570,27 @@ class LidarManager:
                        and (now - self.scan_at) < LIDAR_MAX_AGE_S)
             if healthy and len(points) < LIDAR_MIN_POINTS:
                 return
+            # ROS/peer должны сохранять время съёмки, а не время получения:
+            # повтор старого кадра иначе выглядит свежим. Нулевые/симуляционные
+            # ROS-часы можно показать на экране, но нельзя доверять автономии.
+            epoch_stamp = (isinstance(stamp, (int, float)) and not isinstance(stamp, bool)
+                           and math.isfinite(stamp) and stamp >= 1_262_304_000)
+            source_time_trusted = bool(
+                (source_label == "ros" and epoch_stamp)
+                or (source_label == "peer" and epoch_stamp and peer_time_trusted is True)
+                or source_label.startswith("serial:")
+            )
+            if (epoch_stamp and source_time_trusted and self.scan_time_trusted
+                    and self.scan_at <= now and stamp <= self.scan_at):
+                # Two ROS subscribers or delayed peer replies can arrive out
+                # of order. Never feed an older frame back into scan matching.
+                return
             self.scan = list(points)
-            self.scan_at = now
+            self.scan_at = float(stamp) if epoch_stamp else now
             self.source_type = source_label
+            self.scan_peer_source = peer_source if source_label == "peer" else None
+            # A future capture time must not lock out the next valid frame.
+            self.scan_time_trusted = source_time_trusted and (not epoch_stamp or stamp <= now)
 
     def feed_scan_msg(
         self,
@@ -2574,19 +2601,35 @@ class LidarManager:
         range_min: float = 0.05,
         range_max: float = 12.0,
         source_label: str = "ros",
+        stamp: Optional[float] = None,
     ) -> int:
         """Принимает параметры LaserScan и сохраняет точки."""
         pts = scan_from_ranges(ranges, angle_min, angle_max, angle_increment, range_min, range_max)
-        self._adopt_scan(pts, source_label)
+        self._adopt_scan(pts, source_label, stamp=stamp)
         return len(pts)
+
+    def get_scan_info(self, max_age: float = LIDAR_MAX_AGE_S) -> dict[str, Any]:
+        """Атомарные скан, время и происхождение для карты/навигации."""
+        now = time.time()
+        with self.lock:
+            age = now - self.scan_at
+            if not self.scan or self.scan_at <= 0 or not 0 <= age < max_age:
+                return {"points": None, "stamp": 0.0, "source": "none", "trusted": False}
+            src = self.source_type
+            origin = self.scan_peer_source if src == "peer" else src
+            trusted = (self.scan_time_trusted and isinstance(origin, str)
+                       and (origin == "ros" or origin.startswith("serial:")))
+            return {"points": list(self.scan), "stamp": self.scan_at, "source": src,
+                    "peerSource": self.scan_peer_source, "trusted": trusted}
+
+    def get_scan_with_stamp(self, max_age: float = LIDAR_MAX_AGE_S) -> tuple[Optional[list[dict[str, float]]], float]:
+        """Атомарная пара скан/время захвата; будущий или старый кадр не свежий."""
+        info = self.get_scan_info(max_age)
+        return info["points"], info["stamp"]
 
     def get_scan(self, max_age: float = LIDAR_MAX_AGE_S) -> Optional[list[dict[str, float]]]:
         """Возвращает свежий скан или None (если устарел). Демо-скана нет."""
-        now = time.time()
-        with self.lock:
-            if self.scan and (now - self.scan_at) < max_age:
-                return list(self.scan)
-        return None
+        return self.get_scan_with_stamp(max_age)[0]
 
     def scan_stamp(self) -> float:
         """Время последнего скана (0 — скана ещё не было).
@@ -2597,15 +2640,19 @@ class LidarManager:
         with self.lock:
             return self.scan_at
 
-    def get_status(self) -> dict[str, Any]:
-        """Статус работы лидара для API /api/lidar и подписи на экране."""
+    def get_status(self, *, include_scan: bool = False) -> dict[str, Any]:
+        """Статус и, при запросе, скан из одного атомарного снимка."""
         now = time.time()
         with self.lock:
             scan = list(self.scan)
             scan_at = self.scan_at
             src = self.source_type
+            origin = self.scan_peer_source if src == "peer" else src
+            time_trusted = self.scan_time_trusted
 
-        is_fresh = bool(scan and (now - scan_at) < LIDAR_MAX_AGE_S)
+        is_fresh = bool(scan and scan_at > 0 and 0 <= now - scan_at < LIDAR_MAX_AGE_S)
+        scan_trusted = bool(is_fresh and time_trusted and isinstance(origin, str)
+                            and (origin == "ros" or origin.startswith("serial:")))
         near = min((p["r"] for p in scan), default=None) if scan else None
 
         if is_fresh:
@@ -2615,7 +2662,7 @@ class LidarManager:
         else:
             reason = self.reason
 
-        return {
+        payload = {
             "ok": True,
             "connected": is_fresh,
             "source": src if is_fresh else "no_signal",
@@ -2630,6 +2677,7 @@ class LidarManager:
             "demo": False,
             "points_count": len(scan) if is_fresh else 0,
             "scan_at": scan_at,
+            "scan_trusted": scan_trusted,
             "age_s": round(now - scan_at, 2) if scan_at > 0 else None,
             "nearest_m": near if is_fresh else None,
             "configured_port": self.port,
@@ -2654,6 +2702,9 @@ class LidarManager:
             "tried": [dict(item) for item in self.tried],
             "last_error": self.last_error or None,
         }
+        if include_scan:
+            payload["scan"] = scan if is_fresh else None
+        return payload
 
     # --------------------------- поиск и чтение --------------------------- #
 
@@ -2774,6 +2825,8 @@ class LidarManager:
             self.scan = list(points)
             self.scan_at = time.time()
             self.source_type = source_label
+            self.scan_peer_source = None
+            self.scan_time_trusted = source_label.startswith("serial:")
         if self._active_port:
             # Порт читается, витки идут — обновляем состояние (не чаще throttle в
             # ``_publish_state``), чтобы источник данных шасси не трогал этот порт
@@ -3368,8 +3421,20 @@ class LidarManager:
             if data.get("demo"):
                 self._peer_reason = "у соседа демо-скан (реального лидара там нет)"
                 continue
-            if isinstance(scan, list) and scan:
-                count = self.feed_points(scan, source_label="peer")
+            # Оба процесса обычно работают на одном роботе и разделяют часы.
+            # Без времени захвата нельзя отличить живой лидар от бесконечно
+            # повторяемого HTTP-ответа. Не принимаем также скан, который сам
+            # получен от peer: два соседа иначе могут переотдавать его по кругу.
+            stamp = data.get("scan_at")
+            now = time.time()
+            valid_stamp = (isinstance(stamp, (int, float)) and not isinstance(stamp, bool)
+                           and math.isfinite(stamp) and stamp > 0
+                           and 0 <= now - stamp < LIDAR_MAX_AGE_S)
+            if (isinstance(scan, list) and scan and data.get("connected") is True
+                    and data.get("source") != "peer" and valid_stamp):
+                count = self.feed_points(scan, source_label="peer", stamp=float(stamp),
+                                         peer_source=data.get("source"),
+                                         peer_time_trusted=data.get("scan_trusted") is True)
                 detected = data.get("detected")
                 if isinstance(detected, dict):
                     self.detected = {

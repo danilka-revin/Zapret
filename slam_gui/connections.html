@@ -28,6 +28,13 @@
     <div class="notice">Только просмотр · без подключения к портам, поиска Wi-Fi и Bluetooth-сопряжения.
       Показаны устройства, которые видит ОС на борту, а не на телефоне или компьютере с браузером.</div>
     <div class="inventory-grid">
+      <section class="panel wide system-panel" aria-labelledby="system-title">
+        <header><div><span class="section-icon">ПК</span><h2 id="system-title">Бортовой компьютер</h2></div><span id="system-status" class="count">—</span></header>
+        <p class="section-note">Температура, процессор, память и диск · чтение /proc и /sys, без управления охлаждением</p>
+        <div id="system-facts" class="system-facts">Ожидание данных…</div>
+        <div id="system-zones" class="system-zones"></div>
+        <p id="system-warning" class="warning" hidden></p>
+      </section>
       <section class="panel" aria-labelledby="usb-title"><header><div><span class="section-icon">USB</span><h2 id="usb-title">USB-устройства</h2></div><span id="usb-count" class="count">—</span></header>
         <p class="section-note">Разветвители, платы, адаптеры и периферия</p><div id="usb-items" class="items">Ожидание данных…</div><p id="usb-warning" class="warning" hidden></p></section>
       <section class="panel" aria-labelledby="serial-title"><header><div><span class="section-icon">I/O</span><h2 id="serial-title">COM / UART-порты</h2></div><span id="serial-count" class="count">—</span></header>

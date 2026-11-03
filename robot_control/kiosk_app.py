@@ -488,12 +488,25 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     app.extensions["rc_battery"] = battery
 
     from .connections import ConnectionsMonitor
-    connections = ConnectionsMonitor()
+    from .system_monitor import SystemMonitor, SystemState
+    # Один читатель /proc и /sys на процесс: экран «Подключения» и маленький
+    # индикатор на бортовом экране показывают одни и те же числа.
+    system_state = SystemState()
+    system = SystemMonitor(system_state)
+    app.extensions["rc_system"] = system
+    connections = ConnectionsMonitor(system=system_state)
     app.extensions["rc_connections"] = connections
 
     @app.get("/api/connections")
     def api_connections():
         response = jsonify(connections.snapshot())
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/api/pc_state")
+    def api_system():
+        # Только чтение: температура, память, диск и загрузка процессора.
+        response = jsonify(system.snapshot())
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -619,8 +632,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     motion_routes = {
         "/api/kiosk_neutral", "/api/kiosk_drive", "/api/kiosk_keyboard", "/api/kiosk_steer",
         "/api/kiosk_zero", "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_maneuver",
-        "/api/kiosk_maneuver_config", "/api/navigation/start", "/api/navigation/cancel",
-        "/api/navigation/estop", "/api/estop", "/api/estop/release",
+        "/api/kiosk_maneuver_config", "/api/navigation/start", "/api/navigation/resume",
+        "/api/navigation/cancel", "/api/navigation/estop", "/api/estop", "/api/estop/release",
         "/api/system/stop",
     }
 
@@ -707,8 +720,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if request.method == "POST" and request.path in {
             "/api/kiosk_drive", "/api/kiosk_steer", "/api/kiosk_zero",
             "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_maneuver",
-            "/api/estop", "/api/navigation/start", "/api/navigation/cancel", "/api/navigation/estop",
-            "/api/system/stop",
+            "/api/estop", "/api/navigation/start", "/api/navigation/resume",
+            "/api/navigation/cancel", "/api/navigation/estop", "/api/system/stop",
         }:
             # A global system STOP must retire live steering under the motion
             # gate too; the early best-effort brake alone can be overtaken by
@@ -728,11 +741,13 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             try:
                 manager = LidarManager.get_instance()
                 if manager is not None:
-                    stamp = manager.scan_stamp()
-                    points = manager.get_scan()
+                    scan_info = manager.get_scan_info()
+                    points, stamp = scan_info["points"], scan_info["stamp"]
                     if points and stamp and stamp != last_stamp:
                         last_stamp = stamp
-                        map_service.ingest(points)
+                        # Сохраняем время получения скана, не время окончания
+                        # медленного scan matching: устаревшая поза не свежая.
+                        map_service.ingest(points, stamp=stamp, trusted=scan_info["trusted"])
                 map_service.maybe_autosave()
             except Exception as exc:  # noqa: BLE001 — карта не должна ронять сервер
                 log.debug("карта лидара: %s", exc)
@@ -791,6 +806,20 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         eventlog.record("ok", "автономная навигация запущена к (%.2f, %.2f) м" % (
             payload["status"].get("goal", {}).get("x", 0),
             payload["status"].get("goal", {}).get("y", 0)), source="навигация")
+        return jsonify(payload), status
+
+    @app.post("/api/navigation/resume")
+    def api_navigation_resume():
+        if request.headers.get("X-Robot-Control") != "navigation":
+            return jsonify({"ok": False, "reason": "request_header_required",
+                            "error": "Запрос без заголовка X-Robot-Control: navigation"}), 400
+        try:
+            payload, status = navigation.resume(request.get_json(silent=True))
+        except NavigationError as exc:
+            return jsonify(exc.payload()), exc.status
+        goal = payload["status"].get("goal") or {}
+        eventlog.record("ok", "маршрут навигации продолжен к (%.2f, %.2f) м" % (
+            goal.get("x", 0), goal.get("y", 0)), source="навигация")
         return jsonify(payload), status
 
     @app.post("/api/navigation/cancel")
@@ -1390,7 +1419,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         })
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
-    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js", "robot.css", "robot.js", "full_zero.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
+    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "map_view.js",
                      "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):

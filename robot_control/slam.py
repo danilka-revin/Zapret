@@ -783,6 +783,8 @@ ASSETS = {
     # страница киоска на борту робота (без авторизации)
     "robot.css": "robot_css",
     "robot.js": "robot_js",
+    # индикатор бортового компьютера (температура и загрузка) на экране киоска
+    "pc_chip.js": "pc_chip_js",
     "full_zero.js": "full_zero_js",
     "keyboard.js": "keyboard_js",
     "neutral.js": "neutral_js",
@@ -1047,12 +1049,18 @@ def lidar_status_payload(manager, points, demo):
     экран — причину «скана нет». Флаг ``demo`` всегда ``False``: выдуманного
     скана в системе нет.
     """
-    status = manager.get_status()
+    # The peer consumes scan, timestamp and provenance together. Fetching the
+    # points and status separately could label an intervening API/old scan as
+    # a trusted physical scan. Prefer one atomic manager snapshot.
+    status = manager.get_status(include_scan=True)
+    if status["scan"] is None:
+        # A screen-only fallback is useful, but is not a trusted peer scan.
+        status["scan"] = points
+        status["scan_trusted"] = False
     status["demo"] = bool(demo)
     if demo and not status["connected"]:
         status["reason"] = "демо-скан источника данных (реального лидара нет): " + status["reason"]
-    status["scan"] = points
-    status["count"] = len(points) if points else 0
+    status["count"] = len(status["scan"]) if status["scan"] else 0
     # Экранный журнал: смена состояния лидара — настоящее событие робота.
     note_lidar_status(status)
     return status
@@ -1260,6 +1268,13 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
             return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
         return navigation_proxy("/start")
 
+    @bp.post("/api/navigation/resume")
+    @guard
+    def api_navigation_resume():
+        if not navigation_control_allowed():
+            return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
+        return navigation_proxy("/resume")
+
     @bp.post("/api/navigation/cancel")
     @guard
     def api_navigation_cancel():
@@ -1283,6 +1298,16 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         return _send(KIOSK_PAGE)
 
     bp.add_url_rule("/robot.html", endpoint="kiosk_page", view_func=kiosk_screen)
+
+    @bp.get("/api/pc_state")
+    def api_system():
+        """Состояние бортового компьютера для маленького индикатора на экране.
+
+        Читается на борту (/proc и /sys) и кэшируется там же; здесь только
+        пересылка, как у списка подключений. Секретов в ответе нет.
+        """
+        from .map_peer import proxy_system
+        return proxy_system(peer_kiosk_url().removesuffix("/api/kiosk_state"))
 
     @bp.get("/api/kiosk_state")
     def api_kiosk_state():

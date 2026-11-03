@@ -454,6 +454,8 @@
   function boot() {
     fetchState();
     setInterval(fetchState, POLL_MS);
+    // Температура и загрузка бортового компьютера — отдельный тихий чип.
+    if (window.RCPcChip) window.RCPcChip.start($('pc-chip'), 'api/pc_state');
     setInterval(() => { void fetchKeyboardState(); }, WASD_POLL_MS);
     bindLidarRange();
     loop();

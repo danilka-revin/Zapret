@@ -478,7 +478,7 @@ def test_peer_demo_scan_is_not_taken_for_a_real_lidar(monkeypatch, manager):
 
 def test_peer_real_scan_is_taken(monkeypatch, manager):
     payload = {"scan": [{"a": 0.5, "r": 1.5}, {"a": -0.5, "r": 2.5}], "demo": False,
-               "connected": True,
+               "connected": True, "source": "serial", "scan_at": time.time(),
                "detected": {"port": "/dev/ttyUSB1", "protocol": "lds01",
                             "baud": 230400, "motor": "none"}}
     server, thread = peer_server(payload)
@@ -1063,3 +1063,84 @@ def test_state_stays_fresh_while_the_scan_goes(state_dir, manager):
     assert lidar.lidar_active_port() == str(port)
     written = json.loads(lidar.lidar_state_file().read_text("utf-8"))
     assert time.time() - written["at"] < lidar.LIDAR_STATE_TTL_S
+
+
+def test_peer_preserves_original_timestamp_and_refuses_replay_and_peer_loops(manager, monkeypatch):
+    stamp = time.time() - 0.1
+    response = {"scan": [{"a": 0, "r": 2}], "demo": False, "connected": True,
+                "source": "serial:ttyUSB1", "scan_at": stamp, "scan_trusted": True}
+    monkeypatch.setattr(manager, "_peer_targets", lambda: ["http://peer/api/lidar"])
+    monkeypatch.setattr(lidar, "_fetch_json", lambda _url: dict(response))
+    monkeypatch.setattr(lidar.time, "sleep", lambda _seconds: None)
+    assert manager._peer_cycle()
+    assert manager.scan_stamp() == stamp
+    assert manager.get_scan_info()["trusted"]
+    assert manager._peer_cycle() and manager.scan_stamp() == stamp
+    response["scan_at"] = time.time() - 5
+    assert not manager._peer_cycle()
+    response["scan_at"] = time.time() + 5
+    assert not manager._peer_cycle()
+    response["scan_at"] = time.time()
+    response["source"] = "peer"
+    assert not manager._peer_cycle()
+    response["source"] = "api"
+    assert manager._peer_cycle()
+    assert manager.get_scan_info()["trusted"] is False
+
+
+def test_ros_requires_capture_timestamp_for_navigation_but_allows_visualization(manager):
+    params = {'ranges': [1.5] * 100, 'angle_min': -3.14, 'angle_max': 3.14,
+              'angle_increment': 6.28 / 100, 'source_label': 'ros'}
+    stamp = time.time() - 0.1
+    manager.feed_scan_msg(**params, stamp=stamp)
+    assert manager.get_scan_info()['trusted'] is True
+    assert manager.get_scan_info()['stamp'] == stamp
+    assert manager.get_status()['scan_trusted'] is True
+    older = dict(params, ranges=[0.8] * 100)
+    manager.feed_scan_msg(**older, stamp=stamp - 0.05)
+    assert manager.get_scan_info()['stamp'] == stamp  # out-of-order frame ignored
+    assert manager.get_scan_info()['points'][0]['r'] == 1.5
+    manager.feed_scan_msg(**params, stamp=time.time() + 5)
+    assert manager.get_scan_info()['points'] is None  # future clocks fail closed
+    recovered = time.time() - 0.02
+    manager.feed_scan_msg(**params, stamp=recovered)
+    assert manager.get_scan_info()['stamp'] == recovered and manager.get_scan_info()['trusted']
+    manager.feed_scan_msg(**params, stamp=None)  # new stream without a capture clock
+    assert not manager.get_scan_info()['trusted']
+    manager.feed_scan_msg(**params, stamp=stamp - 5)
+    assert manager.get_scan_info()['points'] is None  # stale header, not reception time
+    manager.feed_scan_msg(**params, stamp=None)
+    assert manager.get_scan_info()['points']
+    assert manager.get_scan_info()['trusted'] is False
+    assert manager.get_status()['scan_trusted'] is False
+    manager.feed_scan_msg(**params, stamp=25.0)  # ROS sim-time is not wall clock
+    assert manager.get_scan_info()['points'] and not manager.get_scan_info()['trusted']
+    manager._store_scan([{'a': 0.0, 'r': 2}], 'serial:ttyUSB1')
+    assert manager.get_scan_info()['trusted'] is True
+
+
+def test_peer_must_report_trusted_capture_time_for_autonomy(manager, monkeypatch):
+    response = {'scan': [{'a': 0, 'r': 2}], 'demo': False, 'connected': True,
+                'source': 'ros', 'scan_at': time.time()}
+    monkeypatch.setattr(manager, '_peer_targets', lambda: ['http://peer/api/lidar'])
+    monkeypatch.setattr(lidar, '_fetch_json', lambda _url: dict(response))
+    monkeypatch.setattr(lidar.time, 'sleep', lambda _seconds: None)
+    assert manager._peer_cycle()
+    assert manager.get_scan_info()['points'] and not manager.get_scan_info()['trusted']
+    response['scan_trusted'] = True
+    assert manager._peer_cycle()
+    assert manager.get_scan_info()['trusted'] is True
+
+
+def test_peer_payload_scan_timestamp_and_trust_are_same_atomic_snapshot(manager):
+    from robot_control.slam import lidar_status_payload
+    physical = [{'a': 0, 'r': 1.5}]
+    earlier_api_scan = [{'a': 1, 'r': 9.0}]
+    manager._store_scan(physical, 'serial:ttyUSB1')
+    payload = lidar_status_payload(manager, earlier_api_scan, False)
+    assert payload['scan'] == physical
+    assert payload['scan_at'] == manager.scan_stamp()
+    assert payload['connected'] and payload['scan_trusted']
+    manager.feed_points(earlier_api_scan, source_label='api')
+    payload = lidar_status_payload(manager, physical, False)
+    assert payload['scan'] == earlier_api_scan and not payload['scan_trusted']

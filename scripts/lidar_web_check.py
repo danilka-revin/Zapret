@@ -6,9 +6,11 @@
 
   * веб-приложения запущены и отвечают;
   * запущены они тем интерпретатором, где есть pyserial (``.venv``);
-  * ``GET /api/lidar`` отдаёт **свежий настоящий** скан (``connected``,
-    ``points_count``, ``detected``: порт, протокол, скорость);
-  * скан не подменён демо (``demo``) — стенд без железа не выдаётся за лидар;
+  * ``GET /api/lidar`` отдаёт свежий скан с подтверждённым приложением
+    происхождением и временем (``scan_trusted``, ``connected``, ``points_count``);
+  * скан не подменён демо (``demo``) или API-сканом без provenance;
+    программная проверка не доказывает подлинность датчика, корректность
+    измерений, обзор и безопасность движения;
   * второй процесс робота берёт скан у первого (``source == "peer"``), то есть
     пульт и бортовой экран не воюют за один USB-порт;
   * если скана нет — печатается причина из API вместе с USB-диагностикой
@@ -28,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 import urllib.error
@@ -65,12 +68,14 @@ def real_scan(status: dict) -> bool:
     """Есть ли в ответе свежий настоящий скан (не демо)."""
     if status.get("error") or status.get("demo"):
         return False
-    if not status.get("connected"):
+    if not status.get("connected") or status.get("scan_trusted") is not True:
         return False
     age = status.get("age_s")
-    if isinstance(age, (int, float)) and age > MAX_AGE_S:
+    if (not isinstance(age, (int, float)) or isinstance(age, bool)
+            or not math.isfinite(age) or not 0 <= age <= MAX_AGE_S):
         return False
-    return bool(status.get("points_count"))
+    points = status.get("points_count")
+    return isinstance(points, int) and not isinstance(points, bool) and points > 0
 
 
 def describe(name: str, url: str, status: dict, restart: str = "") -> dict:
@@ -83,6 +88,7 @@ def describe(name: str, url: str, status: dict, restart: str = "") -> dict:
         "real_scan": real_scan(status),
         "demo": bool(status.get("demo")),
         "connected": bool(status.get("connected")),
+        "scan_trusted": status.get("scan_trusted") is True,
         "points": status.get("points_count") or 0,
         "source": status.get("source"),
         "detected": status.get("detected"),
@@ -123,8 +129,11 @@ def print_report(report: dict) -> None:
     if report["demo"]:
         log("  ✘ ДЕМО-скан вместо реального лидара (%s точек): настоящий скан не читается"
             % report["points"])
+    elif report["connected"] and not report["scan_trusted"]:
+        log("  ✘ скан виден, но источник или время не подтверждены (scan_trusted не true).")
+        log("    Проверь источник, время ROS и обнови оба приложения до одной версии.")
     else:
-        log("  ✘ реального скана нет (точек: %s)" % report["points"])
+        log("  ✘ подтверждённого свежего скана нет (точек: %s)" % report["points"])
     if report["reason"]:
         log("    причина: %s" % report["reason"])
     if report["hint"]:
@@ -198,16 +207,17 @@ def main(argv=None) -> int:
     if all(r["real_scan"] for r in reports):
         if not args.json:
             sources = {r["source"] for r in reports}
-            log("Итог: реальный лидар виден на обоих экранах (источники: %s)."
+            log("Итог: свежий подтверждённый скан виден на проверенных экранах (источники: %s)."
                 % ", ".join(sorted(str(s) for s in sources)))
-            log("Карта лидара на экранах должна обновляться; демо при этом не показывается.")
+            log("Это программная проверка: датчик, геометрию и обзор проверьте физически.")
         return 0
     if not args.json:
         log("Итог: веб-приложения работают, но реального скана нет — причина выше.")
         log("Что делать дальше:")
-        log("  1) .venv/bin/python scripts/lidar_check.py --save-env   # железо и настройки")
-        log("  2) ./scripts/stop.sh && ./scripts/start_robot.sh         # перезапуск обоих экранов")
-        log("  4) journalctl -u robot-control -f  (или окно start.sh)    # журнал лидара")
+        log("  1) ./scripts/ros2_lidar.sh --status                    # состояние драйвера")
+        log("  2) ls -l /dev/serial/by-id/                           # посмотреть имена устройств")
+        log("  3) journalctl -u robot-control -f  (или окно start.sh) # журнал лидара")
+        log("  ВНИМАНИЕ: активный перебор портов может сбросить платы; не запускайте его на действующем роботе.")
     return 1
 
 
