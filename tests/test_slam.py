@@ -1137,3 +1137,22 @@ def test_drive_api_allows_any_steering_angle_end_to_end(kiosk_client):
                                  headers={"X-Robot-Control": "drive"})
     assert response.status_code == 200, response.get_json()
     assert src.commands.get_nowait() == b"t 8\n"
+
+
+def test_ros_source_forwards_laserscan_capture_timestamp(monkeypatch):
+    import time
+    from types import SimpleNamespace as NS
+    from robot_control.lidar import LidarManager
+    backend = _load_backend()
+    captured = {}
+    fake = NS(feed_scan_msg=lambda **fields: captured.update(fields))
+    monkeypatch.setattr(LidarManager, 'get_instance', lambda: fake)
+    source = object.__new__(backend.RosSource)
+    sec = int(time.time())
+    message = NS(ranges=[1.0, 1.5], angle_min=0.0, angle_max=1.0,
+                 angle_increment=0.5, range_min=0.1, range_max=10.0,
+                 header=NS(stamp=NS(sec=sec, nanosec=250_000_000)))
+    source._on_scan(message)
+    assert captured['source_label'] == 'ros'
+    assert captured['stamp'] == sec + 0.25
+    assert source.scan

@@ -44,6 +44,19 @@ SCAN_TIMEOUT_S = 2.0
 RESCAN_SERVICE = "/lidar_supervisor/rescan"
 
 
+def laserscan_stamp(message: Any) -> Optional[float]:
+    """Return the ROS capture timestamp; missing or malformed is untrusted."""
+    value = getattr(getattr(message, "header", None), "stamp", None)
+    try:
+        seconds, nanoseconds = value.sec, value.nanosec
+        if (type(seconds) is not int or type(nanoseconds) is not int
+                or seconds < 0 or not 0 <= nanoseconds < 1_000_000_000):
+            return None
+        return seconds + nanoseconds / 1e9
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
+
+
 def _init_rclpy(rclpy: Any) -> None:
     """Инициализирует rclpy, не перехватывая SIGINT/SIGTERM приложения."""
     ros_env.init_rclpy(rclpy)
@@ -124,6 +137,7 @@ class RosLidar:
         angle_increment: float,
         range_min: float = 0.05,
         range_max: float = 12.0,
+        *, stamp: Optional[float] = None,
     ) -> int:
         """Принимает поля ``sensor_msgs/LaserScan`` и отдаёт их менеджеру."""
         count = 0
@@ -136,6 +150,7 @@ class RosLidar:
                 range_min=range_min,
                 range_max=range_max,
                 source_label="ros",
+                stamp=stamp,
             )
         else:
             count = sum(
@@ -367,7 +382,7 @@ class RosLidar:
                     bridge.feed_laserscan(
                         list(msg.ranges), float(msg.angle_min), float(msg.angle_max),
                         float(msg.angle_increment), float(msg.range_min),
-                        float(msg.range_max))
+                        float(msg.range_max), stamp=laserscan_stamp(msg))
                 except Exception as exc:  # noqa: BLE001 — одно плохое сообщение не повод падать
                     log.debug("Лидар: сообщение /scan не разобрано: %s", exc)
 

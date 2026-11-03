@@ -46,6 +46,7 @@ function makeCtx(el) {
     clearRect: () => {},
     drawImage: (...args) => { target.calls.push(['drawImage', ...args]); },
     measureText: () => ({ width: 10 }),
+    fillText: (...args) => { target.calls.push(['fillText', ...args]); },
   };
   return new Proxy(target, {
     get(obj, prop) {
@@ -135,6 +136,8 @@ global.window = global;
 global.self = global;
 global.Image = FakeImage;
 global.devicePixelRatio = 1;
+const confirmations = [];
+global.confirm = (message) => { confirmations.push(String(message)); return payload.confirmChoice === true; };
 global.addEventListener = () => {};
 global.removeEventListener = () => {};
 global.dispatchEvent = () => true;
@@ -165,7 +168,7 @@ global.fetch = async (url, options) => {
   const text = String(url);
   const method = (options && options.method) || 'GET';
   const body = options && options.body ? JSON.parse(options.body) : null;
-  calls.push({ url: text, method, body });
+  calls.push({ url: text, method, body, headers: options && options.headers });
   if (/api\/state$/.test(text)) return reply(payload.robotState || { ok: false });
   if (/kiosk_map\/reset/.test(text)) {
     return reply(payload.reset || { ok: true, paths: payload.paths });
@@ -184,6 +187,9 @@ global.fetch = async (url, options) => {
   }
   if (/api\/navigation\/plan/.test(text)) {
     return reply(payload.navigationPlanReply || { ok: false, error: 'plan fixture missing' });
+  }
+  if (/api\/navigation\/start/.test(text)) {
+    return reply(payload.navigationStartReply || { ok: true, status: { phase: 'starting', message: 'Запуск' } });
   }
   return reply(payload.snapshot || payload);
 };
@@ -268,6 +274,10 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
       byId('nav-plan').click();
       await sleep(20);
     }
+    if (payload.confirmNavigationTest) {
+      byId('nav-start').click();
+      await sleep(20);
+    }
     let editedRoute = null;
     if (payload.multiPointTest) {
       byId('nav-goal-x').value = '2'; byId('nav-goal-y').value = '0.2';
@@ -291,6 +301,8 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
       routeKpiDist: byId('route-kpi-dist').textContent,
       routeKpiGoal: byId('route-kpi-goal').textContent,
       summary: byId('nav-route-summary').textContent,
+      labels: (canvas._ctx ? canvas._ctx.calls : []).filter((call) => call[0] === 'fillText').map((call) => call[1]),
+      confirmations,
       phase: byId('nav-status').textContent,
       message: byId('nav-msg').textContent,
       startDisabled: byId('nav-start').disabled,

@@ -338,3 +338,58 @@ def test_map_reads_actual_independent_wheel_telemetry(tmp_path):
     assert all(call["method"] == "GET" for call in report["calls"]
                if 'steer' in call["url"] or 'drive' in call["url"])
     assert report["renderErrors"] == []
+
+
+def test_partial_unknown_goal_is_labelled_and_confirmation_warns(tmp_path):
+    plan = {
+        "ok": True, "path": [{"x": 1.25, "y": -0.5}, {"x": 0.6, "y": 0}],
+        "goal": {"x": 0.6, "y": 0}, "goalRequested": {"x": 1.0, "y": 0},
+        "goalsRequested": [{"x": 1.0, "y": 0}], "partial": True, "executable": True,
+        "manualBlindZone": True, "blindInspectionRadiusM": 0.48,
+        "distanceM": 0.82, "waypoints": 1, "footprintM": 0.55,
+    }
+    status = {"ok": True, "phase": "planned", "message": "Частичный маршрут",
+              "canStart": True, "enabled": True, "reason": "", "plan": plan}
+    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS, "navigationTest": True,
+                            "confirmNavigationTest": True,
+                            "navigationPlanReply": {"ok": True, "plan": plan, "status": status}})
+    nav = report["navigation"]
+    assert "только известный участок" in nav["summary"].lower()
+    assert any("ГРАНИЦА ИЗВЕСТНОГО" in label for label in nav["labels"])
+    assert any("ЦЕЛЬ (1.00; 0.00)" in label for label in nav["labels"])
+    assert nav["confirmations"] and "путь неизвестен" in nav["confirmations"][0].lower()
+    assert "слепая зона" in nav["confirmations"][0].lower()
+    assert "0.48 м вокруг датчика" in nav["confirmations"][0].lower()
+    assert not any(c["url"].endswith("api/navigation/start") for c in report["calls"])
+    assert report["renderErrors"] == []
+
+
+@pytest.mark.parametrize("manual_blind", [True, False])
+def test_blind_zone_confirmation_is_sent_only_after_inspection_prompt(tmp_path, manual_blind):
+    plan = {"ok": True, "path": [{"x": 1.25, "y": -0.5}, {"x": 0.6, "y": 0}],
+            "goal": {"x": 0.6, "y": 0}, "goalRequested": {"x": 1.0, "y": 0},
+            "goalsRequested": [{"x": 1.0, "y": 0}], "partial": True,
+            "manualBlindZone": manual_blind, "executable": True,
+            "distanceM": 0.82, "waypoints": 1, "footprintM": 0.55}
+    status = {"ok": True, "phase": "planned", "canStart": True, "enabled": True, "plan": plan}
+    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS, "navigationTest": True,
+                            "confirmNavigationTest": True, "confirmChoice": True,
+                            "navigationPlanReply": {"ok": True, "plan": plan, "status": status}})
+    starts = [c for c in report["calls"] if c["url"].endswith("api/navigation/start")]
+    assert len(starts) == 1 and starts[0]["method"] == "POST"
+    assert starts[0]["headers"]["X-Robot-Control"] == "navigation"
+    assert (starts[0]["body"].get("blindZoneChecked") is True) == manual_blind
+    assert ("слепая зона" in report["navigation"]["confirmations"][0].lower()) == manual_blind
+    assert report["renderErrors"] == []
+
+
+def test_frontier_without_safe_motion_disables_start(tmp_path):
+    plan = {"ok": True, "path": [{"x": 1.25, "y": -0.5}], "goal": {"x": 1.25, "y": -0.5},
+            "goalRequested": {"x": 1.0, "y": 0}, "goalsRequested": [{"x": 1.0, "y": 0}],
+            "partial": True, "executable": False, "distanceM": 0, "waypoints": 0, "footprintM": 0.55}
+    status = {"ok": True, "phase": "planned", "message": "Нет безопасного участка",
+              "canStart": False, "enabled": True, "reason": "Нет безопасного участка", "plan": plan}
+    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS, "navigationTest": True,
+                            "navigationPlanReply": {"ok": True, "plan": plan, "status": status}})
+    assert report["navigation"]["startDisabled"]
+    assert "нет безопасного участка" in report["navigation"]["summary"]

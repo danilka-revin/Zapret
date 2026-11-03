@@ -1047,12 +1047,18 @@ def lidar_status_payload(manager, points, demo):
     экран — причину «скана нет». Флаг ``demo`` всегда ``False``: выдуманного
     скана в системе нет.
     """
-    status = manager.get_status()
+    # The peer consumes scan, timestamp and provenance together. Fetching the
+    # points and status separately could label an intervening API/old scan as
+    # a trusted physical scan. Prefer one atomic manager snapshot.
+    status = manager.get_status(include_scan=True)
+    if status["scan"] is None:
+        # A screen-only fallback is useful, but is not a trusted peer scan.
+        status["scan"] = points
+        status["scan_trusted"] = False
     status["demo"] = bool(demo)
     if demo and not status["connected"]:
         status["reason"] = "демо-скан источника данных (реального лидара нет): " + status["reason"]
-    status["scan"] = points
-    status["count"] = len(points) if points else 0
+    status["count"] = len(status["scan"]) if status["scan"] else 0
     # Экранный журнал: смена состояния лидара — настоящее событие робота.
     note_lidar_status(status)
     return status

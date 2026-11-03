@@ -278,3 +278,71 @@ def test_kiosk_map_page_and_script_served(kiosk_client):
     page = kiosk_client.get("/kiosk").get_data(as_text=True)
     assert "swipe-map-view" in page
     assert "map_view.js" in page
+
+
+def test_identical_scans_report_high_quality_and_failure_clears_it(monkeypatch):
+    estimator = PoseEstimator()
+    scan = room_scan()
+    estimator.update(scan)
+    assert estimator.quality == 0
+    estimator.update(scan)
+    assert estimator.quality == pytest.approx(1.0)
+
+    def rejected(_prev, _current):
+        estimator.quality = 0.99  # even if the match itself reported many hits
+        return None
+
+    monkeypatch.setattr(estimator, "_match", rejected)
+    estimator.update(scan)
+    assert estimator.quality == 0
+    estimator.quality = 0.99
+    estimator.update(scan, enabled=False)
+    assert estimator.quality == 0
+
+
+def test_front_lidar_ray_uses_mount_offset_and_snapshot_is_body_centre(monkeypatch):
+    monkeypatch.setenv("RC_LIDAR_OFFSET_M", "0.35")
+    service = SlamMapService(MapSettings(size_m=10, resolution=0.1))
+    service.ingest([{"a": 0, "r": 2}])
+    snapshot = service.navigation_snapshot()
+    assert snapshot["pose"] == {"x": 0.0, "y": 0.0, "yaw": 0.0}
+    cell = service._grid.cell_of(2.35, 0)
+    assert service._grid.get(*cell) >= 65
+    blind = service._grid.cell_of(0.35, 0.0)
+    assert service._grid.get(*blind) == 255  # near range was not observed
+    assert service.snapshot(with_png=False)["lidarOffsetM"] == 0.35
+
+    # At 90 degrees the sensor has moved with the robot's rotation; convert
+    # back to the body centre rather than applying the offset twice.
+    service._pose.pose = (-0.35, 0.35, math.pi / 2)
+    body = service.navigation_snapshot()["pose"]
+    assert body["x"] == pytest.approx(0, abs=1e-9)
+    assert body["y"] == pytest.approx(0, abs=1e-9)
+
+
+def test_a_hit_cannot_become_free_within_the_same_scan():
+    settings = MapSettings(size_m=10, resolution=0.1, hit=0.05, miss=0.9)
+    grid = OccupancyGrid(settings)
+    # A later ray crosses an earlier hit, and the configured hit is tiny.
+    grid.insert_scan((0, 0, 0), [{"a": 0, "r": 2.0}, {"a": 0, "r": 4.0}], settings)
+    assert grid.get(*grid.cell_of(2.0, 0)) >= 65
+
+
+def test_map_settings_reset_and_untrusted_history_fail_closed(monkeypatch, tmp_path):
+    monkeypatch.setenv("RC_MAP_SETTINGS", str(tmp_path / "settings.json"))
+    service = SlamMapService(MapSettings(size_m=10, autosave=False))
+    service.ingest(wall_scan(), trusted=False)
+    assert not service.navigation_snapshot()["trusted"]
+    service.ingest(wall_scan(), trusted=True)
+    assert not service.navigation_snapshot()["trusted"]  # not healed by a newer scan
+    service.reset(save=False)
+    assert service.navigation_snapshot()["trusted"]
+
+    service.set_settings({"matching": False})
+    service.ingest(wall_scan())
+    service.set_settings({"matching": True})
+    assert not service.navigation_snapshot()["navigationIntegrity"]
+    service.set_settings({"resolution": 0.2})
+    snapshot = service.navigation_snapshot()
+    assert snapshot["navigationIntegrity"] and snapshot["scans"] == 0
+    assert snapshot["quality"] == 0 and snapshot["updatedAt"] == 0

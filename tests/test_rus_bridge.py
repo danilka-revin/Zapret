@@ -81,7 +81,7 @@ def test_plan_crab_within_steer_limit_is_feasible():
     plan = plan_motion(SwerveKinematics(), v * math.cos(math.radians(20)),
                        v * math.sin(math.radians(20)), 0.0, mps_per_percent=CAL)
     assert plan.ok
-    assert all(abs(d - 20.0) < 0.1 for d in plan.steer_deg.values())
+    assert all(abs(d + 20.0) < 0.1 for d in plan.steer_deg.values())
     assert plan.percent == 10
 
 
@@ -91,7 +91,7 @@ def test_plan_crab_45_is_within_steer_limit():
     plan = plan_motion(SwerveKinematics(), v * math.cos(math.radians(45)),
                        v * math.sin(math.radians(45)), 0.0, mps_per_percent=CAL)
     assert plan.ok
-    assert all(abs(d - 45.0) < 0.1 for d in plan.steer_deg.values())
+    assert all(abs(d + 45.0) < 0.1 for d in plan.steer_deg.values())
 
 
 def test_plan_pure_side_step_at_90_degrees_is_feasible():
@@ -190,7 +190,7 @@ def test_after_brake_steer_is_sent_and_waits_for_alignment(master):
     bridge.step(vx, vy, 0.0, now=0.3)            # тормоз
     r = bridge.step(vx, vy, 0.0, now=0.5)        # теперь руль
     assert r["phase"] == "steering"
-    assert any(abs(deg - 20.0) < 0.2 for _, deg in master.steers[-4:])
+    assert any(abs(deg + 20.0) < 0.2 for _, deg in master.steers[-4:])
 
 
 def test_alignment_timeout_stops_the_robot(master):
@@ -286,3 +286,13 @@ def test_brake_method_stops_motion(master):
     bridge.step(0.1, 0.0, 0.0, now=0.1)
     bridge.brake("пульт отпущен", now=0.2)
     assert master.drives[-1] == 0
+
+
+def test_firmware_clockwise_sign_is_opposite_to_map_for_forward_and_reverse():
+    angle = math.radians(20)
+    forward_left = plan_motion(SwerveKinematics(), 0.1 * math.cos(angle),
+                               0.1 * math.sin(angle), 0, mps_per_percent=CAL)
+    reverse_left = plan_motion(SwerveKinematics(), -0.1 * math.cos(angle),
+                               0.1 * math.sin(angle), 0, mps_per_percent=CAL)
+    assert forward_left.percent > 0 and all(a < 0 for a in forward_left.steer_deg.values())
+    assert reverse_left.percent < 0 and all(a > 0 for a in reverse_left.steer_deg.values())

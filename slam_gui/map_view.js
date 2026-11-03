@@ -259,10 +259,15 @@
     return { scale, x0: x0 + state.panX, y0: y0 + state.panY, originX, originY, mapW, mapH, centerX, centerY };
   }
 
-  /* Рисуем робот 75×60 см (высота 30 см) с 4 колёсами и лидаром спереди (+35 см). */
+  function lidarOffset() {
+    const raw = state.snapshot && state.snapshot.lidarOffsetM;
+    return Number.isFinite(raw) && raw >= 0 && raw <= 1.5 ? raw : LIDAR_OFFSET_X_M;
+  }
+
+  /* Рисуем робот 75×60 см (высота 30 см) с 4 колёсами и передним лидаром. */
   function drawRobotChassis(ctx, screenX, screenY, yaw, scale, pal, steerRad) {
     if (window.RCRobotModel) {
-      const options = { light: state.theme === 'light' };
+      const options = { light: state.theme === 'light', lidarOffsetM: lidarOffset() };
       if (state.previewActive) {
         // steerRad — в системе ROS: плюс означает поворот влево. Модель шасси
         // рисует углы в системе прошивки (плюс — вправо), поэтому знак
@@ -284,7 +289,7 @@
     ctx.rotate(-yaw);
 
     // Сектор обзора переднего лидара.
-    const lidarX = halfL * (LIDAR_OFFSET_X_M / (ROBOT_LENGTH_M / 2));
+    const lidarX = halfL * (lidarOffset() / (ROBOT_LENGTH_M / 2));
     ctx.beginPath();
     ctx.moveTo(lidarX, 0);
     ctx.arc(lidarX, 0, Math.max(22, lenPx * 1.15), -0.48, 0.48);
@@ -355,7 +360,8 @@
   function drawRobot(ctx, view, pose, pal) {
     const p = worldToCanvas(pose.x, pose.y, view);
     if (window.RCRobotModel) {
-      window.RCRobotModel.draw(ctx, p.x, p.y, pose.yaw || 0, view.scale, { light: state.theme === 'light' });
+      window.RCRobotModel.draw(ctx, p.x, p.y, pose.yaw || 0, view.scale,
+        { light: state.theme === 'light', lidarOffsetM: lidarOffset() });
     } else drawRobotChassis(ctx, p.x, p.y, pose.yaw || 0, view.scale, pal, 0);
   }
 
@@ -414,7 +420,7 @@
       ctx.font = '11px system-ui'; ctx.textAlign = 'center';
       ctx.fillText('предпросмотр', screen.x, screen.y - Math.max(24, view.scale * .5)); ctx.restore();
     }
-    const activeGoal = (plan && plan.goal) || selectedGoal() || state.goalPoint;
+    const activeGoal = (plan && (plan.goalRequested || plan.goal)) || selectedGoal() || state.goalPoint;
     if (!points.length && !activeGoal) return;
 
     ctx.save();
@@ -482,7 +488,7 @@
         ctx.lineWidth = 1.5;
         ctx.stroke();
       });
-    } else if (activeGoal && Number.isFinite(+activeGoal.x) && Number.isFinite(+activeGoal.y)) {
+    } else if (!plan && activeGoal && Number.isFinite(+activeGoal.x) && Number.isFinite(+activeGoal.y)) {
       // Предварительная линия от робота к выбранной цели до расчёта маршрута.
       const snap = fallbackSnapshot();
       const pose = snap.pose || { x: 0, y: 0 };
@@ -498,10 +504,18 @@
       if (typeof ctx.setLineDash === 'function') ctx.setLineDash([]);
     }
 
+    if (plan && plan.partial && points.length >= 2) {
+      const frontier = points[points.length - 1];
+      const screen = worldToCanvas(+frontier.x, +frontier.y, view);
+      ctx.beginPath(); ctx.arc(screen.x, screen.y, 7, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffc46b'; ctx.fill();
+      ctx.font = 'bold 11px ui-monospace, monospace'; ctx.textAlign = 'left';
+      ctx.fillText('ГРАНИЦА ИЗВЕСТНОГО', screen.x + 10, screen.y + 15);
+    }
     const goal = activeGoal || (points.length ? points[points.length - 1] : null);
     if (goal && Number.isFinite(+goal.x) && Number.isFinite(+goal.y)) {
       const screen = worldToCanvas(+goal.x, +goal.y, view);
-      drawGoalPin(ctx, screen, goal, points.length >= 2);
+      drawGoalPin(ctx, screen, goal, points.length >= 2 && !(plan && plan.partial));
     }
     ctx.restore();
   }
@@ -563,7 +577,7 @@
     const sin = Math.sin(pose.yaw);
     state.scan.forEach((point) => {
       if (!Number.isFinite(point.a) || !Number.isFinite(point.r) || point.r < 0) return;
-      const lx = point.r * Math.cos(point.a);
+      const lx = lidarOffset() + point.r * Math.cos(point.a);
       const ly = point.r * Math.sin(point.a);
       const mx = pose.x + lx * cos - ly * sin;
       const my = pose.y + lx * sin + ly * cos;
@@ -668,7 +682,7 @@
 
   function currentRoutePoints() {
     const plan = state.navigationPlan;
-    if (plan && Array.isArray(plan.path) && plan.path.length >= 2) {
+    if (plan && Array.isArray(plan.path) && plan.path.length >= 1) {
       return plan.path;
     }
     const snap = fallbackSnapshot();
@@ -923,7 +937,8 @@
 
       // Внешний защитный коридор (footprint).
       ctx.strokeStyle = 'rgba(39, 193, 232, .10)';
-      ctx.lineWidth = Math.max(16, ROBOT_LENGTH_M * scale);
+      const footprint = state.navigationPlan && +state.navigationPlan.footprintM;
+      ctx.lineWidth = Math.max(16, (Number.isFinite(footprint) && footprint > 0 ? footprint * 2 : ROBOT_LENGTH_M) * scale);
       ctx.beginPath();
       points.forEach((pt, idx) => {
         const s = toScreen(+pt.x, +pt.y);
@@ -996,7 +1011,8 @@
         const isLast = idx === points.length - 1;
         ctx.beginPath();
         ctx.arc(s.x, s.y, isLast ? 9 : 6, 0, Math.PI * 2);
-        ctx.fillStyle = isLast ? '#53e2a1' : (isFirst ? '#ffc46b' : '#27c1e8');
+        ctx.fillStyle = isLast && state.navigationPlan && state.navigationPlan.partial
+          ? '#ffc46b' : (isLast ? '#53e2a1' : (isFirst ? '#ffc46b' : '#27c1e8'));
         ctx.fill();
         ctx.strokeStyle = '#071018';
         ctx.lineWidth = 2;
@@ -1004,7 +1020,8 @@
         ctx.fillStyle = '#e8f3fa';
         ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.textAlign = 'left';
-        const tag = isFirst ? 'СТАРТ' : (isLast ? 'ЦЕЛЬ (' + (+pt.x).toFixed(2) + '; ' + (+pt.y).toFixed(2) + ')' : 'Т' + idx);
+        const endLabel = state.navigationPlan && state.navigationPlan.partial ? 'ГРАНИЦА' : 'ЦЕЛЬ';
+        const tag = isFirst ? 'СТАРТ' : (isLast ? endLabel + ' (' + (+pt.x).toFixed(2) + '; ' + (+pt.y).toFixed(2) + ')' : 'Т' + idx);
         ctx.fillText(tag, s.x + 12, s.y + 4);
       });
       ctx.restore();
@@ -1017,7 +1034,7 @@
       ctx.fillStyle = 'rgba(255, 110, 118, .85)';
       state.scan.forEach((pt) => {
         if (!Number.isFinite(pt.a) || !Number.isFinite(pt.r) || pt.r <= 0) return;
-        const lx = pt.r * Math.cos(pt.a);
+        const lx = lidarOffset() + pt.r * Math.cos(pt.a);
         const ly = pt.r * Math.sin(pt.a);
         const wx = motion.x + lx * cos - ly * sin;
         const wy = motion.y + lx * sin + ly * cos;
@@ -1049,7 +1066,7 @@
     setText($('route-kpi-pct'), pct + '%');
     const bar = $('route-win-progress-fill');
     if (bar) bar.style.width = pct + '%';
-    const goal = (state.navigationPlan && state.navigationPlan.goal) || selectedGoal() || state.goalPoint;
+    const goal = (state.navigationPlan && (state.navigationPlan.goalRequested || state.navigationPlan.goal)) || selectedGoal() || state.goalPoint;
     setText($('route-kpi-goal'), goal ? fmt(goal.x, 2) + ' / ' + fmt(goal.y, 2) + ' м' : '—');
     const distM = (state.navigationPlan && state.navigationPlan.distanceM) || motion.totalM;
     setText($('route-kpi-dist'), distM ? fmt(distM, 2) + ' м' : '—');
@@ -1489,14 +1506,17 @@
           ? 'цель (' + fmt(goal.x, 2) + '; ' + fmt(goal.y, 2) + ') м · нажмите «Построить маршрут»'
           : 'траектория не рассчитана';
       } else {
-        const pieces = [fmt(plan.distanceM, 2) + ' м', String(plan.waypoints || 0) + ' участ.'];
+        const pieces = [plan.partial ? 'только известный участок' : 'полный маршрут',
+          fmt(plan.distanceM, 2) + ' м', String(plan.waypoints || 0) + ' участ.'];
+        if (plan.partial && !plan.executable) pieces.push('нет безопасного участка для старта');
+        if (plan.manualBlindZone) pieces.push('ближнюю слепую зону осматривает оператор');
         if (active && Number.isFinite(+status.progress)) pieces.push(Math.round(+status.progress * 100) + '%');
         summary.textContent = pieces.join(' · ') + ' · габарит ' + fmt(plan.footprintM, 2) + ' м (75×60×30 см)';
       }
     }
     const safety = $('nav-safety-note');
     if (safety) {
-      safety.textContent = 'Габариты 75×60×30 см, лидар спереди. Поворота на месте нет: допустимы только прямые/крабовые отрезки ±28°. Неизвестные клетки запрещены. ' +
+      safety.textContent = 'Габариты 75×60×30 см, лидар спереди. Поворота на месте нет: допустимы только прямые/крабовые отрезки ±28°. Цель может быть неизвестной, движение — только по подтверждённому участку; при отсутствии пути робот остановится. ' +
         (status.enabled ? 'Автотяга разрешена конфигурацией, но требует актуальной готовности и подтверждения.'
           : 'Автотяга выключена по умолчанию.');
     }
@@ -1614,7 +1634,10 @@
       state.navigationPlan = body.plan || state.navigationPlan;
       draw();
       drawRouteWindow();
-      navigationMessage('Маршрут рассчитан. Проверьте путь и порядок точек на карте перед запуском.', 'ok', true);
+      navigationMessage(body.plan && body.plan.partial
+        ? 'Показан только известный участок; остаток ещё не проверен. Робот остановится, если не найдёт безопасное продолжение.'
+        : 'Маршрут рассчитан. Проверьте путь и порядок точек на карте перед запуском.',
+      body.plan && body.plan.partial ? 'warn' : 'ok', true);
       if (options && options.openWindow) openRouteWindow();
       else if (isRouteWindowVisible()) startRoutePreview();
     } catch (err) {
@@ -1641,7 +1664,16 @@
     const summary = state.navigationPlan
       ? fmt(state.navigationPlan.distanceM, 2) + ' м, ' + (state.navigationPlan.waypoints || 0) + ' участков'
       : 'маршрут';
-    if (!window.confirm('Запустить автономное движение по проверенному маршруту (' + summary + ')? Убедитесь, что зона свободна и E-STOP доступен.')) return;
+    const partialWarning = state.navigationPlan && state.navigationPlan.partial
+      ? ' Проверен только текущий участок: до выбранной цели путь неизвестен, будет перепланирование и возможна остановка.' : '';
+    const requiresBlindCheck = !!(state.navigationPlan && state.navigationPlan.manualBlindZone);
+    const inspectionRadius = requiresBlindCheck ? Number(state.navigationPlan.blindInspectionRadiusM) : NaN;
+    const inspectionArea = Number.isFinite(inspectionRadius) && inspectionRadius > 0
+      ? ' в радиусе не менее ' + inspectionRadius.toFixed(2) + ' м вокруг датчика'
+      : ' с запасом вокруг датчика';
+    const blindWarning = requiresBlindCheck
+      ? ' Ближняя слепая зона лидара не видна датчику: лично осмотрите всё' + inspectionArea + ' и подтвердите, что там пусто.' : '';
+    if (!window.confirm('Запустить автономное движение (' + summary + ')?' + partialWarning + blindWarning + ' Убедитесь, что зона свободна и E-STOP доступен.')) return;
     state.previewActive = false;
     if (state.previewRaf) cancelAnimationFrame(state.previewRaf);
     draw();
@@ -1652,7 +1684,9 @@
     }
     let refreshAfter = false;
     try {
-      const body = await postNavigation('api/navigation/start', routePayload(goal));
+      const request = routePayload(goal);
+      if (requiresBlindCheck) request.blindZoneChecked = true;
+      const body = await postNavigation('api/navigation/start', request);
       renderNavigationStatus(body.status || {});
       navigationMessage((body.status && body.status.message) || 'Маршрут запущен.', 'warn', true);
       openRouteWindow();

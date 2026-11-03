@@ -1116,6 +1116,7 @@ def test_second_process_takes_scan_over_http(fake_serial, monkeypatch):
     """Второй процесс получает скан по HTTP — экран не остаётся пустым."""
     payload = {
         "scan": [{"a": 0.5, "r": 1.5}, {"a": -0.5, "r": 2.5}],
+        "connected": True, "source": "serial", "scan_at": time.time(),
         "detected": {"port": "/dev/ttyTEST", "protocol": "rplidar", "baud": 115200, "motor": "dtr-low"},
     }
 
