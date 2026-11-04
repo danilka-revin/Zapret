@@ -3,14 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b1015">
+  <meta name="theme-color" content="#000000">
   <title>Устройства · RUS SLAM</title>
   <link rel="stylesheet" href="devices.css">
 </head>
 <body>
   <header class="topbar">
     <a class="brand" href="/" aria-label="На главный экран">
-      <span class="brand-mark" aria-hidden="true">R</span><span>RUS SLAM <small>/ РОБОТ</small></span>
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 14h16M7 10h10M9 6h6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="7" cy="18" r="2.2" fill="currentColor"/><circle cx="17" cy="18" r="2.2" fill="currentColor"/></svg>
+      </span>
+      <span>RUS SLAM <small>· УСТРОЙСТВА</small></span>
     </a>
     <nav aria-label="Разделы">
       <a href="/">Главный экран</a>
@@ -21,10 +24,13 @@
 
   <main>
     <section class="intro">
-      <div>
-        <p class="eyebrow"><span class="eyebrow-dot"></span> БОРТОВОЙ КОМПЬЮТЕР / ОБОРУДОВАНИЕ</p>
-        <h1>Устройства робота<span class="title-dot">.</span></h1>
-        <p class="lead">Где подключено оборудование и что действительно удалось проверить.</p>
+      <div class="intro-identity">
+        <div class="intro-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M6 7h12v10H6zM9 4v3m6-3v3m-6 10v3m6-3v3M3 10h3m-3 4h3m12-4h3m-3 4h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 10h6v4H9z" stroke="currentColor" stroke-width="1.5"/></svg></div>
+        <div>
+          <p class="eyebrow">БОРТОВОЙ КОМПЬЮТЕР · ОБОРУДОВАНИЕ</p>
+          <h1>Устройства робота</h1>
+          <p class="lead">Где подключено оборудование и что действительно удалось проверить.</p>
+        </div>
       </div>
       <button class="refresh" id="devices-refresh" type="button"><span aria-hidden="true">↻</span> Обновить</button>
     </section>
