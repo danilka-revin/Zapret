@@ -418,6 +418,14 @@ class BatteryManager:
                 transport = None
                 fd = None
                 try:
+                    # A manually confirmed printer UART is an exclusion, not
+                    # a BMS candidate, even after a service restart.
+                    from .printer import printer_reserved_ports
+                    if os.path.realpath(self.port) in {os.path.realpath(p) for p in printer_reserved_ports()}:
+                        with self._lock:
+                            self._error = "Порт зарезервирован для принтера; выберите отдельный порт BMS"
+                        self._stop.wait(0.5)
+                        continue
                     # Publish the selected port even while waiting: other
                     # processes must never actively probe a configured BMS.
                     if self._requires_wheel_check:
@@ -449,6 +457,8 @@ class BatteryManager:
                         self._reset_extras()
                         self._connected_since = None
                     while not self._stop.is_set():
+                        if os.path.realpath(self.port) in {os.path.realpath(p) for p in printer_reserved_ports()}:
+                            raise OSError("Порт зарезервирован для принтера")
                         if source is not None and (source._device_fingerprint(self.port) != fingerprint or
                                                    not source.manual_bms_port_allowed(self.port)):
                             raise OSError("USB-порт BMS изменился")

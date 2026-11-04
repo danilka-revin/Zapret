@@ -2340,6 +2340,24 @@ class MasterSource:
                         self._unknown_devices.get(real) == fingerprint and
                         (result is None or result == (fingerprint, True)))
 
+    def manual_printer_port_allowed(self, path):
+        """Only a currently passively checked, unclassified UART may be offered.
+
+        Silence is not proof of a printer: this does not classify the port or
+        relax the wheel-discovery motion interlock. The operator must also
+        physically identify the USB-UART before any printer bytes are sent.
+        """
+        real = os.path.realpath(path)
+        fingerprint = self._device_fingerprint(path)
+        with self.lock:
+            result = self._bms_results.get(real)
+            occupied = any(link.device == real for link in self.links.values())
+            spawning = any(os.path.realpath(p) == real for p in self._spawning)
+            return bool(fingerprint is not None and
+                        self._unknown_devices.get(real) == fingerprint and
+                        not (result and result[0] == fingerprint) and
+                        not occupied and not spawning)
+
     def forget_manual_bms_port(self, path):
         """A deselected BMS must not keep an old classification alive."""
         real = os.path.realpath(path)

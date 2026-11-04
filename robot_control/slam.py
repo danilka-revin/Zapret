@@ -823,6 +823,8 @@ ASSETS = {
     "keyboard.js": "keyboard_js",
     "brake_recovery.js": "brake_recovery_js",
     "battery.js": "battery_js",
+    "receipt.js": "receipt_js",
+    "receipt.css": "receipt_css",
     "steering.css": "steering_css",
     "steering.js": "steering_js",
     "wheel_settings.js": "wheel_settings_js",
@@ -1188,12 +1190,12 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
             '<header class="swipe-head"><a class="swipe-close" href="/">Пульт</a>'
             '<a class="swipe-close" href="/controls">Руление и тяга</a>'
             '<a class="swipe-close" href="/battery" id="remote-battery-link">АКБ</a>')
-        # Remote battery view is strictly read-only. The onboard process owns
-        # the UART and its connection settings.
+        # BMS settings stay onboard. Printer jobs also execute only onboard,
+        # but an authenticated operator can submit them via the guarded proxy.
         html = html.replace('id="bms-setup-open"', 'id="bms-setup-open" hidden')
         html = html.replace('<h3>Аккумулятор · JBD BMS</h3>',
             '<h3>АКБ · полная информация JBD BMS</h3>'
-            '<p>Данные с борта · только чтение. Подключение BMS настраивается на бортовом экране.</p>')
+            '<p>Данные BMS с борта · только чтение. Подключение BMS настраивается на борту; чек печатается на принтере робота.</p>')
         html = html.replace('<h3>Тяга и руление</h3>',
             '<h3>Руление и тяга · веб-пульт</h3><p><a href="/">Пульт</a> · '
             '<a href="/console">Сервис</a> · <a href="/map">Карта</a> · '
@@ -1279,6 +1281,8 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         if request.method not in route[1]:
             return jsonify(ok=False, error="Метод не поддерживается"), 405
         if request.method == "POST":
+            if operation.startswith("printer/") and request.content_length is not None and request.content_length > 4096:
+                return jsonify(ok=False, error="Слишком большой запрос"), 413
             if request.headers.get(STEERING_COMMAND_HEADER) != route[2]:
                 return jsonify(ok=False, reason="request_header_required"), 400
             if csrf_header_ok is not None and not csrf_header_ok():

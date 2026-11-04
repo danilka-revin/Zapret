@@ -425,3 +425,27 @@ def test_fast_wheel_state_uses_authenticated_proxy(client, operator, transport):
     assert response.status_code == 200 and response.json['ok']
     assert 'lidar' not in response.json['data']
     assert transport[1][-1][0].endswith('/api/kiosk_wheel_state')
+
+
+def test_remote_printer_requires_auth_and_csrf_and_only_forwards_fixed_routes(client, operator, transport):
+    assert client.get('/api/control/printer').status_code in (302, 401)
+    assert client.post('/api/control/printer/test', json={'requestId': 'safe-12345678901234567'}).status_code in (302, 401)
+    login(client)
+    assert client.post('/api/control/printer/test', json={}).json['reason'] == 'request_header_required'
+    assert client.post('/api/control/printer/test', json={}, headers={'X-Robot-Control': 'printer'}).json['reason'] == 'csrf_required'
+    assert transport[1] == []
+    response = client.get('/api/control/printer')
+    assert response.status_code == 200 and response.json['ok']
+    assert transport[1][-1][0].endswith('/api/printer')
+    result = client.post('/api/control/printer/test', json={'requestId': 'safe-12345678901234567'},
+                         headers=headers(client, 'printer'))
+    assert result.status_code == 409 and 'настроен' in result.json['error']
+    assert transport[1][-1][0].endswith('/api/printer/test')
+    assert transport[1][-1][2].get('X-robot-control') == 'printer'
+    before = len(transport[1])
+    assert client.post('/api/control/printer/raw', json={'bytes': 'ESC'}, headers=headers(client, 'printer')).status_code == 404
+    assert client.get('/api/control/printer/preview?level=short%0D%0Aexample').status_code == 400
+    assert len(transport[1]) == before
+    page = client.get('/battery')
+    assert page.status_code == 200 and 'id="receipt-panel"' in page.text
+    assert client.get('/receipt.js').status_code == 200 and client.get('/receipt.css').status_code == 200

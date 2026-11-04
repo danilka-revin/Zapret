@@ -670,10 +670,18 @@ class DeviceRegistry:
         item = base("printer")
         hint = hints.get("printer")
         printer_candidates = [d for d in topology.get("devices", []) if d.get("printerClass")]
-        selected, _, _ = _resolve_identity(topology, (hint or {}).get("identity"))
+        selected, selected_node, _ = _resolve_identity(topology, (hint or {}).get("identity"))
         printer = selected if selected and selected.get("printerClass") else (
             printer_candidates[0] if len(printer_candidates) == 1 and not hint else None)
-        if printer:
+        if selected and selected_node and selected_node.get("kind") == "serial":
+            # A USB-UART only identifies its adapter, not the peripheral on
+            # its wires. A hint is never proof of a printer or permission.
+            item["usb"] = {k: selected.get(k) for k in
+                           ("topology", "vidPid", "serial", "manufacturer", "product", "connection")}
+            item.update(port=selected_node.get("path"), status="warning", label="USB-UART · подсказка",
+                        check="Адаптер совпал; принтер и печать не проверены",
+                        detail="Физически проверьте подключение и подтвердите порт в настройках печати на странице АКБ.")
+        elif printer:
             item["usb"] = {k: printer.get(k) for k in
                            ("topology", "vidPid", "serial", "manufacturer", "product", "connection")}
             lp = next((n["path"] for n in printer["nodes"] if n["kind"] == "printer"), None)

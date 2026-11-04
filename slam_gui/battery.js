@@ -59,6 +59,9 @@
   // ------------------------------------------------------------- телеметрия
   function render() {
     window._kioskBms = transportOk ? snapshot : (snapshot ? Object.assign({}, snapshot, { connected: false }) : null);
+    // Local receipt time lets other widgets age this snapshot without assuming
+    // that a remote browser and the onboard computer have synchronized clocks.
+    window._kioskBmsReceivedAt = receivedAt;
     const data = snapshot && snapshot.data;
     const fresh = transportOk && Date.now() - receivedAt < 5000 && snapshot && snapshot.connected;
     const available = Boolean(fresh && data);
