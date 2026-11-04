@@ -10,9 +10,13 @@ const {inflate} = await import(join(modules, '@sparticuz/chromium/build/lambdafs
 await inflate(join(modules, '@sparticuz/chromium/bin/al2023.tar.br'));
 process.env.LD_LIBRARY_PATH = '/tmp/al2023/lib' + (process.env.LD_LIBRARY_PATH ? ':' + process.env.LD_LIBRARY_PATH : '');
 const origin = process.argv[2];
+const board = process.argv[3] || origin;
+const remote = process.argv[4] === 'remote';
 const browser = await chromium.launch({headless: true, executablePath: await chrome.executablePath(),
   args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage']});
-const page = await browser.newPage({viewport: {width: 1360, height: 900}});
+// The web CSP forbids eval; Playwright's serialized test predicates use it.
+const context = await browser.newContext({viewport: {width: 1360, height: 900}, bypassCSP: true});
+const page = await context.newPage();
 const errors = [];
 page.on('pageerror', error => errors.push(String(error)));
 page.on('dialog', dialog => dialog.accept());
@@ -23,13 +27,52 @@ try {
     canvas.getContext('2d').fillRect(0, 0, 2, 2);
     return canvas.toDataURL('image/jpeg').split(',')[1];
   });
-  assert((await page.request.post(origin + '/__test/frame', {
+  assert((await page.request.post(board + '/__test/frame', {
     data: Buffer.from(base64, 'base64'), headers: {'Content-Type': 'image/jpeg'}
   })).ok());
+  if (remote) {
+    await page.goto(origin + '/login');
+    await page.locator('input[name="username"]').fill('operator');
+    await page.locator('input[name="password"]').fill('correct-horse-battery');
+    await page.locator('form button[type="submit"]').click();
+  }
   await page.goto(origin + '/devices', {waitUntil: 'domcontentloaded'});
   await page.waitForSelector('[data-role="camera_FL"] .preview img', {timeout: 12000});
   assert.equal(await page.locator('.card').count(), 12);
   assert.equal(await page.locator('[data-role="camera_FL"]').getAttribute('data-state'), 'warning');
+  assert.equal(await page.locator('.topbar nav .remote-only').isHidden(), !remote);
+  const theme = await page.evaluate(() => ({
+    body: getComputedStyle(document.body).backgroundColor,
+    card: getComputedStyle(document.querySelector('.card')).backgroundColor,
+    summary: getComputedStyle(document.querySelector('.summary')).backgroundColor,
+    theme: document.querySelector('meta[name="theme-color"]').content,
+  }));
+  assert.deepEqual(theme, {body: 'rgb(0, 0, 0)', card: 'rgb(16, 16, 18)',
+                          summary: 'rgb(16, 16, 18)', theme: '#000000'});
+  for (const width of [320, 390, 700, 768, 1100, 1360, 1920]) {
+    await page.setViewportSize({width, height: 900});
+    const layout = await page.evaluate(() => {
+      const issues = [];
+      if (document.documentElement.scrollWidth > innerWidth) issues.push('document overflows viewport');
+      for (const label of document.querySelectorAll('.summary-stat div span')) {
+        if (label.scrollWidth > label.clientWidth + 1) issues.push('summary label clipped: ' + label.textContent);
+      }
+      for (const card of document.querySelectorAll('.card')) {
+        if (card.scrollWidth > card.clientWidth + 1) issues.push('card clipped: ' + card.dataset.role);
+        const row = card.querySelector('.hint-row').getBoundingClientRect();
+        for (const control of card.querySelectorAll('.hint-row input, .hint-row button')) {
+          const rect = control.getBoundingClientRect();
+          if (rect.left < row.left - 1 || rect.right > row.right + 1 || rect.height < 39) {
+            issues.push('control clipped/too small: ' + card.dataset.role);
+          }
+        }
+      }
+      return issues;
+    });
+    assert.deepEqual(layout, [], `layout at ${width}px: ${layout.join(', ')}`);
+  }
+  // Exercise the same controls on a narrow touchscreen layout as well.
+  await page.setViewportSize({width: 390, height: 900});
   assert(await page.locator('#options-camera_FL option[value="/dev/video0"]').count());
   const input = page.locator('#hint-camera_FL');
   await input.fill('/dev/video');
@@ -41,14 +84,14 @@ try {
   await page.locator('[data-role="camera_FL"] .confirm').click();
   await page.waitForFunction(() => document.querySelector('[data-role="camera_FL"]')?.dataset.state === 'verified',
                              null, {timeout: 12000});
-  assert((await page.request.post(origin + '/__test/swap-camera')).ok());
+  assert((await page.request.post(board + '/__test/swap-camera')).ok());
   await page.locator('#devices-refresh').click();
   await page.waitForFunction(() => document.querySelector('[data-role="camera_FL"] .card-status')
     ?.textContent.includes('Подсказка не совпала'), null, {timeout: 12000});
   assert(await page.locator('[data-role="camera_FL"] .confirm').isHidden());
   await page.waitForFunction(() => !document.querySelector('[data-role="camera_FL"] .preview img'),
                              null, {timeout: 12000});
-  assert((await page.request.post(origin + '/__test/restore-camera')).ok());
+  assert((await page.request.post(board + '/__test/restore-camera')).ok());
   await page.locator('#devices-refresh').click();
   await page.waitForFunction(() => document.querySelector('[data-role="camera_FL"]')?.dataset.state === 'verified',
                              null, {timeout: 12000});

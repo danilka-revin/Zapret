@@ -382,7 +382,8 @@ def test_web_peer_camera_paths_never_construct_a_second_owner(monkeypatch):
 
 
 @pytest.mark.skipif(not os.environ.get('ZAPRET_BROWSER_NODE_MODULES'), reason='optional Chromium is not installed')
-def test_camera_devices_page_end_to_end_with_synthetic_v4l2(kiosk_client, fake_topology):
+@pytest.mark.parametrize('remote', [False, True], ids=['onboard', 'authenticated-web'])
+def test_camera_devices_page_end_to_end_with_synthetic_v4l2(kiosk_client, fake_topology, app, operator, monkeypatch, remote):
     """Browser workflow with a synthetic frame/USB tree, not a physical camera."""
     import subprocess
     from flask import jsonify, request
@@ -426,16 +427,31 @@ def test_camera_devices_page_end_to_end_with_synthetic_v4l2(kiosk_client, fake_t
 
     class Quiet(WSGIRequestHandler):
         def log_request(self, *args, **kwargs): pass
-    server = make_server('0.0.0.0', 0, kiosk, threaded=True, request_handler=Quiet)
+    server = make_server('127.0.0.1', 0, kiosk, threaded=True, request_handler=Quiet)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    web_server = web_thread = None
     try:
+        board = f'http://127.0.0.1:{server.server_port}'
+        origin = board
+        if remote:
+            monkeypatch.setenv('RC_SLAM_PEER_URL', board + '/api/kiosk_state')
+            web_server = make_server('127.0.0.1', 0, app, threaded=True, request_handler=Quiet)
+            web_thread = threading.Thread(target=web_server.serve_forever, daemon=True)
+            web_thread.start()
+            origin = f'http://127.0.0.1:{web_server.server_port}'
         result = subprocess.run(['node', str(Path(__file__).parent / 'js/devices_browser.mjs'),
-                                 f'http://127.0.0.1:{server.server_port}'],
+                                 origin, board, 'remote' if remote else 'onboard'],
                                 capture_output=True, text=True, timeout=90)
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'camera confirmation, replacement and reset passed' in result.stdout
     finally:
+        if web_server is not None:
+            web_server.shutdown()
+            web_server.server_close()
+        if web_thread is not None:
+            web_thread.join(timeout=3)
         server.shutdown()
+        server.server_close()
         thread.join(timeout=3)
         CameraManager._instance = previous
