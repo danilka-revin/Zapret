@@ -6,6 +6,7 @@
   <title>Экран робота</title>
   <meta name="theme-color" content="#000000" />
   <link rel="stylesheet" href="robot.css" />
+  <link rel="stylesheet" href="calibration.css" />
   <link rel="stylesheet" href="map.css" />
   <link rel="stylesheet" href="lidar_settings.css" />
   <link rel="stylesheet" href="power.css" />
@@ -647,13 +648,40 @@
 
         <p id="steer-source-status" class="steer-source-status" role="status">Проверка связи с модулями…</p>
 
-        <section class="steer-calib-bar" aria-label="Калибровка руля по оптодатчику">
-          <div><b>Ноль руля — по оптодатчику D18</b>
-            <span>Колесо ищет флажок: сначала вправо до 125°, затем влево до 250° от достигнутой точки. Подходит к каждой кромке по три раза и возвращается в сохранённый полный ноль (если он задан). Перед запуском выставьте колёса примерно прямо и убедитесь, что на всём пути нет упоров или людей.</span></div>
-          <div class="full-zero-open-actions">
-            <button id="steer-calib-all" class="btn-steer btn-steer--calib" type="button" disabled>Калибровать все колёса</button>
-            <button id="full-zero-open" class="btn-steer btn-steer--full-zero" type="button" aria-haspopup="dialog" aria-controls="full-zero-modal">Откалибровать полный ноль</button>
-          </div>
+        <section class="steer-calib-bar" id="steer-calibration" aria-labelledby="steer-calibration-title">
+          <header class="calibration-head">
+            <div class="calibration-head__identity">
+              <span class="calibration-head__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/></svg>
+              </span>
+              <div>
+                <p class="calibration-kicker">НАСТРОЙКА ШАССИ</p>
+                <h4 id="steer-calibration-title">Калибровка руления</h4>
+                <p class="calibration-head__description">Ноль колёс, датчики и точность удержания угла</p>
+              </div>
+            </div>
+            <span class="calibration-head__badge"><span aria-hidden="true">●</span> ОБЩИЕ НАСТРОЙКИ · 4 КОЛЕСА</span>
+          </header>
+
+          <aside class="calibration-safety" role="note">
+            <span class="calibration-safety__icon" aria-hidden="true">!</span>
+            <div><b>Перед запуском остановите робота и освободите путь колёсам.</b>
+              <span>Выставьте колёса примерно прямо и держите независимый E-STOP наготове. При поиске оптодатчика колесо поворачивается вправо до 125°, затем влево до 250° от достигнутой точки; при калибровке потенциометров — на ±60°.</span></div>
+          </aside>
+
+          <section class="calibration-card calibration-zero" aria-labelledby="calibration-zero-title">
+            <div class="calibration-card__head">
+              <span class="calibration-card__icon" aria-hidden="true">◎</span>
+              <div><span class="calibration-card__eyebrow">ОПТОДАТЧИК · D18</span><h5 id="calibration-zero-title">Ноль руля</h5></div>
+            </div>
+            <p class="calibration-card__description">Найдите ноль по датчикам или настройте полный ноль с точной поправкой каждого колеса.</p>
+            <div class="full-zero-open-actions">
+              <button id="steer-calib-all" class="btn-steer btn-steer--calib" type="button" disabled>Калибровать все колёса</button>
+              <button id="full-zero-open" class="btn-steer btn-steer--full-zero" type="button" aria-haspopup="dialog" aria-controls="full-zero-modal">Откалибровать полный ноль</button>
+            </div>
+            <p class="calibration-card__footnote">После поиска флажка колёса вернутся в сохранённый полный ноль, если он задан.</p>
+            <span id="steer-calib-status" class="calibration-status" role="status">Ожидание данных колёс…</span>
+          </section>
         </section>
 
         <details class="steer-fine" id="steer-fine">
@@ -795,10 +823,10 @@
             <span id="drive-status" class="direct-servo-control" role="status">Проверка связи с платами…</span><span id="remote-drive-status" class="remote-legacy-drive" role="status">Проверка связи с платами…</span>
           </div>
 
-          <section id="neutral-panel" class="neutral-panel" aria-label="Ручное перекатывание робота">
-            <div class="neutral-head"><b>Ручное перекатывание · нейтраль</b><button id="neutral-toggle" type="button" aria-pressed="false">Снять тормоз</button></div>
-            <div id="neutral-status" role="status" aria-live="polite">Проверка состояния тормозов…</div>
-            <small>Только на ровной поверхности и без задания. Робот может покатиться: удерживайте его и используйте колёсные упоры. Не перекатывайте, пока все четыре платы не подтвердили «НЕЙТРАЛЬ»: тормоз может сниматься неодновременно. Нейтраль блокирует тягу, руль и манёвры; перед работой нажмите «Вернуть тормоз». При потере связи тормоз запрашивается автоматически. Электронный тормоз не гарантирует удержание при отключении питания.</small>
+          <section id="brake-recovery" class="brake-recovery" aria-label="Восстановление тормоза" hidden>
+            <div class="brake-recovery-head"><b>Тормоз не подтверждён</b><button id="brake-restore" type="button" disabled>Вернуть тормоз</button></div>
+            <div id="brake-recovery-status" role="status" aria-live="polite">Проверьте связь с колёсами.</div>
+            <small>Тяга и руление заблокированы, пока все четыре платы не подтвердят новую команду торможения. Подтверждение выводов не гарантирует механического удержания; используйте колёсные упоры.</small>
           </section>
 
           <section id="keyboard-panel" class="keyboard-panel" aria-label="Управление с клавиатуры WASD">
@@ -808,7 +836,8 @@
               <label>Тяга, % шкалы Servo <output id="keyboard-speed-value">20</output><input id="keyboard-speed" type="range" min="1" max="100" step="1" value="20"></label>
               <button id="keyboard-stop" type="button" class="traction-stop">СТОП WASD</button>
             </div>
-            <small>W/S/A/D выбирают направление колёс, стрелка ↑ включает движение по нему, ↓ — обратно. Без WASD колёса направлены прямо; без стрелки тяги нет. После настройки мышью стрелки снова управляют тягой; при настройке клавиатурой нажмите Esc для выхода из поля. В «крабе» A/D выставляют колёса боком, сочетания дают диагональ; противоположная сторона использует обратное вращение. В обычном режиме A/D поворачивают передние и задние колёса в противоположные стороны, отпускание возвращает руль прямо. Руление возможно на ходу; перед сменой направления вращения система тормозит. Нужна fw20 или новее на всех платах. Первые проверки — с вывешенными колёсами и независимым E-STOP.</small>
+            <small>W/S/A/D выбирают направление колёс, ↑ включает движение по нему, ↓ — обратно. Стрелки ← / → разворачивают робота на месте, пока их удерживают; при отпускании тяга выключается. Разворот работает отдельно от ↑ / ↓: при одновременном нажатии несовместимых стрелок отпустите все стрелки перед следующим движением. После настройки мышью стрелки снова управляют движением; при настройке клавиатурой нажмите Esc для выхода из поля. В «крабе» A/D выставляют колёса боком, сочетания дают диагональ; противоположная сторона использует обратное вращение. В обычном режиме A/D поворачивают передние и задние колёса в противоположные стороны, отпускание возвращает руль прямо. Руление возможно на ходу; перед сменой направления вращения система тормозит. Нужна fw20 или новее на всех платах. Первые проверки — с вывешенными колёсами и независимым E-STOP.</small>
+            <small id="keyboard-spin-geometry">Углы разворота появятся после включения управления.</small>
             <div id="keyboard-status" role="status" aria-live="polite">WASD выключено.</div>
           </section>
 
@@ -1193,7 +1222,7 @@
   <script src="pot_hold.js"></script>
   <script src="steer_dial.js"></script>
   <script src="keyboard.js"></script>
-  <script src="neutral.js"></script>
+  <script src="brake_recovery.js"></script>
   <script src="pc_chip.js"></script>
   <script src="robot.js"></script>
   <script src="full_zero.js"></script>

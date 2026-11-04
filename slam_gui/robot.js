@@ -41,7 +41,7 @@
   let keyboardControl = null;
   let keyboardData = null, keyboardDataAt = 0, keyboardDataSession = null;
   let keyboardFetchPending = false;
-  let neutralControl = null;
+  let brakeRecovery = null;
   let live = false;
   let lastLiveAt = 0;
   let liveTimer = null;
@@ -49,6 +49,9 @@
   // авторизация руления/тяги остаётся отдельной настройкой веб-пульта.
   let steeringAuthorized = true;
   let stateFetchPending = false;
+  // Calibration controls fail closed on the first failed telemetry poll,
+  // independently of the visual connection chip's 3.2 s debounce.
+  let calibrationTelemetryCurrent = false;
   // Ползунок задаёт число; кнопка включает направление до СТОП.
   const SERVO_IDS = ['FL', 'FR', 'RL', 'RR'];
   const SERVO_MAX = 150;
@@ -117,6 +120,7 @@
       const j = await r.json();
       if (j && j.ok && j.data) {
         lastData = j.data;
+        calibrationTelemetryCurrent = true;
         if (window.RCRemoteControls && window.RCRemoteLegacyState) window.RCRemoteLegacyState(j.data);
         // Потеря платы или E-STOP не должны автоматически перезапустить её
         // после восстановления связи. Калибровка руля и тахометр здесь ни при чём.
@@ -124,11 +128,12 @@
         if (window.RCRobotModel) window.RCRobotModel.update(j.data);
         setLive(true);
         if (keyboardControl) keyboardControl.stateChanged();
-        if (neutralControl) neutralControl.stateChanged();
+        if (brakeRecovery) brakeRecovery.stateChanged();
       } else {
+        calibrationTelemetryCurrent = false;
         setLive(false);
         if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Нет телеметрии · WASD выключено.');
-        if (neutralControl && neutralControl.isActive()) void neutralControl.restore(true);
+        if (brakeRecovery) brakeRecovery.stateChanged();
         if (window.RCRemoteControls) {
           releaseDrive();
           if (window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
@@ -137,9 +142,10 @@
       }
     } catch (e) {
       // Экран может не мигать на сетевых сбоях, но WASD fail-closed сразу.
+      calibrationTelemetryCurrent = false;
       setLive(false);
       if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Связь потеряна · WASD выключено.');
-      if (neutralControl && neutralControl.isActive()) void neutralControl.restore(true);
+      if (brakeRecovery) brakeRecovery.stateChanged();
       if (window.RCRemoteControls) {
         releaseDrive();
         if (window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
@@ -463,13 +469,23 @@
     initKioskControls();
     initSwipePage();
     initSteeringControls();
+    const requestedView = window.location && typeof URLSearchParams !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('open') : null;
     if (window.RCRemoteControls && window._openSwipe) {
       const view = document.body.dataset.remoteView === 'battery' ? 'battery' : 'motors';
       window._openSwipe(view);
-    } else if (window._openSwipe && window.location && typeof URLSearchParams !== 'undefined' &&
-               new URLSearchParams(window.location.search).get('open') === 'bms') {
+    } else if (window._openSwipe && requestedView === 'bms') {
       window._openSwipe('battery');
       if (window.RCBattery) window.RCBattery.openSetup();
+    } else if (window._openSwipe && requestedView === 'calibration') {
+      // Navigation only: opening this view never starts calibration or motion.
+      window._openSwipe('motors');
+    }
+    if (requestedView === 'calibration' && document.body.dataset.remoteView !== 'battery') {
+      requestAnimationFrame(() => {
+        const section = $('steer-calibration');
+        if (section && section.scrollIntoView) section.scrollIntoView({block: 'start'});
+      });
     }
     // Страница карты лидара: опрос сервера и кнопки (сброс, настройки).
     if (window.RCMapView) window.RCMapView.init();
@@ -1242,8 +1258,7 @@
       const showMap = name === 'map';
       if (activeSwipeView === 'motors' && !showMotors) {
         if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Уход с экрана · WASD выключено.');
-        if (neutralControl && neutralControl.isActive()) void neutralControl.restore(true);
-        else void stopDrive();
+        void stopDrive();
       }
       activeSwipeView = showMotors ? 'motors'
         : (showBattery ? 'battery' : (showMap ? 'map' : 'cameras'));
@@ -1320,8 +1335,7 @@
       if (window.RCCameraView) window.RCCameraView.setActive(false);
       if (activeSwipeView === 'motors') {
         if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Уход с экрана · WASD выключено.');
-        if (neutralControl && neutralControl.isActive()) void neutralControl.restore(true);
-        else void stopDrive();
+        void stopDrive();
       }
       page.classList.remove('is-open');
       document.body.classList.remove('swipe-open');
@@ -2291,7 +2305,7 @@
   function steerPresetBlockedReason() {
     const d = lastData || {};
     const control = d.steeringControl || {};
-    if (d.neutral && d.neutral.locked) return 'Сначала верните тормоз после нейтрали.';
+    if (d.neutral && d.neutral.locked) return 'Сначала верните и подтвердите тормоз.';
     if (!control.available) {
       return String(control.source || '') === 'master-peer'
         ? 'Руление и пресеты доступны на бортовом экране (порт 8090).'
@@ -2625,7 +2639,7 @@
       if (!live) {
         sourceStatus.textContent = 'Нет связи с сервером: актуальные USB-порты неизвестны.';
       } else if (neutralLocked) {
-        sourceStatus.textContent = 'Нейтраль: перед рулением и тягой верните тормоз.' + (usbStatus ? ' ' + usbStatus : '');
+        sourceStatus.textContent = 'Тормоз не подтверждён: перед рулением и тягой верните тормоз.' + (usbStatus ? ' ' + usbStatus : '');
       } else if (!available && String(control.source || '') === 'master-peer') {
         sourceStatus.textContent = 'Руление и тяга — только на бортовом экране (порт 8090). Здесь показана телеметрия.' + (usbStatus ? ' ' + usbStatus : '');
       } else if (!available) {
@@ -2735,7 +2749,7 @@
       const hasData = !!pending || (moving && target != null) || current != null;
       if (!dirty && hasData) slider.value = String(value);
       if (currentEl) currentEl.textContent = current == null ? '—' : Math.round(current) + '°';
-      // Ползунок ограничен ходом руля, а при калибровке цель — до ±135°: показываем настоящую.
+      // Ползунок ограничен ходом руля, а при калибровке поиск может выходить за него: показываем настоящую цель.
       if (targetEl) targetEl.textContent = (!dirty && busy && target != null ? Math.round(target) : Math.round(+slider.value || 0)) + '°';
 
       const ready = available && steeringAuthorized && online && homed && !busy && !pending && !zeroPending &&
@@ -2797,17 +2811,38 @@
       if (stateEl) stateEl.textContent = label;
     });
 
-    if (window.RCPotMode) window.RCPotMode.render(document.querySelector('.steer-calib-bar'), d, steeringAuthorized);
+    // Once the connection has gone stale, don't keep presenting the last
+    // board readings as a current, confirmed mode or hold state.
+    const calibrationData = calibrationTelemetryCurrent ? d : { ...d, motors: [] };
+    if (window.RCPotMode) window.RCPotMode.render(document.querySelector('.steer-calib-bar'), calibrationData, steeringAuthorized);
     // Активное удержание угла: состояние — только из potHold телеметрии.
-    if (window.RCPotHold) window.RCPotHold.render(document.querySelector('.steer-calib-bar'), d, steeringAuthorized);
+    if (window.RCPotHold) window.RCPotHold.render(document.querySelector('.steer-calib-bar'), calibrationData, steeringAuthorized);
     const calibAll = $('steer-calib-all');
     if (calibAll) {
       const online = motors.filter((m) => m && m.online === true);
       const anyBusy = online.some((m) => m.moving || m.calibrating || m.cycling);
       const anyPending = Object.keys(pendingCalib).length > 0;
-      calibAll.disabled = !(available && control.calibration && steeringAuthorized && online.length > 0 &&
+      const estopBlocked = !!(d.estop && (d.estop.latched || d.estop.unknown));
+      calibAll.disabled = !(calibrationTelemetryCurrent && !estopBlocked && available && control.calibration && steeringAuthorized && online.length > 0 &&
         !anyBusy && !anyPending && !tractionActive && !steerPresetBusy);
       calibAll.textContent = online.some((m) => m.calibrating) ? 'Калибровка идёт…' : 'Калибровать все колёса';
+      const status = $('steer-calib-status');
+      if (status) {
+        const onlineCount = STEER_IDS.filter((id) => online.some((m) => m.id === id)).length;
+        const statusText = !calibrationTelemetryCurrent ? 'Нет связи с сервером: состояние колёс неизвестно.'
+          : !steeringAuthorized ? 'Разблокируйте управление PIN-кодом.'
+          : d.estop && (d.estop.latched || d.estop.unknown) ? 'E-STOP: калибровка недоступна.'
+          : neutralLocked ? 'Сначала верните и подтвердите тормоз.'
+          : !available ? 'Управление недоступно: проверьте источник и связь с колёсами.'
+          : !control.calibration ? 'Калибровка по датчику недоступна для этого источника.'
+          : !online.length ? 'Нет связи с колёсами.'
+          : online.some((m) => m.calibrating) ? 'Платы сообщают о калибровке…'
+          : anyPending ? 'Команда отправлена — ожидаем телеметрию плат.'
+          : anyBusy || tractionActive || steerPresetBusy ? 'Дождитесь остановки движения и завершения команд.'
+          : onlineCount < STEER_IDS.length ? 'На связи ' + onlineCount + '/4; остальные колёса не откалибруются.'
+          : 'На связи все 4 колеса. Перед запуском проверьте свободный ход.';
+        if (status.textContent !== statusText) status.textContent = statusText;
+      }
     }
     renderMasterMessages(d.masterMessages);
     renderDriveControls(d);
@@ -3192,7 +3227,7 @@
     if (message) status.textContent = message;
     else if (!servo) status.textContent = 'Прямая тяга доступна при RC_SLAM_SOURCE=master.';
     else if (d.estop) status.textContent = DRIVE_REASON_TEXT.estop;
-    else if (d.neutral && d.neutral.locked) status.textContent = 'Сначала верните тормоз после нейтрали.';
+    else if (d.neutral && d.neutral.locked) status.textContent = 'Сначала верните и подтвердите тормоз.';
     else if (!steeringAuthorized) status.textContent = 'Управление временно недоступно.';
     else if (!servo.canDrive) status.textContent = DRIVE_REASON_TEXT[servo.reason] || 'Нет связи с платами.';
     else if (run) status.textContent = (run.direction === 'forward' ? 'Вперёд' : 'Назад') + ' · движение включено, нажмите СТОП для остановки.';
@@ -3471,7 +3506,9 @@
       onReady: () => { void fetchKeyboardState(); },
       stopManual: () => stopDrive(true)
     });
-    if (window.RCNeutral) neutralControl = window.RCNeutral.create({getState: () => lastData});
+    if (window.RCBrakeRecovery) brakeRecovery = window.RCBrakeRecovery.create({
+      getState: () => lastData, isFresh: () => calibrationTelemetryCurrent
+    });
     // Drain client-side WASD and latched servo heartbeats *before* the full
     // zero session reserves the motors; delayed STOPs must not abort it.
     window.RCPrepareFullZero = async () => {
@@ -3678,7 +3715,7 @@
       const all = id === 'ALL';
       const confirmed = window.confirm(
         (all ? 'Все четыре колеса' : 'Колесо ' + id) +
-        ' будет искать оптодатчик D18 в пределах ±135° от текущего положения (сначала вправо, затем влево) ' +
+        ' будет искать оптодатчик D18: сначала вправо до 125°, затем влево до 250° от достигнутой точки, ' +
         'и встанет в ноль по среднему трёх подходов к каждой кромке. После включения Arduino колёса должны ' +
         'стоять примерно прямо (±30°). Колёса не должны упираться, рядом не должно быть людей. ' +
         'Тяга во время калибровки запрещена. Начать?'

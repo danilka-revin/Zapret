@@ -5,7 +5,7 @@
 // USB-порт автоматически, не угадывая роль по номеру порта или USB-разъёму.
 // Физически правильное расположение плат всё равно проверяет человек.
 //
-// Команды с USB (как в проверенном скетче): k, q, c, d, h, s, g, z, p, w, v, t, b, n.
+// Команды с USB: k, q, c, d, h, s, g, z, p, w, v, t, b. Старый n только тормозит.
 //   w 12.5 | w FL 12.5 — поворот колеса; w zero / w calib — ноль и калибровка;
 //   v N [f/b] — прямое значение Servo.write для тяги (0…150) и направление;
 //   t N — прежняя команда тяги BLDC ±N% для других пультов;
@@ -235,7 +235,7 @@ const uint32_t TACH_MIN_SILENCE_US = 300000UL;
 // v21: короткая полная телеметрия с CRC и совместимый подробный кадр.
 // Старое поле tach остаётся выключенным для совместимости со старым сервером.
 // v24: команда ph — активное удержание угла по потенциометру, бит 0x8000 и ph=
-const uint8_t FIRMWARE_PROTOCOL = 24;          // ph (удержание угла) в телеметрии
+const uint8_t FIRMWARE_PROTOCOL = 25;          // нейтраль удалена, n только тормозит
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -328,13 +328,12 @@ bool resume_allowed = false;           // g продолжит поворот, �
 bool drive_active = false;
 int8_t drive_percent = 0;
 uint32_t last_drive_command_ms = 0;
-// Только свежий подтверждённый b <id> разрешает первый n <id>.
-// После STOP или watchdog прежний n больше не может отпустить тормоз.
+// Tagged b remains the acknowledgement for live steering and recovery.
+// Legacy neutral telemetry fields remain in the protocol for compatibility;
+// this firmware never enters neutral and old n commands only brake.
 uint32_t brake_id = 0;
 uint32_t brake_id_ms = 0;
-const uint16_t NEUTRAL_START_TIMEOUT_MS = 600;
 bool neutral_active = false;
-// После нейтрали даже watchdog не разрешает старую тягу: нужен новый tagged b.
 bool neutral_inhibit = false;
 uint32_t neutral_id = 0;
 // A live keyboard session starts only from its own tagged STOP and cannot be
@@ -1803,7 +1802,7 @@ void applyDriveCommand(int8_t percent) {
 }
 
 void stopDriveLocal() {
-  // STOP, b, нейтраль, watchdog 650 мс и E-STOP сервера гасят активное
+  // STOP, b, старый n, watchdog 650 мс и E-STOP сервера гасят активное
   // удержание угла: оно не отдельный путь движения, а тот же startMotor().
   stopPotHold();
   // In live mode STOP/watchdog must also cancel a steering move; a delayed
@@ -1926,7 +1925,7 @@ void printModuleStatus() {
 //   w <°>          абсолютный угол (нужен ноль, предел ±90°) — команда сервера
 //   v <0…150>      прямое значение Servo.write с бортового экрана
 //   t <%> | b      прежняя команда тяги / тормоз
-//   b <id>, n <id> подтверждённый тормоз и heartbeat нейтрали (fw18)
+//   b <id>         подтверждённый тормоз; старый n — только торможение
 //   p              состояние
 void stopEverything(bool quiet) {
   const bool cycling = cycle_active;
@@ -2244,29 +2243,9 @@ void handleModuleCommand(char* line) {
     }
     applyDirectDrive((uint8_t)value, forward);
   } else if (strcasecmp_P(command, PSTR("n")) == 0) {
-    long requested = 0;
-    if (!arg1 || arg2 || extra || !parseLongToken(arg1, &requested) ||
-        requested <= 0 || requested >= 2147483647L ||
-        (neutral_active ? neutral_id != (uint32_t)requested :
-         brake_id != (uint32_t)requested ||
-         (uint32_t)(millis() - brake_id_ms) > NEUTRAL_START_TIMEOUT_MS ||
-         drive_active || motorBusy() || feedback_pending ||
-         calib_state != CAL_IDLE || pot_cal_state != POT_CAL_IDLE || cycle_active ||
-         tach_display_rpm_x10 > 10 || tachMotionRecent())) {
-      stopDriveLocal();
-      return;
-    }
-    if (!neutral_active) {
-      stopPotHold();                      // нейтраль — удержание выключено
-      driveWriteServo(0);
-      driveSetStop(true);                 // выходы выключены до снятия тормоза
-      driveSetBrake(false);
-      neutral_active = true;
-      neutral_inhibit = true;
-      neutral_id = (uint32_t)requested;
-      brake_id = 0;                       // одноразовое разрешение
-    }
-    last_drive_command_ms = millis();
+    // Legacy freewheel requests, including delayed heartbeats, must never
+    // release the brake. Treat any form of n as a best-effort STOP instead.
+    stopDriveLocal();
   } else if (strcasecmp_P(command, PSTR("b")) == 0) {
     stopDriveLocal();
     // Только после применения тормоза подтверждаем точный идентификатор b.

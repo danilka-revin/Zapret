@@ -26,7 +26,7 @@
     serial_unavailable: 'Нет связи с платами.',
     pin_required: 'Разблокируйте управление PIN-кодом.',
     estop: 'Включён E-STOP.',
-    neutral_locked: 'Включена нейтраль — снимите её.',
+    neutral_locked: 'Сначала верните и подтвердите тормоз.',
     control_not_supported: 'Удержание недоступно для этого источника управления.',
     invalid_action: 'Непонятная команда удержания.',
     payload: 'Непонятная команда удержания.',
@@ -54,7 +54,19 @@
   }
 
   function build(parent) {
-    host = make('section', 'pot-hold');
+    host = make('section', 'calibration-card pot-hold');
+    host.setAttribute('aria-labelledby', 'pot-hold-title');
+    const heading = make('div', 'calibration-card__head');
+    const icon = make('span', 'calibration-card__icon', '↺');
+    icon.setAttribute('aria-hidden', 'true');
+    const headingText = make('div');
+    const eyebrow = make('span', 'calibration-card__eyebrow', 'УДЕРЖАНИЕ УГЛА');
+    const title = make('h5', '', 'Активная доводка');
+    title.setAttribute('id', 'pot-hold-title');
+    headingText.appendChild(eyebrow);
+    headingText.appendChild(title);
+    heading.appendChild(icon);
+    heading.appendChild(headingText);
     button = make('button', 'pot-hold__switch', 'Активная доводка — выкл');
     button.type = 'button';
     button.setAttribute('role', 'switch');
@@ -62,9 +74,9 @@
     hint = make('small', 'pot-hold__hint',
       'колесо само возвращается к заданному углу; после перезапуска платы — выключено; ' +
       'ручной сдвиг больше 15° отключает удержание');
-    status = make('span', 'pot-hold__status', 'Нет подтверждения плат');
+    status = make('span', 'calibration-status pot-hold__status', 'Нет подтверждения плат');
     status.setAttribute('role', 'status');
-    alertBox = make('span', 'pot-hold__alert', '');
+    alertBox = make('span', 'calibration-alert pot-hold__alert', '');
     alertBox.setAttribute('role', 'alert');
     button.addEventListener('click', () => { void toggle(); });
     // Клавиатура: Enter и пробел работают как нажатие. preventDefault не даёт
@@ -76,8 +88,9 @@
       if (event.preventDefault) event.preventDefault();
       void toggle();
     });
-    host.appendChild(button);
+    host.appendChild(heading);
     host.appendChild(hint);
+    host.appendChild(button);
     host.appendChild(status);
     host.appendChild(alertBox);
     parent.appendChild(host);
@@ -119,7 +132,7 @@
     if (desired) return 'Ждём подтверждения плат…';
     if (!info.authorized) return 'Разблокируйте управление PIN-кодом.';
     if (info.estop) return 'E-STOP: удержание недоступно.';
-    if (info.neutral) return 'Нейтраль: сначала снимите её.';
+    if (info.neutral) return 'Сначала верните и подтвердите тормоз.';
     if (!info.confirmed) {
       if (info.online.length < MODULES.length) return 'Нужна связь со всеми четырьмя платами.';
       return 'Нужна прошивка fw24: платы не сообщают состояние удержания.';
@@ -174,11 +187,24 @@
         }
       }
       button.disabled = disabledFor(info);
-      button.setAttribute('aria-checked', info.mode === 'on' ? 'true' : 'false');
-      button.setAttribute('aria-label', label(info));
-      button.textContent = label(info);
+      if (host.getAttribute('data-mode') !== info.mode) host.setAttribute('data-mode', info.mode);
+      if (button.getAttribute('data-mode') !== info.mode) button.setAttribute('data-mode', info.mode);
+      if (info.mode === 'on' || info.mode === 'off') {
+        const checked = info.mode === 'on' ? 'true' : 'false';
+        if (button.getAttribute('role') !== 'switch') button.setAttribute('role', 'switch');
+        if (button.getAttribute('aria-checked') !== checked) button.setAttribute('aria-checked', checked);
+      } else {
+        // A switch only supports true/false: unknown or conflicting boards are
+        // an ordinary button, not an accessible claim that holding is off.
+        button.removeAttribute('role');
+        button.removeAttribute('aria-checked');
+      }
+      const nextLabel = label(info);
+      if (button.getAttribute('aria-label') !== nextLabel) button.setAttribute('aria-label', nextLabel);
+      if (button.textContent !== nextLabel) button.textContent = nextLabel;
       hint.hidden = false;
-      status.textContent = statusText(info);
+      const nextStatus = statusText(info);
+      if (status.textContent !== nextStatus) status.textContent = nextStatus;
     },
     // Для проверок и для экранов, которым нужен только факт.
     state() {

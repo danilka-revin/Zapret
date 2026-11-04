@@ -120,7 +120,7 @@
             <p>Рулевые шаговые моторы; кнопки движения — в самом низу окна</p></div>
           <button type="button" class="rc-steering-close" aria-label="Закрыть">×</button>
         </header>
-        <div class="rc-steering-safety" role="note"><b>Ноль руля — по оптодатчику D18:</b> «Калибровка» ищет оптодатчик в пределах ±135° (ход руля 270°) и ставит ноль в середину флажка по среднему трёх подходов к каждой кромке. После включения Arduino выставьте колёса прямо руками (±30°). «Задать 0°» — запасной ручной вариант без датчика. Ноль теряется после перезапуска Arduino.</div>
+        <div class="rc-steering-safety" role="note"><b>Ноль руля — по оптодатчику D18:</b> поиск идёт вправо до 125°, затем влево до 250° от достигнутой точки; ноль — по среднему трёх подходов к каждой кромке. Остановите робота, выставьте колёса примерно прямо (±30°), освободите путь и держите независимый E-STOP наготове. После перезапуска Arduino ноль нужно найти заново; сохранённая поправка полного нуля применяется после поиска. «Задать 0°» — запасной ручной вариант без датчика.</div>
         <div class="rc-steering-toolbar">
           <span id="rc-steering-auth">Нужен PIN</span>
           <button type="button" class="rc-steering-btn" id="rc-steering-unlock">Разблокировать</button>
@@ -183,7 +183,7 @@
               <small id="rc-maneuver-status" role="status">готово · выберите манёвр</small>
             </div>
           </section>
-          <small class="rc-drive-warning">Нейтраль и размах серво-ШИМ, тахометр, тормозная линия и линия STOP настраиваются на экране «Руление и тяга» (вкладка /controls): настройка живёт в EEPROM платы. Программный стоп и watchdog (650 мс), не аварийный выключатель. Перед запуском вывесьте колёса и установите аппаратную аварийную кнопку в силовую цепь.</small>
+          <small class="rc-drive-warning">Управление тягой и показания SC доступны на экране «Руление и тяга» (/controls). Программный СТОП и watchdog (650 мс) не заменяют аварийный выключатель. Перед запуском вывесьте колёса и установите аппаратную аварийную кнопку в силовую цепь.</small>
         </section>
       </section>`;
     const header = document.querySelector('.top-status, .head-actions');
@@ -266,6 +266,10 @@
     } catch (error) {
       snapshot = null;
       $('rc-steering-source').textContent = error && error.message ? error.message : 'Нет связи с сервером.';
+      // Sensor cards must not keep showing the last confirmed state as current
+      // after telemetry fails, even in this legacy steering dialog.
+      if (window.RCPotMode) window.RCPotMode.render(document.querySelector('.rc-steering-toolbar'), null, authorized);
+      if (window.RCPotHold) window.RCPotHold.render(document.querySelector('.rc-steering-toolbar'), null, authorized);
       IDS.forEach((id) => {
         const card = document.querySelector('[data-rc-steering="' + id + '"]');
         if (card && window.RCWheelPorts) window.RCWheelPorts.render(card.querySelector('[data-port]'), null, false);
@@ -1017,7 +1021,7 @@
 
   async function calibrate(id) {
     if (!authorized) return unlock();
-    if (!window.confirm('Колесо ' + id + ' будет искать оптодатчик D18 в пределах ±135° от текущего положения (сначала вправо, затем влево) и встанет в ноль. После включения Arduino колесо должно стоять примерно прямо (±30°). Колесо не должно упираться, рядом не должно быть людей. Начать?')) return;
+    if (!window.confirm('Колесо ' + id + ' будет искать оптодатчик D18: сначала вправо до 125°, затем влево до 250° от достигнутой точки, и встанет в ноль. После включения Arduino колесо должно стоять примерно прямо (±30°). Колесо не должно упираться, рядом не должно быть людей. Начать?')) return;
     try {
       const { response, body } = await json('api/kiosk_calibrate', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'steering' },

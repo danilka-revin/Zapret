@@ -6,7 +6,7 @@ import threading
 import time
 
 from robot_control.keyboard import KeyboardControl, MODULES
-from robot_control import slam
+from robot_control import maneuvers, slam
 
 
 class Clock:
@@ -19,11 +19,13 @@ class Clock:
 
 class Wheels:
     name = "master"
-    supports_drive = supports_individual_steer = True
+    supports_drive = supports_individual_steer = supports_individual_drive = True
     MAX_STEER_DEG = 100
 
     def __init__(self):
         self.commanded = 0
+        self.commanded_modules = {}
+        self.chassis = dict(maneuvers.DEFAULT_CHASSIS)
         self.calls = []
         self.brake_id = 0
         self.motors = {m: {"id": m, "online": True, "homed": True, "moving": False,
@@ -33,12 +35,18 @@ class Wheels:
 
     def read(self):
         return {"linkOk": True, "motors": copy.deepcopy(list(self.motors.values())),
-                "drive": {"available": True, "canDrive": True, "active": bool(self.commanded),
-                          "commandedPercent": self.commanded}}
+                "drive": {"available": True, "canDrive": True,
+                          "active": bool(self.commanded) or bool(self.commanded_modules),
+                          "commandedPercent": self.commanded,
+                          "commandedModules": dict(self.commanded_modules)}}
+
+    def maneuver_config(self):
+        return {"supported": True, "chassis": dict(self.chassis)}
 
     def drive(self, percent):
         percent = int(percent)
         self.commanded = percent
+        self.commanded_modules = {}
         self.calls.append(("drive", percent))
         for motor in self.motors.values():
             motor["drivePercent"] = percent
@@ -472,11 +480,14 @@ class LiveWheels(Wheels):
 
     def keyboard_live(self, brake_id, sequence, percent, angles, deadline):
         assert deadline > time.monotonic()
-        self.commanded = percent
+        individual = isinstance(percent, dict)
+        self.commanded = 0 if individual else percent
+        self.commanded_modules = dict(percent) if individual else {}
         self.calls.append(("live", brake_id, sequence, percent, dict(angles)))
         for module, motor in self.motors.items():
+            value = percent[module] if individual else percent
             if module not in self.quiet_ack:
-                motor.update(liveId=brake_id, liveSeq=sequence, drivePercent=percent)
+                motor.update(liveId=brake_id, liveSeq=sequence, drivePercent=value)
             if module in self.stuck_steering:
                 motor["moving"] = True
             else:

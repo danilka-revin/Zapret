@@ -24,7 +24,8 @@ const slider = new EventTarget('keyboard-speed', true); slider.value = '20'; sli
 const status = new EventTarget('keyboard-status');
 const stopButton = new EventTarget('keyboard-stop');
 const output = new EventTarget('keyboard-speed-value');
-const elements = Object.fromEntries([panel, button, mode, slider, status, stopButton, output].map(el => [el.id, el]));
+const spinInfo = new EventTarget('keyboard-spin-geometry');
+const elements = Object.fromEntries([panel, button, mode, slider, status, stopButton, output, spinInfo].map(el => [el.id, el]));
 global.document = {hidden: false, body: new EventTarget('body'), activeElement: button,
   getElementById: id => elements[id], addEventListener() {}};
 global.window = new EventTarget('window');
@@ -35,6 +36,9 @@ const motors = ids.map(id => ({id, online: true, homed: true, telemetryAgeS: 0,
   scRpm: 0, scRecent: false, firmware: 23, brakeId: 0, liveId: 0, liveSeq: 0}));
 const telemetry = {linkOk: true, steeringControl: {available: true}, drive: {available: true, active: false}, motors};
 const calls = [];
+const pivot = Math.atan2(500, 380) * 180 / Math.PI;
+const spin = {angleDeg: pivot, wheelbaseMm: 500, trackMm: 380,
+  angles: {FL: pivot, FR: -pivot, RL: -pivot, RR: pivot}};
 let brakeId = 0, session = 0, incompleteFirstAck = true, holdStop = null, holdArm = null, holdBegin = null;
 function deferred() {
   let resolve;
@@ -54,7 +58,7 @@ global.fetch = async (_url, init) => {
   if (body.action === 'begin') {
     brake();
     if (incompleteFirstAck) motors[3].brakeId = 0;
-    result = {ok: true, session: 'session-' + (++session), brakeId};
+    result = {ok: true, session: 'session-' + (++session), brakeId, spin};
     if (holdBegin) { const gate = holdBegin; holdBegin = null; await gate.promise; }
   } else if (body.action === 'stop' || body.action === 'end') {
     if (body.action === 'stop' && holdStop) { const gate = holdStop; holdStop = null; await gate.promise; }
@@ -66,7 +70,8 @@ global.fetch = async (_url, init) => {
     result.permit = 'permit';
   } else if (body.action === 'live') {
     telemetry.drive.active = true;
-    for (const motor of motors) Object.assign(motor, {drivePercent: body.percent,
+    for (const motor of motors) Object.assign(motor, {
+      drivePercent: body.pattern === 'spin' && ['FR', 'RR'].includes(motor.id) ? -body.percent : body.percent,
       liveId: brakeId, liveSeq: body.sequence, angle: body.angles[motor.id]});
   }
   return {ok: true, json: async () => result};
@@ -142,6 +147,43 @@ const count = action => calls.filter(call => call.action === action).length;
   await until(() => telemetry.drive.active, 'drive after leaving slider');
   up('ArrowUp');
   await until(() => !telemetry.drive.active, 'final release');
+
+  // The horizontal arrows use server geometry and require their own permit.
+  assert.match(spinInfo.textContent, /52\.77°/);
+  down('ArrowLeft');
+  await until(() => telemetry.drive.active && motors[0].drivePercent === -20, 'left pivot');
+  assert.deepEqual(motors.map(m => m.drivePercent), [-20, 20, -20, 20]);
+  assert.ok(calls.some(c => c.action === 'arm' && c.pattern === 'spin' && c.direction === -1));
+  assert.ok(calls.some(c => c.action === 'live' && c.pattern === 'spin' && c.percent === -20));
+  up('ArrowLeft');
+  await until(() => !telemetry.drive.active, 'left released');
+
+  // Releasing before a spin permit returns cannot start an old rotation.
+  const spinGate = deferred(); holdArm = spinGate;
+  const oldArms = count('arm'), oldLives = count('live');
+  down('ArrowRight');
+  await until(() => count('arm') === oldArms + 1, 'delayed pivot ARM');
+  up('ArrowRight');
+  await until(() => calls.some(c => c.action === 'stop' && c.sequence > calls.findLast(x => x.action === 'arm').sequence), 'pivot STOP');
+  spinGate.resolve();
+  await sleep(150);
+  assert.equal(count('live'), oldLives, 'late pivot permit resumed motion');
+  assert.equal(telemetry.drive.active, false);
+
+  // Incompatible arrows brake and require all of them to be released.
+  down('ArrowUp');
+  await until(() => telemetry.drive.active, 'forward before conflict');
+  down('ArrowLeft');
+  await until(() => !telemetry.drive.active, 'arrow conflict');
+  const conflictLives = count('live');
+  up('ArrowUp');
+  await sleep(200);
+  assert.equal(count('live'), conflictLives, 'still-held left arrow started after conflict');
+  up('ArrowLeft');
+  down('ArrowRight');
+  await until(() => telemetry.drive.active && motors[0].drivePercent === 20 && motors[1].drivePercent === -20, 'right pivot');
+  up('ArrowRight');
+  await until(() => !telemetry.drive.active, 'right released');
   await keyboard.disable();
 
   // A caller reserving the hardware must be able to drain a BEGIN that was

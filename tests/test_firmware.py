@@ -5,7 +5,7 @@
 * I²C вырезан: каждое колесо — своя плата на своём USB, fw22+ сообщает
   CRC-защищённую роль; fw23 сохраняет поправку полного нуля в EEPROM;
   fw24 добавляет активное удержание угла по потенциометру (команда ``ph``,
-  бит состояния 0x8000 и поле ``ph=``).
+  бит состояния 0x8000 и поле ``ph=``); fw25 удаляет нейтраль.
 * tests/firmware_sim — хост-симуляция четырёх плат (TB6600, оптодатчик D18):
   калибровка из разных положений, ошибки датчика, команды монитора, тяга и
   watchdog. Нужен g++; без него тест пропускается.
@@ -177,7 +177,7 @@ def test_firmware_transmits_its_wheel_role_in_checked_telemetry():
     # Addressed commands remain compatible; the server verifies the role
     # before sending anything to an automatically discovered port.
     assert 'classifyModuleToken' in text
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '24'
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '25'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
@@ -299,7 +299,7 @@ def test_pot_hold_is_a_separate_command_and_loop():
     hold = hold[:hold.index("\n}\n")]
     assert "startMotor(" in hold and "POT_HOLD_STEP_PERIOD_US" in hold
     assert "digitalWrite(STEP_PUL_PIN" not in hold
-    # Stop/b/нейтраль и калибровки гасят удержание, а не приостанавливают.
+    # Stop/b/старый n и калибровки гасят удержание, а не приостанавливают.
     assert "stopPotHold();" in core
     assert core.count("stopPotHold()") >= 6
     # Калибровку ph, в отличие от pm, не сбрасывает.
@@ -389,7 +389,7 @@ def test_fast_and_full_simulated_frames_encode_the_same_instant(simulator):
     fast = backend.parse_master_line(short, module="FR")
     slow = backend.parse_master_line(full, module="FR")
     assert fast is not None and fast == slow
-    assert fast["firmware"] == 24 and fast["mod"] == "FR" and fast["liveId"] == 42 and fast["liveSeq"] == 3
+    assert fast["firmware"] == 25 and fast["mod"] == "FR" and fast["liveId"] == 42 and fast["liveSeq"] == 3
     assert backend.parse_master_line(short) == fast
     assert backend.parse_master_line(full) == slow
     assert backend.parse_master_line(short, module="FL") is None
@@ -423,7 +423,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 24 and frame["calibError"] == 0
+        assert frame["firmware"] == 25 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] is None
         assert frame["tach"] is False and frame["tachHz"] is None
         assert frame["scRpm"] == 0.0 and frame["scHz"] == 0 and frame["scPpr"] == 90
@@ -787,17 +787,17 @@ def test_wasd_in_real_browser_through_all_four_simulated_usb_boards(simulator, k
 @pytest.mark.skipif(
     os.name != "posix" or not shutil.which("node") or
     not os.environ.get("RC_TEST_CHROMIUM") or not os.environ.get("RC_TEST_PLAYWRIGHT_CORE"),
-    reason="для нейтрали нужны Chromium и playwright-core",
+    reason="для проверки браузера нужны Chromium и playwright-core",
 )
 @pytest.mark.parametrize("remote", [False, True], ids=["onboard", "remote-proxy"])
-def test_neutral_in_real_browser_through_four_simulated_boards(
+def test_brake_safety_in_real_browser_through_four_simulated_boards(
         simulator, kiosk_client, app, operator, monkeypatch, tmp_path, remote):
     """Браузер и при необходимости авторизованный пульт → борт → 4 PTY."""
     import threading
     from werkzeug.serving import make_server
     from robot_control import slam
 
-    base = tmp_path / "neutral-wheel"
+    base = tmp_path / "brake-safety-wheel"
     process = subprocess.Popen([str(simulator), "pty", str(base)], stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True)
     source = board_server = web_server = None
@@ -831,7 +831,7 @@ def test_neutral_in_real_browser_through_four_simulated_boards(
             threads.append(thread)
             origin = f"http://127.0.0.1:{web_server.server_port}"
         result = subprocess.run(
-            [shutil.which("node"), str(ROOT / "tests/js/neutral_browser.mjs"), origin,
+            [shutil.which("node"), str(ROOT / "tests/js/brake_safety_browser.mjs"), origin,
              board_origin, "remote" if remote else "onboard"],
             capture_output=True, text=True, timeout=90,
         )
@@ -1021,3 +1021,78 @@ def test_latency_cli_via_onboard_server_and_four_simulated_boards(simulator, kio
             source._dispatch_wakeup.set()
         process.terminate()
         process.wait(timeout=3)
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or not shutil.which("node") or
+    not os.environ.get("RC_TEST_CHROMIUM") or not os.environ.get("RC_TEST_PLAYWRIGHT_CORE"),
+    reason="для проверки стрелок разворота нужны Chromium и playwright-core",
+)
+@pytest.mark.parametrize("remote,track", [(False, 380), (True, 450)], ids=["onboard", "remote-saved-geometry"])
+def test_keyboard_pivot_in_real_browser_through_four_simulated_boards(
+        simulator, kiosk_client, app, operator, monkeypatch, tmp_path, remote, track):
+    """Chromium → борт (или proxy → борт) → четыре fw25 и модель SC в PTY."""
+    import threading
+    from werkzeug.serving import make_server
+    from robot_control import slam
+
+    base = tmp_path / "pivot-wheel"
+    process = subprocess.Popen([str(simulator), "pty", str(base)], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True,
+                               env=dict(os.environ, RC_SIM_SC_FOLLOW_DRIVE="1"))
+    source = board_server = web_server = None
+    threads = []
+
+    def wait_for(predicate, timeout=10):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if predicate():
+                return True
+            time.sleep(0.05)
+        return bool(predicate())
+
+    try:
+        ports = {m: f"{base}-{m}" for m in MODULE_IDS}
+        assert wait_for(lambda: all(Path(port).exists() for port in ports.values()))
+        source = slam.load_backend().MasterSource(list(ports.values()), module_ports=ports)
+        kiosk_client.application.extensions["rc_slam"].source = source
+        assert source.set_maneuver_config("chassis", {"wheelbaseMm": 500, "trackMm": track})["ok"]
+        assert wait_for(lambda: source.servo_drive_status()["canDrive"]), source.read()
+        for module in MODULE_IDS:
+            assert source.zero_module(module)["ok"]
+        assert wait_for(lambda: all(m.get("homed") for m in source.read()["motors"])), source.read()
+        board_server = make_server("127.0.0.1", 0, kiosk_client.application, threaded=True)
+        thread = threading.Thread(target=board_server.serve_forever, daemon=True)
+        thread.start()
+        threads.append(thread)
+        board_origin = f"http://127.0.0.1:{board_server.server_port}"
+        origin = board_origin
+        if remote:
+            monkeypatch.setenv("RC_SLAM_PEER_URL", board_origin + "/api/kiosk_state")
+            web_server = make_server("127.0.0.1", 0, app, threaded=True)
+            thread = threading.Thread(target=web_server.serve_forever, daemon=True)
+            thread.start()
+            threads.append(thread)
+            origin = f"http://127.0.0.1:{web_server.server_port}"
+        result = subprocess.run(
+            [shutil.which("node"), str(ROOT / "tests/js/keyboard_spin_browser.mjs"), origin,
+             board_origin, "remote" if remote else "onboard", str(track)],
+            capture_output=True, text=True, timeout=150,
+        )
+        assert result.returncode == 0, result.stdout + "\n" + result.stderr
+        assert "four simulated USB boards: OK" in result.stdout
+    finally:
+        for server in (web_server, board_server):
+            if server is not None:
+                server.shutdown()
+                server.server_close()
+        for thread in threads:
+            thread.join(timeout=3)
+        if source is not None:
+            source._stop = True
+        process.terminate()
+        try:
+            process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()

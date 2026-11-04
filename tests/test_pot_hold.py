@@ -322,6 +322,18 @@ def test_switch_is_disabled_by_state(tmp_path, step, status_part):
     assert report["requests"] == [], "при disabled POST не уходит"
 
 
+def test_unknown_hold_is_not_exposed_as_a_confirmed_off_switch(tmp_path):
+    report = run_screen(tmp_path, {"steps": [
+        {"name": "no-telemetry", "motors": _motors(potHold=None)},
+        {"name": "restored", "motors": _motors(potHold=True)},
+    ]})
+    unknown, restored = report["seen"][1:]
+    assert unknown["disabled"] is True
+    assert unknown["role"] is None and unknown["ariaChecked"] is None
+    assert "нет подтверждения" in unknown["text"]
+    assert restored["role"] == "switch" and restored["ariaChecked"] == "true"
+
+
 def test_switch_stays_usable_while_the_hold_moves_the_wheel(tmp_path):
     """Пока удержание само подтягивает угол, выключатель должен работать.
 
@@ -349,6 +361,8 @@ def test_switch_resolves_boards_that_disagree(tmp_path):
     ]})
     mixed = report["seen"][1]
     assert mixed["disabled"] is False
+    # Нельзя объявлять расходящиеся платы выключенным ARIA-переключателем.
+    assert mixed["role"] is None and mixed["ariaChecked"] is None
     assert "расходятся" in mixed["status"]
     assert [item["action"] for item in report["requests"]] == ["off"]
 
@@ -366,7 +380,7 @@ def test_switch_is_disabled_without_pin_estop_or_neutral(tmp_path):
         assert by_name[name]["requests"] == 0, name
     assert "PIN" in by_name["no-pin"]["status"]
     assert "E-STOP" in by_name["estop"]["status"]
-    assert "Нейтраль" in by_name["neutral"]["status"]
+    assert "тормоз" in by_name["neutral"]["status"]
 
 
 def test_switch_waits_for_telemetry_instead_of_optimistic_toggle(tmp_path):

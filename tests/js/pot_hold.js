@@ -44,6 +44,7 @@ class El {
   }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null; }
+  removeAttribute(name) { delete this.attributes[name]; }
   appendChild(child) {
     if (child.parentElement) {
       const index = child.parentElement.children.indexOf(child);
@@ -148,11 +149,12 @@ const sleep = (ms) => new Promise((resolve) => setImmediate(resolve));
   const seen = [];
   window.RCPotHold.render(parent, state({}), true);
   const host = parent.children[0];
+  const byClass = name => host.children.find(child => child.className.split(/\s+/).includes(name));
   const parts = {
-    button: host.children[0],
-    hint: host.children[1],
-    status: host.children[2],
-    alert: host.children[3],
+    button: byClass('pot-hold__switch'),
+    hint: byClass('pot-hold__hint'),
+    status: byClass('pot-hold__status'),
+    alert: byClass('pot-hold__alert'),
   };
   seen.push(Object.assign({ step: 'render' }, read(parts)));
 

@@ -153,6 +153,12 @@ PACK = {
 # ============================================================================
 # 1. Протокол обмена
 # ============================================================================
+def _wire_steer_angle(angle):
+    """Keep hundredths where needed while preserving old one-decimal commands."""
+    text = "%.2f" % angle
+    return text[:-1] if text.endswith("0") else text
+
+
 def crc16(data):
     """CRC16/Modbus (0xA001, init 0xFFFF). Эталон: b'123456789' → 0x4B37."""
     crc = 0xFFFF
@@ -597,7 +603,7 @@ def _load_maneuvers():
 
 
 class _ExpiringCommand(bytes):
-    """A queued neutral heartbeat must not be written after its browser lease."""
+    """A queued real-time command must not be written after its deadline."""
     def __new__(cls, payload, deadline):
         command = super().__new__(cls, payload)
         command.deadline = deadline
@@ -729,7 +735,7 @@ class MasterSource:
         self.servo_commands = {}
         # Останов и раздача очереди не должны обгонять друг друга.
         self._commands_lock = threading.RLock()
-        # Резервирование нейтрали запрещает отправку всех команд движения до
+        # Неизвестное состояние тормоза запрещает отправку всех команд движения до
         # подтверждённого возврата тормоза на четырёх платах.
         self._neutral_inhibit = False
         # A durable pending marker prevents driving after an interrupted
@@ -1203,7 +1209,7 @@ class MasterSource:
                                            self._full_zero_memory_fault())
 
     def _queue_motion(self, command):
-        """Проверка нейтрали и постановка в очередь атомарны с её включением."""
+        """Атомарно учитывать блокировку старого состояния и ставить команду в очередь."""
         with getattr(self, "_commands_lock", nullcontext()):
             context = getattr(self, "_full_zero_context", None)
             if getattr(context, "allowed", False) and not getattr(self, "_full_zero_session", False):
@@ -1390,11 +1396,11 @@ class MasterSource:
                 return {"ok": False, "reason": "full_zero_stopped"}
             result = self.full_zero_move_probe(module, _full_zero_probe, angle=angle)
         else:
-            command = ("w %s %.1f\n" % (module, angle)).encode("ascii")
+            command = ("w %s %s\n" % (module, _wire_steer_angle(angle))).encode("ascii")
             result = self._queue_motion(command)
         if not result["ok"]:
             return result
-        return {"ok": True, "queued": True, "module": module, "angle": round(angle, 1)}
+        return {"ok": True, "queued": True, "module": module, "angle": round(angle, 2)}
 
     def zero_module(self, module, now=None):
         """Назначить текущую позицию программным нулём; мотор не двигается."""
@@ -2010,46 +2016,6 @@ class MasterSource:
                 self._neutral_inhibit = True
                 self._brake_all()
 
-    def reserve_neutral(self):
-        """Атомарно запретить движение и запросить подтверждённый STOP."""
-        with getattr(self, "_manual_motion_lock", nullcontext()):
-            if self.maneuvers is not None and self.maneuvers.status()["active"]:
-                return {"ok": False, "reason": "maneuver_busy"}
-            with getattr(self, "_commands_lock", nullcontext()):
-                if getattr(self, "_neutral_inhibit", False) or getattr(self, "_full_zero_inhibit", False):
-                    return {"ok": False, "reason": "neutral_locked"}
-                if not self.serial_ready.is_set():
-                    return {"ok": False, "reason": "serial_unavailable"}
-                self._neutral_inhibit = True
-                result = self.brake_for_control()
-                if not result.get("ok"):
-                    self._neutral_inhibit = False
-                return result
-
-    def neutral_heartbeat(self, brake_id, deadline):
-        """Раздать свежий n всем портам; задержавшийся в очереди n выбросить."""
-        if type(brake_id) is not int or not 0 < brake_id < 0x7FFFFFFF:
-            return {"ok": False, "reason": "payload"}
-        if not isinstance(deadline, (int, float)) or not math.isfinite(deadline) or deadline <= time.monotonic():
-            return {"ok": False, "reason": "command_expired"}
-        with getattr(self, "_commands_lock", nullcontext()):
-            if not getattr(self, "_neutral_inhibit", False) or not self.serial_ready.is_set():
-                return {"ok": False, "reason": "serial_unavailable"}
-            with self.lock:
-                links = [link for link in (getattr(self, "links", None) or {}).values() if link.module]
-            if len(links) != len(MODULE_TITLES) or {link.module for link in links} != set(MODULE_TITLES):
-                self._brake_all()
-                return {"ok": False, "reason": "module_offline"}
-            command = _ExpiringCommand(("n %d\n" % brake_id).encode("ascii"), deadline)
-            for link in links:
-                self._filter_queue(link.commands, lambda queued: bytes(queued).split()[:1] != [b"n"])
-                try:
-                    link.commands.put_nowait(command)
-                except queue.Full:
-                    self._brake_all()
-                    return {"ok": False, "reason": "command_queue_full"}
-        return {"ok": True}
-
     def keyboard_live(self, brake_id, sequence, percent, angles, deadline):
         """Queue an expiring live-steering heartbeat to each identified v20 board.
 
@@ -2058,11 +2024,25 @@ class MasterSource:
         """
         if (type(brake_id) is not int or not 0 < brake_id < 0x7FFFFFFF or
                 type(sequence) is not int or not 0 < sequence < 0x7FFFFFFF or
-                type(percent) is not int or percent == 0 or abs(percent) > self.drive_limit_percent() or
                 not isinstance(angles, dict) or set(angles) != set(MODULE_TITLES) or
                 any(isinstance(a, bool) or not isinstance(a, (int, float)) or
                     not math.isfinite(a) or abs(a) > self.MAX_STEER_DEG for a in angles.values())):
             return {"ok": False, "reason": "payload"}
+        individual = isinstance(percent, dict)
+        if individual:
+            # The only mixed-sign keyboard pattern is a symmetric pivot. Do
+            # not accept an arbitrary wheel map or silently omit a board.
+            if (set(percent) != set(MODULE_TITLES) or
+                    any(type(v) is not int or v == 0 or abs(v) > self.drive_limit_percent()
+                        for v in percent.values()) or
+                    percent["FL"] != percent["RL"] or percent["FR"] != percent["RR"] or
+                    percent["FL"] != -percent["FR"]):
+                return {"ok": False, "reason": "payload"}
+            wheel_percents = dict(percent)
+        else:
+            if type(percent) is not int or percent == 0 or abs(percent) > self.drive_limit_percent():
+                return {"ok": False, "reason": "payload"}
+            wheel_percents = {module: percent for module in MODULE_TITLES}
         if not isinstance(deadline, (int, float)) or not math.isfinite(deadline) or deadline <= time.monotonic():
             return {"ok": False, "reason": "command_expired"}
         with getattr(self, "_commands_lock", nullcontext()):
@@ -2091,15 +2071,16 @@ class MasterSource:
                 self._brake_all()
                 return {"ok": False, "reason": "live_firmware_required"}
             for module in MODULE_TITLES:
-                command = ("j %d %d %d %.1f\n" % (brake_id, sequence, percent, angles[module])).encode("ascii")
+                command = ("j %d %d %d %s\n" % (brake_id, sequence, wheel_percents[module],
+                                                    _wire_steer_angle(angles[module]))).encode("ascii")
                 try:
                     links[module].commands.put_nowait(_ExpiringCommand(command, deadline))
                 except queue.Full:
                     self._brake_all()
                     return {"ok": False, "reason": "command_queue_full"}
             with self.lock:
-                self.drive_percent = percent
-                self.drive_modules = {}
+                self.drive_percent = 0 if individual else percent
+                self.drive_modules = wheel_percents if individual else {}
                 self.servo_commands = {}
                 self.drive_last_command = now
         return {"ok": True, "queued": True, "percent": percent}

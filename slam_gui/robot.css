@@ -1712,12 +1712,13 @@ body.swipe-open .kiosk {
   flex-direction: column;
   gap: 9px;
 }
-.neutral-panel { grid-column: 1 / -1; display: grid; gap: 9px; padding: 14px; border: 1px solid #b77d20; border-radius: 14px; background: var(--panel-2); }
-.neutral-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-.neutral-panel button { padding: 8px 11px; border: 1px solid #b77d20; border-radius: 9px; background: var(--bg-2); color: var(--text); font: inherit; cursor: pointer; }
-.neutral-panel button[aria-pressed="true"] { background: #a86308; color: white; }
-.neutral-panel small, #neutral-status { color: var(--muted); font-size: 12px; line-height: 1.45; }
-#neutral-status[data-locked="true"] { color: #eaa441; font-weight: 700; }
+.brake-recovery { grid-column: 1 / -1; display: grid; gap: 9px; padding: 14px; border: 1px solid #b77d20; border-radius: 14px; background: var(--panel-2); }
+.brake-recovery[hidden] { display: none; }
+.brake-recovery-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.brake-recovery button { padding: 8px 11px; border: 1px solid #b77d20; border-radius: 9px; background: var(--bg-2); color: var(--text); font: inherit; cursor: pointer; }
+.brake-recovery button:disabled { cursor: not-allowed; opacity: .55; }
+.brake-recovery small { color: var(--muted); font-size: 12px; line-height: 1.45; }
+#brake-recovery-status { color: #eaa441; font-size: 12px; font-weight: 700; line-height: 1.45; }
 .keyboard-panel { grid-column: 1 / -1; display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--panel-2); }
 .keyboard-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .keyboard-options { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; }
@@ -1838,20 +1839,6 @@ body.swipe-open .kiosk {
 .steer-meta [data-home="manual"] { color: var(--warn); }
 .steer-meta [data-home="error"] { color: var(--err); }
 .steer-meta [data-opto="on"] { color: var(--accent-strong); }
-.steer-calib-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 10px 14px;
-  border: 1px solid rgba(192, 80, 90, .35);
-  border-radius: 12px;
-  background: var(--bg-2);
-}
-.steer-calib-bar > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.steer-calib-bar b { color: var(--text); font-size: 14px; }
-.steer-calib-bar span { color: var(--muted); font-size: 11px; line-height: 1.4; }
-.btn-steer--calib { flex: none; border-color: var(--accent); background: rgba(192, 80, 90, .16); color: var(--text); }
 .steer-messages {
   list-style: none;
   margin: 0;
@@ -1916,7 +1903,6 @@ body.swipe-open .kiosk {
   .steer-access { justify-content: space-between; flex-wrap: wrap; }
   .steer-grid { grid-template-columns: 1fr; }
   .steer-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .steer-calib-bar { flex-direction: column; align-items: stretch; }
   .traction-controls { grid-template-columns: 1fr; }
   .traction-head { grid-column: auto; flex-direction: column; }
   .traction-warning { grid-column: auto; }
