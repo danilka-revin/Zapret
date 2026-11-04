@@ -45,11 +45,17 @@ def clean_geometry():
 def test_payload_describes_all_measured_fields(clean_geometry):
     payload = calibration.geometry_payload()
     assert payload["ok"] is True and payload["calibrated"] is False
-    assert len(payload["groups"]) == 5  # Kinect + 4 камеры
-    assert payload["fieldCount"] == 33
+    assert len(payload["groups"]) == 6  # Kinect + 4 камеры + тяга/скорость
+    assert payload["fieldCount"] == 38
     keys = {field["key"] for group in payload["groups"] for field in group["fields"]}
     assert "RC_KINECT_HFOV_DEG" in keys and "RC_CAMERA_RR_YAW_DEG" in keys
+    assert "RC_NAV_MPS_PER_PERCENT" in keys
     assert keys == set(calibration.ALLOWED_KEYS)
+    drive = payload["groups"][-1]
+    assert drive["id"] == "drive"
+    speed = drive["fields"][0]
+    assert speed["value"] is None and speed["measured"] is True, \
+        "скорость нельзя подставлять по умолчанию — её измеряют"
 
 
 def test_validate_rejects_unknown_out_of_range_and_bool(clean_geometry):
@@ -57,9 +63,12 @@ def test_validate_rejects_unknown_out_of_range_and_bool(clean_geometry):
     assert calibration.validate({"RC_KINECT_SCAN_COLUMNS": 80.6})["RC_KINECT_SCAN_COLUMNS"] == "81"
     for bad in ({"RC_SECRET_KEY": "x"}, {"RC_KINECT_HFOV_DEG": 999},
                 {"RC_KINECT_HFOV_DEG": "banana"}, {"RC_KINECT_HFOV_DEG": True},
-                {"RC_KINECT_HFOV_DEG": float("nan")}, {}):
+                {"RC_KINECT_HFOV_DEG": float("nan")},
+                {"RC_NAV_MPS_PER_PERCENT": ""}, {}):
         with pytest.raises(calibration.CalibrationError):
             calibration.validate(bad)
+    assert calibration.validate({"RC_NAV_MPS_PER_PERCENT": 0.00625}) == {
+        "RC_NAV_MPS_PER_PERCENT": "0.00625"}
 
 
 def test_save_geometry_writes_only_known_keys_and_applies_env(tmp_path, clean_geometry, monkeypatch):
@@ -83,9 +92,11 @@ def test_save_geometry_writes_only_known_keys_and_applies_env(tmp_path, clean_ge
 def test_calibrated_only_when_every_angle_is_set(tmp_path, clean_geometry, monkeypatch):
     env = tmp_path / ".env"
     monkeypatch.setattr(calibration, "env_file_path", lambda: env)
+    # RC_NAV_MPS_PER_PERCENT намеренно приходит пустым: его измеряют на
+    # площадке, поэтому в «заполнить всё» он не участвует.
     values = {field["key"]: field["value"]
               for group in calibration.geometry_payload()["groups"]
-              for field in group["fields"]}
+              for field in group["fields"] if field["value"] is not None}
     result = calibration.save_geometry(values)
     assert result["calibrated"] is True
     assert sensor_layout.geometry_calibrated() is True
@@ -95,7 +106,7 @@ def test_kiosk_calibration_api(kiosk_client, tmp_path, clean_geometry, monkeypat
     env = tmp_path / ".env"
     monkeypatch.setattr(calibration, "env_file_path", lambda: env)
     page = kiosk_client.get("/api/calibration/geometry")
-    assert page.status_code == 200 and page.json["fieldCount"] == 33
+    assert page.status_code == 200 and page.json["fieldCount"] == 38
     assert kiosk_client.post("/api/calibration/geometry",
                              json={"values": {"RC_NOPE": 1}}).status_code == 400
     reply = kiosk_client.post(
@@ -122,7 +133,7 @@ def test_web_calibration_proxy_requires_csrf(client, operator, kiosk_client, mon
     monkeypatch.setattr(map_peer, "urlopen", forward)
     token = client.get("/api/exploration/status").json["csrfToken"]
     page = client.get("/api/calibration/geometry")
-    assert page.status_code == 200 and page.json["fieldCount"] == 33
+    assert page.status_code == 200 and page.json["fieldCount"] == 38
     assert page.json["csrfToken"] == token
     payload = {"values": {"RC_KINECT_HFOV_DEG": 57}}
     assert client.post("/api/calibration/geometry", json=payload).status_code == 400

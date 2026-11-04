@@ -63,8 +63,43 @@
     });
   }
 
+  function renderNav(nav) {
+    const box = $('explore-nav');
+    if (!box || !nav || !nav.checks) return;
+    box.textContent = '';
+    const title = document.createElement('b');
+    title.textContent = 'Готовность навигации: ' + (nav.ready ? 'можно ехать' :
+      (nav.reason || 'есть блокирующие проверки'));
+    box.appendChild(title);
+    Object.keys(nav.checks).forEach((key) => {
+      const line = document.createElement('div');
+      line.className = 'explore-nav-check ' + (nav.checks[key] ? 'ok' : 'bad');
+      line.textContent = (nav.checks[key] ? '✓ ' : '✗ ') +
+        (NAV_LABELS[key] || key);
+      box.appendChild(line);
+    });
+  }
+
+  const NAV_LABELS = {
+    enabled: 'включена навигация (RC_NAV_ENABLE=1)',
+    speedCalibrated: 'измерена скорость: RC_NAV_MPS_PER_PERCENT',
+    speedWithinLimit: 'скорость внутри RC_NAV_MAX_PERCENT',
+    masterReady: 'готово шасси (RC_SLAM_SOURCE=master, canDrive)',
+    driveStopped: 'тяга остановлена перед стартом',
+    mapFresh: 'свежий скан лидара',
+    mapReady: 'не менее двух сканов для локализации',
+    mapTrusted: 'карта построена с физического лидара',
+    mapIntegrity: 'карта с сопоставлением сканов и без decay',
+    scanReady: 'полный скан без пропусков',
+    poseReady: 'качество scan matching выше порога',
+    mapDecayDisabled: 'забывание препятствий выключено (decay=0)',
+    footprintSufficient: 'защитный радиус больше половины диагонали корпуса',
+    estopClear: 'E-STOP снят',
+  };
+
   function render(status) {
     if (status.csrfToken) csrf = status.csrfToken;
+    renderNav(status.navigation);
     const phase = String(status.phase || 'idle');
     text('explore-status', PHASES[phase] || phase);
     const badge = $('explore-status');
@@ -151,7 +186,8 @@
         input.step = String(field.step || 0.01);
         input.min = String(field.min);
         input.max = String(field.max);
-        input.value = String(field.value);
+        input.value = (field.value === null || field.value === undefined) ? '' : String(field.value);
+        if (field.measured) input.placeholder = 'измерить на площадке';
         input.dataset.key = field.key;
         label.appendChild(caption);
         label.appendChild(input);
@@ -173,7 +209,12 @@
   async function saveCalibration(event) {
     if (event && event.preventDefault) event.preventDefault();
     const values = {};
-    calibrationFields.forEach((entry) => { values[entry.key] = entry.input.value; });
+    // Пустые поля (ещё не измеренные) не отправляем: сервер не должен записать
+    // нулевую скорость вместо отсутствующего замера.
+    calibrationFields.forEach((entry) => {
+      const raw = String(entry.input.value || '').trim();
+      if (raw !== '') values[entry.key] = raw;
+    });
     if (!Object.keys(values).length) {
       text('explore-cal-message', 'Поля ещё не загружены.');
       return;

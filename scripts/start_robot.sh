@@ -215,6 +215,23 @@ else
   KIOSK_PID=$!
 fi
 
+# --- Kinect 360: публикатор глубины поднимается сам ------------------------- #
+# По умолчанию включено, но kinect_depth.sh сам проверяет наличие драйвера:
+# без freenect/openni2/rclpy он спокойно выйдет, не подсовывая демо-кадр.
+if [[ "${RC_KINECT_PUBLISHER_AUTOSTART:-1}" == "1" ]]; then
+  for _ in $(seq 1 30); do
+    health "$KIOSK_PORT" && break
+    sleep 1
+  done
+  if health "$KIOSK_PORT"; then
+    ./scripts/kinect_depth.sh || log "⚠ Kinect: публикатор не запущен — проверьте var/kinect-depth.log."
+  else
+    log "⚠ Kinect: киоск 8090 не ответил за 30 с — публикатор не запущен."
+  fi
+else
+  log "Kinect: автозапуск публикатора выключен (RC_KINECT_PUBLISHER_AUTOSTART=0)."
+fi
+
 log "готово: пульт http://127.0.0.1:${PORT}/ · киоск http://127.0.0.1:${KIOSK_PORT}/kiosk"
 log "для остановки нажмите Ctrl+C; можно также выполнить ./scripts/stop.sh."
 

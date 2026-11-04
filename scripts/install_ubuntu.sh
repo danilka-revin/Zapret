@@ -165,12 +165,15 @@ fi
 if [[ $AUTOSTART -eq 1 ]]; then
   log "ставлю systemd-юнит и включаю автозапуск…"
   if command -v sudo >/dev/null 2>&1 && [[ $EUID -ne 0 ]]; then SUDO=sudo; else SUDO=; fi
-  for unit in robot-control robot-kiosk; do
+  for unit in robot-control robot-kiosk robot-kinect-depth; do
     $SUDO cp "scripts/$unit.service" /etc/systemd/system/
     $SUDO sed -i "s|/opt/robot-control|$PWD|g; s|User=robotctl|User=$LOGIN_USER|g; s|Group=robotctl|Group=$LOGIN_USER|g" \
       "/etc/systemd/system/$unit.service"
     if [[ "$unit" == "robot-control" ]]; then
       $SUDO sed -i "s|^ExecStart=.*|ExecStart=$PWD/.venv/bin/python $PWD/run.py|" \
+        "/etc/systemd/system/$unit.service"
+    elif [[ "$unit" == "robot-kinect-depth" ]]; then
+      $SUDO sed -i "s|^ExecStart=.*|ExecStart=$PWD/scripts/kinect_depth.sh --foreground|" \
         "/etc/systemd/system/$unit.service"
     else
       $SUDO sed -i "s|^ExecStart=.*|ExecStart=$PWD/.venv/bin/python $PWD/run_kiosk.py --no-open|" \
@@ -178,7 +181,7 @@ if [[ $AUTOSTART -eq 1 ]]; then
     fi
   done
   $SUDO systemctl daemon-reload
-  $SUDO systemctl enable --now robot-control robot-kiosk
+  $SUDO systemctl enable --now robot-control robot-kiosk robot-kinect-depth
   log "службы robot-control и robot-kiosk запущены (автозапуск включён)"
   # Лидар ROS 2 при автозапуске службами: ярлыка нет — супервизор поднимает
   # служба robot-lidar (её поставил ros2_setup.sh --service выше).

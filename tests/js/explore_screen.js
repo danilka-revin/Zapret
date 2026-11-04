@@ -60,6 +60,12 @@ const status = {
   canStart: false,
   blockers: ['Автообследование выключено', 'Нет свежего кадра Kinect 360'],
   warnings: ['Геометрия не откалибрована'], csrfToken: 'csrf-123',
+  navigation: {
+    ok: true, ready: false, enabled: false,
+    reason: 'Нет калибровки скорости',
+    checks: { enabled: false, speedCalibrated: false,
+      masterReady: true, estopClear: true },
+  },
 };
 const layout = {
   ok: true, calibrated: false, cameraCount: 4, duplicatePorts: [],
@@ -75,6 +81,8 @@ const calibration = {
     { id: 'kinect', title: 'Kinect 360', fields: [
       { key: 'RC_KINECT_HFOV_DEG', label: 'Угол', unit: '°', value: 57, min: 10, max: 170, step: 0.5 },
       { key: 'RC_KINECT_X_M', label: 'X', unit: 'м', value: 0.35, min: -2, max: 2, step: 0.01 },
+      { key: 'RC_NAV_MPS_PER_PERCENT', label: 'Скорость', unit: 'м/с', value: null,
+        min: 0.0001, max: 1, step: 0.0001, measured: true },
     ] },
     { id: 'front_left', title: 'Передняя левая', port: '/dev/video0', fields: [
       { key: 'RC_CAMERA_FL_YAW_DEG', label: 'Угол', unit: '°', value: -25, min: -360, max: 360, step: 0.5 },
@@ -140,6 +148,9 @@ async function settle() {
   assert.equal(get('explore-status').dataset.phase, 'idle');
   assert.match(get('explore-coverage').textContent, /12\.5%/);
   assert.equal(get('explore-blockers').children.length, 3, 'заголовок + 2 причины');
+  assert.match(get('explore-nav').textContent, /Готовность навигации/);
+  assert.match(get('explore-nav').textContent, /измерена скорость/);
+  assert.equal(get('explore-nav').children.length, 5, 'заголовок + 4 проверки');
   assert.match(get('explore-calibration').textContent, /Калибровка/);
   assert.equal(get('explore-cal-state').textContent, 'требуется замер');
   assert.equal(get('explore-cal-fields').children.length, 2, 'две группы полей');
@@ -147,9 +158,11 @@ async function settle() {
     group.children
       .filter((child) => child.className === 'explore-cal-field')
       .flatMap((label) => label.children.filter((child) => child.type === 'number')));
-  assert.equal(inputs.length, 3);
+  assert.equal(inputs.length, 4);
   assert.equal(inputs[0].dataset.key, 'RC_KINECT_HFOV_DEG');
   assert.equal(inputs[0].value, '57');
+  assert.equal(inputs[2].dataset.key, 'RC_NAV_MPS_PER_PERCENT');
+  assert.equal(inputs[2].value, '', 'неизмеренная скорость остаётся пустой');
 
   // Сохранение уходит с маркером calibration и CSRF-токеном из статуса.
   const before = fetches.length;
@@ -158,7 +171,9 @@ async function settle() {
   assert.ok(post, 'POST сохранения геометрии');
   assert.equal(post.options.headers['X-Robot-Control'], 'calibration');
   assert.equal(post.options.headers['X-CSRF-Token'], 'csrf-123');
-  assert.equal(Object.keys(JSON.parse(post.options.body).values).length, 3);
+  const sent = JSON.parse(post.options.body).values;
+  assert.equal(Object.keys(sent).length, 3, 'пустое поле скорости не отправляется');
+  assert.ok(!('RC_NAV_MPS_PER_PERCENT' in sent));
   assert.match(get('explore-cal-message').textContent, /Сохранено полей: 3/);
 
   // Пуск без подтверждения слепой зоны не отправляет команду.

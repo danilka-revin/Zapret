@@ -33,6 +33,25 @@ from .lidar import normalize_angle
 from .navigation import FREE_MAX, OCCUPIED_MIN, NavigationError
 from .slam_map import UNKNOWN
 
+# Подписи проверок NavigationService._preflight для чек-листа оператора.
+# Ключи совпадают с diagnostics.checks в NavigationService.status().
+NAV_CHECK_LABELS: dict[str, str] = {
+    "enabled": "включена навигация (RC_NAV_ENABLE=1)",
+    "speedCalibrated": "измерена скорость: RC_NAV_MPS_PER_PERCENT",
+    "speedWithinLimit": "скорость внутри RC_NAV_MAX_PERCENT",
+    "masterReady": "готово шасси (RC_SLAM_SOURCE=master, canDrive)",
+    "driveStopped": "тяга остановлена перед стартом",
+    "mapFresh": "свежий скан лидара",
+    "mapReady": "не менее двух сканов для локализации",
+    "mapTrusted": "карта построена с физического лидара",
+    "mapIntegrity": "карта с сопоставлением сканов и без decay",
+    "scanReady": "полный скан без пропусков",
+    "poseReady": "качество scan matching выше порога",
+    "mapDecayDisabled": "забывание препятствий выключено (decay=0)",
+    "footprintSufficient": "защитный радиус больше половины диагонали корпуса",
+    "estopClear": "E-STOP снят",
+}
+
 DEFAULT_MAX_STEPS = 40
 DEFAULT_MAX_DURATION_S = 900.0
 DEFAULT_POLL_S = 0.5
@@ -389,12 +408,44 @@ class ExplorationService:
         eventlog.record("warn", "автообследование остановлено: %s" % reason, source="навигация")
         return {"ok": True, "status": self.status()}
 
+    def nav_readiness(self) -> dict[str, Any]:
+        """Готовность навигации со всеми проверками, а не одной первой причиной.
+
+        Раньше панель показывала только «включите RC_NAV_ENABLE», а про пустой
+        ``RC_NAV_MPS_PER_PERCENT`` оператор узнавал уже после нажатия «Начать».
+        Берём готовый диагностический снимок NavigationService.status().
+        """
+        empty = {"ok": True, "ready": False, "enabled": False, "available": False,
+                 "reason": "Навигация не отвечает", "checks": {}, "errors": []}
+        try:
+            status_fn = getattr(self.navigation, "status", None)
+            state = status_fn() if callable(status_fn) else None
+            if not isinstance(state, dict):
+                return empty
+            diagnostics = state.get("diagnostics") or {}
+            checks = diagnostics.get("checks") or {}
+            failed = [NAV_CHECK_LABELS.get(key, key)
+                      for key, passed in checks.items() if not passed]
+            return {
+                "ok": True,
+                "ready": bool(state.get("canStart")),
+                "enabled": bool(state.get("enabled")),
+                "available": bool(state.get("available")),
+                "reason": str(state.get("reason") or ""),
+                "checks": {key: bool(value) for key, value in checks.items()},
+                "errors": failed,
+            }
+        except Exception as exc:  # noqa: BLE001 — чек-лист не должен ронять экран
+            result = dict(empty)
+            result["reason"] = "Не удалось проверить навигацию: %s" % str(exc)[:120]
+            return result
+
     def preflight(self) -> dict[str, Any]:
         """Что мешает пуску, а что стоит просто проверить — для панели UI.
 
-        ``blockers`` повторяет ровно те проверки, которые :meth:`start` всё
-        равно выполнит; ``warnings`` не блокируют кнопку, а подсказывают, что
-        карта или геометрия ещё не готовы к точной работе.
+        ``blockers`` повторяет проверки :meth:`start` и дополнительно все
+        невыполненные проверки навигации: без этого кнопка «Начать» выглядела
+        доступной, хотя первый же шаг неизбежно получал 409 от планировщика.
         """
         blockers: list[str] = []
         warnings: list[str] = []
@@ -419,7 +470,14 @@ class ExplorationService:
         duplicate = sensor_layout.layout_payload().get("duplicatePorts") or []
         if duplicate:
             warnings.append("Один порт у нескольких камер: " + ", ".join(duplicate))
+        nav = self.nav_readiness()
+        # Детали навигации добавляем только когда она уже включена: иначе те же
+        # «выключено» и «нет калибровки скорости» дублировали бы первый блокер.
+        if nav["enabled"]:
+            for label in nav["errors"]:
+                blockers.append("Навигация: " + label)
         return {"blockers": blockers, "warnings": warnings,
+                "navigation": nav,
                 "canStart": not blockers and not self.active}
 
     def status(self) -> dict[str, Any]:

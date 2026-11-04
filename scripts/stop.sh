@@ -133,6 +133,9 @@ done
 # Супервизор лидара в своей группе процессов: TERM получает цикл перезапуска,
 # а он — супервизор, который останавливает драйвер и освобождает порт.
 stop_server "$VAR_DIR/lidar.pid" "лидар ROS 2 (супервизор ярлыка)" || true
+# Публикатор глубины Kinect: иначе после остановки он продолжал бы слать кадры в
+# уже мёртвый киоск и занимать USB-порт датчика.
+stop_server "$VAR_DIR/kinect-depth.pid" "публикатор глубины Kinect 360" || true
 
 if [[ $ONLY_SERVERS -eq 0 ]]; then
   stop_service robot-control "пульт оператора, служба systemd" || true
@@ -140,6 +143,7 @@ if [[ $ONLY_SERVERS -eq 0 ]]; then
   # Драйвер лидара держит USB-порт: останавливаем его вместе с приложениями,
   # иначе при следующем запуске порт занят и скан не поднимается.
   stop_service robot-lidar "лидар ROS 2, служба systemd" || true
+  stop_service robot-kinect-depth "публикатор глубины Kinect, служба systemd" || true
   stop_browsers || true
 fi
 
