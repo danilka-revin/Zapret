@@ -714,6 +714,7 @@ class MasterSource:
         self.port = None                 # первый опознанный порт (для экрана)
         self.ports = ports
         self.candidates = [p for p in ports if os.path.exists(p)]
+        self.excluded_candidates = []    # present devices skipped by operator/active-owner exclusions
         self.baud = baud
         self.lock = threading.Lock()
         self.frames = {}                 # модуль → (последний кадр, время)
@@ -2583,7 +2584,8 @@ class MasterSource:
             blocked = set()
         with self.lock:
             known_unknown = dict(self._unknown_devices) if self.auto_discovery else {}
-        out, seen = [], set()
+            known_peripherals = dict(self._bms_results) if self.auto_discovery else {}
+        out, excluded, seen, excluded_real = [], [], set(), set()
         for path in ports:
             path = str(path or "").strip()
             if not path or not os.path.exists(path):
@@ -2591,11 +2593,19 @@ class MasterSource:
             real = os.path.realpath(path)
             if real in seen:
                 continue
-            # A BMS/lidar which we already classified remains part of the USB
-            # topology when its owner takes the lock. Removing it here loses
-            # its classification and makes the two owners repeatedly reset it.
+            # A positively classified BMS/lidar stays in the topology when
+            # its owner takes the lock; otherwise the two owners can reset it
+            # repeatedly. An unclassified/silent port must NOT bypass a newly
+            # added operator exclusion and get passively opened again.
             blocked_now = path in blocked or real in blocked
-            if blocked_now and known_unknown.get(real) != self._device_fingerprint(path):
+            fingerprint = self._device_fingerprint(path) if blocked_now else None
+            result = known_peripherals.get(real)
+            classified = (fingerprint is not None and known_unknown.get(real) == fingerprint and
+                          result is not None and result[0] == fingerprint)
+            if blocked_now and not classified:
+                if real not in excluded_real:
+                    excluded.append(path)
+                    excluded_real.add(real)
                 continue
             seen.add(real)
             out.append(path)
@@ -2615,6 +2625,7 @@ class MasterSource:
                 else:
                     changed = False
                 self.candidates = list(out)
+                self.excluded_candidates = list(excluded)
             if changed and self.serial_ready.is_set():
                 self._begin_discovery_stop_locked(reason)
                 stop = True
@@ -2728,8 +2739,11 @@ class MasterSource:
             if token is None or (self.auto_discovery and (token is _UNCLAIMED or token == -1)):
                 # Automatic probing is forbidden without the shared lock: even
                 # a failed open could toggle DTR on somebody else's device.
-                if token is not None:
+                if token is None:
+                    self.last_error = "USB-порт %s занят другим процессом (общий замок)" % link.path
+                else:
                     self.last_error = "Недоступен общий замок USB-порта %s" % link.path
+                self._note_status("warn", self.last_error)
                 with self.lock:
                     self._cooldown[link.path] = time.monotonic() + self.RETRY_S
                 return
@@ -2808,7 +2822,7 @@ class MasterSource:
                     next_tag = time.monotonic() + self.TAG_REFRESH_S
         except Exception as exc:          # noqa: BLE001 — порт может пропасть
             failure = exc
-            self.last_error = str(exc)
+            self.last_error = "%s: %s%s" % (link.path, exc, self._port_error_hint(exc))
         finally:
             link.writer_stop.set()
             if dev is not None:
@@ -2901,6 +2915,41 @@ class MasterSource:
         now = time.time() if now is None else now
         with self.lock:
             frames = dict(self.frames)
+            modules = dict(getattr(self, "modules", None) or {})
+            links = {}
+            for path, item in (getattr(self, "links", None) or {}).items():
+                serial_port = getattr(item, "serial", None)
+                links[path] = (getattr(item, "device", None), getattr(item, "fingerprint", None),
+                               getattr(item, "module", None),
+                               bool(serial_port and getattr(serial_port, "is_open", False)),
+                               bool(getattr(item, "legacy_wheel", False)))
+            fault = getattr(self, "identity_fault", "")
+            port = getattr(self, "port", None)
+            candidate_list = getattr(self, "candidates", None)
+            if candidate_list is None:  # older/test sources may not have scanned yet
+                candidate_list = getattr(self, "ports", None) or ([port] if port else [])
+            candidates = list(candidate_list)
+            excluded = list(getattr(self, "excluded_candidates", None) or [])
+            unknown = dict(getattr(self, "_unknown_devices", None) or {})
+            peripheral = dict(getattr(self, "_bms_results", None) or {})
+            ready_event = getattr(self, "serial_ready", None)
+            ready = bool(ready_event and ready_event.is_set())
+            auto = bool(getattr(self, "auto_discovery", False))
+
+        # Show a role's port only while the same open device still has a fresh
+        # CRC-validated frame. A changed symlink, stale frame or duplicate ID
+        # must not turn a former path into a falsely assigned wheel on screen.
+        confirmed = {}
+        if auto and not fault:
+            for mid, path in modules.items():
+                entry = frames.get(mid)
+                item = links.get(path)
+                if (entry is not None and now - entry[1] < self.STALE_S and
+                        (entry[0].get("firmware") or 0) >= 22 and item is not None and
+                        item[2] == mid and item[3] and item[1] is not None and
+                        os.path.realpath(path) == item[0] and self._device_fingerprint(path) == item[1]):
+                    confirmed[mid] = {"port": item[0], "portPath": path}
+
         motors = []
         link = False
         for mid in MODULE_NAMES.values():
@@ -2951,6 +3000,8 @@ class MasterSource:
                                "brakeId": None, "neutralId": None, "neutralLocked": None,
                                "liveId": None, "liveSeq": None,
                                "telemetryAgeS": None, "moving": False, "calibrating": False})
+            info = confirmed.get(mid) or {}
+            motors[-1].update({"port": info.get("port"), "portPath": info.get("portPath")})
         out = NoSource().read()              # АКБ и маршрут пока не передаются
         out["motors"] = motors
         out["drive"] = self.drive_status(now)
@@ -2973,29 +3024,34 @@ class MasterSource:
         out["mode"] = "МАСТЕР НА СВЯЗИ" if link else None
         out["linkOk"] = link
         out["masterMessages"] = self.recent_messages(8) if hasattr(self, "messages") else []
-        # Какие порты открыты и за каким колесом какой закреплён: экран
-        # объясняет «нет связи» конкретным портом, а не советом «проверьте кабель».
-        with self.lock:
-            modules = dict(getattr(self, "modules", None) or {})
-            open_ports = list(getattr(self, "links", None) or {})
-            port = getattr(self, "port", None)
-            ready = getattr(self, "serial_ready", None)
-            active = port if ready is not None and ready.is_set() else None
-            candidates = list(getattr(self, "candidates", None) or
-                              getattr(self, "ports", None) or ([port] if port else []))
-            out["masterPort"] = {
-                "configured": getattr(self, "configured_port", port),
-                "active": active,
-                "candidates": candidates,
-                "error": (getattr(self, "identity_fault", "") or
-                          (getattr(self, "last_error", "") if not ready or not ready.is_set() else "") or None),
-                "auto": bool(getattr(self, "auto_discovery", False)),
-                "ready": bool(ready and ready.is_set()),
-                "legacy": [link.path for link in getattr(self, "links", {}).values()
-                           if getattr(link, "legacy_wheel", False)],
-                "modules": modules,
-                "open": open_ports,
-            }
+        # These are diagnostics, not permission to access a candidate. A
+        # passively checked but unclassified USB device still blocks commands.
+        unclassified = []
+        if auto:
+            identified_devices = {info["port"] for info in confirmed.values()}
+            for path in candidates:
+                real = os.path.realpath(path)
+                fingerprint = self._device_fingerprint(path)
+                result = peripheral.get(real)
+                classified = (fingerprint is not None and unknown.get(real) == fingerprint and
+                              result is not None and result[0] == fingerprint)
+                if real not in identified_devices and not classified:
+                    unclassified.append(path)
+        verified_paths = {mid: info["portPath"] for mid, info in confirmed.items()}
+        out["masterPort"] = {
+            "configured": getattr(self, "configured_port", port),
+            "active": (next(iter(verified_paths.values()), None) if auto and ready
+                       else port if not auto and ready else None),
+            "candidates": candidates,
+            "excluded": excluded,
+            "unclassified": unclassified,
+            "error": fault or (getattr(self, "last_error", "") if not ready else "") or None,
+            "auto": auto,
+            "ready": ready,
+            "legacy": [path for path, item in links.items() if item[4]],
+            "modules": verified_paths if auto else modules,
+            "open": list(links),
+        }
         return out
 
 class MasterPeerSource:
@@ -3058,6 +3114,7 @@ class MasterPeerSource:
             out["peer"] = {"url": self.peer_url, "error": error or "нет связи с бортовым экраном"}
             return out
         out["motors"] = data.get("motors") or out["motors"]
+        out["cameras"] = data.get("cameras") if isinstance(data.get("cameras"), list) else []
         out["drive"] = data.get("drive") or out["drive"]
         out["masterMessages"] = data.get("masterMessages") or []
         out["masterPort"] = data.get("masterPort")

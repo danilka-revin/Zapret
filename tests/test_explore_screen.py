@@ -27,7 +27,19 @@ def test_legacy_screens_show_four_c930e_cameras():
     for marker in ("CAM-FL", "CAM-RL", "CAM-FR", "CAM-RR"):
         assert marker in index, marker
     script = (ROOT / "slam_gui" / "main.js").read_text(encoding="utf-8")
-    assert "backendCams" in script and "api/camera/' + i + '/stream'" in script
+    poller = (ROOT / "slam_gui" / "camera_frames.js").read_text(encoding="utf-8")
+    assert "backendCams" in script and "api/camera/' + camera.id + '/frame" in poller
+    assert main.index('src="camera_frames.js"') < main.index('src="main.js"')
+
+
+def test_bounded_camera_frame_polling():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is needed for browser-script tests")
+    result = subprocess.run([node, str(ROOT / "tests/js/camera_frames.js")],
+                            capture_output=True, text=True, cwd=ROOT, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "bounded camera frame polling: OK" in result.stdout
 
 
 def test_map_and_route_pages_serve_calibration_form(kiosk_client, client, operator):

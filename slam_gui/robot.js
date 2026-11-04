@@ -274,6 +274,7 @@
 
     ['FL', 'FR', 'RL', 'RR'].forEach((id) => {
       const m = motors.find((x) => x.id === id) || {};
+      if (window.RCWheelPorts) window.RCWheelPorts.render($('usb-port-' + id), m, live);
       const tone = modTone(m);
       const card = $('mod-' + id);
       const wheel = $('wheel-' + id);
@@ -465,6 +466,10 @@
     if (window.RCRemoteControls && window._openSwipe) {
       const view = document.body.dataset.remoteView === 'battery' ? 'battery' : 'motors';
       window._openSwipe(view);
+    } else if (window._openSwipe && window.location && typeof URLSearchParams !== 'undefined' &&
+               new URLSearchParams(window.location.search).get('open') === 'bms') {
+      window._openSwipe('battery');
+      if (window.RCBattery) window.RCBattery.openSetup();
     }
     // Страница карты лидара: опрос сервера и кнопки (сброс, настройки).
     if (window.RCMapView) window.RCMapView.init();
@@ -2152,6 +2157,7 @@
   function masterPortHint(d) {
     const info = d && d.masterPort;
     if (!info) return '';
+    if (info.auto === true && window.RCWheelPorts) return ' ' + window.RCWheelPorts.status(d) + '.';
     const configured = String(info.configured || '');
     const active = String(info.active || '');
     if (active) return ' Порт: ' + active + '.';
@@ -2160,7 +2166,7 @@
     const error = info.error ? ' Ошибка: ' + String(info.error) + '.' : '';
     return ' Порт ' + (configured || '—') + ' не ответил' +
       (tried && tried !== configured ? ' (проверены: ' + tried + ')' : '') + '.' + error +
-      ' Проверьте USB-кабель, RC_SLAM_PORT и scripts/master_check.py.';
+      ' Проверьте USB-кабели, питание и источник данных.';
   }
 
   const STEER_IDS = ['FL', 'FR', 'RL', 'RR'];
@@ -2615,14 +2621,19 @@
     renderSteerPresetBar(d, motors, available, tractionActive);
 
     if (sourceStatus) {
-      if (neutralLocked) {
-        sourceStatus.textContent = 'Нейтраль: перед рулением и тягой верните тормоз.';
+      const usbStatus = window.RCWheelPorts ? window.RCWheelPorts.status(d) : '';
+      if (!live) {
+        sourceStatus.textContent = 'Нет связи с сервером: актуальные USB-порты неизвестны.';
+      } else if (neutralLocked) {
+        sourceStatus.textContent = 'Нейтраль: перед рулением и тягой верните тормоз.' + (usbStatus ? ' ' + usbStatus : '');
       } else if (!available && String(control.source || '') === 'master-peer') {
-        sourceStatus.textContent = 'Руление и тяга — только на бортовом экране (порт 8090). Здесь показана телеметрия.';
+        sourceStatus.textContent = 'Руление и тяга — только на бортовом экране (порт 8090). Здесь показана телеметрия.' + (usbStatus ? ' ' + usbStatus : '');
       } else if (!available) {
-        sourceStatus.textContent = 'Ручной поворот доступен только при RC_SLAM_SOURCE=master и подключённом UART мастера.';
+        sourceStatus.textContent = 'Источник: ' + source + '. Для автопоиска колёс нужен RC_SLAM_SOURCE=master и перезапуск приложения.';
+      } else if (usbStatus) {
+        sourceStatus.textContent = usbStatus + (control.calibration ? ' · Ноль руля — «Калибровка» по датчику.' : '');
       } else if (d.linkOk === false) {
-        sourceStatus.textContent = 'Мастер выбран, но свежей связи с рулевыми модулями пока нет.' + masterPortHint(d);
+        sourceStatus.textContent = 'Нет свежей связи с рулевыми модулями.' + masterPortHint(d);
       } else if (control.calibration) {
         sourceStatus.textContent = 'Мастер подключён · ноль руля — «Калибровка» по оптодатчику D18; «0° вручную» — если датчика нет.';
       } else {
@@ -2646,6 +2657,7 @@
       if (!card || !slider) return;
 
       const motor = motors.find((m) => m && m.id === id) || null;
+      if (window.RCWheelPorts) window.RCWheelPorts.render($('steer-usb-port-' + id), motor, live);
       const current = motor && motor.angle != null && Number.isFinite(+motor.angle) ? +motor.angle : null;
       const target = motor && motor.targetAngle != null && Number.isFinite(+motor.targetAngle) ? +motor.targetAngle : null;
       const online = !!(motor && motor.online === true && current != null);

@@ -256,6 +256,9 @@ fi
 
 # --- 6. запуск --------------------------------------------------------------- #
 [[ ${#CMD[@]} -gt 0 ]] || die "нечем запускать: нет python3 и команды ros2 → ./scripts/ros2_setup.sh"
+# Read the optional onboard discovery hints from the project in any engine;
+# the supervisor still accepts only the USB owner's live lidar allowlist.
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 if [[ "$ENGINE" == "venv" || "$ENGINE" == "python" ]]; then
   # PYTHONPATH: собранный пакет и python-пакеты ROS 2 (rclpy, sensor_msgs) уже

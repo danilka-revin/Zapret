@@ -665,6 +665,8 @@ body {
   font-size: 13px;
 }
 .mod-head .chip { margin-left: auto; padding: 4px 9px; font-size: 11px; }
+.wheel-port { display: flex; align-items: baseline; gap: 6px; min-width: 0; color: var(--muted); font-size: 11px; line-height: 1.25; }
+.wheel-port span:last-child { min-width: 0; color: var(--text); font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
 
 .mod-metrics {
   flex: 1 1 auto;

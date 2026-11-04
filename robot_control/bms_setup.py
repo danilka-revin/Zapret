@@ -61,10 +61,10 @@ def master_ports() -> set[str]:
             value = os.environ.get(f"RC_WHEEL_{module}_PORT", "").strip()
             if value:
                 ports |= {value, _real(value)}
-    for chunk in (os.environ.get("RC_SLAM_PORTS") or "").split(","):
-        chunk = chunk.strip()
-        if chunk:
-            ports |= {chunk, _real(chunk)}
+        for chunk in (os.environ.get("RC_SLAM_PORTS") or "").split(","):
+            chunk = chunk.strip()
+            if chunk:
+                ports |= {chunk, _real(chunk)}
     return ports
 
 

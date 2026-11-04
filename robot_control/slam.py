@@ -788,17 +788,21 @@ ASSETS = {
     "steer_dial.css": "steer_dial_css",
     "connections.css": "connections_css",
     "connections.js": "connections_js",
+    "devices.css": "devices_css",
+    "devices.js": "devices_js",
     "main.css": "main_css",
     "main.js": "main_js",
     # карта лидара в стиле RViz (зум, сетка, Decay Time) — общая для пульта и бортового экрана
     "lidar_view.js": "lidar_view_js",
     "robot_model.js": "robot_model_js",
+    "wheel_ports.js": "wheel_ports_js",
     "map.css": "map_css",
     "map_view.js": "map_view_js",
     # автообследование: статус, пуск/стоп и визуальные ориентиры
     "explore.js": "explore_js",
     "viewport.js": "viewport_js",
     "camera_view.js": "camera_view_js",
+    "camera_frames.js": "camera_frames_js",
     "styles.css": "styles_css",
     "app.js": "app_js",
     "console.js": "console_js",
@@ -970,7 +974,7 @@ def peer_kiosk_url() -> str:
     return f"http://127.0.0.1:{port}/api/kiosk_state"
 
 
-def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
+def make_source(mode: str = "auto", ports=None, master_role: str = "owner", device_registry=None):
     """Источник данных робота.
 
     ``master``: четыре колеса по одному USB каждое (см. firmware/motor_wheel).
@@ -1004,9 +1008,24 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
 
         # Old RC_WHEEL_*_PORT settings are deliberately ignored. Identity is
         # proven anew from fw22 CRC telemetry after each open/reconnect.
+        # Hints reorder the already enumerated candidates only. MasterSource
+        # still passively checks every port, detects conflicts and requires
+        # fresh CRC telemetry before routing any motion command.
+        def prioritized_ports():
+            ports = serial_ports()
+            if device_registry is None:
+                return ports
+            try:
+                ordered = device_registry.order_serial(list(ports))
+                if len(ordered) == len(ports) and sorted(ordered) == sorted(ports):
+                    return ordered
+            except Exception:  # noqa: BLE001 — cache failure never disables the complete search
+                log.exception("Не удалось применить USB-подсказки; полный поиск продолжается")
+            return ports
+        provider = prioritized_ports if device_registry else serial_ports
         return mod.MasterSource(
             auto_discovery=True,
-            port_provider=serial_ports,
+            port_provider=provider,
             blocked_ports=autodiscovery_reserved_ports,
             publish_discovery=publish_usb_scan,
             passive_lidar_probe=passive_lidar_probe,
@@ -1035,10 +1054,10 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner"):
 
 
 def build_state(mode="auto", ports=None, lock_file=None, pin=None,
-                max_attempts=None, lock_sec=None, master_role="owner"):
+                max_attempts=None, lock_sec=None, master_role="owner", device_registry=None):
     """Собирает ``App`` из backend.py: источник данных + PIN-хранилище."""
     mod = load_backend()
-    source = make_source(mode, ports, master_role=master_role)
+    source = make_source(mode, ports, master_role=master_role, device_registry=device_registry)
     path = str(lock_file) if lock_file else str(GUI_DIR / "state" / "lock.json")
     directory = os.path.dirname(path)
     if directory:
@@ -1195,6 +1214,37 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     @guard
     def connections_screen():
         return _send("connections.html")
+
+    @bp.get("/devices")
+    @guard
+    def devices_screen():
+        return _send("devices.html")
+
+    @bp.get("/api/devices")
+    @guard
+    def devices_snapshot():
+        from .map_peer import proxy_devices
+        return proxy_devices(peer_kiosk_url().removesuffix("/api/kiosk_state"))
+
+    @bp.post("/api/devices/hint")
+    @guard
+    def devices_hint():
+        if request.headers.get(STEERING_COMMAND_HEADER) != "devices":
+            return jsonify(ok=False, reason="request_header_required"), 400
+        if csrf_header_ok is None or not csrf_header_ok():
+            return jsonify(ok=False, reason="csrf_required"), 400
+        from .map_peer import proxy_devices
+        return proxy_devices(peer_kiosk_url().removesuffix("/api/kiosk_state"), operation="hint")
+
+    @bp.post("/api/devices/camera/confirm")
+    @guard
+    def devices_camera_confirm():
+        if request.headers.get(STEERING_COMMAND_HEADER) != "devices":
+            return jsonify(ok=False, reason="request_header_required"), 400
+        if csrf_header_ok is None or not csrf_header_ok():
+            return jsonify(ok=False, reason="csrf_required"), 400
+        from .map_peer import proxy_devices
+        return proxy_devices(peer_kiosk_url().removesuffix("/api/kiosk_state"), operation="confirm")
 
     @bp.get("/api/connections")
     @guard
@@ -1645,7 +1695,10 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         # Причина, если скана нет: экран пишет её под картой (порт лидара не
         # найден, не та скорость, порт занят вторым процессом робота и т. д.).
         snap["lidarStatus"] = lidar_status_payload(manager, points, demo)
-        snap["cameras"] = CameraManager.get_instance().list_cameras()
+        if getattr(state.source, "name", "") == "master-peer":
+            snap.setdefault("cameras", [])  # copied from the fresh onboard snapshot
+        else:
+            snap["cameras"] = CameraManager.get_instance().list_cameras()
         if getattr(state.source, "name", "") != "master-peer":
             snap["estop"] = estop_latch.latched()
         else:
@@ -1730,13 +1783,27 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         return jsonify({"ok": False, "error": "expected 'points' or 'ranges'"}), 400
 
     # ---------------------------- КАМЕРЫ --------------------------------- #
+    def camera_peer():
+        return getattr(getattr(state, "source", None), "name", "") == "master-peer"
+
+    def camera_origin():
+        return peer_kiosk_url().removesuffix("/api/kiosk_state")
+
     @bp.get("/api/cameras")
+    @guard
     def api_cameras():
+        if camera_peer():
+            from .map_peer import proxy_camera_json
+            return proxy_camera_json(camera_origin(), "list")
         mgr = CameraManager.get_instance()
         return jsonify({"ok": True, "cameras": mgr.list_cameras()})
 
     @bp.get("/api/camera/<int:cam_id>/stream")
+    @guard
     def api_camera_stream(cam_id: int):
+        if camera_peer():
+            from .map_peer import proxy_camera_stream
+            return proxy_camera_stream(camera_origin(), cam_id)
         mgr = CameraManager.get_instance()
         return Response(
             mgr.generate_mjpeg_stream(cam_id),
@@ -1752,7 +1819,11 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         return api_camera_stream(1)
 
     @bp.get("/api/camera/<int:cam_id>/frame")
+    @guard
     def api_camera_frame(cam_id: int):
+        if camera_peer():
+            from .map_peer import proxy_camera_frame
+            return proxy_camera_frame(camera_origin(), cam_id)
         mgr = CameraManager.get_instance()
         frame = mgr.get_frame(cam_id)
         if frame:
@@ -1768,7 +1839,14 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         return api_camera_frame(1)
 
     @bp.post("/api/camera/<int:cam_id>/frame")
+    @guard
     def api_camera_feed(cam_id: int):
+        if camera_peer():
+            # External publishers should normally feed the onboard owner.
+            if csrf_header_ok is None or not csrf_header_ok():
+                return jsonify(ok=False, reason="csrf_required"), 400
+            from .map_peer import proxy_camera_frame
+            return proxy_camera_frame(camera_origin(), cam_id)
         mgr = CameraManager.get_instance()
         data = request.get_data()
         if data:
@@ -1785,6 +1863,9 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     @bp.get("/api/camera/settings")
     @guard
     def api_camera_settings():
+        if camera_peer():
+            from .map_peer import proxy_camera_json
+            return proxy_camera_json(camera_origin(), "settings")
         from .camera_settings import settings_payload as cam_settings_payload
 
         result = cam_settings_payload()
@@ -1798,6 +1879,11 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     @bp.post("/api/camera/settings")
     @guard
     def api_camera_settings_save():
+        if camera_peer():
+            if csrf_header_ok is None or not csrf_header_ok():
+                return jsonify(ok=False, reason="csrf_required"), 400
+            from .map_peer import proxy_camera_json
+            return proxy_camera_json(camera_origin(), "settings")
         from .camera_settings import apply_camera_settings
 
         body = request.get_json(silent=True) or {}
@@ -1815,6 +1901,11 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     @bp.post("/api/camera/rescan")
     @guard
     def api_camera_rescan():
+        if camera_peer():
+            if csrf_header_ok is None or not csrf_header_ok():
+                return jsonify(ok=False, reason="csrf_required"), 400
+            from .map_peer import proxy_camera_json
+            return proxy_camera_json(camera_origin(), "rescan")
         from .camera_settings import describe_camera_ports
         from .camera import CameraManager
 

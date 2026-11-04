@@ -148,7 +148,11 @@
 
   function masterPortHint(d) {
     const info = d && d.masterPort;
-    if (!info) return '';
+    if (!info) {
+      const source = d && d.source ? String(d.source) : 'неизвестен';
+      return ' · источник: ' + source + ' — для автопоиска колёс нужен RC_SLAM_SOURCE=master';
+    }
+    if (info.auto === true && window.RCWheelPorts) return ' · ' + window.RCWheelPorts.status(d);
     const configured = String(info.configured || '');
     const active = String(info.active || '');
     if (active) return ' · порт: ' + active;
@@ -156,7 +160,7 @@
     const tried = list.length ? list.join(', ') : (configured || '—');
     return ' · порт ' + (configured || '—') + ' не ответил' +
       (tried && tried !== configured ? ' (проверены: ' + tried + ')' : '') +
-      ' — проверьте кабель и RC_SLAM_PORT';
+      ' — проверьте кабели, питание и источник данных';
   }
 
   function buildAlerts(view) {
@@ -173,6 +177,10 @@
     const out = [];
 
     if (d.linkOk === false) out.push({ sev: 'err', text: 'нет связи с бортом' + masterPortHint(d) });
+    else if (d.masterPort && d.masterPort.auto === true && window.RCWheelPorts &&
+             (d.masterPort.ready !== true || MODULES.some(id => !(d.masterPort.modules || {})[id]))) {
+      out.push({ sev: 'warn', text: window.RCWheelPorts.status(d) });
+    }
     if (typeof b.volts === 'number') {
       if (b.volts < crit) out.push({ sev: 'err', text: 'АКБ ниже аварийного порога ' + fmt(crit, 1) + ' В' });
       else if (b.volts < low) out.push({ sev: 'warn', text: 'АКБ ниже порога предупреждения ' + fmt(low, 1) + ' В' });
@@ -378,6 +386,7 @@
 
     MODULES.forEach((id) => {
       const m = motors.find((x) => x.id === id);
+      if (window.RCWheelPorts) window.RCWheelPorts.render($('usb-port-' + id), m, view.live);
       const card = $('mod-' + id);
       const chip = $('mod-state-' + id);
       const wheel = $('wheel-' + id);
@@ -531,40 +540,23 @@
     setText($('route-to'), parts[1] || '—');
   }
 
-  /* ------------------------------------------------------------ камеры — 4 × C930e, USB-вебки и MJPEG с борта */
+  /* ------------------------------------------------------------ камеры — 4 × C930e и USB-вебки */
   const WEBCAM = {
     frontVideo: null,
     rearVideo: null,
     frontReady: false,
     rearReady: false,
     backendCams: [null, null, null, null],
-    backendActive: false,
-    checkingBackend: false,
     starting: false,
     started: false,
   };
+  // 0 — передняя левая, 1 — задняя левая, 2 — передняя правая, 3 — задняя правая.
+  const backendCameraPoller = window.RCCameraFrames && window.RCCameraFrames.create((id, image) => {
+    WEBCAM.backendCams[id] = image;
+  });
 
-  async function checkBackendCameras() {
-    if (WEBCAM.checkingBackend) return;
-    WEBCAM.checkingBackend = true;
-    try {
-      const r = await fetch('api/cameras');
-      if (r.ok) {
-        const j = await r.json();
-        if (j && Array.isArray(j.cameras)) {
-          // Четыре C930e: 0 — передняя левая, 1 — задняя левая,
-          // 2 — передняя правая, 3 — задняя правая.
-          for (let i = 0; i < 4; i += 1) {
-            if (WEBCAM.backendCams[i]) continue;
-            const img = new Image();
-            img.src = 'api/camera/' + i + '/stream';
-            img.onload = () => { WEBCAM.backendActive = true; };
-            WEBCAM.backendCams[i] = img;
-          }
-          WEBCAM.backendActive = true;
-        }
-      }
-    } catch (e) {}
+  function checkBackendCameras() {
+    if (backendCameraPoller && !document.hidden) backendCameraPoller.start();
   }
 
   async function startBrowserWebcams() {
@@ -638,6 +630,7 @@
     const meta = $('cam-meta');
     const canvases = ['cam-canvas', 'cam-rear-canvas', 'cam-right-canvas', 'cam-rear-right-canvas'];
     const empties = ['cam-empty', 'cam-rear-empty', 'cam-right-empty', 'cam-rear-right-empty'];
+    const badges = ['cam-front-badge', 'cam-rear-badge', 'cam-right-badge', 'cam-rear-right-badge'];
     const labels = ['CAM 0 · передняя левая', 'CAM 1 · задняя левая',
       'CAM 2 · передняя правая', 'CAM 3 · задняя правая'];
     const sources = canvases.map((id, index) => {
@@ -650,12 +643,14 @@
       return WEBCAM.backendCams[index];
     });
     const liveCount = sources.filter((src) => src && (src.videoWidth > 0 || src.naturalWidth > 0)).length;
-    if (meta) setText(meta, liveCount ? liveCount + '× LIVE · 30 fps' : 'нет сигнала');
+    if (meta) setText(meta, liveCount ? liveCount + '× LIVE' : 'нет сигнала');
     sources.forEach((src, index) => {
       const canvas = $(canvases[index]);
       const empty = $(empties[index]);
+      const badge = $(badges[index]);
       const live = !!(src && (src.videoWidth > 0 || src.naturalWidth > 0));
       if (empty) empty.hidden = live;
+      if (badge) badge.hidden = !live;
       if (canvas) drawCamera(canvas, d, live, labels[index], src);
     });
   }
@@ -889,6 +884,12 @@
     const rearVp = $('cam-viewport-rear');
     if (frontVp) frontVp.addEventListener('click', () => { startBrowserWebcams(); checkBackendCameras(); });
     if (rearVp) rearVp.addEventListener('click', () => { startBrowserWebcams(); checkBackendCameras(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { if (backendCameraPoller) backendCameraPoller.stop(); }
+      else checkBackendCameras();
+    });
+    window.addEventListener('pagehide', () => { if (backendCameraPoller) backendCameraPoller.stop(); });
+    window.addEventListener('pageshow', checkBackendCameras);
   }
 
   function boot() {

@@ -233,6 +233,93 @@ def proxy_connections(origin: str):
                          limit=MAX_NAV_REPLY_BYTES, timeout=1.0)
 
 
+def proxy_devices(origin: str, *, operation: str = 'snapshot'):
+    """Only the fixed onboard inventory endpoints, with a small POST body."""
+    paths = {'snapshot': '/api/devices', 'hint': '/api/devices/hint',
+             'confirm': '/api/devices/camera/confirm'}
+    if operation not in paths:
+        return jsonify(ok=False, error='Неизвестная операция'), 404
+    mutate = operation != 'snapshot'
+    if mutate:
+        if request.content_length is not None and request.content_length > 4096:
+            return jsonify(ok=False, error="Слишком большой запрос"), 413
+        request.max_content_length = 4096
+    path = paths[operation]
+    if not mutate and request.args.get('refresh') == '1':
+        path += '?refresh=1'
+    return _forward_json(origin, path, methods={'POST'} if mutate else {'GET'},
+                         limit=MAX_NAV_REPLY_BYTES, timeout=5.0,
+                         control_header='devices' if mutate else '')
+
+
+def proxy_camera_json(origin: str, operation: str):
+    routes = {'list': ('/api/cameras', {'GET'}),
+              'settings': ('/api/camera/settings', {'GET', 'POST'}),
+              'rescan': ('/api/camera/rescan', {'POST'})}
+    if operation not in routes:
+        return jsonify(ok=False, error='Неизвестная операция камер'), 404
+    path, methods = routes[operation]
+    return _forward_json(origin, path, methods=methods, limit=MAX_NAV_REPLY_BYTES, timeout=5.0)
+
+
+def _camera_frame(origin: str, cam_id: int) -> bytes | None:
+    if cam_id not in range(4):
+        return None
+    try:
+        with urlopen(Request(origin + f'/api/camera/{cam_id}/frame',
+                             headers={'Accept': 'image/jpeg'}), timeout=2.0) as reply:
+            if reply.code != 200 or not str(reply.headers.get('Content-Type', '')).lower().startswith('image/jpeg'):
+                return None
+            raw = reply.read(MAX_LANDMARK_BYTES + 1)
+            return raw if raw and len(raw) <= MAX_LANDMARK_BYTES else None
+    except (OSError, URLError, ValueError, HTTPException):
+        return None
+
+
+def proxy_camera_frame(origin: str, cam_id: int):
+    """Bounded still frame only; a peer never opens V4L2 on the computer."""
+    if cam_id not in range(4):
+        return Response(status=404)
+    if request.method == 'GET':
+        frame = _camera_frame(origin, cam_id)
+        return (Response(frame, mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
+                if frame else Response(status=404, headers={'Cache-Control': 'no-store'}))
+    if request.method != 'POST':
+        return Response(status=405)
+    if request.content_length is not None and request.content_length > MAX_LANDMARK_BYTES:
+        return jsonify(ok=False, error='Слишком большой кадр'), 413
+    raw = request.stream.read(MAX_LANDMARK_BYTES + 1)
+    if not raw or len(raw) > MAX_LANDMARK_BYTES:
+        return jsonify(ok=False, error='Пустой или слишком большой кадр'), 400
+    try:
+        upstream = Request(origin + f'/api/camera/{cam_id}/frame', data=raw,
+                           headers={'Content-Type': 'image/jpeg'}, method='POST')
+        with urlopen(upstream, timeout=2.0) as reply:
+            body = reply.read(4097)
+            parsed = json.loads(body)
+            if len(body) > 4096 or not isinstance(parsed, dict) or 'ok' not in parsed:
+                raise ValueError('invalid reply')
+            return Response(body, status=reply.code, mimetype='application/json',
+                            headers={'Cache-Control': 'no-store'})
+    except (OSError, URLError, ValueError, HTTPException):
+        return jsonify(ok=False, error='Камера на борту недоступна'), 503
+
+
+def proxy_camera_stream(origin: str, cam_id: int):
+    """Compatibility MJPEG generated from bounded owner frames, no V4L2 open."""
+    if cam_id not in range(4):
+        return Response(status=404)
+    import time
+    def generate():
+        while True:
+            frame = _camera_frame(origin, cam_id)
+            if frame:
+                yield b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n'
+            time.sleep(0.1 if frame else 1.0)
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame',
+                    headers={'Cache-Control': 'no-store'})
+
+
 def proxy_system(origin: str):
     """Temperature and load of the onboard computer, read-only, cached on board."""
     return _forward_json(origin, '/api/pc_state', methods={'GET'},

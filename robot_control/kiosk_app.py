@@ -475,6 +475,11 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     if not config.testing and config.slam_source == "master":
         os.environ["RC_USB_DISCOVERY_MODE"] = "1"
     app = Flask(__name__)
+    from .device_registry import DeviceRegistry
+    device_registry = DeviceRegistry()
+    app.extensions["rc_devices"] = device_registry
+    # Configure the onboard owner before any lazy camera manager is created.
+    CameraManager.configure_registry(device_registry)
     app.config.update(
         SECRET_KEY=config.secret_key or secrets.token_urlsafe(48),
         SESSION_COOKIE_HTTPONLY=True,
@@ -578,6 +583,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             pin=config.slam_pin,
             max_attempts=config.slam_max_attempts,
             lock_sec=config.slam_lock_seconds,
+            device_registry=device_registry,
         )
         log.info("киоск: интерфейс подключён (источник: %s)",
                  getattr(state.source, "name", "?"))
@@ -611,6 +617,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     app.extensions["rc_lidar"] = start_lidar(
         testing=config.testing, port=kiosk_port(),
     )
+    if app.extensions["rc_lidar"] is not None:
+        app.extensions["rc_lidar"].device_registry = device_registry
 
     # --------------------- Карта лидара (страница экрана) ------------------ #
     # Карта живёт в сервере: её строит тот же лидар, что читает экран, а файл
@@ -649,6 +657,41 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     full_zero = FullZeroControl(lambda: getattr(state, "source", None), estop_latch.latched,
                                 neutral.status, lambda: navigation.active)
     app.extensions["rc_full_zero"] = full_zero
+
+    def device_snapshot(*, refresh=False):
+        # Reuse each subsystem's single owner; this service never opens a
+        # serial/video port or actively probes an unknown USB device.
+        errors = []
+        def read(name, callback, fallback):
+            try:
+                return callback()
+            except Exception as exc:  # noqa: BLE001 — one broken driver must not hide all devices
+                errors.append(name + ": " + (str(exc) or type(exc).__name__))
+                return fallback
+        source = getattr(state, "source", None) if state is not None else None
+        wheels = read("колёса", lambda: source.read() if source else {}, {})
+        cameras = read("камеры", lambda: CameraManager.get_instance().list_cameras(), [])
+        lidar_manager = app.extensions.get("rc_lidar") or LidarManager._instance
+        lidar_status = read("лидар", lambda: lidar_manager.get_status() if lidar_manager else {}, {})
+        bms_status = read("BMS", battery.snapshot, {})
+        depth = read("Kinect", kinect_service.status, {})
+        result = device_registry.snapshot(wheels=wheels, cameras=cameras, lidar=lidar_status,
+                                          bms=bms_status, kinect=depth, refresh=refresh)
+        result["producerErrors"] = errors
+        return result
+
+    if not config.testing:
+        device_stop = threading.Event()
+        app.extensions["rc_devices_stop"] = device_stop
+        def device_worker():
+            while not device_stop.is_set():
+                try:
+                    device_snapshot()
+                except Exception:  # noqa: BLE001 — monitoring cannot stop device owners
+                    log.exception("Не удалось обновить реестр устройств")
+                device_stop.wait(2.0)
+        threading.Thread(target=device_worker, name="device-registry", daemon=True).start()
+
     motion_gate = threading.RLock()
     motion_routes = {
         "/api/kiosk_neutral", "/api/kiosk_drive", "/api/kiosk_keyboard", "/api/kiosk_steer",
@@ -809,6 +852,59 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     @app.get(KIOSK_URL_PATH)
     def kiosk():
         return _send(KIOSK_PAGE)
+
+    @app.get("/devices")
+    def device_page():
+        return _send("devices.html")
+
+    @app.get("/api/devices")
+    def api_devices():
+        return jsonify(device_snapshot(refresh=request.args.get("refresh") == "1")), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/devices/hint")
+    def api_device_hint():
+        import json
+        if request.headers.get("X-Robot-Control") != "devices":
+            return jsonify(ok=False, error="Требуется запрос со страницы устройств"), 400
+        if request.content_length is not None and request.content_length > 4096:
+            return jsonify(ok=False, error="Слишком большой запрос"), 413
+        raw = request.stream.read(4097)
+        if len(raw) > 4096:
+            return jsonify(ok=False, error="Слишком большой запрос"), 413
+        try:
+            body = json.loads(raw)
+            if not isinstance(body, dict) or set(body) != {"role", "port"}:
+                raise ValueError("Нужны только поля role и port")
+            result = device_registry.set_hint(body["role"], body["port"])
+        except (ValueError, TypeError, UnicodeError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        except OSError as exc:
+            return jsonify(ok=False, error="Не удалось сохранить подсказку: " + str(exc)), 500
+        if body["role"].startswith("camera_"):
+            # Stop old streams and discard their frames before re-resolving.
+            CameraManager.get_instance().refresh()
+        return jsonify(result), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/devices/camera/confirm")
+    def api_device_camera_confirm():
+        import json
+        if request.headers.get("X-Robot-Control") != "devices":
+            return jsonify(ok=False, error="Требуется запрос со страницы устройств"), 400
+        if request.content_length is not None and request.content_length > 4096:
+            return jsonify(ok=False, error="Слишком большой запрос"), 413
+        raw = request.stream.read(4097)
+        if len(raw) > 4096:
+            return jsonify(ok=False, error="Слишком большой запрос"), 413
+        try:
+            body = json.loads(raw)
+            if not isinstance(body, dict) or set(body) != {"role"} or not isinstance(body["role"], str):
+                raise ValueError("Укажите роль камеры")
+            result = device_registry.confirm_camera(body["role"], CameraManager.get_instance().list_cameras())
+        except (ValueError, TypeError, UnicodeError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        except OSError as exc:
+            return jsonify(ok=False, error="Не удалось сохранить подтверждение: " + str(exc)), 500
+        return jsonify(result), 200, {"Cache-Control": "no-store"}
 
     @app.get("/map")
     def kiosk_map_page():
@@ -1017,6 +1113,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         return jsonify({"ok": True, "data": {
             "battery": snap.get("battery"),
             "motors": snap.get("motors"),
+            # The peer displays these snapshots, but never opens cameras.
+            "cameras": CameraManager.get_instance().list_cameras(),
             "lidar": points,
             # Демо (стенд без железа) помечено отдельно: экран пишет «демо»,
             # а не «в реальном времени».
@@ -1516,6 +1614,9 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     def api_kiosk_camera_settings_save():
         from .camera_settings import apply_camera_settings
 
+        hints, _ = device_registry.records()
+        if any(key.startswith("camera_") for key in hints):
+            return jsonify(ok=False, error="Камеры настроены на странице «Устройства». Измените или очистите подсказки там."), 409
         body = request.get_json(silent=True) or {}
         try:
             result = apply_camera_settings(body.get("settings") or body)
@@ -1584,9 +1685,9 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
     for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js",
-                     "pot_hold.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
-                     "lidar_settings.js", "lidar_view.js", "robot_model.js", "map_view.js",
-                     "explore.js", "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
+                     "pot_hold.js", "devices.css", "devices.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
+                     "lidar_settings.js", "lidar_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
+                     "explore.js", "map.css", "viewport.js", "camera_view.js", "camera_frames.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
         def _view(name=filename):

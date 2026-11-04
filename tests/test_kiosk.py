@@ -122,7 +122,14 @@ def test_telemetry_api_returns_only_public_values(kiosk_client):
             "estop", "neutral",
             # какой порт мастера настроен/открыт: экран объясняет «нет связи»
             "masterPort",
+            # Статусы камер отдаёт единственный бортовой владелец для веб-пульта.
+            "cameras",
         }
+        cameras = body["data"]["cameras"]
+        assert isinstance(cameras, list)
+        assert all(set(cam) <= {"id", "name", "device", "openedPath", "frameSource", "frameAgeS",
+                                "captureError", "exists", "active", "width", "height", "fps", "role",
+                                "model", "yaw_deg", "hfov_deg", "stream_url", "frame_url"} for cam in cameras)
         # причина «нет скана» видна на экране, а не только в журнале
         status = body["data"]["lidarStatus"]
         assert status["ok"] is True

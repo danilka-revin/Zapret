@@ -17,6 +17,13 @@ def test_camera_lifecycle_and_viewport_gestures():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_main_camera_frame_poller_is_served(client):
+    response = client.get('/camera_frames.js')
+    assert response.status_code == 200
+    assert 'MAX_IN_FLIGHT = 2' in response.text
+    assert "'/frame?t='" in response.text
+
+
 def test_camera_button_and_controls_are_served(kiosk_client):
     page = kiosk_client.get('/kiosk').text
     assert 'id="k-cameras-open"' in page

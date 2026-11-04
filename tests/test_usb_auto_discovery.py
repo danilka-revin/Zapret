@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from robot_control import battery, lidar, slam
+from robot_control import battery, bms_setup, lidar, master_port, slam
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = ("FL", "FR", "RL", "RR")
@@ -231,6 +231,152 @@ def legacy_wheel(backend):
     return dev.start(run)
 
 
+def test_master_discovery_ignores_stale_serial_mode_ports(boards, usb_context, monkeypatch):
+    """An old serial configuration must not hide CRC-identifying wheels in master mode."""
+    _, start = usb_context
+    wheel = boards("old-serial-config")
+    monkeypatch.setenv("RC_SLAM_PORTS", ",".join(wheel.values()))
+    monkeypatch.delenv("RC_LIDAR_EXCLUDE", raising=False)
+    monkeypatch.setattr(lidar, "lidar_active_port", lambda: None)
+    source = start(list(wheel.values()), blocked=master_port.autodiscovery_reserved_ports)
+    assert wait_for(lambda: len(source.modules) == 4 and source.serial_ready.is_set(), 4), (
+        source.modules, source.last_error, master_port.autodiscovery_reserved_ports())
+    assert source.modules == wheel
+
+
+def test_explicit_exclusion_is_visible_and_connects_after_operator_removes_it(boards, usb_context, monkeypatch):
+    _, start = usb_context
+    wheel = boards("excluded")
+    monkeypatch.setattr(lidar, "lidar_active_port", lambda: None)
+    monkeypatch.setenv("RC_LIDAR_EXCLUDE", wheel["FR"])
+    source = start(list(wheel.values()), blocked=master_port.autodiscovery_reserved_ports)
+    assert wait_for(lambda: len(source.modules) == 3 and wheel["FR"] in source.read()["masterPort"]["excluded"])
+    assert "FR" not in source.read()["masterPort"]["modules"]
+    assert not next(m for m in source.read()["motors"] if m["id"] == "FR")["port"]
+    monkeypatch.delenv("RC_LIDAR_EXCLUDE")
+    assert wait_for(lambda: len(source.modules) == 4 and source.serial_ready.is_set())
+    assert wheel["FR"] not in source.read()["masterPort"]["excluded"]
+
+
+def test_all_excluded_ports_are_not_reported_as_unclassified_candidates(boards, usb_context, monkeypatch):
+    _, start = usb_context
+    wheel = boards("all-excluded")
+    monkeypatch.setattr(lidar, "lidar_active_port", lambda: None)
+    monkeypatch.setenv("RC_LIDAR_EXCLUDE", ",".join(wheel.values()))
+    source = start(list(wheel.values()), blocked=master_port.autodiscovery_reserved_ports)
+    assert wait_for(lambda: len(source.read()["masterPort"]["excluded"]) == 4)
+    info = source.read()["masterPort"]
+    assert info["candidates"] == []
+    assert info["unclassified"] == []
+    assert not source.serial_ready.is_set()
+
+
+def test_new_exclusion_also_removes_a_previously_silent_unknown_device(boards, usb_context, monkeypatch):
+    _, start = usb_context
+    wheel = boards("late-exclusion")
+    silent = Device().start(lambda: None)
+    monkeypatch.setattr(lidar, "lidar_active_port", lambda: None)
+    monkeypatch.delenv("RC_LIDAR_EXCLUDE", raising=False)
+    try:
+        source = start(list(wheel.values()) + [silent.path], blocked=master_port.autodiscovery_reserved_ports)
+        assert wait_for(lambda: silent.path in source.passively_checked_unknown_ports(), 6)
+        assert not source.serial_ready.is_set()
+        monkeypatch.setenv("RC_LIDAR_EXCLUDE", silent.path)
+        assert wait_for(lambda: silent.path in source.read()["masterPort"]["excluded"], 6)
+        assert silent.path not in source.read()["masterPort"]["candidates"]
+        # A forced rescan cannot open the excluded device or write to it.
+        source._open_new_links()
+        assert silent.path not in source.links and silent.path not in source._spawning
+        assert not silent.read() and not silent.received
+    finally:
+        silent.close()
+
+
+def test_busy_usb_is_reported_then_recovers_without_manual_assignment(boards, usb_context):
+    _, start = usb_context
+    wheel = boards("busy")
+    token = lidar.try_lock_port(wheel["RL"])
+    assert token not in (None, -1)
+    try:
+        source = start(list(wheel.values()))
+        assert wait_for(lambda: "занят" in (source.read()["masterPort"]["error"] or ""), 6)
+        assert wheel["RL"] in source.read()["masterPort"]["unclassified"]
+        assert not source.serial_ready.is_set()
+    finally:
+        lidar.unlock_port(token)
+    assert wait_for(lambda: len(source.modules) == 4 and source.serial_ready.is_set(), 8)
+    assert source.read()["masterPort"]["error"] is None
+
+
+def test_confirmed_ports_survive_owner_api_and_peer_and_disappear_when_peer_stale(
+        boards, usb_context, kiosk_client):
+    backend, start = usb_context
+    wheel = boards("api-and-peer")
+    source = start(list(wheel.values()))
+    assert wait_for(lambda: len(source.modules) == 4 and source.serial_ready.is_set())
+    kiosk_client.application.extensions["rc_slam"].source = source
+    response = kiosk_client.get("/api/kiosk_state")
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert {m["id"]: m["port"] for m in data["motors"]} == {
+        role: os.path.realpath(path) for role, path in wheel.items()}
+    assert data["masterPort"]["modules"] == wheel
+
+    peer = backend.MasterPeerSource("owner", fetch=lambda: {"data": source.read()})
+    assert wait_for(lambda: peer.read().get("masterPort") is not None)
+    peer_data = peer.read()
+    assert {m["id"]: m["port"] for m in peer_data["motors"]} == {
+        role: os.path.realpath(path) for role, path in wheel.items()}
+    # Once the owner stops answering, a peer must not keep old USB paths alive.
+    peer._fetch = lambda: (_ for _ in ()).throw(OSError("owner gone"))
+    with peer.lock:
+        peer.snapshot_time = time.time() - peer.STALE_S - 1
+    stale = peer.read()
+    assert stale.get("masterPort") is None
+    assert all(m.get("port") is None and not m["online"] for m in stale["motors"])
+
+
+def test_master_ignores_old_serial_list_but_preserves_explicit_usb_exclusions(usb_context, monkeypatch, tmp_path):
+    """Old lists can't mask classified peripherals; explicit excludes and locks remain."""
+    _, _ = usb_context
+    monkeypatch.syspath_prepend(str(ROOT / "ros2_ws/src/zapret_lidar"))
+    from zapret_lidar import drivers
+
+    wheel, laser, excluded = [tmp_path / name for name in ("wheel", "laser", "excluded")]
+    for path in (wheel, laser, excluded):
+        path.touch()
+    monkeypatch.setenv("RC_SLAM_PORTS", f"{wheel},{laser}")
+    monkeypatch.setenv("RC_LIDAR_EXCLUDE", str(excluded))
+    monkeypatch.setattr(lidar, "lidar_active_port", lambda: None)
+    assert str(wheel) not in master_port.autodiscovery_reserved_ports()
+    assert str(excluded) in master_port.autodiscovery_reserved_ports()
+    assert str(laser) not in lidar.excluded_ports()
+    assert str(excluded) in lidar.excluded_ports()
+    assert str(laser) not in bms_setup.master_ports()
+    assert str(laser) not in drivers.reserved_ports()
+    assert str(excluded) in drivers.reserved_ports()
+
+    # Positive lidar classification is still essential; removing the stale
+    # serial hint is not permission to probe a wheel or an unknown device.
+    st = laser.stat()
+    lidar.publish_usb_scan([(str(laser), (st.st_dev, st.st_ino, st.st_rdev, st.st_ctime_ns), False)])
+    assert drivers.candidate_ports([str(wheel), str(laser), str(excluded)]) == [str(laser)]
+    assert str(wheel) not in lidar.checked_lidar_ports()
+    lock = lidar.try_lock_port(str(wheel))
+    try:
+        assert lock not in (None, -1)
+        assert lidar.try_lock_port(str(wheel)) is None
+    finally:
+        lidar.unlock_port(lock)
+
+    # In the separate serial mode, the same configured names still protect
+    # serial chassis ports from the lidar and BMS.
+    monkeypatch.delenv("RC_USB_DISCOVERY_MODE")
+    assert str(wheel) in lidar.excluded_ports()
+    assert str(wheel) in bms_setup.master_ports()
+    assert str(wheel) in drivers.reserved_ports()
+
+
 def test_roles_survive_usb_reordering_and_commands_target_the_verified_board(boards, usb_context, monkeypatch, tmp_path):
     backend, start = usb_context
     wheel = boards()
@@ -250,6 +396,16 @@ def test_roles_survive_usb_reordering_and_commands_target_the_verified_board(boa
     source = start(paths)
     assert wait_for(lambda: len(source.modules) == 4 and source.serial_ready.is_set())
     assert source.modules == {role: str(alias) for alias, role in zip(aliases, order)}
+    snap = source.read()
+    motors = {m["id"]: m for m in snap["motors"]}
+    for alias, role in zip(aliases, order):
+        assert motors[role]["port"] == os.path.realpath(wheel[role])
+        assert motors[role]["portPath"] == str(alias)
+        assert snap["masterPort"]["modules"][role] == str(alias)
+    # Never present an old path as currently attached after telemetry expires.
+    stale = source.read(now=time.time() + backend.MasterSource.STALE_S + 1)
+    assert all(m["port"] is None and m["portPath"] is None for m in stale["motors"])
+    assert stale["masterPort"]["modules"] == {}
     assert source.zero_module("FR")["ok"]
     assert wait_for(lambda: any(path == str(aliases[3]) and cmd == b"w zero\n" for path, cmd in writes))
     assert not any(cmd == b"w zero\n" and path != str(aliases[3]) for path, cmd in writes)
@@ -261,9 +417,20 @@ def test_roles_survive_usb_reordering_and_commands_target_the_verified_board(boa
         replacement = alias.with_suffix(".new")
         replacement.symlink_to(wheel[role])
         os.replace(replacement, alias)
+        # No snapshot may attach the new occupant to the old role, even in the
+        # interval before the reader notices the changed symlink.
+        for motor in source.read()["motors"]:
+            if motor["port"] is not None:
+                assert motor["port"] == os.path.realpath(wheel[motor["id"]])
+                assert os.path.realpath(motor["portPath"]) == motor["port"]
     assert wait_for(lambda: source.modules == {role: str(alias) for alias, role in zip(aliases, new_order)}
                     and source.serial_ready.is_set(), 10), (source.modules, source.identity_fault, source.last_error)
     assert not source.identity_fault
+    snap = source.read()
+    for alias, role in zip(aliases, new_order):
+        motor = next(m for m in snap["motors"] if m["id"] == role)
+        assert (motor["port"], motor["portPath"]) == (os.path.realpath(wheel[role]), str(alias))
+        assert snap["masterPort"]["modules"][role] == str(alias)
 
 
 def test_duplicate_identity_latches_and_stops_every_verified_wheel(boards, usb_context, monkeypatch):
@@ -284,6 +451,10 @@ def test_duplicate_identity_latches_and_stops_every_verified_wheel(boards, usb_c
     assert wait_for(lambda: bool(source.identity_fault), 5)
     assert "FL" in source.identity_fault and "Две платы" in source.identity_fault
     assert not source.serial_ready.is_set() and not source.frames
+    snap = source.read()
+    assert snap["masterPort"]["modules"] == {}
+    assert all(m["port"] is None for m in snap["motors"])
+    assert "Две платы" in snap["masterPort"]["error"]
     assert source.drive_servo(20)["reason"] == "serial_unavailable"
     assert wait_for(lambda: {path for path, cmd, _ in writes if cmd == b"s q\nb\n"} >= set(paths), 5)
     original_error = source.identity_fault
@@ -302,6 +473,7 @@ def test_fw21_wheel_is_never_assigned_or_sent_commands(boards, usb_context):
         source = start(list(wheel.values()) + [old.path])
         assert wait_for(lambda: any(link.legacy_wheel for link in list(source.links.values())), 5)
         assert not source.serial_ready.is_set()
+        assert old.path in source.read()["masterPort"]["legacy"]
         assert all(link.module is None for link in source.links.values() if link.path == old.path)
         assert source.drive_servo(20)["reason"] == "serial_unavailable"
         time.sleep(.2)
@@ -441,6 +613,7 @@ def test_silent_unselected_usb_is_not_probed_or_treated_as_lidar(boards, usb_con
         source = start(list(wheel.values()) + [silent.path])
         assert wait_for(lambda: silent.path in source.passively_checked_unknown_ports(), 6)
         assert not source.serial_ready.is_set()
+        assert silent.path in source.read()["masterPort"]["unclassified"]
         assert silent.path not in lidar.checked_lidar_ports()
         assert not silent.read() and not silent.received
     finally:
@@ -575,6 +748,65 @@ def test_full_zero_end_to_end_with_four_fw23_pty_boards(boards, usb_context, kio
     assert not source._full_zero_inhibit
     # New zero was applied to the real simulated boards, not just the screen.
     assert wait_for(lambda: all(abs(m["angle"]) < .02 for m in source.read()["motors"]), 3)
+
+
+@pytest.mark.skipif(not os.environ.get("ZAPRET_BROWSER_NODE_MODULES") or not shutil.which("node"),
+                    reason="optional Chromium/playwright-core not installed")
+def test_wheel_port_cards_in_browser_with_live_owner_and_peer(
+        boards, usb_context, kiosk_client, app, operator, monkeypatch):
+    """Four PTYs → onboard owner → API/browser, peer, unplug and recovery."""
+    from flask import jsonify
+    from werkzeug.serving import WSGIRequestHandler, make_server
+    from robot_control.camera import CameraManager
+    backend, start = usb_context
+    wheel = boards("browser-ports")
+    real_ports = {role: os.path.realpath(path) for role, path in wheel.items()}
+    rl_target = os.readlink(wheel["RL"])
+    source = start([wheel[m] for m in MODULES])
+    assert wait_for(lambda: len(source.modules) == 4 and source.serial_ready.is_set(), 8)
+    kiosk = kiosk_client.application
+    kiosk.extensions["rc_slam"].source = source
+
+    # Only registered in this test app. No real hardware or application route
+    # is involved in the simulated plug/unplug.
+    @kiosk.post("/__test/unplug")
+    def unplug():
+        os.unlink(wheel["RL"])
+        return jsonify(ok=True)
+
+    @kiosk.post("/__test/replug")
+    def replug():
+        os.symlink(rl_target, wheel["RL"])
+        return jsonify(ok=True)
+
+    class Quiet(WSGIRequestHandler):
+        def log_request(self, *args, **kwargs):
+            pass
+
+    onboard = make_server("0.0.0.0", 0, kiosk, threaded=True, request_handler=Quiet)
+    peer_url = f"http://127.0.0.1:{onboard.server_port}/api/kiosk_state"
+    monkeypatch.setenv("RC_SLAM_PEER_URL", peer_url)
+    app.extensions["rc_slam"].source = backend.MasterPeerSource(peer_url)
+    remote = make_server("0.0.0.0", 0, app, threaded=True, request_handler=Quiet)
+    threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in (onboard, remote)]
+    for thread in threads:
+        thread.start()
+    previous_camera_manager = CameraManager._instance
+    CameraManager._instance = CameraManager()
+    try:
+        result = subprocess.run(["node", str(ROOT / "tests/js/wheel_ports_browser.mjs"),
+                                 f"http://127.0.0.1:{onboard.server_port}",
+                                 f"http://127.0.0.1:{remote.server_port}", json.dumps(real_ports)],
+                                capture_output=True, text=True, timeout=120)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "unplug, replug and stale server passed" in result.stdout
+    finally:
+        remote.shutdown()
+        onboard.shutdown()
+        for thread in threads:
+            thread.join(timeout=3)
+        CameraManager.reset_instance()
+        CameraManager._instance = previous_camera_manager
 
 
 @pytest.mark.skipif(not os.environ.get("ZAPRET_BROWSER_NODE_MODULES") or not shutil.which("node"),
@@ -1069,3 +1301,33 @@ def test_slow_fault_journal_never_delays_stop_on_the_faulty_wheel(
     finally:
         release.set()
     assert wait_for(path.exists, 5)
+
+
+def test_wrong_cached_hint_only_reorders_all_live_usb_candidates(boards, usb_context, tmp_path, monkeypatch):
+    """A hint to RR as FL cannot assign it, exclude another port or allow motion."""
+    import re
+    from robot_control import device_registry
+    _, start = usb_context
+    wheel = boards('registry-wheels')
+    unknown = Device()
+    paths = [wheel[m] for m in MODULES] + [unknown.path]
+    # Production accepts /dev paths only; PTY aliases in this test live in tmp.
+    monkeypatch.setattr(device_registry, 'SERIAL_RE', re.compile(r'^' + re.escape(str(tmp_path)) + r'/[A-Za-z0-9_-]+$'))
+    reg = device_registry.DeviceRegistry(tmp_path / 'devices.json')
+    reg.set_hint('wheel_FL', wheel['RR'])
+    ordered = reg.order_serial(paths)
+    assert ordered[0] == wheel['RR'] and set(ordered) == set(paths) and len(ordered) == len(paths)
+    source = start(paths)
+    source.port_provider = lambda: reg.order_serial(paths)
+    try:
+        assert wait_for(lambda: len(source.modules) == 4, 8)
+        snapshot = source.read()
+        motors = {motor['id']: motor for motor in snapshot['motors']}
+        assert motors['FL']['port'] == os.path.realpath(wheel['FL'])
+        assert motors['RR']['port'] == os.path.realpath(wheel['RR'])
+        assert wait_for(lambda: unknown.path in source.read()['masterPort']['unclassified'], 6)
+        assert not source.serial_ready.is_set()
+        assert not source.drive_servo(20, 'FL')['ok']
+        assert not unknown.read(), 'no motor/lidar/BMS command may be sent to unknown USB'
+    finally:
+        unknown.close()

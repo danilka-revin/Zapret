@@ -1025,13 +1025,12 @@ def excluded_ports() -> set[str]:
     if os.environ.get("RC_USB_DISCOVERY_MODE") != "1":
         # Legacy/standalone serial mode only. In master auto mode these old
         # paths can now refer to a completely different device.
-        for name in ("RC_SLAM_PORT", "RC_SLAM_MASTER_PORT",
+        for name in ("RC_SLAM_PORT", "RC_SLAM_MASTER_PORT", "RC_SLAM_PORTS",
                      "RC_WHEEL_FL_PORT", "RC_WHEEL_FR_PORT",
                      "RC_WHEEL_RL_PORT", "RC_WHEEL_RR_PORT"):
             value = os.environ.get(name)
             if value:
                 raw = raw + "," + value
-    raw = raw + "," + (os.environ.get("RC_SLAM_PORTS") or "")
     for chunk in raw.split(","):
         chunk = chunk.strip()
         if not chunk:
@@ -2756,6 +2755,18 @@ class LidarManager:
                 step = self._rotate % len(ports)
                 if step:
                     ports = ports[step:] + ports[:step]
+                else:
+                    # A saved hint only reorders the already safety-filtered
+                    # candidates. It never grants USB permission or bypasses
+                    # the owner's positive streaming-lidar check.
+                    registry = getattr(self, "device_registry", None)
+                    if registry is not None:
+                        try:
+                            ordered = registry.order_serial(list(ports), roles=("lidar",))
+                            if len(ordered) == len(ports) and sorted(ordered) == sorted(ports):
+                                ports = ordered
+                        except Exception:  # noqa: BLE001 — keep full discovery
+                            pass
                 self._rotate = step + 1
         self.candidates = ports
         return ports
