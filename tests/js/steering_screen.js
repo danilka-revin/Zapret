@@ -373,6 +373,7 @@ function load(name) {
   vm.runInThisContext(fs.readFileSync(file, 'utf8'), { filename: file });
 }
 load('robot_model.js');
+load('wheel_ports.js');
 load('steer_presets.js');      // как в robot.html: общий модуль грузится до экрана
 if (payload.remoteView) {
   global.RCRemoteControls = true;
@@ -581,6 +582,9 @@ function findPreset(id) {
       id,
       state: byId('steer-state-' + id).textContent,
       sliderDisabled: !!byId('steer-slider-' + id).disabled,
+      overviewPort: byId('usb-port-' + id).textContent,
+      overviewPortTitle: byId('usb-port-' + id).title,
+      steerPort: byId('steer-usb-port-' + id).textContent,
     })),
     status: byId('steer-preset-status').textContent,
     masterMessages: byId('steer-messages').innerHTML,

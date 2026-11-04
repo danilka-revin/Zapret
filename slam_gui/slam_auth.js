@@ -12,6 +12,9 @@
   "use strict";
 
   var token = new URLSearchParams(window.location.search).get("st");
+  // Images do not go through fetch/XHR; camera pollers must explicitly carry
+  // the same session token in embedded previews without third-party cookies.
+  window.RCSessionUrl = function (url) { return token ? withToken(url) : url; };
   if (!token) {
     return;
   }

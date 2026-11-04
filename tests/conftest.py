@@ -50,6 +50,13 @@ def isolated_estop_latch(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_device_registry(tmp_path, monkeypatch):
+    """Discovery hints in tests must never modify the robot's local registry."""
+    monkeypatch.setenv("RC_DEVICE_REGISTRY_FILE", str(tmp_path / "device_registry.json"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def isolated_maneuver_config(tmp_path, monkeypatch):
     """Пресеты манёвров («метр вперёд», «90°») — файл во временной папке.
 

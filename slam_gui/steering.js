@@ -143,6 +143,7 @@
         <div class="rc-steering-grid">${IDS.map((id) => `
           <article class="rc-steering-card" data-rc-steering="${id}">
             <header><b>${id}<small>${WHEEL_NAMES[id]}</small></b><span data-status>нет связи</span></header>
+            <div class="wheel-port"><span>USB</span><span data-port>—</span></div>
             <div class="rc-steering-values"><span>Сейчас <b data-current>—</b></span><span>Цель <b data-target>0°</b></span></div>
             <input data-range type="range" min="-100" max="100" step="1" value="0" aria-label="${id}, целевой угол" disabled>
             <div class="rc-steering-actions">
@@ -248,13 +249,14 @@
       const control = snapshot.steeringControl || {};
       syncLimit(control);
       const source = $('rc-steering-source');
-      source.textContent = !control.available
-        ? 'Управление доступно при RC_SLAM_SOURCE=master и подключённом USB мастера.'
+      const usbStatus = window.RCWheelPorts ? window.RCWheelPorts.status(snapshot) : '';
+      source.textContent = usbStatus || (!control.available
+        ? 'Для автопоиска колёс нужен RC_SLAM_SOURCE=master и перезапуск приложения.'
         : snapshot.linkOk === false
           ? 'Мастер выбран, но свежей телеметрии пока нет.'
           : control.calibration
             ? 'Мастер на связи · откалибруйте колёса по датчику перед рулением и тягой.'
-            : 'Мастер на связи · задайте ручной ноль перед рулением и тягой.';
+            : 'Мастер на связи · задайте ручной ноль перед рулением и тягой.');
       if (window.RCPotMode) window.RCPotMode.render(document.querySelector('.rc-steering-toolbar'), snapshot, authorized);
       // Удержание угла: тот же компонент, что на киоске; на пульте нужен PIN.
       if (window.RCPotHold) window.RCPotHold.render(document.querySelector('.rc-steering-toolbar'), snapshot, authorized);
@@ -262,7 +264,12 @@
       renderDrive();
       renderPresets();
     } catch (error) {
+      snapshot = null;
       $('rc-steering-source').textContent = error && error.message ? error.message : 'Нет связи с сервером.';
+      IDS.forEach((id) => {
+        const card = document.querySelector('[data-rc-steering="' + id + '"]');
+        if (card && window.RCWheelPorts) window.RCWheelPorts.render(card.querySelector('[data-port]'), null, false);
+      });
       IDS.forEach((id) => renderCard(id));
       renderDrive();
     }
@@ -495,6 +502,7 @@
     if (!card) return;
     const motor = snapshot && Array.isArray(snapshot.motors)
       ? snapshot.motors.find((item) => item && item.id === id) : null;
+    if (window.RCWheelPorts) window.RCWheelPorts.render(card.querySelector('[data-port]'), motor, !!snapshot);
     const control = (snapshot && snapshot.steeringControl) || {};
     const online = !!(motor && motor.online === true && Number.isFinite(+motor.angle));
     const zeroed = !!(motor && motor.homed === true);

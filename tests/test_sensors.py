@@ -121,7 +121,7 @@ def test_camera_manager_feed_and_get():
     assert cam_mgr.get_camera(0).is_active is True
 
 
-def test_slam_lidar_and_camera_api(client):
+def test_slam_lidar_and_camera_api(client, operator):
     from conftest import login
 
     login(client)

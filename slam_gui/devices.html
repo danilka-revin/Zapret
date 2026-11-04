@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1015">
+  <title>Устройства · RUS SLAM</title>
+  <link rel="stylesheet" href="devices.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="На главный экран">
+      <span class="brand-mark" aria-hidden="true">R</span><span>RUS SLAM <small>/ РОБОТ</small></span>
+    </a>
+    <nav aria-label="Разделы">
+      <a href="/">Главный экран</a>
+      <a href="/devices" aria-current="page">Устройства</a>
+      <a href="/connections" class="remote-only">Все подключения</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="intro">
+      <div>
+        <p class="eyebrow"><span class="eyebrow-dot"></span> БОРТОВОЙ КОМПЬЮТЕР / ОБОРУДОВАНИЕ</p>
+        <h1>Устройства робота<span class="title-dot">.</span></h1>
+        <p class="lead">Где подключено оборудование и что действительно удалось проверить.</p>
+      </div>
+      <button class="refresh" id="devices-refresh" type="button"><span aria-hidden="true">↻</span> Обновить</button>
+    </section>
+
+    <div class="summary" aria-label="Сводка по устройствам">
+      <div class="summary-main"><span class="summary-kicker">МОНИТОРИНГ УСТРОЙСТВ</span><strong>12 <small>устройств</small></strong><span>Без модуля датчиков</span></div>
+      <div class="summary-stat"><span class="dot good"></span><div><strong id="count-verified">—</strong><span>Подтверждено</span></div></div>
+      <div class="summary-stat"><span class="dot warn"></span><div><strong id="count-warning">—</strong><span>Нужна проверка</span></div></div>
+      <div class="summary-stat"><span class="dot dim"></span><div><strong id="count-missing">—</strong><span>Нет подтверждения</span></div></div>
+    </div>
+
+    <div class="connection-bar" role="status" aria-live="polite">
+      <div><span class="dot dim" id="server-dot"></span><strong id="server-status">Ожидание бортового сервера…</strong></div>
+      <span id="last-update">—</span>
+    </div>
+    <div class="notice" id="discovery-status">Поиск колёс: ожидание данных.</div>
+    <div class="notice notice-warning" id="device-alert" role="alert" hidden></div>
+
+    <section class="device-section" aria-labelledby="wheels-title">
+      <header class="section-heading"><div><p class="section-index">01 / ХОДОВАЯ</p><h2 id="wheels-title">Колёсные модули</h2></div><span class="section-count">04 УСТРОЙСТВА</span></header>
+      <p class="section-description">Положение определяет сама плата по телеметрии с CRC. Подсказки не назначают колёса и не обходят проверку остальных USB-портов.</p>
+      <div class="cards" id="wheel-cards"></div>
+    </section>
+    <section class="device-section" aria-labelledby="cameras-title">
+      <header class="section-heading"><div><p class="section-index">02 / ОБЗОР</p><h2 id="cameras-title">Камеры</h2></div><span class="section-count">04 УСТРОЙСТВА</span></header>
+      <p class="section-description">Укажите порт и проверьте изображение рукой перед объективом. Одинаковые камеры нельзя различить по модели; расположение подтверждает оператор. Без уникального серийного номера проверяйте его снова после перестановки.</p>
+      <div class="cards" id="camera-cards"></div>
+    </section>
+    <section class="device-section" aria-labelledby="other-title">
+      <header class="section-heading"><div><p class="section-index">03 / ПЕРИФЕРИЯ</p><h2 id="other-title">Остальные устройства</h2></div><span class="section-count">04 УСТРОЙСТВА</span></header>
+      <p class="section-description">Реальное состояние берётся у существующих драйверов. Подсказка для BMS не заменяет ручной выбор порта на бортовом экране.</p>
+      <div class="cards" id="other-cards"></div>
+    </section>
+    <footer><b>Как это работает</b> · Сначала читаем состав USB, затем сверяем сохранённые подсказки с текущими устройствами и данными драйверов. Один USB-девайс может иметь несколько портов. Подсказка и совпадение гнезда не являются доказательством роли. Печать принтера здесь не проверяется.</footer>
+  </main>
+  <script src="slam_auth.js"></script>
+  <script src="camera_frames.js"></script>
+  <script src="devices.js"></script>
+</body>
+</html>

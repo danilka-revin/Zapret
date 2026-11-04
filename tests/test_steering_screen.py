@@ -133,6 +133,54 @@ def test_screen_renders_without_errors(tmp_path):
     assert report["dataChip"] == "в реальном времени"
 
 
+def test_wheel_ports_are_real_verified_telemetry_on_both_cards(tmp_path):
+    motors = [dict(motor(mid), port=f"/dev/ttyACM{i}", portPath=f"/dev/serial/by-path/usb-{i}")
+              for i, mid in enumerate(MODULES)]
+    # An offline wheel must not show an otherwise stale path received in a payload.
+    motors[2]["online"] = False
+    body = payload(motors=motors)
+    body["data"]["masterPort"] = {"auto": True, "ready": False,
+                                  "modules": {"FL": "/dev/a", "FR": "/dev/b", "RR": "/dev/d"},
+                                  "unclassified": ["/dev/ttyUSB7"], "legacy": ["/dev/ttyUSB8"],
+                                  "excluded": ["/dev/ttyUSB9"], "error": "порт занят"}
+    report = run_screen(tmp_path, body)
+    assert report["renderErrors"] == []
+    cards = {item["id"]: item for item in report["wheels"]}
+    assert [cards[mid]["overviewPort"] for mid in MODULES] == [
+        "/dev/ttyACM0", "/dev/ttyACM1", "—", "/dev/ttyACM3"]
+    assert [cards[mid]["steerPort"] for mid in MODULES] == [
+        "/dev/ttyACM0", "/dev/ttyACM1", "—", "/dev/ttyACM3"]
+    assert "/dev/serial/by-path/usb-0" in cards["FL"]["overviewPortTitle"]
+    assert all(word in report["sourceStatus"] for word in (
+        "3/4", "RL", "/dev/ttyUSB7", "/dev/ttyUSB8", "/dev/ttyUSB9", "порт занят", "заблокированы"))
+    assert not report["sent"] and not report["drives"]
+
+
+def test_ports_are_cleared_when_server_is_down_and_restored_after_reconnect(tmp_path):
+    motors = [dict(motor(mid), port=f"/dev/ttyACM{i}", portPath=f"/dev/ttyACM{i}")
+              for i, mid in enumerate(MODULES)]
+    body = payload(motors=motors, virtualClock=True,
+                   actions=[{"type": "server-offline", "rounds": 20}])
+    report = run_screen(tmp_path, body)
+    assert report["dataChip"] == "НЕТ СВЯЗИ С СЕРВЕРОМ"
+    assert [item["overviewPort"] for item in report["wheels"]] == ["—"] * 4
+    assert [item["steerPort"] for item in report["wheels"]] == ["—"] * 4
+    assert "актуальные USB-порты неизвестны" in report["sourceStatus"]
+    body["actions"].append({"type": "server-online", "rounds": 4})
+    restored = run_screen(tmp_path, body)
+    assert [item["overviewPort"] for item in restored["wheels"]] == [f"/dev/ttyACM{i}" for i in range(4)]
+    assert [item["steerPort"] for item in restored["wheels"]] == [f"/dev/ttyACM{i}" for i in range(4)]
+
+
+def test_nonmaster_source_says_how_to_enable_auto_discovery(tmp_path):
+    body = payload(available=False)
+    body["data"]["steeringControl"]["source"] = "serial"
+    report = run_screen(tmp_path, body)
+    assert "Источник: serial" in report["sourceStatus"]
+    assert "RC_SLAM_SOURCE=master" in report["sourceStatus"]
+    assert [item["overviewPort"] for item in report["wheels"]] == ["—"] * 4
+
+
 def wheel_drive(mod):
     return next(item for item in mod["wheelDrive"] if item["id"] == "FL") if isinstance(mod, dict) else None
 

@@ -55,6 +55,10 @@ const state = {
   _wasSpin: false,
 };
 
+// The older console retains a simulated chassis internally, but its wheel
+// cards must show only the onboard owner's real telemetry and confirmed ports.
+const wheelView = { data: null, at: 0, pending: false };
+
 const FSM = ["IDLE", "READY", "NAVIGATE", "YIELD_SIGN", "WAIT_LIGHT", "DELIVER", "RETURN", "FAULT"];
 
 /* Единая «часы» симуляции: удобно подменять в тестах (jsdom) и стабилизировать светофор. */
@@ -376,17 +380,85 @@ document.querySelectorAll("nav button").forEach((btn) => {
 });
 
 function renderModules() {
-  const html = state.modules.map((m) => `
-    <div class="mod">
-      <b>${m.id}</b>
-      руль ${m.steer.toFixed(0)}° · ${m.rpm.toFixed(0)} об/мин
-      <div class="bar"><i style="width:${Math.min(100, Math.abs(m.rpm)/8)}%"></i></div>
-      <span>${m.temp.toFixed(0)}°C · ${m.homed ? "homed" : "seek"}</span>
-    </div>`).join("");
-  document.getElementById("modules").innerHTML = html;
-  document.getElementById("mod-cards").innerHTML = `
-    <div class="modules" style="grid-template-columns:repeat(4,1fr);padding:0">${html}</div>
-    <p class="hint">Кадр команды 10 Б + телеметрия 16 Б, CRC16/Modbus, 20 Гц.</p>`;
+  const fresh = !!wheelView.data && Date.now() - wheelView.at < 2500;
+  const data = fresh ? wheelView.data : null;
+  const motors = data && Array.isArray(data.motors) ? data.motors : [];
+  const number = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const makeCard = (id) => {
+    const motor = motors.find(item => item && item.id === id) || null;
+    const online = !!(motor && motor.online === true);
+    const angle = online ? number(motor.angle) : null;
+    const sc = online ? number(motor.scRpm) : null;
+    const rpm = sc !== null && sc >= 0 ? sc : online && !(motor.firmware >= 16) ? number(motor.rpm) : null;
+    const temp = online ? number(motor.temp) : null;
+    const card = document.createElement('div');
+    card.className = 'mod';
+    card.dataset.wheelId = id;
+    const heading = document.createElement('b');
+    heading.textContent = id + ' · ' + (!online ? 'нет связи' : motor.calibrating ? 'калибровка' : 'на связи');
+    card.appendChild(heading);
+    const values = document.createElement('span');
+    values.textContent = 'руль ' + (angle === null ? '—' : angle.toFixed(0) + '°') + ' · ' +
+      (rpm === null ? '—' : rpm.toFixed(0)) + ' об/мин';
+    card.appendChild(values);
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    const fill = document.createElement('i');
+    fill.style.width = Math.min(100, Math.abs(rpm || 0) / 8) + '%';
+    bar.appendChild(fill);
+    card.appendChild(bar);
+    const details = document.createElement('span');
+    details.textContent = (temp === null ? '—' : temp.toFixed(0) + '°C') + ' · ' +
+      (!online ? 'нет данных' : motor.homed === true ? 'ноль задан' : 'нужен ноль');
+    card.appendChild(details);
+    const port = document.createElement('div');
+    port.className = 'wheel-port';
+    const label = document.createElement('span');
+    label.textContent = 'USB';
+    const value = document.createElement('span');
+    value.dataset.wheelPort = id;
+    if (window.RCWheelPorts) window.RCWheelPorts.render(value, motor, fresh);
+    else value.textContent = '—';
+    port.appendChild(label);
+    port.appendChild(value);
+    card.appendChild(port);
+    return card;
+  };
+  const ids = ['FL', 'FR', 'RL', 'RR'];
+  const compact = document.getElementById('modules');
+  compact.replaceChildren(...ids.map(makeCard));
+  const grid = document.createElement('div');
+  grid.className = 'modules';
+  grid.style.cssText = 'grid-template-columns:repeat(4,minmax(0,1fr));padding:0';
+  grid.replaceChildren(...ids.map(makeCard));
+  const hint = document.createElement('p');
+  hint.className = 'hint';
+  hint.textContent = data && window.RCWheelPorts && window.RCWheelPorts.status(data) ||
+    (data && data.source && data.source !== 'master' && data.source !== 'master-peer'
+      ? 'Источник: ' + data.source + '. Для автопоиска колёс нужен RC_SLAM_SOURCE=master.'
+      : data ? 'Данные с бортового экрана.' : 'Нет свежей телеметрии бортового экрана.');
+  document.getElementById('mod-cards').replaceChildren(grid, hint);
+}
+
+async function pollWheelState() {
+  if (wheelView.pending) return;
+  wheelView.pending = true;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const response = await fetch('api/kiosk_state', {cache: 'no-store', signal: controller.signal});
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const body = await response.json();
+    if (!body || !body.ok || !body.data) throw new Error('Нет телеметрии');
+    wheelView.data = body.data;
+    wheelView.at = Date.now();
+  } catch (_) {
+    wheelView.data = null;
+  } finally {
+    clearTimeout(timer);
+    wheelView.pending = false;
+    renderModules();
+  }
 }
 
 function renderFsm() {
@@ -1284,7 +1356,6 @@ function sim(dt) {
   const modeEl = document.getElementById("mode-label");
   if (modeEl && state.serviceStand) modeEl.textContent = "СЕРВИС · стенд · автономия заблокирована";
   document.getElementById("wd").textContent = state.watchdogMs.toFixed(0) + " мс";
-  renderModules();
 }
 
 let last = performance.now();
@@ -1564,6 +1635,8 @@ document.getElementById("btn-refresh")?.addEventListener("click", () => location
 document.getElementById("btn-main-screen")?.addEventListener("click", () => { location.href = "main.html"; });
 
 renderModules();
+pollWheelState();
+setInterval(pollWheelState, 800);
 renderFsm();
 renderDets();
 log("ok", "пульт RUS SLAM онлайн");

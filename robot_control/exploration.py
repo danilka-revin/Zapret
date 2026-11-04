@@ -241,6 +241,11 @@ class LandmarkRecorder:
             for cam_id in range(4):
                 try:
                     device = manager.get_camera(cam_id)
+                    role_check = getattr(device, "role_verified", None) if device else None
+                    # Never store an orientation-labelled landmark from a
+                    # guessed/default or socket-only camera association.
+                    if callable(role_check) and role_check() is False:
+                        continue
                     jpeg = manager.get_frame(cam_id, max_age_s=2.0)
                 except Exception:
                     continue

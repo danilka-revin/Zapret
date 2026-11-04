@@ -107,7 +107,8 @@
     image.onerror = () => finish(false);
     camera.timeout = setTimeout(() => { finish(false); image.src = ''; }, 5000);
     // IDs are fixed: rear camera still works when it is the only connected one.
-    image.src = 'api/camera/' + (camera.n - 1) + '/frame?t=' + Date.now();
+    const url = 'api/camera/' + (camera.n - 1) + '/frame?t=' + Date.now();
+    image.src = window.RCSessionUrl ? window.RCSessionUrl(url) : url;
   }
 
   function stop(camera) {

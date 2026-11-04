@@ -273,7 +273,11 @@ def reserved_ports() -> set[str]:
         raw = (os.environ.get(name) or "").strip()
         if raw:
             values.append(raw)
-    for name in ("RC_SLAM_PORTS", "RC_LIDAR_EXCLUDE"):
+    # In master auto-discovery RC_SLAM_PORTS is a stale serial-mode hint.
+    # The positive lidar allowlist below, not that old list, protects wheels.
+    lists = ("RC_LIDAR_EXCLUDE",) if os.environ.get("RC_USB_DISCOVERY_MODE") == "1" else (
+        "RC_SLAM_PORTS", "RC_LIDAR_EXCLUDE")
+    for name in lists:
         raw = os.environ.get(name) or ""
         values.extend(item.strip() for item in raw.replace(";", ",").split(","))
     out: set[str] = set()
@@ -307,6 +311,16 @@ def candidate_ports(spec: str | Iterable[str] | None = None) -> list[str]:
             continue
         seen.add(real)
         out.append(port)
+    if spec is None:
+        # Optional robot registry: reorder only ports already admitted by the
+        # live USB guard. Standalone ROS installations work without it.
+        try:
+            from robot_control.device_registry import DeviceRegistry
+            ordered = DeviceRegistry().order_serial(list(out), roles=("lidar",))
+            if len(ordered) == len(out) and sorted(ordered) == sorted(out):
+                out = ordered
+        except Exception:  # noqa: BLE001 — keep the complete safe candidate list
+            pass
     return out
 
 

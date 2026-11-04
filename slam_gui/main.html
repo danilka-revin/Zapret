@@ -56,6 +56,7 @@
           <svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
           <span class="nav-text">Сводка</span>
         </a>
+        <a href="/devices" id="nav-devices"><span class="nav-text">Устройства робота</span></a>
         <a href="/connections" id="nav-connections"><span class="nav-text">Подключения</span></a>
         <a href="/battery" id="nav-battery"><span class="nav-text">АКБ</span></a>
         <a href="/controls" id="nav-controls"><span class="nav-text">Руление и тяга</span></a>
@@ -154,6 +155,7 @@
                 <span class="mod-title">передний левый</span>
                 <span class="chip idle" id="mod-state-FL">—</span>
               </header>
+              <div class="wheel-port"><span>USB</span><span id="usb-port-FL">—</span></div>
               <div class="mod-metrics">
                 <div class="metric"><span class="metric-label">угол руля</span><span class="metric-value"><b id="angle-FL">—</b></span></div>
                 <div class="metric"><span class="metric-label">обороты</span><span class="metric-value"><b id="rpm-FL">—</b><small>об/мин</small></span></div>
@@ -179,6 +181,7 @@
                 <span class="mod-title">передний правый</span>
                 <span class="chip idle" id="mod-state-FR">—</span>
               </header>
+              <div class="wheel-port"><span>USB</span><span id="usb-port-FR">—</span></div>
               <div class="mod-metrics">
                 <div class="metric"><span class="metric-label">угол руля</span><span class="metric-value"><b id="angle-FR">—</b></span></div>
                 <div class="metric"><span class="metric-label">обороты</span><span class="metric-value"><b id="rpm-FR">—</b><small>об/мин</small></span></div>
@@ -194,6 +197,7 @@
                 <span class="mod-title">задний левый</span>
                 <span class="chip idle" id="mod-state-RL">—</span>
               </header>
+              <div class="wheel-port"><span>USB</span><span id="usb-port-RL">—</span></div>
               <div class="mod-metrics">
                 <div class="metric"><span class="metric-label">угол руля</span><span class="metric-value"><b id="angle-RL">—</b></span></div>
                 <div class="metric"><span class="metric-label">обороты</span><span class="metric-value"><b id="rpm-RL">—</b><small>об/мин</small></span></div>
@@ -210,6 +214,7 @@
                 <span class="mod-title">задний правый</span>
                 <span class="chip idle" id="mod-state-RR">—</span>
               </header>
+              <div class="wheel-port"><span>USB</span><span id="usb-port-RR">—</span></div>
               <div class="mod-metrics">
                 <div class="metric"><span class="metric-label">угол руля</span><span class="metric-value"><b id="angle-RR">—</b></span></div>
                 <div class="metric"><span class="metric-label">обороты</span><span class="metric-value"><b id="rpm-RR">—</b><small>об/мин</small></span></div>
@@ -230,25 +235,25 @@
             <div class="cam-viewport" id="cam-viewport-front">
               <canvas id="cam-canvas" aria-label="Камера передняя левая"></canvas>
               <p class="cam-empty" id="cam-empty" hidden>нет сигнала</p>
-              <span class="cam-badge" aria-hidden="true">● LIVE · ПЕРЕД-Л</span>
+              <span class="cam-badge" id="cam-front-badge" aria-hidden="true" hidden>● LIVE · ПЕРЕД-Л</span>
               <span class="cam-cross" aria-hidden="true"></span>
             </div>
             <div class="cam-viewport" id="cam-viewport-rear">
               <canvas id="cam-rear-canvas" aria-label="Камера задняя левая"></canvas>
               <p class="cam-empty" id="cam-rear-empty" hidden>нет сигнала</p>
-              <span class="cam-badge" aria-hidden="true">● LIVE · ЗАД-Л</span>
+              <span class="cam-badge" id="cam-rear-badge" aria-hidden="true" hidden>● LIVE · ЗАД-Л</span>
               <span class="cam-cross" aria-hidden="true"></span>
             </div>
             <div class="cam-viewport" id="cam-viewport-front-right">
               <canvas id="cam-right-canvas" aria-label="Камера передняя правая"></canvas>
               <p class="cam-empty" id="cam-right-empty" hidden>нет сигнала</p>
-              <span class="cam-badge" aria-hidden="true">● LIVE · ПЕРЕД-П</span>
+              <span class="cam-badge" id="cam-right-badge" aria-hidden="true" hidden>● LIVE · ПЕРЕД-П</span>
               <span class="cam-cross" aria-hidden="true"></span>
             </div>
             <div class="cam-viewport" id="cam-viewport-rear-right">
               <canvas id="cam-rear-right-canvas" aria-label="Камера задняя правая"></canvas>
               <p class="cam-empty" id="cam-rear-right-empty" hidden>нет сигнала</p>
-              <span class="cam-badge" aria-hidden="true">● LIVE · ЗАД-П</span>
+              <span class="cam-badge" id="cam-rear-right-badge" aria-hidden="true" hidden>● LIVE · ЗАД-П</span>
               <span class="cam-cross" aria-hidden="true"></span>
             </div>
           </div>
@@ -358,6 +363,8 @@
 
   <script src="/slam_auth.js"></script>
   <script src="/robot_model.js"></script><script src="lidar_view.js"></script>
+  <script src="wheel_ports.js"></script>
+  <script src="camera_frames.js"></script>
   <script src="main.js"></script>
   <script>
     { const st = new URLSearchParams(location.search).get('st');

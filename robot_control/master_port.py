@@ -125,8 +125,12 @@ def autodiscovery_reserved_ports() -> set[str]:
     # BMS remains in the topology after its passive wheel probe so its
     # fingerprint survives; its held lock and the cached result prevent opens.
     values = {lidar_active_port()}
-    for name in ("RC_SLAM_PORTS", "RC_LIDAR_EXCLUDE"):
-        values.update(chunk.strip() for chunk in (os.environ.get(name) or "").replace(";", ",").split(","))
+    # RC_SLAM_PORTS belongs to the separate legacy serial source. In master
+    # mode old assignments can refer to the wheels (or to newly reused tty
+    # names), so they must not prevent passive, CRC-verified identification.
+    # RC_LIDAR_EXCLUDE remains an explicit do-not-touch list here.
+    values.update(chunk.strip() for chunk in
+                  (os.environ.get("RC_LIDAR_EXCLUDE") or "").replace(";", ",").split(","))
     paths = {str(value) for value in values if value}
     return paths | {os.path.realpath(value) for value in paths}
 

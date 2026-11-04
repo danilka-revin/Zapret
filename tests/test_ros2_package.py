@@ -675,3 +675,36 @@ def test_scripts_pass_bash_syntax_check():
         result = subprocess.run(["bash", "-n", str(SCRIPTS / name)],
                                 capture_output=True, text=True, timeout=60)
         assert result.returncode == 0, "%s: %s" % (name, result.stderr)
+
+
+def test_registry_priority_cannot_expand_ros_usb_guard(monkeypatch, tmp_path):
+    """Only positively classified lidar candidates may reach the ROS planner."""
+    from zapret_lidar import usb_guard
+    from robot_control import device_registry
+    allowed = [str(tmp_path / 'lidar-a'), str(tmp_path / 'lidar-b')]
+    forbidden = str(tmp_path / 'wheel-or-bms')
+    for port in allowed + [forbidden]:
+        Path(port).touch()
+    monkeypatch.setattr(ros_drivers, 'reserved_ports', lambda: set())
+    monkeypatch.setattr(ros_drivers, 'parse_ports', lambda spec: list(allowed) + [forbidden])
+    monkeypatch.setattr(usb_guard, 'enabled', lambda: True)
+    monkeypatch.setattr(usb_guard, 'checked_lidar_ports', lambda: set(allowed))
+    calls = []
+    class Priority:
+        def order_serial(self, ports, *, roles):
+            calls.append((ports, roles))
+            return list(reversed(ports))
+    monkeypatch.setattr(device_registry, 'DeviceRegistry', Priority)
+    assert ros_drivers.candidate_ports() == list(reversed(allowed))
+    assert calls == [(allowed, ('lidar',))]
+    class Broken:
+        def order_serial(self, ports, *, roles):
+            return ports + [forbidden]
+    monkeypatch.setattr(device_registry, 'DeviceRegistry', Broken)
+    assert ros_drivers.candidate_ports() == allowed  # reject enlargement
+    class Standalone:
+        def __init__(self): raise ImportError('optional robot package unavailable')
+    monkeypatch.setattr(device_registry, 'DeviceRegistry', Standalone)
+    assert ros_drivers.candidate_ports() == allowed
+    # Explicit caller selection does not consult the optional cache.
+    assert ros_drivers.candidate_ports(allowed) == allowed
