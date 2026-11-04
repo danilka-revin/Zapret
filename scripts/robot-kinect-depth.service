@@ -1,0 +1,29 @@
+# Публикатор глубины Kinect 360 для карты робота.
+# Устанавливается install_ubuntu.sh --autostart или вручную:
+#   sudo cp scripts/robot-kinect-depth.service /etc/systemd/system/
+#   sudo sed -i "s|/opt/robot-control|$PWD|g; s|User=robotctl|User=$USER|g; s|Group=robotctl|Group=$USER|g" \
+#     /etc/systemd/system/robot-kinect-depth.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now robot-kinect-depth
+#
+# Без драйвера Kinect скрипт сам завершится с понятной записью в journalctl,
+# не создавая демо-поток и не требуя перезапуска systemd.
+[Unit]
+Description=Zapret Kinect 360 depth publisher
+Documentation=docs/AUTONOMY.md
+After=robot-kiosk.service
+Wants=robot-kiosk.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/robot-control
+User=robotctl
+Group=robotctl
+Environment=RC_SKIP_DEPS=1
+ExecStart=/opt/robot-control/scripts/kinect_depth.sh --foreground
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

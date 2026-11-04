@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 from robot_control.exploration import (
-    ExplorationError, ExplorationService, LandmarkRecorder, coverage_pct,
-    find_frontiers, known_cells,
+    NAV_CHECK_LABELS, ExplorationError, ExplorationService, LandmarkRecorder,
+    coverage_pct, find_frontiers, known_cells,
 )
 from robot_control.navigation import NavigationError
 from robot_control.slam_map import UNKNOWN
@@ -64,13 +64,23 @@ class FakeKinect:
 
 
 class FakeNavigation:
-    def __init__(self, mapping, *, enabled=True):
+    def __init__(self, mapping, *, enabled=True, nav_checks=None, nav_can_start=True):
         self.enabled = enabled
         self.mapping = mapping
         self.active = False
         self.starts = []
         self.cancels = []
         self.hold_active = False
+        self.nav_checks = dict(nav_checks or {key: True for key in NAV_CHECK_LABELS})
+        self.nav_can_start = nav_can_start
+
+    def status(self):
+        return {
+            "enabled": self.enabled, "available": True,
+            "canStart": self.nav_can_start,
+            "reason": "Проверки не пройдены" if not self.nav_can_start else "",
+            "diagnostics": {"checks": dict(self.nav_checks)},
+        }
 
     def start(self, body, *, autonomous=False):
         assert autonomous is True, "обследование не имеет права обходить проверенный план оператора"
@@ -158,6 +168,34 @@ def test_start_requires_all_confirmations(monkeypatch):
     wait_done(service)
     assert nav.starts == []          # карта полная — ехать некуда
     assert service.status()["phase"] == "done"
+
+
+def test_preflight_shows_every_navigation_check():
+    """Чек-лист готовности приходит целиком, а не первой причиной отказа."""
+    mapping = FakeMap(free_until=1.0)
+    nav = FakeNavigation(mapping)
+    service = ExplorationService(mapping, nav, kinect=FakeKinect(), enabled=True,
+                                 estop_check=lambda: None)
+    ready = service.preflight()
+    assert ready["navigation"]["checks"] == {key: True for key in NAV_CHECK_LABELS}
+    assert ready["navigation"]["ready"] is True and ready["navigation"]["errors"] == []
+    assert ready["canStart"] is True
+
+    # Не измерена скорость: панель обязана показать это ДО нажатия «Начать».
+    nav.nav_checks["speedCalibrated"] = False
+    nav.nav_can_start = False
+    blocked = service.preflight()
+    assert blocked["navigation"]["errors"] == [
+        "измерена скорость: RC_NAV_MPS_PER_PERCENT"]
+    assert "Навигация: измерена скорость: RC_NAV_MPS_PER_PERCENT" in blocked["blockers"]
+    assert blocked["canStart"] is False
+
+    # Выключенная навигация не дублирует все проверки в blockers, но чек-лист
+    # по-прежнему доступен оператору в status().navigation.
+    nav.enabled = False
+    off = service.preflight()
+    assert off["blockers"] == ["Навигация выключена: задайте RC_NAV_ENABLE=1"]
+    assert set(off["navigation"]["checks"]) == set(NAV_CHECK_LABELS)
 
 
 def test_disabled_and_estop_block_start():

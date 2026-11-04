@@ -16,7 +16,7 @@ import os
 import secrets
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from . import sensor_layout as layout
 from .config import PROJECT_ROOT
@@ -46,6 +46,21 @@ KINECT_FIELDS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+# Замеры шасси, без которых навигация не даст двинуться. В особенности
+# RC_NAV_MPS_PER_PERCENT: он НЕ подставляется по умолчанию и измеряется на
+# площадке, поэтому в форме показывается пустым до ввода оператором.
+DRIVE_FIELDS: tuple[tuple[str, str, str, float, float, Optional[float]], ...] = (
+    ("RC_NAV_MPS_PER_PERCENT", "Скорость на 1% тяги (измерить!)", "м/с", 0.0001, 1.0, None),
+    ("RC_NAV_SPEED_MPS", "Уставка скорости", "м/с", 0.01, 1.0, 0.05),
+    ("RC_NAV_MAX_PERCENT", "Предел тяги", "%", 1.0, 100.0, 4.0),
+    ("RC_NAV_FOOTPRINT_M", "Защитный радиус", "м", 0.1, 3.0, 0.55),
+    ("RC_LIDAR_OFFSET_M", "Смещение лидара вперёд", "м", -2.0, 2.0, 0.35),
+)
+DRIVE_LIMITS: dict[str, tuple[float, float]] = {
+    key: (lo, hi) for key, _label, _unit, lo, hi, _default in DRIVE_FIELDS
+}
+
+
 def _allowed_keys() -> dict[str, tuple[str, float, float]]:
     """env-ключ → (имя поля, минимум, максимум)."""
     out: dict[str, tuple[str, float, float]] = {}
@@ -57,6 +72,8 @@ def _allowed_keys() -> dict[str, tuple[str, float, float]]:
         for field in ("x_m", "y_m", "z_m", "yaw_deg", "pitch_deg"):
             lo, hi = layout.FIELD_LIMITS[field]
             out[keys[field]] = (field, lo, hi)
+    for key, (lo, hi) in DRIVE_LIMITS.items():
+        out[key] = (key, lo, hi)
     return out
 
 
@@ -106,15 +123,35 @@ def geometry_payload() -> dict[str, Any]:
             })
         groups.append({"id": role, "title": layout.CAMERA_LABELS[role],
                        "port": camera["port"], "fields": fields})
+    drive_fields: list[dict[str, Any]] = []
+    for key, label, unit, lo, hi, default in DRIVE_FIELDS:
+        raw = (os.environ.get(key) or "").strip()
+        try:
+            value: Optional[float] = float(raw) if raw else default
+        except ValueError:
+            value = default
+        drive_fields.append({
+            "key": key, "field": key, "label": label, "unit": unit,
+            "value": value, "min": lo, "max": hi,
+            "step": 0.0001 if key == "RC_NAV_MPS_PER_PERCENT" else 0.01,
+            "measured": key == "RC_NAV_MPS_PER_PERCENT",
+        })
+    groups.append({
+        "id": "drive", "title": "Тяга и скорость · обязательно для выезда",
+        "fields": drive_fields,
+        "hint": "RC_NAV_MPS_PER_PERCENT измеряют на площадке: "
+                "./scripts/measure_nav_speed.py --distance 2 --seconds 8 --percent 4 --save-env",
+    })
     return {
         "ok": True,
         "calibrated": layout.geometry_calibrated(),
         "groups": groups,
         "fieldCount": sum(len(g["fields"]) for g in groups),
         "envPath": str(env_file_path()),
-        "hint": ("Замерьте углы и смещения на собранном роботе, заполните поля "
-                 "и нажмите «Сохранить». Значения попадут в .env; до этого "
-                 "геометрия считается неоткалиброванной."),
+        "hint": ("Замерьте углы, смещения и скорость на собранном роботе, "
+                 "заполните поля и нажмите «Сохранить». Значения попадут в "
+                 ".env; до этого геометрия считается неоткалиброванной, а "
+                 "выезд заблокирован пустым RC_NAV_MPS_PER_PERCENT."),
     }
 
 
@@ -133,6 +170,8 @@ def validate(values: Any) -> dict[str, str]:
         field, lo, hi = ALLOWED_KEYS[key]
         if isinstance(raw, bool):
             raise CalibrationError("%s: ожидается число" % key)
+        if isinstance(raw, str) and not raw.strip():
+            raise CalibrationError("%s: сначала измерьте и впишите значение" % key)
         try:
             number = float(raw)
         except (TypeError, ValueError):
