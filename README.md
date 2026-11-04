@@ -356,7 +356,7 @@ USB-разветвителя (для нескольких плат и камер
   шасси (`tests/test_navigation_executor.py`): движение до цели и тормоз,
   устаревший скан, стоящий привод, уход в сторону, отмена, E-STOP, обход,
   невозможный обход и продолжение маршрута;
-- тесты: 1488 проверок (`pytest`), в том числе симуляция всех четырёх прошивок
+- тесты: 1505 проверок (`pytest`), в том числе симуляция всех четырёх прошивок
   (нужен `g++`) и сборка avr-gcc (если задан тулчейн, см. `firmware/README.md`).
 
 ## Автономное обследование: 4 камеры, Kinect 360 и карта
@@ -374,8 +374,15 @@ USB-разветвителя (для нескольких плат и камер
   `/api/camera/<0…3>/frame`) и «визуальные ориентиры»: на каждом шаге обследования
   кадры сохраняются с привязкой к позе в `data/landmarks/`.
 - Все **углы и положение сенсоров вынесены в `.env`** (`RC_CAMERA_*`,
-  `RC_KINECT_*`): шаблон есть в `.env.example`, после монтажа впишите замеренные
-  значения. Пока они не заданы, `GET /api/sensors/layout` сообщает `calibrated=false`.
+  `RC_KINECT_*`): шаблон есть в `.env.example`, а внести замеры удобно прямо с
+  `/map` → «Калибровка геометрии». Пока заданы не все углы,
+  `GET /api/sensors/layout` сообщает `calibrated=false`.
+- Панель показывает **чек-лист готовности** (`blockers`/`warnings`), а
+  `/api/kinect/status` — какие драйверы Kinect реально установлены; без
+  драйвера `--source auto` честно ошибётся, а не подставит демо-кадр.
+  Опционально второй Kinect сзади: `RC_KINECT_REAR_ENABLE=1` + `--unit rear`.
+- Проверить цикл без железа: `scripts/explore_sim.py` (поиск границы, «поездка»,
+  рост карты, ориентиры). Драйверы — `requirements-kinect.txt`.
 
 Включение: `RC_NAV_ENABLE=1` + `RC_EXPLORE_ENABLE=1`, запустить публикатор
 глубины, затем на странице «Карта лидара»/«Движение по маршруту» в панели
@@ -952,6 +959,7 @@ crontab -l | grep -E 'start(_robot|_desktop)?\.sh|kiosk\.sh|run(_kiosk)?\.py'  #
 sudo apt install python3-venv python3-pip
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+# опционально: драйверы Kinect 360 ставятся отдельно, см. requirements-kinect.txt
 
 cp .env.example .env            # и вписать RC_SECRET_KEY
 .venv/bin/python scripts/create_operator.py --username operator
@@ -1470,6 +1478,7 @@ robot_control/
   sensor_layout.py            геометрия 4 камер и Kinect из .env (углы, положение, FOV)
   kinect.py                   глубина Kinect 360 → псевдоскан в систему координат карты
   exploration.py              автообследование: границы карты, цикл поездок, ориентиры
+  calibration.py              мастер калибровки: 33 поля геометрии → атомарно в .env
   templates/                  login, служебная страница /panel, ошибка
   static/css/style.css
 slam_gui/                     веб-интерфейс робота (из danilka-revin/rus_slam)
@@ -1493,6 +1502,7 @@ scripts/
                                --ros — дистрибутив ROS 2, rclpy и пакеты драйверов)
   lidar_web_check.py          проверка, что скан дошёл до пульта и бортового экрана
   kinect_depth_publisher.py   Kinect 360 → POST /api/kinect/depth (freenect/OpenNI2/ROS 2/demo)
+  explore_sim.py              сухой прогон автоцикла на синтетической карте без железа
   master_check.py             проверка только вручную выбранного порта по @TLM
                               (--save-env — записать постоянное имя by-id в .env)
   ros2_setup.sh               ROS 2 для лидара сам: установка (apt или исходники), драйверы,

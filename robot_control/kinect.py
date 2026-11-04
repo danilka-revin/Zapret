@@ -22,6 +22,7 @@ from __future__ import annotations
 import array
 import base64
 import binascii
+import importlib.util
 import math
 import sys
 import threading
@@ -49,6 +50,33 @@ class DepthFrame:
     stamp: float
     fx: float = 0.0
     fy: float = 0.0
+
+
+BACKENDS: tuple[tuple[str, str, str], ...] = (
+    ("freenect", "freenect", "pip install freenect (libfreenect + USB)"),
+    ("openni", "openni2", "pip install openni2 (OpenNI2 + primesense-ros)"),
+    ("ros2", "rclpy", "ROS 2 + /camera/depth/image_rect_raw (requirements-kinect.txt)"),
+)
+
+
+def available_backends() -> dict[str, Any]:
+    """Какие драйверы Kinect реально импортируются в этом процессе.
+
+    Диагностика для ``/api/kinect/status``: «кадра нет» и «драйвер не стоит» —
+    разные неисправности, и экран должен их различать.
+    """
+    found: dict[str, bool] = {}
+    for name, module, _hint in BACKENDS:
+        try:
+            found[name] = importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):
+            found[name] = False
+    return {
+        "ok": True,
+        "backends": found,
+        "installed": [name for name, present in found.items() if present],
+        "hints": {name: hint for name, _module, hint in BACKENDS if not found[name]},
+    }
 
 
 def _number(value: Any, name: str, lo: float, hi: float) -> float:
@@ -181,7 +209,8 @@ def depth_to_scan(frame: DepthFrame, spec: Optional[dict[str, Any]] = None, *,
     return points
 
 
-def points_from_payload(payload: dict[str, Any], *, clock=time.time) -> tuple[list[dict[str, float]], float, str]:
+def points_from_payload(payload: dict[str, Any], *, clock=time.time,
+                        spec: Optional[dict[str, Any]] = None) -> tuple[list[dict[str, float]], float, str]:
     """Вернуть (точки, метка времени, источник) для любого формата сообщения."""
     if not isinstance(payload, dict):
         raise DepthError("ожидается JSON-объект")
@@ -196,10 +225,10 @@ def points_from_payload(payload: dict[str, Any], *, clock=time.time) -> tuple[li
         if angle_max <= angle_min:
             raise DepthError("angle_max должен быть больше angle_min")
         increment = (angle_max - angle_min) / max(1, len(payload["ranges"]) - 1)
-        spec = kinect_spec()
+        cfg = spec or kinect_spec()
         points = scan_from_ranges([float(v) for v in payload["ranges"]], angle_min, angle_max,
-                                  increment, range_min=float(spec["min_range_m"]),
-                                  range_max=float(spec["max_range_m"]))[:MAX_POINTS]
+                                  increment, range_min=float(cfg["min_range_m"]),
+                                  range_max=float(cfg["max_range_m"]))[:MAX_POINTS]
         return points, stamp_value, "ranges"
     if isinstance(payload.get("points"), list):
         points: list[dict[str, float]] = []
@@ -215,7 +244,7 @@ def points_from_payload(payload: dict[str, Any], *, clock=time.time) -> tuple[li
                 points.append({"a": round(angle, 4), "r": round(distance, 3)})
         return points, stamp_value, "points"
     frame = decode_depth_payload(payload, clock=clock)
-    return depth_to_scan(frame), frame.stamp, "depth"
+    return depth_to_scan(frame, spec), frame.stamp, "depth"
 
 
 class KinectDepthService:
@@ -243,7 +272,8 @@ class KinectDepthService:
 
     def feed(self, payload: Any) -> dict[str, Any]:
         """Принять кадр; исключение DepthError пробрасывается в HTTP как 400."""
-        points, stamp, source = points_from_payload(payload, clock=self._clock)
+        points, stamp, source = points_from_payload(
+            payload, clock=self._clock, spec=self._spec)
         with self._lock:
             self._points = points
             self._stamp = stamp
@@ -285,6 +315,7 @@ class KinectDepthService:
                 "height": self._last_height,
                 "error": self._error,
                 "spec": dict(self._spec),
+                "drivers": available_backends(),
             }
 
     def reset(self) -> None:

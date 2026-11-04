@@ -61,6 +61,63 @@ def test_post_sends_base64_uint16_and_marker(monkeypatch):
     assert captured["headers"]["X-robot-control"] == "kinect"
 
 
+def test_rear_unit_is_passed_in_url_and_body(monkeypatch):
+    captured = {}
+
+    class Reply:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"ok":true,"unit":"rear"}'
+
+    def fake_urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return Reply()
+
+    monkeypatch.setattr(publisher.urllib.request, "urlopen", fake_urlopen)
+    samples = array.array("H", [2000] * 16)
+    reply = publisher.post("http://127.0.0.1:8090/api/kinect/depth",
+                           samples, 4, 4, 12.5, unit="rear")
+    assert reply["unit"] == "rear"
+    assert captured["url"].endswith("?unit=rear")
+    assert captured["body"]["unit"] == "rear"
+    assert publisher.main(["--source", "demo", "--once", "--unit", "rear"]) == 0
+
+
+def test_auto_without_drivers_is_honest(monkeypatch, capsys):
+    """Без драйвера auto не подсовывает демо-кадр вместо настоящей глубины."""
+    monkeypatch.setattr(publisher, "detect_backends", lambda: [])
+    source, hint = publisher.detect_source()
+    assert source == "" and "не найден ни один драйвер" in hint
+    assert publisher.main(["--once"]) == 2
+    assert "requirements-kinect.txt" in capsys.readouterr().err
+    assert publisher.detect_source(allow_demo=True)[0] == "demo"
+    monkeypatch.setattr(publisher, "detect_backends", lambda: ["freenect", "ros2"])
+    assert publisher.detect_source() == ("freenect", "")
+
+
+def test_list_backends_reports_installed_drivers(monkeypatch, capsys):
+    monkeypatch.setattr(publisher, "detect_backends", lambda: ["ros2"])
+    assert publisher.main(["--list-backends"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["installed"] == ["ros2"]
+    assert "freenect" in report["missing"] and "openni" in report["missing"]
+
+
+def test_kinect_status_reports_drivers():
+    from robot_control import kinect
+    drivers = kinect.available_backends()
+    assert set(drivers["backends"]) == {"freenect", "openni", "ros2"}
+    assert drivers["installed"] == [name for name, yes in drivers["backends"].items() if yes]
+    service = kinect.KinectDepthService()
+    assert service.status()["drivers"]["ok"] is True
+
+
 def test_demo_once_end_to_end(monkeypatch):
     """--source demo --once проходит через grab → resample → post."""
     calls = []

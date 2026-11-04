@@ -126,6 +126,20 @@ def proxy_sensors(origin: str, suffix: str):
                          timeout=4.0)
 
 
+def proxy_calibration(origin: str, suffix: str):
+    """Чтение и сохранение замеров геометрии на бортовом сервере."""
+    routes = {
+        "/geometry": ({"GET"}, ""),
+        "/geometry/save": ({"POST"}, "calibration"),
+    }
+    if suffix not in routes:
+        return jsonify(ok=False, error="Неизвестная операция калибровки"), 404
+    methods, marker = routes[suffix]
+    return _forward_json(origin, "/api/calibration/geometry",
+                         methods=methods, limit=MAX_NAV_REPLY_BYTES,
+                         timeout=8.0, control_header=marker)
+
+
 def proxy_estop(origin: str, release: bool = False):
     """E-STOP и PIN-снятие для read-only master-peer веб-пульта."""
     suffix = "/release" if release else ""

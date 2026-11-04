@@ -220,7 +220,7 @@
           </div>
         </section>
 
-        <!-- камеры — по ширине шасси ниже шасси: передняя + задняя -->
+        <!-- камеры — 4 × Logitech C930e: спереди слева/справа и сзади слева/справа -->
         <section class="panel camera" id="camera" aria-labelledby="cam-title">
           <header class="panel-head">
             <h2 id="cam-title">Камеры</h2>
@@ -228,15 +228,27 @@
           </header>
           <div class="cam-grid">
             <div class="cam-viewport" id="cam-viewport-front">
-              <canvas id="cam-canvas" aria-label="Камера передняя"></canvas>
+              <canvas id="cam-canvas" aria-label="Камера передняя левая"></canvas>
               <p class="cam-empty" id="cam-empty" hidden>нет сигнала</p>
-              <span class="cam-badge" aria-hidden="true">● LIVE · ПЕРЕД</span>
+              <span class="cam-badge" aria-hidden="true">● LIVE · ПЕРЕД-Л</span>
               <span class="cam-cross" aria-hidden="true"></span>
             </div>
             <div class="cam-viewport" id="cam-viewport-rear">
-              <canvas id="cam-rear-canvas" aria-label="Камера задняя"></canvas>
+              <canvas id="cam-rear-canvas" aria-label="Камера задняя левая"></canvas>
               <p class="cam-empty" id="cam-rear-empty" hidden>нет сигнала</p>
-              <span class="cam-badge" aria-hidden="true">● LIVE · ЗАД</span>
+              <span class="cam-badge" aria-hidden="true">● LIVE · ЗАД-Л</span>
+              <span class="cam-cross" aria-hidden="true"></span>
+            </div>
+            <div class="cam-viewport" id="cam-viewport-front-right">
+              <canvas id="cam-right-canvas" aria-label="Камера передняя правая"></canvas>
+              <p class="cam-empty" id="cam-right-empty" hidden>нет сигнала</p>
+              <span class="cam-badge" aria-hidden="true">● LIVE · ПЕРЕД-П</span>
+              <span class="cam-cross" aria-hidden="true"></span>
+            </div>
+            <div class="cam-viewport" id="cam-viewport-rear-right">
+              <canvas id="cam-rear-right-canvas" aria-label="Камера задняя правая"></canvas>
+              <p class="cam-empty" id="cam-rear-right-empty" hidden>нет сигнала</p>
+              <span class="cam-badge" aria-hidden="true">● LIVE · ЗАД-П</span>
               <span class="cam-cross" aria-hidden="true"></span>
             </div>
           </div>

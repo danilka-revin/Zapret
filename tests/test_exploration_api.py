@@ -36,6 +36,10 @@ def test_kiosk_status_layout_and_kinect(kiosk_client):
     assert layout.json["kinect"]["model"] == "Kinect 360"
     kinect = kiosk_client.get("/api/kinect/status")
     assert kinect.status_code == 200 and kinect.json["connected"] is False
+    assert kinect.json["unit"] == "front" and kinect.json["units"]["front"] is False
+    assert kiosk_client.get("/api/kinect/status?unit=rear").status_code == 404
+    assert layout.json["rearKinectEnabled"] is False
+    assert list(layout.json["kinects"]) == ["front"]
     assert kiosk_client.application.extensions["rc_exploration"] is not None
     assert kiosk_client.application.extensions["rc_kinect"] is not None
 

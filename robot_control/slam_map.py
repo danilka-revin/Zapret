@@ -825,7 +825,8 @@ class SlamMapService:
             self._maybe_decay()
         return True
 
-    def ingest_kinect(self, points: Sequence[dict], stamp: Optional[float] = None) -> int:
+    def ingest_kinect(self, points: Sequence[dict], stamp: Optional[float] = None,
+                      *, spec: Optional[dict] = None) -> int:
         """Добавить лучи Kinect 360 в ту же сетку, минуя оценку позы.
 
         Точки уже выражены в системе робота (угол от «вперёд»), но исходят из
@@ -838,12 +839,12 @@ class SlamMapService:
             return 0
         from .sensor_layout import kinect_spec
 
-        spec = kinect_spec()
+        cfg = dict(spec or kinect_spec())
         with self._lock:
             bx, by, yaw = self._body_pose()
             cos_y, sin_y = math.cos(yaw), math.sin(yaw)
-            kx = bx + spec["x_m"] * cos_y - spec["y_m"] * sin_y
-            ky = by + spec["x_m"] * sin_y + spec["y_m"] * cos_y
+            kx = bx + cfg["x_m"] * cos_y - cfg["y_m"] * sin_y
+            ky = by + cfg["x_m"] * sin_y + cfg["y_m"] * cos_y
             touched = self._grid.insert_scan((kx, ky, yaw), points, self._settings)
             self._kinect_scans += 1
             self._kinect_points += len(points)

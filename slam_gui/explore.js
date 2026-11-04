@@ -1,6 +1,7 @@
 /* Автономное обследование: карта растёт сама, оператор только запускает и стопит.
  * Работает и на киоске (8090), и на пульте (8080): команды идут относительными
- * URL, CSRF-токен берётся из /api/exploration/status, как у навигации.
+ * URL, CSRF-токен берётся из /api/exploration/status или /api/calibration/geometry.
+ * Здесь же мастер калибровки: замеры с робота сохраняются в .env на борту.
  */
 (function () {
   'use strict';
@@ -14,6 +15,7 @@
   let busy = false;
   let timer = null;
   let initialized = false;
+  let calibrationFields = [];
 
   function text(id, value) { const el = $(id); if (el) el.textContent = value; }
   function okTone(el, good) { if (!el) return; el.classList.toggle('ok', !!good); el.classList.toggle('bad', !good); }
@@ -27,8 +29,11 @@
     return body;
   }
 
-  async function postJson(url, payload) {
-    const headers = { 'Content-Type': 'application/json', 'X-Robot-Control': 'exploration' };
+  async function postJson(url, payload, marker) {
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Robot-Control': marker || 'exploration',
+    };
     if (csrf) headers['X-CSRF-Token'] = csrf;
     const response = await fetch(url, {
       method: 'POST', cache: 'no-store', headers,
@@ -39,6 +44,23 @@
       throw new Error((body && (body.error || body.reason)) || ('HTTP ' + response.status));
     }
     return body;
+  }
+
+  function renderBlockers(status) {
+    const box = $('explore-blockers');
+    if (!box) return;
+    const blockers = Array.isArray(status.blockers) ? status.blockers : [];
+    box.textContent = '';
+    if (!blockers.length) return;
+    const title = document.createElement('b');
+    title.textContent = 'Перед пуском:';
+    box.appendChild(title);
+    blockers.forEach((reason) => {
+      const line = document.createElement('div');
+      line.className = 'explore-blocker';
+      line.textContent = '• ' + String(reason);
+      box.appendChild(line);
+    });
   }
 
   function render(status) {
@@ -55,9 +77,12 @@
     okTone($('explore-kinect'), status.kinectFresh);
     text('explore-enabled', status.enabled && status.navigationEnabled ? 'включено' : 'выключено');
     okTone($('explore-enabled'), status.enabled && status.navigationEnabled);
+    renderBlockers(status);
     const startBtn = $('explore-start');
     const stopBtn = $('explore-stop');
-    if (startBtn) startBtn.disabled = busy || status.active || !status.enabled || !status.navigationEnabled;
+    const canStart = status.canStart !== false;
+    if (startBtn) startBtn.disabled = busy || status.active || !canStart ||
+      !status.enabled || !status.navigationEnabled;
     if (stopBtn) stopBtn.disabled = busy || !status.active;
   }
 
@@ -66,10 +91,11 @@
     const cams = layout.cameras.slice(0, 4)
       .map((cam) => `${cam.role}: ${cam.yaw_deg}°`)
       .join(' · ');
-    text('explore-cameras', cams || '—');
+    const units = Object.keys(layout.kinects || { front: {} });
+    text('explore-cameras', (cams || '—') + ' · Kinect: ' + units.join(' + '));
     text('explore-calibration', layout.calibrated
       ? 'углы заданы в .env'
-      : 'углы не откалиброваны — заполните RC_CAMERA_* / RC_KINECT_* в .env');
+      : 'углы не откалиброваны — откройте «Калибровка геометрии»');
     okTone($('explore-calibration'), layout.calibrated);
     if (layout.duplicatePorts && layout.duplicatePorts.length) {
       text('explore-message', 'Две камеры используют один порт: ' + layout.duplicatePorts.join(', '));
@@ -97,6 +123,73 @@
       box.appendChild(line);
     });
     if (!box.childNodes.length) text('explore-landmarks', 'ориентиров пока нет');
+  }
+
+  // -- калибровка геометрии ---------------------------------------------- //
+  function renderCalibration(payload) {
+    if (payload.csrfToken) csrf = payload.csrfToken;
+    if (payload.hint) text('explore-cal-hint', payload.hint);
+    text('explore-cal-state', payload.calibrated ? 'замеры внесены' : 'требуется замер');
+    okTone($('explore-cal-state'), payload.calibrated);
+    const box = $('explore-cal-fields');
+    if (!box || !Array.isArray(payload.groups)) return;
+    box.textContent = '';
+    calibrationFields = [];
+    payload.groups.forEach((group) => {
+      const wrap = document.createElement('fieldset');
+      wrap.className = 'explore-cal-group';
+      const legend = document.createElement('legend');
+      legend.textContent = group.title + (group.port ? ' · ' + group.port : '');
+      wrap.appendChild(legend);
+      (group.fields || []).forEach((field) => {
+        const label = document.createElement('label');
+        label.className = 'explore-cal-field';
+        const caption = document.createElement('span');
+        caption.textContent = field.label + (field.unit ? ', ' + field.unit : '');
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.step = String(field.step || 0.01);
+        input.min = String(field.min);
+        input.max = String(field.max);
+        input.value = String(field.value);
+        input.dataset.key = field.key;
+        label.appendChild(caption);
+        label.appendChild(input);
+        wrap.appendChild(label);
+        calibrationFields.push({ key: field.key, input });
+      });
+      box.appendChild(wrap);
+    });
+  }
+
+  async function loadCalibration() {
+    try {
+      renderCalibration(await getJson('api/calibration/geometry'));
+    } catch (err) {
+      text('explore-cal-message', 'Не удалось прочитать геометрию: ' + (err.message || err));
+    }
+  }
+
+  async function saveCalibration(event) {
+    if (event && event.preventDefault) event.preventDefault();
+    const values = {};
+    calibrationFields.forEach((entry) => { values[entry.key] = entry.input.value; });
+    if (!Object.keys(values).length) {
+      text('explore-cal-message', 'Поля ещё не загружены.');
+      return;
+    }
+    busy = true;
+    try {
+      const body = await postJson('api/calibration/geometry', { values }, 'calibration');
+      text('explore-cal-message', 'Сохранено полей: ' + (body.savedKeys || []).length +
+        (body.calibrated ? ' · геометрия откалибрована' : ' · заполните все углы'));
+      await loadCalibration();
+      try { renderLayout(await getJson('api/sensors/layout')); } catch (e) { /* не критично */ }
+    } catch (err) {
+      text('explore-cal-message', 'Сохранение отклонено: ' + (err.message || err));
+    } finally {
+      busy = false;
+    }
   }
 
   async function refresh() {
@@ -159,15 +252,21 @@
     const stopBtn = $('explore-stop');
     if (startBtn) startBtn.addEventListener('click', start);
     if (stopBtn) stopBtn.addEventListener('click', stop);
+    const form = $('explore-cal-form');
+    if (form) form.addEventListener('submit', saveCalibration);
+    const reload = $('explore-cal-reload');
+    if (reload) reload.addEventListener('click', loadCalibration);
     refresh();
     refreshExtras();
+    loadCalibration();
     timer = setInterval(() => { refresh(); }, 1500);
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) { refresh(); refreshExtras(); }
     });
   }
 
-  window.RCExplore = { init, refresh, start, stop, render,
+  window.RCExplore = { init, refresh, start, stop, render, renderLayout,
+    renderCalibration, loadCalibration, saveCalibration,
     stopPolling() { if (timer) clearInterval(timer); timer = null; } };
 
   if (document.readyState === 'loading') {

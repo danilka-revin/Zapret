@@ -159,15 +159,19 @@ def grab(source: str, topic: str) -> tuple[array.array, int, int]:
 
 
 def post(url: str, samples: array.array, width: int, height: int,
-         stamp: float, timeout_s: float = 3.0) -> dict[str, Any]:
+         stamp: float, timeout_s: float = 3.0, unit: str = "front") -> dict[str, Any]:
     if sys.byteorder != "little":
         samples = array.array("H", samples)
         samples.byteswap()
-    body = json.dumps({
+    payload = {
         "width": width, "height": height,
         "depth": base64.b64encode(samples.tobytes()).decode("ascii"),
         "units": "mm", "stamp": stamp,
-    }).encode("utf-8")
+    }
+    if unit != "front":
+        payload["unit"] = unit
+        url = url + ("&" if "?" in url else "?") + "unit=" + unit
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST", headers={
         "Content-Type": "application/json",
         CONTROL_HEADER: "kinect",
@@ -176,30 +180,77 @@ def post(url: str, samples: array.array, width: int, height: int,
         return json.loads(reply.read().decode("utf-8"))
 
 
+BACKEND_MODULES: tuple[tuple[str, str], ...] = (
+    ("freenect", "freenect"),
+    ("openni", "openni2"),
+    ("ros2", "rclpy"),
+)
+
+
+def detect_backends() -> list[str]:
+    """Какие драйверы Kinect реально импортируются (без чтения кадров)."""
+    found: list[str] = []
+    for name, module in BACKEND_MODULES:
+        try:
+            __import__(module)
+        except ImportError:
+            continue
+        found.append(name)
+    return found
+
+
+def detect_source(allow_demo: bool = False) -> tuple[str, str]:
+    """Выбрать источник для ``--source auto``.
+
+    Раньше при отсутствии драйверов скрипт молча уходил в демо-кадр, и по
+    карте было не отличить настоящий Kinect от заглушки. Теперь без драйвера —
+    честная ошибка, а демо включается только явно.
+    """
+    found = detect_backends()
+    if found:
+        return found[0], ""
+    if allow_demo:
+        return "demo", "Kinect: драйверы не найдены, явно разрешён демо-кадр (--allow-demo)"
+    return "", ("Kinect: не найден ни один драйвер (freenect / openni2 / rclpy). "
+                "См. requirements-kinect.txt и docs/AUTONOMY.md; для проверки "
+                "связи без железа запустите --source demo.")
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Kinect 360 → карта робота")
     parser.add_argument("--source", choices=("auto", "demo", "freenect", "openni", "ros2"),
-                        default="auto", help="auto пробует freenect, openni, затем demo")
+                        default="auto", help="auto выбирает установленный драйвер Kinect")
+    parser.add_argument("--allow-demo", action="store_true",
+                        help="в auto разрешить демо-кадр, если драйверов нет")
+    parser.add_argument("--list-backends", action="store_true",
+                        help="показать установленные драйверы и выйти")
     parser.add_argument("--url", default=DEFAULT_URL)
     parser.add_argument("--topic", default="/camera/depth/image_rect_raw")
+    parser.add_argument("--unit", choices=("front", "rear"), default="front",
+                        help="какой Kinect публикует кадр (rear требует RC_KINECT_REAR_ENABLE=1)")
     parser.add_argument("--width", type=int, default=DEFAULT_WIDTH)
     parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT)
     parser.add_argument("--fps", type=float, default=10.0)
     parser.add_argument("--once", action="store_true", help="отправить один кадр и выйти")
     args = parser.parse_args(argv)
 
+    if args.list_backends:
+        installed = detect_backends()
+        print(json.dumps({
+            "installed": installed,
+            "missing": [name for name, _module in BACKEND_MODULES if name not in installed],
+            "hint": "requirements-kinect.txt · docs/AUTONOMY.md",
+        }, ensure_ascii=False))
+        return 0
+
     source = args.source
     if source == "auto":
-        for candidate in ("freenect", "openni"):
-            try:
-                __import__(candidate if candidate != "openni" else "openni2")
-                source = candidate
-                break
-            except ImportError:
-                continue
-        else:
-            source = "demo"
-            print("Kinect не найден: отправляю демо-кадр (--source demo)", file=sys.stderr)
+        detected, hint = detect_source(args.allow_demo)
+        if hint:
+            print(hint, file=sys.stderr)
+        if not detected:
+            return 2
+        source = detected
 
     period = 1.0 / max(0.1, min(30.0, args.fps))
     frames = 0
@@ -207,7 +258,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         while True:
             samples, raw_w, raw_h = grab(source, args.topic)
             small = resample_u16(samples, raw_w, raw_h, args.width, args.height)
-            reply = post(args.url, small, args.width, args.height, time.time())
+            reply = post(args.url, small, args.width, args.height, time.time(),
+                         unit=args.unit)
             frames += 1
             if args.once:
                 print(json.dumps({"source": source, "reply": reply}, ensure_ascii=False))

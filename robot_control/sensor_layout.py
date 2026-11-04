@@ -101,6 +101,10 @@ _LIMITS: dict[str, tuple[float, float]] = {
 }
 
 
+# Публичная копия для мастера калибровки (robot_control/calibration.py).
+FIELD_LIMITS: dict[str, tuple[float, float]] = dict(_LIMITS)
+
+
 def _env_float(name: str, default: float, lo: float, hi: float) -> float:
     raw = (os.environ.get(name) or "").strip()
     if not raw:
@@ -123,7 +127,12 @@ def _env_port(role: str, default: str) -> str:
 
 
 def _env_is_set(*keys: str) -> bool:
-    return any(bool((os.environ.get(key) or "").strip()) for key in keys)
+    """True только когда заданы все перечисленные переменные.
+
+    Раньше здесь было ``any``: одного ``RC_KINECT_X_M`` хватало, чтобы экран
+    объявил геометрию откалиброванной, хотя углы камер ещё не измерены.
+    """
+    return all(bool((os.environ.get(key) or "").strip()) for key in keys)
 
 
 def camera_specs() -> list[dict[str, Any]]:
@@ -173,11 +182,37 @@ def camera_env_keys(role: str) -> dict[str, str]:
     }
 
 
-def kinect_spec() -> dict[str, Any]:
-    """Настройки Kinect 360: монтаж, оптика, фильтры и число лучей."""
+# Второй Kinect 360 сзади по центру — опция. В исходном описании сзади были
+# только две C930e, поэтому по умолчанию выключен; если он всё же стоит,
+# достаточно RC_KINECT_REAR_ENABLE=1 и своих замеров ниже.
+REAR_KINECT_ENABLE_KEY = "RC_KINECT_REAR_ENABLE"
+KINECT_REAR_ENV_KEYS: dict[str, str] = {
+    field: key.replace("RC_KINECT_", "RC_KINECT_REAR_", 1)
+    for field, key in KINECT_ENV_KEYS.items()
+}
+_KINECT_REAR_DEFAULTS = dict(_KINECT_DEFAULTS, x_m=-0.35, yaw_deg=180.0, pitch_deg=0.0)
+
+
+def rear_kinect_enabled() -> bool:
+    return (os.environ.get(REAR_KINECT_ENABLE_KEY) or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
+def kinect_spec(unit: str = "front") -> dict[str, Any]:
+    """Настройки Kinect 360: монтаж, оптика, фильтры и число лучей.
+
+    ``unit='rear'`` — опциональный датчик сзади; у него свои переменные .env
+    и свой курс (по умолчанию 180°), но та же математика псевдоскана.
+    """
+    if unit == "rear":
+        env_keys, defaults = KINECT_REAR_ENV_KEYS, _KINECT_REAR_DEFAULTS
+    elif unit == "front":
+        env_keys, defaults = KINECT_ENV_KEYS, _KINECT_DEFAULTS
+    else:
+        raise ValueError("неизвестный Kinect: %s" % unit)
     spec = {
-        key: _env_float(env_key, float(_KINECT_DEFAULTS[key]), *_LIMITS[key])
-        for key, env_key in KINECT_ENV_KEYS.items()
+        key: _env_float(env_keys[key], float(defaults[key]), *_LIMITS[key])
+        for key in env_keys
     }
     spec["scan_columns"] = int(spec["scan_columns"])
     spec["model"] = "Kinect 360"
@@ -187,6 +222,14 @@ def kinect_spec() -> dict[str, Any]:
     if spec["max_height_m"] <= spec["min_height_m"]:
         spec["max_height_m"] = spec["min_height_m"] + 0.5
     return spec
+
+
+def kinect_specs() -> dict[str, dict[str, Any]]:
+    """Активные датчики глубины: передний всегда, задний — по флагу .env."""
+    units = {"front": kinect_spec("front")}
+    if rear_kinect_enabled():
+        units["rear"] = kinect_spec("rear")
+    return units
 
 
 def geometry_calibrated() -> bool:
@@ -212,7 +255,11 @@ def layout_payload() -> dict[str, Any]:
         "calibrated": geometry_calibrated(),
         "cameraCount": len(cameras),
         "cameras": cameras,
-        "kinect": kinect_spec(),
+        "kinect": kinect_spec("front"),
+        "kinects": kinect_specs(),
+        "rearKinectEnabled": rear_kinect_enabled(),
+        "rearKinectEnvKeys": dict(KINECT_REAR_ENV_KEYS),
+        "rearKinectEnableKey": REAR_KINECT_ENABLE_KEY,
         "cameraEnvKeys": {role: camera_env_keys(role) for role in CAMERA_ROLES},
         "kinectEnvKeys": dict(KINECT_ENV_KEYS),
         "duplicatePorts": sorted({p for p in ports if ports.count(p) > 1}),

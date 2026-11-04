@@ -111,6 +111,19 @@
             <p class="nav-msg" id="explore-message" role="status" aria-live="polite">Обследование не запущено.</p>
             <p class="explore-meta">Камеры: <span id="explore-cameras">—</span></p>
             <p class="explore-meta">Калибровка: <span id="explore-calibration">—</span></p>
+            <div id="explore-blockers" class="explore-blockers" role="status" aria-live="polite"></div>
+            <details class="explore-cal" id="explore-cal">
+              <summary>Калибровка геометрии · <span id="explore-cal-state">—</span></summary>
+              <p class="nav-hint" id="explore-cal-hint">Замерьте углы и смещения на роботе и сохраните их здесь: значения попадут в .env на борту.</p>
+              <form id="explore-cal-form">
+                <div id="explore-cal-fields" class="explore-cal-fields"></div>
+                <div class="nav-actions">
+                  <button type="submit" id="explore-cal-save" class="map-btn map-btn--primary">Сохранить в .env</button>
+                  <button type="button" id="explore-cal-reload" class="map-btn">Перечитать</button>
+                </div>
+                <p class="nav-msg" id="explore-cal-message" role="status" aria-live="polite"></p>
+              </form>
+            </details>
             <div id="explore-landmarks" class="explore-landmarks"></div>
           </section>
         </aside>

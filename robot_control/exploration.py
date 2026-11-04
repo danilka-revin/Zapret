@@ -27,6 +27,7 @@ from typing import Any, Callable, Optional
 
 from . import estop as estop_latch
 from . import eventlog
+from . import sensor_layout
 from .config import PROJECT_ROOT
 from .lidar import normalize_angle
 from .navigation import FREE_MAX, OCCUPIED_MIN, NavigationError
@@ -388,6 +389,39 @@ class ExplorationService:
         eventlog.record("warn", "автообследование остановлено: %s" % reason, source="навигация")
         return {"ok": True, "status": self.status()}
 
+    def preflight(self) -> dict[str, Any]:
+        """Что мешает пуску, а что стоит просто проверить — для панели UI.
+
+        ``blockers`` повторяет ровно те проверки, которые :meth:`start` всё
+        равно выполнит; ``warnings`` не блокируют кнопку, а подсказывают, что
+        карта или геометрия ещё не готовы к точной работе.
+        """
+        blockers: list[str] = []
+        warnings: list[str] = []
+        if not self.enabled:
+            blockers.append("Автообследование выключено: задайте RC_EXPLORE_ENABLE=1")
+        if not getattr(self.navigation, "enabled", False):
+            blockers.append("Навигация выключена: задайте RC_NAV_ENABLE=1")
+        if self._estop():
+            blockers.append("Взведён E-STOP: снимите аварийную остановку")
+        if self.require_depth and not self._kinect_fresh():
+            blockers.append("Нет свежего кадра Kinect 360: запустите публикатор глубины")
+        if self.require_blind_check:
+            warnings.append("Перед пуском осмотрите ближнюю зону вокруг робота")
+        try:
+            if known_cells(self._snapshot()) == 0:
+                warnings.append("Карта пуста: дождитесь свежего скана лидара")
+        except Exception:  # noqa: BLE001 — статус не должен ронять экран
+            warnings.append("Не удалось прочитать карту")
+        if not sensor_layout.geometry_calibrated():
+            warnings.append("Геометрия не откалибрована: углы взяты по умолчанию — "
+                            "откройте «Калибровка геометрии» и внесите замеры")
+        duplicate = sensor_layout.layout_payload().get("duplicatePorts") or []
+        if duplicate:
+            warnings.append("Один порт у нескольких камер: " + ", ".join(duplicate))
+        return {"blockers": blockers, "warnings": warnings,
+                "canStart": not blockers and not self.active}
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             state = dict(self._state)
@@ -401,6 +435,7 @@ class ExplorationService:
                 goal_ahead_m=self.goal_ahead_m, max_candidates=self.max_candidates))
         except Exception as exc:  # noqa: BLE001 — статус не должен ронять экран
             state["mapError"] = str(exc)[:160]
+        state.update(self.preflight())
         state.update({
             "ok": True,
             "enabled": self.enabled,

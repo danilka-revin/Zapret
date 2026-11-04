@@ -13,7 +13,7 @@ occupancy grid, сохраняет карту и повторяет. Это **н
 | **Лидар 360°** (RPLIDAR/LD06/LDS-01/ROS 2) | основной источник карты и позы | `SlamMapService.ingest()` + scan matching, `NavigationService._preflight` |
 | **Kinect 360** (спереди по центру) | глубина, ближняя зона и препятствия впереди | `POST /api/kinect/depth` → `kinect.depth_to_scan()` → `SlamMapService.ingest_kinect()` в **ту же** сетку |
 | **4 × Logitech C930e** (FL, FR спереди; RL, RR сзади по бокам) | круговой обзор и визуальные ориентиры | MJPEG `/api/camera/<0…3>/frame`, кадры с привязкой к позе в `data/landmarks/` |
-| Одометрия/телеметрия колёс | подтверждение готовности тяги и停下 | существующий `MasterBridge`/`NavigationService` |
+| Одометрия/телеметрия колёс | подтверждение готовности тяги и остановки | существующий `MasterBridge`/`NavigationService` |
 
 Kinect **не** участвует в оценке позы и не подменяет «свежесть» лидара: позу
 по-прежнему определяет 360° скан. Поэтому неоткалиброванный Kinect не может
@@ -59,10 +59,18 @@ RC_KINECT_YAW_DEG=0
 RC_KINECT_PITCH_DEG=0
 ```
 
-Пока переменные не заданы, `GET /api/sensors/layout` возвращает
-`calibrated: false`; карта при этом всё ещё строится лидаром, но не стоит
-рассчитывать на точные углы обзора. C930e по умолчанию: 82° по горизонтали,
-52° по вертикали; Kinect 360: 57° × 43°, 0,45…4 м.
+Вносить замеры можно не только руками: на `/map` и `/route` откройте
+**«Калибровка геометрии»** — там все 33 поля (4 камеры × 5 + Kinect × 13) с
+текущими значениями, диапазонами и подсказками. «Сохранить в .env» пишет
+только известные ключи атомарно, не трогая остальные строки файла, и сразу
+применяет их к процессу. На пульте 8080 сохранение дополнительно защищено
+CSRF-токеном и заголовком `X-Robot-Control: calibration`.
+
+Пока заданы не все углы, `GET /api/sensors/layout` возвращает
+`calibrated: false`, а панель обследования показывает предупреждение; карта
+при этом всё ещё строится лидаром, но не стоит рассчитывать на точные углы
+обзора. C930e по умолчанию: 82° по горизонтали, 52° по вертикали; Kinect 360:
+57° × 43°, 0,45…4 м.
 
 Проверить геометрию и отсутствие дублей портов:
 
@@ -77,8 +85,14 @@ curl http://127.0.0.1:8090/api/cameras | python3 -m json.tool
 изменений в приложении и не открывает USB из Flask-процесса:
 
 ```bash
+# какие драйверы вообще установлены
+.venv/bin/python scripts/kinect_depth_publisher.py --list-backends
+
 # сначала без железа: один синтетический кадр, проверка всей цепочки
 .venv/bin/python scripts/kinect_depth_publisher.py --source demo --once
+
+# auto выберет установленный драйвер; без драйвера честно остановится с ошибкой
+.venv/bin/python scripts/kinect_depth_publisher.py --source auto
 
 # реальный Kinect 360 через libfreenect
 .venv/bin/python scripts/kinect_depth_publisher.py --source freenect
@@ -99,6 +113,12 @@ curl http://127.0.0.1:8090/api/cameras | python3 -m json.tool
 curl http://127.0.0.1:8090/api/kinect/status   # connected, frames, points
 curl http://127.0.0.1:8090/api/kiosk_map       # kinectScans, kinectPoints
 ```
+
+Драйверы (`freenect`, `openni2`, `rclpy`) намеренно **не** добавлены в основной
+`requirements.txt`: им нужны системные библиотеки или ROS 2. Команды установки
+и переменные окружения собраны в `requirements-kinect.txt`, ROS 2-вариант —
+в `docs/ROS2_LIDAR.md`. Поле `drivers` в `/api/kinect/status` показывает, что
+реально импортируется на борту.
 
 Если нужен автозапуск — добавьте публикатор в `scripts/autostart.sh` рядом с
 киоском или отдельный systemd-юнит по образцу `scripts/robot-kiosk.service`.
@@ -186,3 +206,74 @@ ORB-SLAM3 требует калибровки каждой камеры, ROS 2 �
 | Камеры перепутаны | закрепите `/dev/v4l/by-id/…` в «Настройке камер» |
 | `duplicatePorts` в `/api/sensors/layout` | два разных `RC_CAMERA_*` указывают на один порт |
 | «Поездка превысила таймаут» | `RC_EXPLORE_STEP_TIMEOUT_S`, связь с шасси, застрявшее колесо |
+
+## 8. Чек-лист готовности перед пуском
+
+`/api/exploration/status` содержит `blockers` (то, что реально не даст
+запуститься), `warnings` (что стоит проверить) и `canStart`. Панель показывает
+их списком и держит кнопку «Начать» выключенной, пока есть blockers:
+
+```bash
+curl http://127.0.0.1:8090/api/exploration/status | python3 -m json.tool
+```
+
+| Поле | Источник |
+|---|---|
+| `RC_EXPLORE_ENABLE=1`, `RC_NAV_ENABLE=1` | иначе режим и навигация выключены |
+| E-STOP снят | `robot_control/estop.py` |
+| свежий кадр Kinect | `RC_EXPLORE_REQUIRE_DEPTH`, `/api/kinect/status` |
+| галка «Ближняя зона осмотрена» | физический осмотр оператором, не показание датчика |
+| все углы внесены | «Калибровка геометрии», `/api/sensors/layout → calibrated` |
+| карта не пуста, лидар свежий | `/api/kiosk_map → scans, quality, trusted` |
+
+Предупреждения не блокируют пуск: например, без калибровки робот поедет, но
+лучи Kinect будут смещены относительно реального монтажа.
+
+## 9. Сухой прогон без железа
+
+Полный цикл можно проверить на синтетической карте — без лидара, шасси и
+Kinect. Скрипт повторяет выбор границы, «поездку», рост карты, автосохранение
+и запись ориентиров:
+
+```bash
+.venv/bin/python scripts/explore_sim.py            # отчёт
+.venv/bin/python scripts/explore_sim.py --steps 8 --json
+```
+
+Отчёт `ok: true` означает только исправность логики, **не** безопасность
+движения: физические проверки из `docs/navigation.md` остаются обязательными.
+
+## 10. Второй Kinect 360 сзади (опция)
+
+В исходной схеме сзади были только две C930e, поэтому второй Kinect выключен.
+Если он установлен:
+
+```ini
+RC_KINECT_REAR_ENABLE=1
+RC_KINECT_REAR_X_M=-0.35
+RC_KINECT_REAR_YAW_DEG=180
+# остальные RC_KINECT_REAR_* — по замеру, см. .env.example
+```
+
+```bash
+.venv/bin/python scripts/kinect_depth_publisher.py --source auto --unit rear
+curl 'http://127.0.0.1:8090/api/kinect/status?unit=rear'
+```
+
+У заднего датчика свой `KinectDepthService`, свои фильтры и своя точка монтажа;
+точки поворачиваются на его `yaw` ещё до попадания в карту. Поза по-прежнему
+берётся у лидара. `/api/sensors/layout` отдаёт `kinects` и
+`rearKinectEnabled`.
+
+## 11. Проверки интерфейса без браузера
+
+Логику панели обследования и формы калибровки проверяют Node/`vm`-тесты
+(как остальные экранные скрипты проекта), без Chromium:
+
+```bash
+node tests/js/explore_screen.js
+.venv/bin/python -m pytest -q tests/test_explore_screen.py tests/test_calibration.py
+```
+
+Это проверка DOM-логики и заголовков запросов, а не замена просмотру страницы
+в реальном браузере на роботе.

@@ -98,7 +98,8 @@ from robot_control.slam_map import SlamMapService, map_paths
 from robot_control.navigation import NavigationError, NavigationService
 from robot_control.kinect import DepthError, KinectDepthService
 from robot_control.exploration import ExplorationError, ExplorationService
-from robot_control.sensor_layout import layout_payload
+from robot_control.sensor_layout import layout_payload, kinect_spec, rear_kinect_enabled
+from robot_control import calibration as geometry_calibration
 
 log = logging.getLogger("robot_control.kiosk")
 
@@ -627,6 +628,12 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     # пульт 8080 получает статус и команды через proxy, а не второго исполнителя.
     kinect_service = KinectDepthService()
     app.extensions["rc_kinect"] = kinect_service
+    # Второй Kinect сзади — опция (RC_KINECT_REAR_ENABLE=1). Передний всегда
+    # доступен под прежним ключом rc_kinect, чтобы старые API и тесты не менялись.
+    kinect_services = {"front": kinect_service}
+    if rear_kinect_enabled():
+        kinect_services["rear"] = KinectDepthService(spec=kinect_spec("rear"))
+    app.extensions["rc_kinects"] = kinect_services
     camera_provider = lambda: CameraManager.get_instance()  # noqa: E731 — ленивый синглтон
     exploration = ExplorationService(
         map_service, navigation, camera_provider=camera_provider, kinect=kinect_service,
@@ -768,11 +775,15 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                         # медленного scan matching: устаревшая поза не свежая.
                         map_service.ingest(points, stamp=stamp, trusted=scan_info["trusted"])
                 # Kinect 360: отдельный псевдоскан в ту же сетку, ровно один
-                # раз на кадр. Позу и качество определяет только лидар.
-                depth = kinect_service.consume()
-                if depth is not None:
+                # раз на кадр. Задний датчик (если включён) вносит точки со
+                # своим смещением и курсом. Позу задаёт только лидар.
+                for unit, service in kinect_services.items():
+                    depth = service.consume()
+                    if depth is None:
+                        continue
                     depth_points, depth_stamp = depth
-                    map_service.ingest_kinect(depth_points, stamp=depth_stamp)
+                    map_service.ingest_kinect(depth_points, stamp=depth_stamp,
+                                              spec=kinect_spec(unit))
                 map_service.maybe_autosave()
             except Exception as exc:  # noqa: BLE001 — карта не должна ронять сервер
                 log.debug("карта лидара: %s", exc)
@@ -914,9 +925,24 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         return send_from_directory(exploration.landmark_directory, name,
                                    mimetype="image/jpeg", max_age=0)
 
+    def _kinect_for_request(body=None):
+        unit = (request.args.get("unit") or (body or {}).get("unit") or "front").strip().lower()
+        if unit not in {"front", "rear"}:
+            return None, None
+        service = kinect_services.get(unit)
+        if service is None:
+            return None, unit
+        return service, unit
+
     @app.get("/api/kinect/status")
     def api_kinect_status():
-        return jsonify(kinect_service.status()), 200, {"Cache-Control": "no-store"}
+        service, unit = _kinect_for_request()
+        if service is None:
+            return jsonify({"ok": False, "error": "Kinect %s не включён (RC_KINECT_REAR_ENABLE=1)" % unit}), 404
+        payload = service.status()
+        payload["unit"] = unit
+        payload["units"] = {name: item.status()["connected"] for name, item in kinect_services.items()}
+        return jsonify(payload), 200, {"Cache-Control": "no-store"}
 
     @app.post("/api/kinect/depth")
     def api_kinect_depth():
@@ -926,16 +952,40 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
             return jsonify({"ok": False, "error": "Ожидается JSON-объект с кадром глубины"}), 400
+        service, unit = _kinect_for_request(body)
+        if service is None:
+            return jsonify({"ok": False, "error": "Kinect %s не включён" % unit}), 404
         try:
-            result = kinect_service.feed(body)
+            result = service.feed(body)
         except DepthError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
+        result["unit"] = unit
         return jsonify(result)
 
     @app.get("/api/sensors/layout")
     def api_sensors_layout():
         """Четыре C930e + Kinect 360: порты, углы, готовность калибровки."""
         return jsonify(layout_payload()), 200, {"Cache-Control": "no-store"}
+
+    @app.get("/api/calibration/geometry")
+    def api_calibration_geometry():
+        """Поля для внесения замеров геометрии сенсоров."""
+        return jsonify(geometry_calibration.geometry_payload()), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/calibration/geometry")
+    def api_calibration_geometry_save():
+        """Сохранить замеры в .env (только известные ключи, с проверкой диапазонов)."""
+        body = request.get_json(silent=True) or {}
+        values = body.get("values", body)
+        try:
+            result = geometry_calibration.save_geometry(values)
+        except geometry_calibration.CalibrationError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except OSError as exc:
+            return jsonify({"ok": False, "error": "не удалось записать .env: %s" % exc}), 500
+        eventlog.record("ok", "Геометрия сенсоров: сохранено полей %d" % len(result["savedKeys"]),
+                        source="Калибровка")
+        return jsonify(result)
 
     @app.get("/api/kiosk_logs")
     def api_kiosk_logs():

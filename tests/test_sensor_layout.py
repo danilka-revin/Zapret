@@ -17,6 +17,9 @@ def clean_camera_env(monkeypatch):
             monkeypatch.delenv(key, raising=False)
     for key in layout.KINECT_ENV_KEYS.values():
         monkeypatch.delenv(key, raising=False)
+    for key in layout.KINECT_REAR_ENV_KEYS.values():
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv(layout.REAR_KINECT_ENABLE_KEY, raising=False)
 
 
 def test_four_cameras_have_stable_ids_roles_and_angles(monkeypatch):
@@ -43,7 +46,31 @@ def test_env_overrides_geometry_and_calibration(monkeypatch):
     assert specs["front_left"]["yaw_deg"] == -37.5
     assert specs["front_right"]["port"] == "/dev/v4l/by-id/cam-fr-video-index0"
     assert layout.kinect_spec()["x_m"] == 0.42
+    # Одного-двух замеров мало: калибровка считается законченной только когда
+    # заданы углы всех четырёх камер и положение/оптика Kinect.
+    assert layout.geometry_calibrated() is False
+    for role in layout.CAMERA_ROLES:
+        monkeypatch.setenv(layout.camera_env_keys(role)["yaw_deg"], "-37.5")
+    monkeypatch.setenv("RC_KINECT_HFOV_DEG", "57")
     assert layout.geometry_calibrated() is True
+
+
+def test_rear_kinect_is_optional_and_has_own_geometry(monkeypatch):
+    clean_camera_env(monkeypatch)
+    monkeypatch.delenv("RC_KINECT_REAR_ENABLE", raising=False)
+    assert layout.rear_kinect_enabled() is False
+    assert list(layout.kinect_specs()) == ["front"]
+    payload = layout.layout_payload()
+    assert payload["rearKinectEnabled"] is False and list(payload["kinects"]) == ["front"]
+    monkeypatch.setenv("RC_KINECT_REAR_ENABLE", "1")
+    monkeypatch.setenv("RC_KINECT_REAR_X_M", "-0.42")
+    monkeypatch.setenv("RC_KINECT_REAR_YAW_DEG", "175")
+    assert layout.rear_kinect_enabled() is True
+    specs = layout.kinect_specs()
+    assert set(specs) == {"front", "rear"}
+    assert specs["rear"]["x_m"] == -0.42 and specs["rear"]["yaw_deg"] == 175.0
+    assert specs["front"]["x_m"] == pytest.approx(0.35), "передний не должен меняться"
+    assert layout.layout_payload()["rearKinectEnabled"] is True
 
 
 def test_bad_env_values_are_clamped_not_crashing(monkeypatch):

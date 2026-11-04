@@ -1255,7 +1255,7 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     # The onboard process owns the map. The web process must never build a
     # second grid or race it when saving the same files.
     from .map_peer import (proxy_map, proxy_navigation, proxy_exploration,
-                          proxy_sensors, proxy_landmark_file)
+                          proxy_sensors, proxy_landmark_file, proxy_calibration)
 
     for suffix, methods in (("", ["GET"]), ("/settings", ["GET", "POST"]),
                             ("/reset", ["POST"]), ("/save", ["POST"])):
@@ -1384,6 +1384,29 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     @guard
     def api_sensors_layout():
         return sensors_proxy("/layout")
+
+    def calibration_proxy(suffix):
+        return proxy_calibration(
+            peer_kiosk_url().removesuffix("/api/kiosk_state"), suffix)
+
+    @bp.get("/api/calibration/geometry")
+    @guard
+    def api_calibration_geometry():
+        response = calibration_proxy("/geometry")
+        if csrf_token_provider and getattr(response, "is_json", False):
+            payload = response.get_json(silent=True)
+            if isinstance(payload, dict):
+                payload["csrfToken"] = csrf_token_provider()
+                return jsonify(payload), response.status_code, {"Cache-Control": "no-store"}
+        return response
+
+    @bp.post("/api/calibration/geometry")
+    @guard
+    def api_calibration_geometry_save():
+        if request.headers.get("X-Robot-Control") != "calibration" or \
+                csrf_header_ok is None or not csrf_header_ok():
+            return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
+        return calibration_proxy("/geometry/save")
 
     @bp.get("/api/kinect/status")
     @guard
