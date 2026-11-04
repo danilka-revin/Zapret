@@ -7,6 +7,7 @@
   <meta name="theme-color" content="#000000" />
   <link rel="stylesheet" href="robot.css" />
   <link rel="stylesheet" href="calibration.css" />
+  <link rel="stylesheet" href="receipt.css" />
   <link rel="stylesheet" href="map.css" />
   <link rel="stylesheet" href="lidar_settings.css" />
   <link rel="stylesheet" href="power.css" />
@@ -203,6 +204,52 @@
             <a id="bms-report" class="swipe-close" href="api/battery/report.csv" aria-disabled="true">Скачать CSV</a>
           </div>
         </header>
+
+        <section class="receipt-panel" id="receipt-panel" aria-labelledby="receipt-heading">
+          <div class="receipt-top">
+            <div class="receipt-title">
+              <div class="receipt-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M6 8V3h12v5M6 17H4V9h16v8h-2M7 14h10v7l-2-1-2 1-2-1-2 1-2-1v-6Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M16 11h1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div>
+              <div><span class="receipt-eyebrow">ЧЕКОВЫЙ ПРИНТЕР · USB-UART</span><h4 id="receipt-heading">Отчёт по аккумулятору</h4><p>Свежие показания BMS на бумаге</p></div>
+            </div>
+            <span class="receipt-badge" id="receipt-badge">Проверяем…</span>
+          </div>
+          <fieldset class="receipt-levels" aria-label="Длина отчёта">
+            <label><input type="radio" name="receipt-level" value="short"><span><b>Короткий</b><small>Главные показатели</small></span></label>
+            <label><input type="radio" name="receipt-level" value="medium" checked><span><b>Средний</b><small>Все банки и защиты</small></span></label>
+            <label><input type="radio" name="receipt-level" value="full"><span><b>Полный</b><small>Каждая банка и история</small></span></label>
+          </fieldset>
+          <div class="receipt-actions">
+            <button id="receipt-print" class="receipt-primary" type="button" disabled>Напечатать отчёт <span aria-hidden="true">↗</span></button>
+            <button id="receipt-preview-toggle" class="receipt-secondary" type="button" aria-controls="receipt-preview" aria-expanded="false">Предпросмотр</button>
+            <button id="receipt-cancel" class="receipt-secondary" type="button" hidden>Остановить отправку</button>
+          </div>
+          <p id="receipt-message" class="receipt-message" role="status" aria-live="polite">Проверяем принтер…</p>
+          <p id="receipt-requirements" class="receipt-requirements" hidden></p>
+          <div id="receipt-preview" class="receipt-preview" hidden>
+            <div class="receipt-preview-meta"><b>ПРЕДПРОСМОТР</b><span id="receipt-preview-meta">Текущий снимок BMS</span></div>
+            <pre id="receipt-preview-text">Ожидание данных BMS…</pre>
+            <small>При печати используется новый свежий снимок. Ещё 4 строки — подача для отрыва.</small>
+          </div>
+          <details id="receipt-settings" class="receipt-settings">
+            <summary><span>Настроить принтер</span><small>порт, скорость и кодировка</small></summary>
+            <p class="receipt-hint">Нужен отдельный USB-UART принтера. Адаптер не доказывает, что к нему подключён принтер: проверьте кабель физически. Порт колеса, лидара или BMS использовать нельзя.</p>
+            <p class="receipt-hint">Неопознанный USB-UART может блокировать движение робота. Подтверждение порта для печати не снимает эту защиту.</p>
+            <div class="receipt-form">
+              <label class="receipt-port">USB-порт принтера<select id="receipt-port"><option value="">Не выбран</option></select></label>
+              <label>Скорость UART<select id="receipt-baud"><option>9600</option><option>19200</option><option>38400</option><option>57600</option><option>115200</option></select></label>
+              <label>Кадр<select id="receipt-framing"><option>8N1</option><option>8E1</option><option>7E1</option></select></label>
+              <label>Ширина, символов<input id="receipt-width" type="number" min="24" max="48" step="1" value="32"></label>
+              <label>Режим<select id="receipt-profile"><option value="plain">Простой текст</option><option value="escpos">ESC/POS</option></select></label>
+              <label>Язык<select id="receipt-language"><option value="en">English / ASCII</option><option value="ru">Русский</option></select></label>
+              <label>Кириллица<select id="receipt-charset"><option value="cp866">CP866</option><option value="cp1251">CP1251</option><option value="utf8">UTF-8</option></select></label>
+              <label>Пауза на строку, мс<input id="receipt-delay" type="number" min="0" max="2000" step="50" value="800"></label>
+            </div>
+            <p class="receipt-hint">Как в ploter_a1: по умолчанию простой ASCII-текст, 9600 8N1 и 800 мс на строку. Для русского нужен совместимый шрифт и кодовая страница; в простом режиме команда смены таблицы не отправляется.</p>
+            <label class="receipt-confirm"><input id="receipt-confirm" type="checkbox"><span>Я физически проверил: выбранный USB-UART подключён именно к чековому принтеру.</span></label>
+            <div class="receipt-settings-actions"><button id="receipt-save" type="button">Сохранить и подтвердить</button><button id="receipt-test" type="button" disabled>Пробная страница</button><button id="receipt-refresh" type="button">Обновить порты</button></div>
+            <p class="receipt-hint">После перезапуска или замены USB-адаптера подтвердите порт заново. Результат отправки не доказывает, что принтер напечатал чек.</p>
+          </details>
+        </section>
 
         <section id="bms-setup" class="bms-setup" hidden aria-label="Подключение BMS">
           <header><b>Подключение JBD BMS</b><span id="bms-setup-current">порт не выбран</span></header>
@@ -1228,6 +1275,7 @@
   <script src="full_zero.js"></script>
   <script src="wheel_settings.js"></script>
   <script src="battery.js"></script>
+  <script src="receipt.js"></script>
   <script src="lidar_settings.js"></script>
   <script src="power.js"></script>
 </body>

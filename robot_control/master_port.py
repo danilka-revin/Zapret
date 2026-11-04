@@ -94,6 +94,11 @@ def reserved_ports() -> set[str]:
     except Exception:  # noqa: BLE001 — модуль BMS может быть недоступен
         pass
     try:
+        from .printer import printer_reserved_ports
+        values |= printer_reserved_ports()
+    except Exception:  # noqa: BLE001 — never use a printer hint to authorize a port
+        pass
+    try:
         from .lidar import lidar_active_port, lidar_reserved_ports
         values |= set(lidar_reserved_ports())
         active = lidar_active_port()

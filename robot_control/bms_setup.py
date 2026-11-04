@@ -107,6 +107,8 @@ def describe_ports(paths: Iterable[str] | None = None,
     configured = (os.environ.get(ENV_KEY) or "").strip()
     configured_real = _real(configured) if configured else ""
     master, lidar, chassis = master_ports(), _lidar_ports(), _chassis_ports()
+    from .printer import printer_reserved_ports
+    printers = {_real(p) for p in printer_reserved_ports()}
     details = _comports()
     result = []
     for path in (candidate_paths() if paths is None else list(paths)):
@@ -124,6 +126,8 @@ def describe_ports(paths: Iterable[str] | None = None,
             role, note = "lidar", "лидар — не трогаем"
         elif path in chassis or real in chassis:
             role, note = "chassis", "модуль шасси — не трогаем"
+        elif real in printers:
+            role, note = "printer", "выбранный порт принтера — не подключать BMS"
         elif configured and real == configured_real:
             role, note = "bms", "выбранный порт BMS"
         elif checked is not None and real not in checked:
@@ -179,6 +183,9 @@ def probe_port(port: str, *, opener: Callable[[str], Any] | None = None,
     if not port or not os.path.exists(port):
         return {"ok": False, "port": port, "found": False, "error": "порт не существует"}
     real = _real(port)
+    from .printer import printer_reserved_ports
+    if real in {_real(p) for p in printer_reserved_ports()}:
+        return {"ok": False, "port": port, "found": False, "error": "порт зарезервирован для принтера"}
     if os.environ.get("RC_USB_DISCOVERY_MODE") == "1":
         from .lidar import checked_usb_ports
         permitted = {_real(path) for path in checked_usb_ports()}
@@ -295,6 +302,9 @@ def apply_port(manager, port: str, env_path: Path | None = None) -> dict[str, An
         if not os.path.exists(port):
             raise ValueError("порт %s не найден" % port)
         real = _real(port)
+        from .printer import printer_reserved_ports
+        if real in {_real(p) for p in printer_reserved_ports()}:
+            raise ValueError("это выбранный порт принтера, его нельзя назначить BMS")
         if port in master_ports() or real in master_ports():
             raise ValueError("это порт мастера руля (RC_SLAM_PORT)")
         if port in _lidar_ports() or real in _lidar_ports():

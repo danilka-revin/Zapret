@@ -154,6 +154,12 @@ CONTROL_ROUTES = {
     'wheel_state': ('/api/kiosk_wheel_state', {'GET'}, ''),
     'logs': ('/api/kiosk_logs', {'GET'}, ''),
     'battery': ('/api/battery', {'GET'}, ''),
+    'printer': ('/api/printer', {'GET'}, ''),
+    'printer/preview': ('/api/printer/preview', {'GET'}, ''),
+    'printer/config': ('/api/printer/config', {'POST'}, 'printer'),
+    'printer/print': ('/api/printer/print', {'POST'}, 'printer'),
+    'printer/test': ('/api/printer/test', {'POST'}, 'printer'),
+    'printer/cancel': ('/api/printer/cancel', {'POST'}, 'printer'),
     'lock': ('/api/kiosk_lock', {'GET'}, ''),
     'lock/open': ('/api/kiosk_lock/open', {'POST'}, 'steering'),
     'lock/close': ('/api/kiosk_lock/close', {'POST'}, 'steering'),
@@ -196,6 +202,11 @@ def proxy_control(origin: str, operation: str):
     if operation == 'logs':
         from .eventlog import clamp_limit
         path += '?limit=' + str(clamp_limit(request.args.get('limit')))
+    elif operation == 'printer/preview':
+        level = request.args.get('level', 'medium')
+        if level not in {'short', 'medium', 'full'}:
+            return jsonify(ok=False, error='Неверный вид отчёта'), 400
+        path += '?level=' + level
     if operation == 'drive':
         import time
         # Web and onboard servers run on the robot. Do not execute a heartbeat
@@ -218,7 +229,8 @@ def proxy_control(origin: str, operation: str):
                 deadline = 'invalid'
             extra = {'X-Robot-Command-Deadline': deadline}
     return _forward_json(origin, path, methods=methods, limit=MAX_NAV_REPLY_BYTES,
-                         timeout=0.6 if operation in {'drive', 'keyboard', 'neutral'} else 1.0,
+                         timeout=(0.6 if operation in {'drive', 'keyboard', 'neutral'} else
+                                  4.0 if operation.startswith('printer') else 1.0),
                          control_header=marker, extra_headers=extra)
 
 

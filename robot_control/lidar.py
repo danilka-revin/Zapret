@@ -1776,7 +1776,8 @@ def discover_ports(
     иначе перебор тратил бы на него двойное время.
     """
     from .battery import reserved_ports
-    blocked = {p for p in excluded if p} | reserved_ports()
+    from .printer import printer_reserved_ports
+    blocked = {p for p in excluded if p} | reserved_ports() | printer_reserved_ports()
     blocked |= {os.path.realpath(p) for p in blocked}
     found: list[str] = []
     seen_real: set[str] = set()
@@ -2738,7 +2739,8 @@ class LidarManager:
             allowed = {os.path.realpath(p) for p in allowed_paths}
             ports = [p for p in ports if os.path.realpath(p) in allowed]
             from .battery import reserved_ports
-            blocked = excluded | reserved_ports()
+            from .printer import printer_reserved_ports
+            blocked = excluded | reserved_ports() | printer_reserved_ports()
             blocked |= {os.path.realpath(p) for p in blocked}
             seen = {os.path.realpath(p) for p in ports}
             for path in allowed_paths:
@@ -3402,10 +3404,14 @@ class LidarManager:
         fd = try_lock_port(port)
         if fd is None or (fd == -1 and os.environ.get("RC_USB_DISCOVERY_MODE") == "1"):
             return False
+        from .printer import printer_reserved_ports
+        real = os.path.realpath(port)
+        if real in {os.path.realpath(p) for p in printer_reserved_ports()}:
+            unlock_port(fd)
+            return False
         if os.environ.get("RC_USB_DISCOVERY_MODE") == "1":
             from .battery import reserved_ports
-            real = os.path.realpath(port)
-            blocked = reserved_ports() | set(chassis_module_ports())
+            blocked = reserved_ports() | printer_reserved_ports() | set(chassis_module_ports())
             if (real not in {os.path.realpath(p) for p in checked_lidar_ports()} or
                     real in {os.path.realpath(p) for p in blocked}):
                 unlock_port(fd)

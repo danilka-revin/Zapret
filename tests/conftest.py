@@ -57,6 +57,13 @@ def isolated_device_registry(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_printer_config(tmp_path, monkeypatch):
+    """Printer tests and inventory must never inspect or overwrite robot settings."""
+    monkeypatch.setenv("RC_PRINTER_CONFIG", str(tmp_path / "printer.json"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def isolated_maneuver_config(tmp_path, monkeypatch):
     """Пресеты манёвров («метр вперёд», «90°») — файл во временной папке.
 

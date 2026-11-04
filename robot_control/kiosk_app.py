@@ -496,6 +496,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     from . import bms_setup
     battery = BatteryManager(os.environ.get("RC_BMS_PORT", "").strip())
     app.extensions["rc_battery"] = battery
+    usb_assignment_lock = threading.RLock()
 
     from .connections import ConnectionsMonitor
     from .system_monitor import SystemMonitor, SystemState
@@ -547,7 +548,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if (port and battery._requires_wheel_check and
                 (battery._manual_source is None or not battery._manual_source.manual_bms_port_allowed(port))):
             return jsonify({"ok": False, "error": "Порт ещё не проверен или занят колесом/лидаром"}), 409
-        result = bms_setup.probe_port(port)
+        with usb_assignment_lock:
+            result = bms_setup.probe_port(port)
         eventlog.record("info" if result.get("found") else "warn",
                         "BMS: проверка %s — %s" % (port or "?", result.get("summary") or result.get("error")
                                                    or "JBD не ответила"),
@@ -564,7 +566,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if "port" not in body or not isinstance(body.get("port"), str):
             return jsonify({"ok": False, "error": "нужно поле port"}), 400
         try:
-            result = bms_setup.apply_port(battery, body["port"])
+            with usb_assignment_lock:
+                result = bms_setup.apply_port(battery, body["port"])
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except OSError as exc:
@@ -598,6 +601,72 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             log.error("BMS: жду владельца проверки USB-портов колёс")
     if not config.testing:
         battery.start()
+
+    # Printer is owned by the onboard process. Inventory/preview are passive;
+    # only an explicit request starts a single bounded USB-UART print job.
+    from .printer import PrinterError, PrinterService
+    printer = PrinterService(device_registry, battery, lambda: getattr(state, "source", None))
+    app.extensions["rc_printer"] = printer
+
+    def printer_body():
+        import json
+        if request.headers.get("X-Robot-Control") != "printer":
+            raise PrinterError("Требуется запрос со страницы принтера.", 400)
+        if request.content_length is not None and request.content_length > 4096:
+            raise PrinterError("Слишком большой запрос.", 413)
+        raw = request.stream.read(4097)
+        if len(raw) > 4096:
+            raise PrinterError("Слишком большой запрос.", 413)
+        try:
+            body = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise PrinterError("Ожидается JSON-объект.", 400) from None
+        if not isinstance(body, dict):
+            raise PrinterError("Ожидается JSON-объект.", 400)
+        return body
+
+    @app.get("/api/printer")
+    def api_printer_status():
+        return jsonify(printer.status()), 200, {"Cache-Control": "no-store"}
+
+    @app.get("/api/printer/preview")
+    def api_printer_preview():
+        try:
+            return jsonify(printer.preview(request.args.get("level", "medium"))), 200, {"Cache-Control": "no-store"}
+        except PrinterError as exc:
+            return jsonify(ok=False, error=str(exc)), exc.status
+
+    @app.post("/api/printer/config")
+    def api_printer_config():
+        try:
+            body = printer_body()
+            with usb_assignment_lock:
+                result = printer.configure(body)
+        except PrinterError as exc:
+            return jsonify(ok=False, error=str(exc)), exc.status
+        except OSError as exc:
+            return jsonify(ok=False, error="Не удалось сохранить настройки принтера: " + str(exc)), 500
+        eventlog.record("info", "Принтер: настройки сохранены; USB-UART требует физической проверки", source="АКБ")
+        return jsonify(result), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/printer/print")
+    @app.post("/api/printer/test")
+    def api_printer_print():
+        try:
+            result = printer.start(printer_body(), test=request.path.endswith("/test"))
+        except PrinterError as exc:
+            return jsonify(ok=False, error=str(exc)), exc.status
+        eventlog.record("info", "Принтер: задание принято; результат печати не подтверждён", source="АКБ")
+        return jsonify(result), 202, {"Cache-Control": "no-store"}
+
+    @app.post("/api/printer/cancel")
+    def api_printer_cancel():
+        try:
+            if printer_body() != {}:
+                raise PrinterError("Неверный запрос остановки.", 400)
+            return jsonify(printer.cancel()), 200, {"Cache-Control": "no-store"}
+        except PrinterError as exc:
+            return jsonify(ok=False, error=str(exc)), exc.status
 
     def note_case_pin_result(result: dict, *, where: str) -> None:
         """Журналировать PIN кейса без самого кода и без обещаний авторизации руля."""
@@ -1671,7 +1740,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
     for filename in ("steer_dial.js", "steer_dial.css", "calibration.css", "wheel_settings.js", "pot_mode.js",
-                     "pot_hold.js", "devices.css", "devices.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "brake_recovery.js", "battery.js", "lidar_settings.css",
+                     "pot_hold.js", "devices.css", "devices.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "brake_recovery.js", "battery.js", "receipt.js", "receipt.css", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
                      "explore.js", "map.css", "viewport.js", "camera_view.js", "camera_frames.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):
