@@ -160,6 +160,30 @@ def test_all_commands_reach_onboard_owner(client, operator, transport, operation
     assert telemetry['steeringControl']['available'] is True
 
 
+@pytest.mark.parametrize('payload', [
+    {'action': 'begin'},
+    {'action': 'begin', 'extra': True},
+    {'action': 'heartbeat', 'session': 'old', 'sequence': 42},
+])
+def test_web_never_forwards_legacy_freewheel_to_an_old_onboard_server(client, operator, transport, payload):
+    login(client)
+    response = client.post('/api/control/neutral', json=payload, headers=headers(client, 'drive'))
+    assert response.status_code == 410 and response.json['reason'] == 'neutral_disabled'
+    assert transport[1] == []  # even if the upstream still supports neutral
+
+
+def test_web_forwards_only_brake_recovery(client, operator, transport):
+    login(client)
+    marker = headers(client, 'drive')
+    for payload in ({'action': 'restore', 'extra': True}, {'action': []}, {}, []):
+        response = client.post('/api/control/neutral', json=payload, headers=marker)
+        assert response.status_code == 400
+    assert transport[1] == []
+    response = client.post('/api/control/neutral', json={'action': 'restore'}, headers=marker)
+    assert response.status_code == 200 and response.json['phase'] == 'idle'
+    assert len(transport[1]) == 1 and transport[1][0][0].endswith('/api/kiosk_neutral')
+
+
 def test_onboard_rejections_remain_effective(client, operator, transport):
     login(client)
     # Предел тяги задан прошивкой: 100 % — можно, 101 % сервер отклоняет.

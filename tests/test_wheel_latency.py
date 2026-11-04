@@ -315,3 +315,67 @@ def test_live_deadline_rechecked_after_waiting_for_command_lock(held_wheels):
     assert response == [{"ok": False, "reason": "command_expired"}]
     assert source.drive_percent == 0
     assert all(not p.values() for p in ports.values())
+
+
+def test_keyboard_pivot_writes_precise_angles_and_opposite_torque_to_each_role(held_wheels):
+    source, ports = held_wheels
+    make_v20_frames(source)
+    angle = 52.76516601842533
+    angles = {"FL": angle, "FR": -angle, "RL": -angle, "RR": angle}
+    for module in MODULES:
+        result = source.steer_module(module, angles[module])
+        assert result["ok"] and result["angle"] == round(angles[module], 2)
+    assert wait_for(lambda: all(p.values() for p in ports.values()))
+    for module, port in ports.items():
+        # The fan-out already selected the verified module and removes its ID.
+        assert port.values() == [("w %s52.77\n" % (
+            "-" if angles[module] < 0 else "")).encode()]
+    signs = {"FL": -20, "FR": 20, "RL": -20, "RR": 20}
+    assert source.keyboard_live(55, 7, signs, angles, time.monotonic() + 0.4)["ok"]
+    assert wait_for(lambda: all(len(p.values()) == 2 for p in ports.values()))
+    for module, port in ports.items():
+        assert port.values()[-1] == ("j 55 7 %d %s52.77\n" % (
+            signs[module], "-" if angles[module] < 0 else "")).encode()
+    state = source.drive_status()
+    assert state["commandedPercent"] == 0 and state["commandedModules"] == signs
+    assert source._module_drive_active()
+    assert all(source._module_drive_active(module) for module in MODULES)
+    assert source.brake_for_keyboard()["ok"]
+    assert source.drive_percent == 0 and source.drive_modules == {}
+
+
+@pytest.mark.parametrize("bad", [
+    {"FL": -20, "FR": 20, "RL": -20},
+    {"FL": -20, "FR": 20, "RL": -20, "RR": 19},
+    {"FL": 20, "FR": 20, "RL": 20, "RR": 20},
+    {"FL": 0, "FR": 0, "RL": 0, "RR": 0},
+    {"FL": True, "FR": -1, "RL": True, "RR": -1},
+    {"FL": 101, "FR": -101, "RL": 101, "RR": -101},
+])
+def test_keyboard_pivot_rejects_incomplete_or_asymmetric_wheel_maps(held_wheels, bad):
+    source, ports = held_wheels
+    make_v20_frames(source)
+    result = source.keyboard_live(55, 7, bad, {m: 0 for m in MODULES}, time.monotonic() + 0.4)
+    assert result["reason"] == "payload"
+    assert all(not port.values() for port in ports.values())
+    assert not source.drive_modules and source.drive_percent == 0
+
+
+def test_keyboard_pivot_queue_failure_brakes_every_board(held_wheels):
+    source, ports = held_wheels
+    make_v20_frames(source)
+    link = next(link for link in source.links.values() if link.module == "FR")
+    ports["FR"].block_value = b"hold\n"
+    link.commands.put_nowait(b"hold\n")
+    assert ports["FR"].write_blocked.wait(2)
+    for _ in range(link.commands.maxsize):
+        link.commands.put_nowait(b"stale\n")
+    signs = {"FL": -20, "FR": 20, "RL": -20, "RR": 20}
+    result = source.keyboard_live(55, 7, signs, {m: 0 for m in MODULES}, time.monotonic() + 0.4)
+    assert result["reason"] == "command_queue_full"
+    assert source.drive_percent == 0 and not source.drive_modules
+    ports["FR"].release_write.set()
+    assert wait_for(lambda: all(b"b\n" in p.values() for p in ports.values()))
+    for port in ports.values():
+        assert b"stale\n" not in port.values()
+        assert not any(v.startswith(b"j ") for v in port.values()[port.values().index(b"b\n") + 1:])

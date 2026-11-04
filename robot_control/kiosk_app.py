@@ -651,8 +651,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     keyboard = KeyboardControl(lambda: getattr(state, "source", None), dispatch_drive_command,
                                dispatch_steering_command, estop_latch.latched)
     app.extensions["rc_keyboard"] = keyboard
-    neutral = NeutralControl(lambda: getattr(state, "source", None), estop_latch.latched,
-                             lambda: navigation.active, interrupt_keyboard=keyboard.interrupt)
+    neutral = NeutralControl(lambda: getattr(state, "source", None), interrupt_keyboard=keyboard.interrupt)
     app.extensions["rc_neutral"] = neutral
     full_zero = FullZeroControl(lambda: getattr(state, "source", None), estop_latch.latched,
                                 neutral.status, lambda: navigation.active)
@@ -704,8 +703,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     @app.before_request
     def guard_neutral_motion():
-        # A request that passed the interlock must finish before neutral can
-        # reserve the ports; requests arriving later cannot queue motion.
+        # A request that passed the interlock must finish before brake
+        # recovery; commands arriving while locked must not run afterwards.
         if request.method != "POST" or request.path not in motion_routes:
             return None
         arrival_epoch, arrival_locked = neutral.ticket()
@@ -747,10 +746,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         motion_gate.acquire()
         g.neutral_motion_gate = True
         if request.path == "/api/kiosk_neutral":
-            # Restoring the brake is always allowed, starting neutral is not.
-            if body.get("action") != "restore" and (zero_locked or full_zero.ticket()[1] or
-                                                   zero_epoch != full_zero.ticket()[0]):
-                return jsonify(ok=False, reason="full_zero_active"), 409
+            # Recovery is always allowed; the endpoint rejects legacy release
+            # commands independently of the full-zero session state.
             return None
         current = neutral.status()
         if is_stop:
@@ -787,7 +784,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if request.method == "POST" and request.path in {
             "/api/kiosk_drive", "/api/kiosk_steer", "/api/kiosk_zero",
             "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_pot_hold",
-            "/api/kiosk_maneuver",
+            # Geometry must never change underneath an armed keyboard pivot.
+            "/api/kiosk_maneuver", "/api/kiosk_maneuver_config",
             "/api/estop", "/api/navigation/start", "/api/navigation/resume",
             "/api/navigation/cancel", "/api/navigation/estop",
             "/api/exploration/start", "/api/exploration/stop", "/api/system/stop",
@@ -1409,27 +1407,15 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         action = body.get("action")
         if not isinstance(action, str):
             return jsonify(ok=False, reason="payload"), 400
-        expires = None
         if action in {"begin", "heartbeat"}:
-            try:
-                deadline = float(request.headers.get("X-Robot-Command-Deadline", ""))
-                now = time.time()
-                if not math.isfinite(deadline) or deadline < now or deadline > now + 0.75:
-                    raise ValueError("expired")
-                expires = time.monotonic() + (deadline - now)
-            except (TypeError, ValueError):
-                if action == "heartbeat":
-                    neutral.interrupt("command_expired")
-                return jsonify(ok=False, reason="command_expired"), 408
-        if action == "begin" and set(body) == {"action"}:
-            result, status = neutral.begin(expires)
-        elif action == "heartbeat":
-            result, status = neutral.heartbeat(body, expires)
-        elif action == "restore" and set(body) == {"action"}:
+            # Old/cached clients must never be able to request freewheel. Still
+            # detect an orphaned legacy state and initiate its safe brake.
+            neutral.status()
+            return jsonify(ok=False, reason="neutral_disabled"), 410
+        if action == "restore" and set(body) == {"action"}:
             result, status = neutral.restore()
-        else:
-            return jsonify(ok=False, reason="payload"), 400
-        return jsonify(result), status
+            return jsonify(result), status
+        return jsonify(ok=False, reason="payload"), 400
 
     @app.post("/api/kiosk_keyboard")
     def api_kiosk_keyboard():
@@ -1684,8 +1670,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         })
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
-    for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js",
-                     "pot_hold.js", "devices.css", "devices.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
+    for filename in ("steer_dial.js", "steer_dial.css", "calibration.css", "wheel_settings.js", "pot_mode.js",
+                     "pot_hold.js", "devices.css", "devices.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "brake_recovery.js", "battery.js", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
                      "explore.js", "map.css", "viewport.js", "camera_view.js", "camera_frames.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):

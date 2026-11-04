@@ -23,4 +23,16 @@ assert.deepEqual(plan(keys('SA', 'Up'), 'normal'),
 assert.deepEqual(plan(keys('D'), 'normal'),
   {angles: {FL: 25, FR: 25, RL: -25, RR: -25}, direction: 0});
 assert.deepEqual(plan(keys('', 'Up'), 'normal'), {angles: angles(0), direction: 1});
+const pivot = Math.atan2(500, 380) * 180 / Math.PI;
+const spin = {angleDeg: pivot, wheelbaseMm: 500, trackMm: 380,
+  angles: {FL: pivot, FR: -pivot, RL: -pivot, RR: pivot}};
+for (const mode of ['crab', 'normal']) {
+  assert.deepEqual(plan(keys('', 'Left'), mode, spin), {angles: spin.angles, direction: -1, pattern: 'spin'});
+  assert.deepEqual(plan(keys('W', 'Right'), mode, spin), {angles: spin.angles, direction: 1, pattern: 'spin'});
+  assert.deepEqual(plan(new Set(['ArrowLeft', 'ArrowRight']), mode, spin), {angles: angles(0), direction: 0});
+  assert.deepEqual(plan(new Set(['ArrowLeft', 'ArrowUp']), mode, spin), {angles: angles(0), direction: 0});
+}
+assert.equal(plan(keys('', 'Left'), 'crab', null).error, 'spin_geometry_required');
+assert.equal(plan(keys('', 'Left'), 'crab', null).direction, 0);
+
 console.log('keyboard plans OK');

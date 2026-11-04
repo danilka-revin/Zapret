@@ -8,16 +8,21 @@
   'use strict';
   const IDS = ['FL', 'FR', 'RL', 'RR'];
 
-  // WASD selects the wheel direction; arrows separately enable traction.
-  // In crab, +90° with negative traction goes left without turning to -90°.
-  // With no WASD key held the selected direction is straight ahead.
-  function plan(keys, mode) {
+  // W/S/A/D select the wheel direction; up/down provide traction. Left/right
+  // are an exclusive hold-to-run pivot using the onboard geometry and lease.
+  function plan(keys, mode, spin) {
     const has = (k) => keys.has(k);
     const up = has('ArrowUp'), down = has('ArrowDown');
+    const left = has('ArrowLeft'), rightArrow = has('ArrowRight');
     const w = has('KeyW'), s = has('KeyS'), a = has('KeyA'), d = has('KeyD');
-    if ((w && s) || (a && d) || (up && down)) {
-      return {angles: {FL: 0, FR: 0, RL: 0, RR: 0}, direction: 0};
+    const stopped = {angles: {FL: 0, FR: 0, RL: 0, RR: 0}, direction: 0};
+    if ((left && rightArrow) || ((left || rightArrow) && (up || down))) return stopped;
+    if (left || rightArrow) {
+      if (!spin || !spin.angles || !IDS.every(id => Number.isFinite(spin.angles[id])))
+        return {...stopped, error: 'spin_geometry_required'};
+      return {angles: {...spin.angles}, direction: left ? -1 : 1, pattern: 'spin'};
     }
+    if ((w && s) || (a && d) || (up && down)) return stopped;
     const arrow = Number(up) - Number(down);
     const right = Number(d) - Number(a);
     const forward = w || s ? Number(w) - Number(s) : (right ? 0 : 1);
@@ -40,10 +45,12 @@
     const mode = $('keyboard-mode');
     const speed = $('keyboard-speed');
     const status = $('keyboard-status');
+    const spinInfo = $('keyboard-spin-geometry');
     const state = {enabled: false, enabling: false, token: null, sequence: 0,
       generation: 0, keys: new Set(), timer: null, running: null, planning: false,
       drivePending: null, pingPending: false, lastTick: 0, lastDrive: 0, lastPing: 0,
-      brake: null, pendingPlan: null, beginning: Promise.resolve(), retirement: Promise.resolve()};
+      brake: null, pendingPlan: null, beginning: Promise.resolve(), retirement: Promise.resolve(),
+      spin: null, arrowConflict: false};
     // Firmware accepts a fresh tagged brake for up to 6 s. Use a smaller
     // browser-side bound to leave time for the permit and serial delivery.
     const BRAKE_REUSE_MS = 4000;
@@ -58,11 +65,13 @@
       wheel_moving: 'Колёса ещё вращаются.',
       module_busy: 'Сначала остановите тягу и рулевые модули.',
       steering_changed: 'Углы руля не подтверждены; тяга снята.',
+      spin_geometry_required: 'Нет подтверждённой геометрии разворота; проверьте размеры шасси.',
+      spin_geometry_changed: 'Геометрия изменилась; включите управление заново.',
       brake_firmware_required: 'На всех платах нужна прошивка с подтверждением тормоза.',
       live_firmware_required: 'Для руления на ходу нужна fw20 или новее на всех четырёх платах.',
       live_unconfirmed: 'Не все платы подтвердили управление; тяга снята.',
       brake_unconfirmed: 'Тормоз не подтверждён всеми платами.',
-      neutral_locked: 'Сначала верните тормоз после нейтрали.',
+      neutral_locked: 'Сначала верните и подтвердите тормоз.',
       sc_invalid: 'Нет корректных показаний SC.',
       sc_changed: 'Счётчик SC или плата изменились; тяга снята.',
       sc_stalled: 'Нет переходов SC на одном из колёс; тяга снята.',
@@ -72,6 +81,21 @@
       command_failed: 'Нет подтверждения команды; тяга остановлена.'
     };
     function show(text) { if (status) status.textContent = text; }
+    function showGeometry(geometry) {
+      if (!spinInfo) return;
+      spinInfo.textContent = geometry
+        ? 'Разворот: углы колёс ±' + geometry.angleDeg.toFixed(2) + '° · база ' +
+          geometry.wheelbaseMm + ' мм, колея ' + geometry.trackMm + ' мм.'
+        : 'Углы разворота появятся после включения управления.';
+    }
+    function validGeometry(value) {
+      return !!(value && Number.isFinite(value.angleDeg) && Number.isFinite(value.wheelbaseMm) &&
+        Number.isFinite(value.trackMm) && value.angles && Object.keys(value.angles).length === IDS.length &&
+        IDS.every(id => Number.isFinite(value.angles[id]) && Math.abs(value.angles[id]) <= 100));
+    }
+    function forPattern(values, current) {
+      return current.pattern === 'spin' ? {...values, pattern: 'spin'} : values;
+    }
     function updateButton() {
       if (button) {
         button.textContent = state.enabled || state.enabling ? 'Выключить WASD' : 'Включить WASD';
@@ -125,6 +149,9 @@
       state.enabling = false;
       state.token = null;
       state.keys.clear();
+      state.arrowConflict = false;
+      state.spin = null;
+      showGeometry(null);
       state.running = null;
       state.planning = false;
       state.brake = null;
@@ -178,9 +205,9 @@
       return !data.drive.active && IDS.every((id) => !motors[id].moving && motors[id].drivePercent === 0 &&
         motors[id].scRpm <= 1 && motors[id].scRecent !== true);
     }
-    function arrived(data, angles) {
+    function arrived(data, angles, tolerance) {
       const motors = motorMap(data);
-      return IDS.every((id) => !motors[id].moving && Math.abs(motors[id].angle - angles[id]) <= 1.5);
+      return IDS.every((id) => !motors[id].moving && Math.abs(motors[id].angle - angles[id]) <= tolerance);
     }
     function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
     async function waitFor(gen, predicate, timeoutMs) {
@@ -231,7 +258,8 @@
       state.drivePending = pending;
       state.lastDrive = Date.now();
       try {
-        await send('live', {percent: current.direction * pending.speed, angles: current.angles, permit: permit || ''});
+        await send('live', forPattern({percent: current.direction * pending.speed,
+          angles: current.angles, permit: permit || ''}, current));
       } catch (error) {
         if (valid(gen)) fail(error);
       } finally {
@@ -290,6 +318,8 @@
           const result = await post({action: 'begin'});
           if (gen !== state.generation) { await retire(result.session, 1, false); return; }
           state.token = result.session;
+          state.spin = validGeometry(result.spin) ? result.spin : null;
+          showGeometry(state.spin);
           state.sequence = 0;
           state.brake = Number.isInteger(result.brakeId) && result.brakeId > 0
             ? {at: beginAt, promise: Promise.resolve({result})} : null;
@@ -311,9 +341,13 @@
 
     function replan() {
       if (!state.enabled) return;
-      const desired = plan(state.keys, mode ? mode.value : 'crab');
+      const desired = state.arrowConflict
+        ? {angles: {FL: 0, FR: 0, RL: 0, RR: 0}, direction: 0}
+        : plan(state.keys, mode ? mode.value : 'crab', state.spin);
+      if (desired.error) { fail(new Error(desired.error)); return; }
       const preparing = state.pendingPlan;
       if (state.planning && preparing && preparing.gen === state.generation &&
+          (desired.pattern || 'drive') === preparing.pattern &&
           IDS.every((id) => desired.angles[id] === preparing.angles[id])) {
         if (desired.direction === preparing.direction ||
             (!preparing.arming && preparing.direction === 0 && desired.direction !== 0)) {
@@ -323,7 +357,8 @@
           return;
         }
       }
-      if (state.running && desired.direction && desired.direction === state.running.direction) {
+      if (state.running && desired.direction && desired.direction === state.running.direction &&
+          (desired.pattern || 'drive') === (state.running.pattern || 'drive')) {
         const changed = IDS.some((id) => desired.angles[id] !== state.running.angles[id]);
         if (changed) {
           state.running = desired;
@@ -336,7 +371,8 @@
       const gen = ++state.generation;
       state.running = null;
       state.planning = true;
-      const pending = {gen, angles: desired.angles, direction: desired.direction, arming: false};
+      const pending = {gen, angles: desired.angles, direction: desired.direction,
+        pattern: desired.pattern || 'drive', arming: false};
       state.pendingPlan = pending;
       show('Остановка перед изменением углов…');
       // STOP is sent immediately if a command may have moved a wheel. While
@@ -352,22 +388,25 @@
         let data = await waitFor(gen, (current) => stopped(current) &&
           IDS.every((id) => motorMap(current)[id].brakeId === brakeId), 6000);
         if (!data || !valid(gen)) return;
-        const sentSteer = IDS.some((id) => Math.abs(motorMap(data)[id].angle - desired.angles[id]) > 1.0);
+        const tolerance = desired.pattern === 'spin' ? 0.15 : 1.5;
+        const steerThreshold = desired.pattern === 'spin' ? tolerance : 1.0;
+        const sentSteer = IDS.some((id) => Math.abs(motorMap(data)[id].angle - desired.angles[id]) > steerThreshold);
         if (sentSteer) {
           // A new key/release must STOP this potentially moving steering.
           if (state.brake === barrier) state.brake = null;
-          await sendWhenStopped(gen, 'steer_all', {angles: desired.angles});
+          await sendWhenStopped(gen, 'steer_all', forPattern({angles: desired.angles}, desired));
         }
         if (!valid(gen)) return;
         const sentAt = Date.now();
         show('Ждём подтверждения углов всех колёс…');
-        data = await waitFor(gen, (current) => (!sentSteer || options.freshAt() > sentAt) && arrived(current, desired.angles), 6000);
+        data = await waitFor(gen, (current) => (!sentSteer || options.freshAt() > sentAt) &&
+          arrived(current, desired.angles, tolerance), 6000);
         if (!data || !valid(gen)) return;
         if (!pending.direction) {
           if (freshBrake(barrier)) state.brake = barrier;
           state.pendingPlan = null;
           state.planning = false;
-          show('Руль выставлен · без тяги.');
+          show(state.arrowConflict ? 'Отпустите все стрелки: команды несовместимы.' : 'Руль выставлен · без тяги.');
           return;
         }
         // Reuse only while the firmware's brake-start window remains fresh.
@@ -381,21 +420,24 @@
         // even an in-flight permit; old replies are generation-fenced.
         state.brake = null;
         pending.arming = true;
-        const arm = await sendWhenStopped(gen, 'arm', {direction: pending.direction, angles: desired.angles}, barrier);
+        const arm = await sendWhenStopped(gen, 'arm', forPattern({direction: pending.direction,
+          angles: desired.angles}, desired), barrier);
         if (!valid(gen) || !arm) return;
         if (arm.brakeExpired) { state.pendingPlan = null; replan(); return; }
-        const running = {angles: desired.angles, direction: pending.direction};
+        const running = {angles: desired.angles, direction: pending.direction, pattern: pending.pattern};
         state.pendingPlan = null;
         state.running = running;
         state.planning = false;
         state.lastTick = Date.now();
         await heartbeat(gen, running, arm.permit);
-        if (valid(gen) && state.running) show('Движение · удерживайте клавиши.');
+        if (valid(gen) && state.running) show(desired.pattern === 'spin'
+          ? 'Разворот · удерживайте стрелку; отпускание остановит тягу.'
+          : 'Движение · удерживайте клавиши.');
       })().catch((error) => { if (valid(gen)) fail(error); });
     }
     function keyCode(event) {
-      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown'].includes(event.code)) return event.code;
-      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') return event.key;
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) return event.code;
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return event.key;
       const key = String(event.key || '').toUpperCase();
       return ['W', 'A', 'S', 'D'].includes(key) ? 'Key' + key : '';
     }
@@ -423,6 +465,9 @@
       event.preventDefault();
       if (event.repeat || state.keys.has(code)) return;
       state.keys.add(code);
+      const horizontal = state.keys.has('ArrowLeft') || state.keys.has('ArrowRight');
+      if (horizontal && ((state.keys.has('ArrowLeft') && state.keys.has('ArrowRight')) ||
+          state.keys.has('ArrowUp') || state.keys.has('ArrowDown'))) state.arrowConflict = true;
       // A key pressed while BEGIN is in flight starts only if it is still
       // held after enabling and the usual brake/telemetry checks complete.
       if (state.enabled) replan();
@@ -432,6 +477,10 @@
       if ((!state.enabled && !state.enabling) || !code || !state.keys.has(code)) return;
       event.preventDefault();
       state.keys.delete(code);
+      // Conflicting arrows must all be released before a fresh key can move
+      // the robot; releasing one must not start a different held direction.
+      if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].some(k => state.keys.has(k)))
+        state.arrowConflict = false;
       if (state.enabled) replan();
     });
     if (button) button.addEventListener('click', () => { void enable(); });
@@ -450,6 +499,7 @@
         modeUsedPointer = false;
         if (!state.enabled && !state.enabling) return;
         state.keys.clear();
+        state.arrowConflict = false;
         if (state.enabled) replan();
         if (usedPointer && document.activeElement === mode) mode.blur();
       });

@@ -13,6 +13,8 @@ import secrets
 import threading
 import time
 
+from . import maneuvers
+
 MODULES = ("FL", "FR", "RL", "RR")
 
 
@@ -26,6 +28,9 @@ class KeyboardControl:
     TELEMETRY_AGE_S = 0.75
     SC_SILENCE_S = 3.0
     ANGLE_TOLERANCE_DEG = 1.5
+    # Telemetry is reported in hundredths of a degree. For a pivot, don't
+    # silently reuse a wheel that is nearly a degree away from its tangent.
+    SPIN_ANGLE_TOLERANCE_DEG = 0.15
     # A missing board ACK must not be hidden by heartbeats to the other three.
     LIVE_ACK_TTL = 0.45
     LIVE_STEER_TTL = 6.0
@@ -57,6 +62,10 @@ class KeyboardControl:
         self._live_pending = []
         self._live_latest_seq = 0
         self._live_angles_since = None
+        self._pattern = None
+        self._wheel_percents = {}
+        self._spin_geometry = None
+        self._spin_source = None
 
     def _brake(self):
         self._brake_id = None
@@ -94,6 +103,10 @@ class KeyboardControl:
         self._live_pending = []
         self._live_latest_seq = 0
         self._live_angles_since = None
+        self._pattern = None
+        self._wheel_percents = {}
+        self._spin_geometry = None
+        self._spin_source = None
 
     def interrupt(self):
         """Another operator/mode takes priority, including an ordinary STOP."""
@@ -160,6 +173,55 @@ class KeyboardControl:
         return (isinstance(value, (int, float)) and not isinstance(value, bool)
                 and math.isfinite(value))
 
+    @staticmethod
+    def _pattern_for(body, keys):
+        """Keep the existing keyboard protocol unchanged for ordinary driving."""
+        if set(body) == keys:
+            return "drive"
+        if set(body) == keys | {"pattern"} and body.get("pattern") == "spin":
+            return "spin"
+        return None
+
+    def _geometry(self, source):
+        """One authoritative snapshot, shared with the odometry manoeuvres."""
+        if getattr(source, "supports_individual_drive", False) is not True:
+            return None
+        try:
+            config = source.maneuver_config()
+            if not isinstance(config, dict) or config.get("supported") is not True:
+                return None
+            chassis = config.get("chassis")
+            if not isinstance(chassis, dict):
+                return None
+            dimensions = {}
+            for key in ("wheelbaseMm", "trackMm"):
+                value = chassis.get(key)
+                low, high = maneuvers.LIMITS[key]
+                if not self._number(value) or not low <= value <= high:
+                    return None
+                dimensions[key] = float(value)
+            angle = maneuvers.pivot_angle_deg(dimensions)
+            angles, _ = maneuvers.steering_targets("spin_left", dimensions)
+            limit = getattr(source, "MAX_STEER_DEG", None)
+            if not self._number(limit) or any(abs(value) > limit for value in angles.values()):
+                return None
+            return {**dimensions, "angleDeg": angle, "angles": angles}
+        except Exception:  # noqa: BLE001 — never invent a geometry on failure
+            return None
+
+    def _spin_error(self, angles):
+        if self._spin_geometry is None:
+            return "spin_geometry_required"
+        try:
+            source = self._source()
+        except Exception:  # noqa: BLE001 — a lost owner must stop the spin
+            return "spin_geometry_changed"
+        if source is not self._spin_source or self._geometry(source) != self._spin_geometry:
+            return "spin_geometry_changed"
+        if angles != self._spin_geometry["angles"]:
+            return "invalid_angle"
+        return None
+
     def _snapshot(self):
         try:
             snap = self._source().read()
@@ -201,7 +263,7 @@ class KeyboardControl:
             return "wheel_moving"
         return None
 
-    def _target_ready(self, snapshot, angles, first):
+    def _target_ready(self, snapshot, angles, first, tolerance=None):
         drive, motors = snapshot
         if not drive.get("canDrive"):
             return drive.get("reason") or "drive_not_ready"
@@ -212,9 +274,10 @@ class KeyboardControl:
         elif drive.get("commandedPercent") != self._percent:
             # A different controller changed or stopped traction; do not resume.
             return "manual_override"
+        tolerance = self.ANGLE_TOLERANCE_DEG if tolerance is None else tolerance
         for module in MODULES:
             motor = motors[module]
-            if motor.get("moving") or abs(motor["angle"] - angles[module]) > self.ANGLE_TOLERANCE_DEG:
+            if motor.get("moving") or abs(motor["angle"] - angles[module]) > tolerance:
                 return "steering_changed"
         return None
 
@@ -253,10 +316,12 @@ class KeyboardControl:
             confirmed = min(motors[m]["liveSeq"] for m in MODULES)
             self._live_pending = [(seq, sent) for seq, sent in self._live_pending if seq > confirmed]
             if confirmed >= self._live_latest_seq:
-                if (not drive.get("active") or any(motors[m]["drivePercent"] != self._percent for m in MODULES)):
+                if (not drive.get("active") or any(motors[m]["drivePercent"] != self._wheel_percents[m] for m in MODULES)):
                     return "live_unconfirmed"
+                tolerance = (self.SPIN_ANGLE_TOLERANCE_DEG if self._pattern == "spin"
+                             else self.ANGLE_TOLERANCE_DEG)
                 arrived = all(not motors[m].get("moving") and
-                              abs(motors[m]["angle"] - self._angles[m]) <= self.ANGLE_TOLERANCE_DEG
+                              abs(motors[m]["angle"] - self._angles[m]) <= tolerance
                               for m in MODULES)
                 if arrived:
                     self._live_angles_since = None
@@ -264,7 +329,7 @@ class KeyboardControl:
                     return "steering_changed"
                 elif now - self._live_angles_since > 0.3 and any(
                         not motors[m].get("moving") and
-                        abs(motors[m]["angle"] - self._angles[m]) > self.ANGLE_TOLERANCE_DEG
+                        abs(motors[m]["angle"] - self._angles[m]) > tolerance
                         for m in MODULES):
                     return "steering_changed"
         if self._live_pending and now - self._live_pending[0][1] > self.LIVE_ACK_TTL:
@@ -274,7 +339,8 @@ class KeyboardControl:
         return None
 
     def _handle_live(self, body, snapshot, now, deadline):
-        if set(body) != {"action", "session", "sequence", "percent", "angles", "permit"}:
+        pattern = self._pattern_for(body, {"action", "session", "sequence", "percent", "angles", "permit"})
+        if pattern is None:
             return self._fail("payload", 400, body=body)
         percent, angles, sequence = body.get("percent"), body.get("angles"), body["sequence"]
         if (type(percent) is not int or not 1 <= abs(percent) <= 100 or
@@ -282,6 +348,10 @@ class KeyboardControl:
                 not all(self._number(angles[m]) and abs(angles[m]) <= 100 for m in MODULES) or
                 sequence >= 0x7FFFFFFF):
             return self._fail("invalid_drive", 400, body=body)
+        if pattern == "spin":
+            error = self._spin_error(angles)
+            if error:
+                return self._fail(error, body=body)
         drive, motors = snapshot
         if any(type(motors[m].get("firmware")) is not int or motors[m]["firmware"] < 20 or
                type(motors[m].get("liveId")) is not int or not 0 <= motors[m]["liveId"] < 0x7FFFFFFF or
@@ -294,13 +364,18 @@ class KeyboardControl:
             permit = self._permit
             if (not permit or not isinstance(body.get("permit"), str) or
                     body["permit"] != permit["value"] or now > permit["expires"] or
-                    direction != permit["direction"] or angles != permit["angles"]):
+                    direction != permit["direction"] or angles != permit["angles"] or
+                    pattern != permit["pattern"]):
                 return self._fail("keyboard_expired", body=body)
-            error = self._target_ready(snapshot, angles, first=True)
+            tolerance = self.SPIN_ANGLE_TOLERANCE_DEG if pattern == "spin" else None
+            error = self._target_ready(snapshot, angles, first=True, tolerance=tolerance)
         else:
-            if not self._live or direction != self._direction:
+            if not self._live or pattern != self._pattern or direction != self._direction:
                 return self._fail("module_busy", body=body)
-            if drive.get("commandedPercent") != self._percent:
+            if (pattern == "spin" and
+                    (drive.get("commandedPercent") != 0 or drive.get("commandedModules") != self._wheel_percents)):
+                return self._fail("manual_override", body=body)
+            if pattern == "drive" and drive.get("commandedPercent") != self._percent:
                 return self._fail("manual_override", body=body)
             error = self._live_progress(snapshot, now)
         if not error:
@@ -317,8 +392,13 @@ class KeyboardControl:
             return self._fail("command_expired", 408, body=body)
         if self.is_preempted(body):
             return {"ok": False, "reason": "stale_command"}, 409
+        # Left/right arrows use opposite wheel directions. Negative percent
+        # means counter-clockwise (left), matching manoeuvres.steering_targets.
+        wheel_percents = ({m: percent if m in ("FL", "RL") else -percent for m in MODULES}
+                          if pattern == "spin" else {m: percent for m in MODULES})
         try:
-            result = sender(self._brake_id, sequence, percent, angles, deadline)
+            result = sender(self._brake_id, sequence,
+                            wheel_percents if pattern == "spin" else percent, angles, deadline)
         except Exception:  # noqa: BLE001 — stop on broken transport
             return self._fail("command_failed", 503, body=body)
         if not result.get("ok"):
@@ -328,6 +408,7 @@ class KeyboardControl:
         self._running = self._live = True
         self._permit = None
         self._direction, self._percent = direction, percent
+        self._pattern, self._wheel_percents = pattern, wheel_percents
         self._angles = dict(angles)
         self._live_latest_seq = sequence
         self._live_pending.append((sequence, now))
@@ -352,6 +433,8 @@ class KeyboardControl:
                 source = self._source()
                 if not getattr(source, "supports_drive", False) or not getattr(source, "supports_individual_steer", False):
                     return {"ok": False, "reason": "control_not_supported"}, 409
+                self._spin_source = source
+                self._spin_geometry = self._geometry(source)
                 with self._stop_lock:
                     self._token = secrets.token_urlsafe(24)
                     self._sequence = 0
@@ -359,7 +442,11 @@ class KeyboardControl:
                 # The browser can reuse this freshly issued STOP instead of
                 # sending another one on the first arrow press. It must still
                 # wait for all four matching brake ACKs and request a permit.
-                return {"ok": True, "session": self._token, "brakeId": self._brake_id}, 200
+                spin = self._spin_geometry
+                if spin is not None:
+                    spin = {**spin, "angles": dict(spin["angles"])}
+                return {"ok": True, "session": self._token, "brakeId": self._brake_id,
+                        "spin": spin}, 200
 
             if action not in {"stop", "end", "ping", "steer", "steer_all", "arm", "drive", "live"}:
                 return {"ok": False, "reason": "invalid_action"}, 400
@@ -388,6 +475,8 @@ class KeyboardControl:
                 self._live_pending = []
                 self._live_latest_seq = 0
                 self._live_angles_since = None
+                self._pattern = None
+                self._wheel_percents = {}
                 self._last_activity = now
                 result, status = self._brake()
                 if action == "end" or not result.get("ok"):
@@ -410,12 +499,17 @@ class KeyboardControl:
             if self.is_preempted(body):
                 return {"ok": False, "reason": "stale_command"}, 409
             if action == "steer_all":
-                if set(body) != {"action", "session", "sequence", "angles"}:
+                pattern = self._pattern_for(body, {"action", "session", "sequence", "angles"})
+                if pattern is None:
                     return self._fail("payload", 400, body=body)
                 angles = body.get("angles")
                 if (not isinstance(angles, dict) or set(angles) != set(MODULES) or
                         not all(self._number(angles[m]) and abs(angles[m]) <= 100 for m in MODULES)):
                     return self._fail("invalid_angle", 400, body=body)
+                if pattern == "spin":
+                    error = self._spin_error(angles)
+                    if error:
+                        return self._fail(error, body=body)
                 if self._running or any(snapshot[1][m].get("moving") for m in MODULES):
                     return self._fail("module_busy", body=body)
                 self._permit = None
@@ -433,7 +527,8 @@ class KeyboardControl:
                 for module in MODULES:
                     if self.is_preempted(body):
                         return {"ok": False, "reason": "stale_command"}, 409
-                    if abs(snapshot[1][module]["angle"] - angles[module]) <= 1.0:
+                    tolerance = self.SPIN_ANGLE_TOLERANCE_DEG if pattern == "spin" else 1.0
+                    if abs(snapshot[1][module]["angle"] - angles[module]) <= tolerance:
                         continue
                     result, status = self._steer(self._source(), {"module": module, "angle": angles[module]})
                     if not result.get("ok"):
@@ -461,14 +556,20 @@ class KeyboardControl:
                 return result, status
 
             if action == "arm":
-                if set(body) != {"action", "session", "sequence", "direction", "angles"}:
+                pattern = self._pattern_for(body, {"action", "session", "sequence", "direction", "angles"})
+                if pattern is None:
                     return self._fail("payload", 400, body=body)
                 angles, direction = body.get("angles"), body.get("direction")
                 if (self._running or type(direction) is not int or direction not in (-1, 1) or
                         not isinstance(angles, dict) or set(angles) != set(MODULES) or
                         not all(self._number(angles[m]) and abs(angles[m]) <= 100 for m in MODULES)):
                     return self._fail("invalid_angle", 400, body=body)
-                error = self._target_ready(snapshot, angles, first=True)
+                if pattern == "spin":
+                    error = self._spin_error(angles)
+                    if error:
+                        return self._fail(error, body=body)
+                tolerance = self.SPIN_ANGLE_TOLERANCE_DEG if pattern == "spin" else None
+                error = self._target_ready(snapshot, angles, first=True, tolerance=tolerance)
                 if error == "wheel_moving":
                     self._permit = None
                     return {"ok": False, "reason": error, "retryable": True}, 409
@@ -478,7 +579,7 @@ class KeyboardControl:
                     return {"ok": False, "reason": "stale_command"}, 409
                 nonce = secrets.token_urlsafe(18)
                 self._permit = {"value": nonce, "expires": now + self.START_PERMIT_TTL,
-                                "angles": dict(angles), "direction": direction}
+                                "angles": dict(angles), "direction": direction, "pattern": pattern}
                 return {"ok": True, "permit": nonce}, 200
 
             if action == "live":
@@ -499,7 +600,8 @@ class KeyboardControl:
                 permit = self._permit
                 if (not permit or not isinstance(body.get("permit"), str) or
                         body["permit"] != permit["value"] or now > permit["expires"] or
-                        direction != permit["direction"] or angles != permit["angles"]):
+                        direction != permit["direction"] or angles != permit["angles"] or
+                        permit["pattern"] != "drive"):
                     return self._fail("keyboard_expired", body=body)
             error = self._target_ready(snapshot, angles, first=not self._running)
             if not error:

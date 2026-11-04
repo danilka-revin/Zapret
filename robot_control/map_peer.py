@@ -182,6 +182,17 @@ def proxy_control(origin: str, operation: str):
         return jsonify(ok=False, error='Неизвестная команда управления'), 404
     path, methods, marker = route
     extra = None
+    if operation == 'neutral' and request.method == 'POST':
+        # The web proxy may be updated before the onboard server. Never
+        # forward a freewheel command to an older server that still accepts it.
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(ok=False, reason='payload'), 400
+        action = payload.get('action')
+        if isinstance(action, str) and action in {'begin', 'heartbeat'}:
+            return jsonify(ok=False, reason='neutral_disabled'), 410
+        if payload != {'action': 'restore'}:
+            return jsonify(ok=False, reason='payload'), 400
     if operation == 'logs':
         from .eventlog import clamp_limit
         path += '?limit=' + str(clamp_limit(request.args.get('limit')))

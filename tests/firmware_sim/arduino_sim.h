@@ -198,6 +198,7 @@ struct Board {
   int64_t min_high_us = 1000000;
   int64_t min_period_us = 1000000;
   long dir_setup_violations = 0;
+  long brake_releases = 0;  // high -> low, including transient releases
   long steps = 0;
   long steps_while_disabled = 0;
 
@@ -249,6 +250,7 @@ struct Board {
     value = value ? HIGH : LOW;
     const uint8_t before = level[pin];
     level[pin] = value;
+    if (pin == 5 && before == HIGH && value == LOW) ++brake_releases;
     if (pin == 7 && before != value) last_dir_change_us = now_us;
     if (pin != 6 || before == value) return;
     if (value == HIGH) {

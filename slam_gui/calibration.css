@@ -1,0 +1,203 @@
+/* Shared calibration controls: the onboard screen and /controls use the
+   same components. The legacy steering dialog also mounts the sensor cards. */
+.steer-calib-bar {
+  --cal-text: #f4f1f2;
+  --cal-muted: #b2a8ae;
+  display: grid;
+  grid-template-columns: 1.08fr 1fr 1fr;
+  grid-template-areas: "heading heading heading" "safety safety safety" "zero mode hold";
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid #463338;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #1a1518 0%, #121214 58%, #101012 100%);
+  color: var(--cal-text);
+}
+.calibration-head {
+  grid-area: heading;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 1px 1px 7px;
+}
+.calibration-head__identity, .calibration-card__head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.calibration-head__icon, .calibration-card__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  border: 1px solid #5b3a40;
+  background: #2a1a1e;
+  color: #e09aa1;
+}
+.calibration-head__icon { width: 46px; height: 46px; border-radius: 13px; }
+.calibration-head__icon svg { width: 23px; height: 23px; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+.calibration-kicker, .calibration-card__eyebrow {
+  display: block;
+  margin: 0 0 3px;
+  color: #ce9097;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .11em;
+  line-height: 1.3;
+}
+.calibration-head h4 { margin: 0; color: var(--cal-text); font-size: 19px; line-height: 1.2; letter-spacing: -.02em; }
+.calibration-head__description { margin: 4px 0 0; color: var(--cal-muted); font-size: 13px; line-height: 1.4; }
+.calibration-head__badge {
+  flex: none;
+  padding: 7px 10px;
+  border: 1px solid #44373c;
+  border-radius: 7px;
+  color: #c9b9bf;
+  background: #1a1719;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .045em;
+}
+.calibration-head__badge span { color: #d17882; margin-right: 5px; font-size: 8px; }
+
+.calibration-card {
+  --cal-card: #101012;
+  --cal-text: #f4f1f2;
+  --cal-muted: #b2a8ae;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #332d31;
+  border-radius: 12px;
+  background: var(--cal-card);
+  color: var(--cal-text);
+}
+.steer-calib-bar > .calibration-zero { grid-area: zero; }
+.steer-calib-bar > .pot-mode { grid-area: mode; }
+.steer-calib-bar > .pot-hold { grid-area: hold; }
+.calibration-card__icon { width: 38px; height: 38px; border-radius: 10px; font: 500 23px/1 system-ui, sans-serif; }
+.calibration-card__head h5 { margin: 0; color: var(--cal-text); font-size: 15px; line-height: 1.25; letter-spacing: -.01em; }
+.calibration-card__eyebrow { color: #a7949b; font-size: 9px; }
+.calibration-card__description, .pot-hold__hint {
+  display: block;
+  margin: 0;
+  color: var(--cal-muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+.pot-hold__hint::first-letter { text-transform: uppercase; }
+.calibration-card__footnote {
+  display: block;
+  margin: 0;
+  color: #aea2a9;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+.steer-calib-bar .full-zero-open-actions { display: grid; gap: 8px; margin-top: auto; }
+.calibration-card button, .calibration-card select { font-family: inherit; }
+.calibration-zero .btn-steer, .calibration-secondary, .pot-hold__switch {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #53464b;
+  border-radius: 9px;
+  background: #221c20;
+  color: var(--cal-text);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.3;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.calibration-zero .btn-steer { padding: 10px 12px; }
+.calibration-zero .btn-steer--full-zero { border-color: #d17882; background: #c7616e; color: #1b1013; }
+.calibration-zero .btn-steer--calib, .calibration-secondary { padding: 10px 12px; background: #211b1e; color: #eee7ea; }
+.calibration-zero .btn-steer:hover:not(:disabled), .calibration-secondary:hover:not(:disabled),
+.pot-hold__switch:hover:not(:disabled) { border-color: #e2a0a8; filter: brightness(1.08); }
+.calibration-zero .btn-steer:disabled, .calibration-secondary:disabled, .pot-hold__switch:disabled {
+  opacity: 1;
+  border-color: #3d363a;
+  background: #211e20;
+  color: #a79ca2;
+  cursor: not-allowed;
+}
+.calibration-card button:focus-visible, .calibration-card select:focus-visible {
+  outline: 2px solid #eeaab1;
+  outline-offset: 3px;
+}
+.pot-mode__field { display: grid; gap: 6px; margin-top: auto; color: #d4cbd0; font-size: 12px; font-weight: 700; }
+.pot-mode__field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 36px 10px 11px;
+  appearance: none;
+  border: 1px solid #53464b;
+  border-radius: 9px;
+  background-color: #211c1f;
+  background-image: linear-gradient(45deg, transparent 50%, #cbbec4 50%), linear-gradient(135deg, #cbbec4 50%, transparent 50%);
+  background-position: calc(100% - 18px) 19px, calc(100% - 13px) 19px;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--cal-text);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.pot-mode__field select:disabled { opacity: 1; border-color: #3d363a; background-color: #211e20; color: #a79ca2; cursor: not-allowed; }
+.pot-hold__switch { position: relative; margin-top: auto; padding: 10px 66px 10px 12px; text-align: left; }
+.pot-hold__switch::before, .pot-hold__switch::after { content: ""; position: absolute; top: 50%; transform: translateY(-50%); }
+.pot-hold__switch::before { right: 12px; width: 38px; height: 22px; border: 1px solid #62575d; border-radius: 99px; background: #484045; }
+.pot-hold__switch::after { right: 33px; width: 16px; height: 16px; border-radius: 50%; background: #e4dce0; }
+.pot-hold__switch[aria-checked="true"]::before { border-color: #e0929b; background: #c7616e; }
+.pot-hold__switch[aria-checked="true"]::after { right: 17px; background: #fff; }
+/* Unknown and mixed telemetry must not look like a confirmed OFF state. */
+.pot-hold__switch[data-mode="unknown"]::before, .pot-hold__switch[data-mode="mixed"]::before { background: #292528; border-style: dashed; }
+.pot-hold__switch[data-mode="unknown"]::after, .pot-hold__switch[data-mode="mixed"]::after { background: #8f8389; }
+.calibration-status, .calibration-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid #302d30;
+  border-radius: 8px;
+  background: #191719;
+  color: #c1b5bb;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.calibration-status::before { content: ""; flex: none; width: 6px; height: 6px; margin-top: 5px; border-radius: 50%; background: #b5a2a9; }
+.pot-hold[data-mode="mixed"] .calibration-status::before { background: #e5b878; }
+.calibration-alert { border-color: #704947; color: #f2c3a5; background: #2b1c1b; }
+.calibration-status:empty, .calibration-alert:empty { display: none; }
+.calibration-safety {
+  grid-area: safety;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #574632;
+  border-radius: 10px;
+  background: #211c17;
+  color: #d6c6af;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.calibration-safety__icon { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border: 1px solid #987447; border-radius: 6px; color: #f1bc75; font-size: 12px; font-weight: 800; }
+.calibration-safety b { display: block; margin-bottom: 2px; color: #f0d3aa; font-size: 13px; }
+.calibration-safety span { display: block; }
+
+/* Fallback for the older pop-up steering panel on the main/console screens. */
+.rc-steering-toolbar > .calibration-card { flex: 1 1 270px; align-self: stretch; }
+.rc-steering-toolbar > .pot-mode, .rc-steering-toolbar > .pot-hold { margin-top: 4px; }
+
+@media (max-width: 1100px) {
+  .steer-calib-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "heading heading" "safety safety" "zero mode" "hold hold"; }
+}
+@media (max-width: 700px) {
+  .steer-calib-bar { grid-template-columns: minmax(0, 1fr); grid-template-areas: "heading" "safety" "zero" "mode" "hold"; padding: 15px; gap: 10px; }
+  .calibration-head { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .calibration-head__badge { margin-left: 0; }
+  .calibration-card { padding: 15px; }
+}

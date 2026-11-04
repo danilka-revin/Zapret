@@ -746,18 +746,20 @@ static void scenario_pot_hold_stop() {
     CHECK(!FR::pot_hold, "команда «%s» выключает удержание", command);
     CHECK(wait_until(fr_settled, 30000), "«%s» закончилась", command);
   }
-  // Нейтраль тоже выключает удержание (после подтверждённого b).
+  // A legacy n is now a STOP: it turns hold off but never releases BRAKE.
   board_fr.serial.send("b 5");
   sim::run_for_ms(2);
   board_fr.serial.send("ph 1");
   sim::run_for_ms(5);
-  CHECK(FR::pot_hold, "ph 1 включена перед нейтралью");
+  CHECK(FR::pot_hold, "ph 1 включена перед старой командой n");
+  const long releases = board_fr.brake_releases;
   board_fr.serial.send("n 5");
   sim::run_for_ms(5);
-  CHECK(!FR::pot_hold && FR::neutral_active, "нейтраль выключает удержание");
+  CHECK(!FR::pot_hold && !FR::neutral_active && drive_idle(board_fr) &&
+        board_fr.brake_releases == releases, "старый n выключает удержание и только тормозит");
   board_fr.serial.send("ph 1");
   sim::run_for_ms(5);
-  CHECK(!FR::pot_hold, "на нейтрали ph 1 не проходит");
+  CHECK(FR::pot_hold, "старая команда не запирает обычное удержание");
   board_fr.serial.send("s");
   sim::run_for_ms(5);
 }
@@ -1145,7 +1147,7 @@ static void scenario_system_calibrate_all() {
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=24"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=25"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -1262,7 +1264,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v24"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v25"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -1927,82 +1929,55 @@ static void scenario_tach_rollover() {
         "оборотомер возобновляет показ после паузы");
 }
 
-// Freewheel requires a fresh, one-shot brake ACK and its own heartbeat.
+// Legacy freewheel commands may never release the brake, even transiently.
 static void scenario_neutral() {
-  boot({&board_fr});
-  board_fr.serial.send("z");
-  board_fr.serial.send("n 42");
-  sim::run_for_ms(5);
-  CHECK(drive_idle(board_fr) && !FR::neutral_active, "n без tagged b не снимает тормоз");
-  board_fr.serial.send("b 42");
-  board_fr.serial.send("n 42");
-  sim::run_for_ms(5);
-  CHECK(FR::neutral_active && FR::neutral_id == 42 && FR::brake_id == 0 &&
-        board_fr.level[2] == LOW && board_fr.level[5] == LOW && servo_value(board_fr) == 0,
-        "нейтраль: выходы выключены, тормоз отпущен, Servo=0");
-  board_fr.serial.send("v 80");
-  board_fr.serial.send("t 20");
-  board_fr.serial.send("w 45");
-  board_fr.serial.send("k");
-  sim::run_for_ms(50);
-  CHECK(FR::neutral_active && !FR::drive_active && !FR::motorBusy() &&
-        board_fr.level[2] == LOW && board_fr.level[5] == LOW,
-        "движение, прямой Servo и калибровка запрещены на нейтрали");
-  // SC импульсы имитируют ручное перекатывание после включения нейтрали.
-  board_fr.tach_period_us = 10000;
-  board_fr.tach_next_edge_us = sim::now_us + board_fr.tach_period_us;
-  for (int i = 0; i < 5; ++i) {
-    board_fr.serial.send("n 42");
-    sim::run_for_ms(200);
+  const std::vector<sim::Board*> boards = all_boards();
+  boot(boards);
+  const char* requests[] = {"n", "n 42", "n 43", "N 42", "n -1", "n 42 extra"};
+  for (const char* command : requests) {
+    for (sim::Board* board : boards) board->serial.send("b 42");
+    sim::run_for_ms(5);
+    long releases[4];
+    for (size_t i = 0; i < boards.size(); ++i) {
+      CHECK(drive_idle(*boards[i]), "%s: tagged b тормозит", boards[i]->name);
+      releases[i] = boards[i]->brake_releases;
+      boards[i]->serial.send(command);
+    }
+    sim::run_for_ms(50);
+    for (size_t i = 0; i < boards.size(); ++i) {
+      FastFrame frame;
+      CHECK(drive_idle(*boards[i]) && boards[i]->brake_releases == releases[i],
+            "%s: «%s» не должен даже кратковременно отпускать тормоз", boards[i]->name, command);
+      CHECK(latest_fast_frame(*boards[i], &frame) && frame.firmware == 25 &&
+            frame.neutral == 0 && frame.neutral_lock == 0,
+            "%s: нейтраль не отображается в телеметрии", boards[i]->name);
+    }
   }
-  CHECK(FR::neutral_active && FR::tach_display_rpm_x10 > 10 && has(board_fr, "neutral_id=42"),
-        "heartbeat сохраняет нейтраль при ручном вращении по SC");
-  board_fr.tach_period_us = 0;
-  board_fr.serial.send("b");
-  board_fr.serial.send("n 42");
+
+  // Normal direct traction still releases the brake while the driver is
+  // enabled; a delayed legacy n stops it, and normal traction can start again.
+  for (sim::Board* board : boards) board->serial.send("v 40 f");
   sim::run_for_ms(5);
-  CHECK(drive_idle(board_fr) && !FR::neutral_active, "запоздавший n после STOP не отпускает тормоз");
-  sim::run_for_ms(2000); // дождаться нуля оборотов перед повторным включением
-  board_fr.serial.send("b 43");
-  board_fr.serial.send("n 43");
+  for (sim::Board* board : boards) {
+    CHECK(thrust_on(*board) && servo_value(*board) == 40, "%s: обычная тяга работает", board->name);
+    board->serial.send("n 42");
+  }
   sim::run_for_ms(5);
-  CHECK(FR::neutral_active, "новый tagged b разрешает новую нейтраль");
-  sim::run_for_ms(700);
-  CHECK(drive_idle(board_fr) && !FR::neutral_active, "потеря heartbeat включает тормоз");
-  board_fr.serial.send("n 43");
-  board_fr.serial.send("v 80");
-  board_fr.serial.send("t 30");
-  board_fr.serial.send("b");
+  for (sim::Board* board : boards) {
+    CHECK(drive_idle(*board), "%s: запоздавший n остановил тягу", board->name);
+    board->serial.send("v 150 b");
+  }
   sim::run_for_ms(5);
-  CHECK(drive_idle(board_fr) && !FR::neutral_active && FR::neutral_inhibit,
-        "старые n/v/t и обычный b после watchdog не возобновляют движение");
-  board_fr.serial.send("b 444");
-  board_fr.serial.send("v 20");
-  sim::run_for_ms(5);
-  CHECK(!FR::neutral_inhibit && FR::drive_active && thrust_on(board_fr),
-        "только новый tagged b снова разрешает тягу");
-  board_fr.serial.send("b 44");
-  board_fr.serial.send("n 44");
-  board_fr.serial.send("t 0");
-  sim::run_for_ms(5);
-  CHECK(drive_idle(board_fr) && !FR::neutral_active, "t 0 остаётся аварийным тормозом");
-  board_fr.serial.send("b 45");
-  board_fr.serial.send("n 45");
-  board_fr.serial.send("n 46");
-  sim::run_for_ms(5);
-  CHECK(drive_idle(board_fr) && !FR::neutral_active, "чужой id снимает нейтраль и тормозит");
-  board_fr.serial.send("b 47");
-  sim::run_for_ms(5);
-  FR::tach_display_rpm_x10 = 100;
-  board_fr.serial.send("n 47");
-  sim::run_for_ms(5);
-  CHECK(drive_idle(board_fr) && !FR::neutral_active, "вращающееся колесо не отпускаем");
-  FR::tach_display_rpm_x10 = 0;
-  board_fr.serial.send("b 48");
-  sim::run_for_ms(610);
-  board_fr.serial.send("n 48");
-  sim::run_for_ms(5);
-  CHECK(drive_idle(board_fr) && !FR::neutral_active, "просроченный tagged b не разрешает первый n");
+  for (sim::Board* board : boards) {
+    CHECK(thrust_on(*board) && servo_value(*board) == 150, "%s: тяга после n работает", board->name);
+    board->serial.send("b 99");
+  }
+  sim::run_for_ms(50);
+  for (sim::Board* board : boards) {
+    FastFrame frame;
+    CHECK(drive_idle(*board) && latest_fast_frame(*board, &frame) && frame.brake == 99,
+          "%s: tagged b тормозит и подтверждается", board->name);
+  }
 }
 
 // An edge must be noticed immediately, even before the 500 ms RPM sample.
@@ -2032,7 +2007,8 @@ static void scenario_recent_sc() {
   sim::run_for_ms(2);
   board_fr.serial.send("n 902");
   sim::run_for_ms(2);
-  CHECK(wheel_fr::neutral_active, "после тишины и свежего STOP нейтраль разрешается");
+  CHECK(!wheel_fr::neutral_active && board_fr.level[5] == HIGH,
+        "после тишины старый n тоже не отпускает тормоз");
 
   // Hold time follows three periods, bounded to 300 ms..1500 ms.
   wheel_fr::tach_has_edge = true;
@@ -2144,6 +2120,21 @@ static void scenario_live_steering() {
   board_fr.serial.send("j 106 3 20 90");
   sim::run_for_ms(5);
   CHECK(!thrust_on(board_fr), "heartbeat после перехвата не возобновляет тягу");
+
+  board_fr.serial.send("z");
+  board_fr.serial.send("b 109");
+  sim::run_for_ms(5);
+  board_fr.serial.send("j 109 1 20 0");
+  board_fr.serial.send("j 109 2 20 90");
+  sim::run_for_ms(30);
+  CHECK(thrust_on(board_fr) && wheel_fr::motorBusy(), "руление на ходу работает до старого n");
+  board_fr.serial.send("n 109");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr) && !wheel_fr::motorBusy() && wheel_fr::live_id == 0,
+        "старый n останавливает тягу и руль во время WASD");
+  board_fr.serial.send("j 109 3 20 90");
+  sim::run_for_ms(5);
+  CHECK(drive_idle(board_fr) && !wheel_fr::motorBusy(), "старый j не возобновляет движение после n");
 
   board_fr.serial.send("z");
   board_fr.serial.send("b 107");
@@ -2352,13 +2343,13 @@ static void scenario_full_zero_reboot() {
   board_fr.serial.send("zq 201");
   sim::run_for_ms(250);
   CHECK(FR::zero_reply_status == 1 && FR::zero_reply_id == 201, "preflight ready");
-  CHECK(has(board_fr, "@Z 24 2 201 1 "), "checked preflight returned");
+  CHECK(has(board_fr, "@Z 25 2 201 1 "), "checked preflight returned");
   board_fr.serial.send("zc 202");
   sim::run_for_ms(250);
   CHECK(FR::zero_reply_status == 2 && FR::full_zero_steps == physical && FR::stepNow() == 0,
         "EEPROM committed and coordinates rebased: %ld %ld %ld", (long)FR::full_zero_steps,
         physical, (long)FR::stepNow());
-  CHECK(has(board_fr, "@Z 24 2 202 2 "), "checked commit returned");
+  CHECK(has(board_fr, "@Z 25 2 202 2 "), "checked commit returned");
   const uint32_t generation = FR::full_zero_generation;
   board_fr.serial.send("zc 202"); // retry is idempotent
   sim::run_for_ms(2);

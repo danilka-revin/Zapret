@@ -786,6 +786,7 @@ def _drive_command(source, body):
 ASSETS = {
     "steer_dial.js": "steer_dial_js",
     "steer_dial.css": "steer_dial_css",
+    "calibration.css": "calibration_css",
     "connections.css": "connections_css",
     "connections.js": "connections_js",
     "devices.css": "devices_css",
@@ -820,7 +821,7 @@ ASSETS = {
     "pc_chip.js": "pc_chip_js",
     "full_zero.js": "full_zero_js",
     "keyboard.js": "keyboard_js",
-    "neutral.js": "neutral_js",
+    "brake_recovery.js": "brake_recovery_js",
     "battery.js": "battery_js",
     "steering.css": "steering_css",
     "steering.js": "steering_js",
