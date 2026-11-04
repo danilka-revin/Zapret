@@ -48,6 +48,7 @@ def test_map_and_route_pages_serve_calibration_form(kiosk_client, client, operat
     for web in (kiosk_client, client):
         for page_path in ("/map", "/route"):
             page = web.get(page_path).text
-            for marker in ('id="explore-blockers"', 'id="explore-cal-form"',
-                           'id="explore-cal-fields"', 'id="explore-cal-state"'):
+            for marker in ('id="explore-blockers"', 'id="explore-nav"',
+                           'id="explore-cal-form"', 'id="explore-cal-fields"',
+                           'id="explore-cal-state"'):
                 assert marker in page, (page_path, marker)

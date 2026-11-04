@@ -620,3 +620,11 @@
 }
 #explore-cal-state.ok { color: #36c275; }
 #explore-cal-state.bad { color: #e35d6a; }
+
+/* Полный чек-лист готовности навигации (до нажатия «Начать») */
+.explore-nav { margin: 8px 0; padding: 7px 9px; border: 1px solid var(--line, #444); border-radius: 8px; font-size: 10.5px; line-height: 1.5; }
+.explore-nav:empty { display: none; }
+.explore-nav > b { display: block; margin-bottom: 4px; font-size: 11px; }
+.explore-nav-check { padding-left: 4px; }
+.explore-nav-check.ok { color: #36c275; }
+.explore-nav-check.bad { color: #e35d6a; }

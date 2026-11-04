@@ -82,6 +82,12 @@ if have_systemd && $SUDO systemctl cat robot-lidar.service >/dev/null 2>&1; then
   UNITS+=(robot-lidar)
   UNIT_TITLES+=("лидар ROS 2 (драйвер 360°)")
 fi
+# Публикатор глубины Kinect — отдельная служба, добавляем только если её
+# поставили: на роботах без Kinect в status не должно быть лишних предупреждений.
+if have_systemd && $SUDO systemctl cat robot-kinect-depth.service >/dev/null 2>&1; then
+  UNITS+=(robot-kinect-depth)
+  UNIT_TITLES+=("глубина Kinect 360 (публикатор)")
+fi
 
 unit_installed() {
   have_systemd && $SUDO systemctl cat "$1.service" >/dev/null 2>&1

@@ -153,11 +153,11 @@ def test_autostart_status_shows_what_starts_itself(fake_host, monkeypatch):
     result = run("autostart.sh", "status")
     assert result.returncode == 0, result.stderr
     out = result.stdout
-    # Пульт, бортовой экран и служба лидара ROS 2: последняя попадает в список
-    # только если она установлена на этой машине (фальшивый systemctl отвечает
-    # «установлена» на любой вызов `cat`).
-    assert out.count("автозапуск ВКЛЮЧЁН") == 3
-    assert "лидар ROS 2" in out
+    # Пульт, бортовой экран, публикатор глубины Kinect и служба лидара ROS 2:
+    # последние попадают в список только если установлены на этой машине
+    # (фальшивый systemctl отвечает «установлена» на любой вызов `cat`).
+    assert out.count("автозапуск ВКЛЮЧЁН") == 4
+    assert "Kinect" in out and "лидар ROS 2" in out
     assert "ВКЛЮЧЁН" in out and str(entry) in out
     assert "автоподъём ВКЛЮЧЁН" in out
     assert "autostart.sh off" in out
@@ -503,6 +503,37 @@ def test_install_rejects_unknown_flag():
     result = run("install_ubuntu.sh", "--автозапуск")
     assert result.returncode != 0
     assert "неизвестный аргумент" in result.stderr
+
+
+def test_kinect_publisher_autostart_is_wired_and_never_fakes_depth():
+    """Публикатор поднимается сам, но без драйвера не шлёт демо-кадр."""
+    wrapper = SCRIPTS / "kinect_depth.sh"
+    assert wrapper.is_file() and os.access(wrapper, os.X_OK)
+    syntax = subprocess.run(["bash", "-n", str(wrapper)], capture_output=True,
+                            text=True, check=False)
+    assert syntax.returncode == 0, syntax.stderr
+    body = wrapper.read_text(encoding="utf-8")
+    assert "--list-backends" in body and "--source auto" in body
+    assert "--source demo" not in body and "--allow-demo" not in body
+    assert "--foreground" in body and "kinect-depth.pid" in body
+    # Диагностика показывает все бэкенды, даже когда ни один не установлен.
+    probe = subprocess.run(["bash", str(wrapper), "--list-backends"],
+                           cwd=SCRIPTS.parent, capture_output=True, text=True,
+                           check=False)
+    assert probe.returncode == 0, probe.stderr
+    assert "installed" in probe.stdout and "missing" in probe.stdout
+
+    start = (SCRIPTS / "start_robot.sh").read_text(encoding="utf-8")
+    assert "./scripts/kinect_depth.sh" in start
+    assert "RC_KINECT_PUBLISHER_AUTOSTART" in start
+    stop = (SCRIPTS / "stop.sh").read_text(encoding="utf-8")
+    assert "kinect-depth.pid" in stop and "robot-kinect-depth" in stop
+    unit = (SCRIPTS / "robot-kinect-depth.service").read_text(encoding="utf-8")
+    assert "kinect_depth.sh --foreground" in unit and "After=robot-kiosk.service" in unit
+    install = (SCRIPTS / "install_ubuntu.sh").read_text(encoding="utf-8")
+    assert "robot-kinect-depth" in install
+    autostart = (SCRIPTS / "autostart.sh").read_text(encoding="utf-8")
+    assert "robot-kinect-depth.service" in autostart
 
 
 if __name__ == "__main__":  # pragma: no cover — ручной запуск

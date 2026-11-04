@@ -60,11 +60,29 @@ RC_KINECT_PITCH_DEG=0
 ```
 
 Вносить замеры можно не только руками: на `/map` и `/route` откройте
-**«Калибровка геометрии»** — там все 33 поля (4 камеры × 5 + Kinect × 13) с
-текущими значениями, диапазонами и подсказками. «Сохранить в .env» пишет
-только известные ключи атомарно, не трогая остальные строки файла, и сразу
-применяет их к процессу. На пульте 8080 сохранение дополнительно защищено
-CSRF-токеном и заголовком `X-Robot-Control: calibration`.
+**«Калибровка геометрии»** — там все 38 полей на одном экране (4 камеры × 5 +
+Kinect × 13 + тяга и скорость × 5) с текущими значениями, диапазонами и
+подсказками. «Сохранить в .env» пишет только известные ключи атомарно, не
+трогая остальные строки файла, и сразу применяет их к процессу. На пульте
+8080 сохранение дополнительно защищено CSRF-токеном и заголовком
+`X-Robot-Control: calibration`.
+
+**Скорость не угадывают.** `RC_NAV_MPS_PER_PERCENT` в шаблоне пуст, в форме
+оно показано пустым с подсказкой «измерить на площадке», а пустая строка при
+сохранении отклоняется — иначе навигация отказала бы уже после нажатия
+«Начать». Замерьте проезд на площадке и запишите результат:
+
+```bash
+# робот проехал 2 м за 8 с при тяге 4%
+.venv/bin/python scripts/measure_nav_speed.py --distance 2 --seconds 8 --percent 4
+# → RC_NAV_MPS_PER_PERCENT=0.0625
+.venv/bin/python scripts/measure_nav_speed.py --distance 2 --seconds 8 --percent 4 --save-env
+```
+
+Скрипт ничего не запускает и не двигает робот: он только считает по вашим
+замерам и (с `--save-env`) атомарно дописывает ключ в `.env`. Остальные поля
+группы — `RC_NAV_SPEED_MPS`, `RC_NAV_MAX_PERCENT`, `RC_NAV_FOOTPRINT_M`,
+`RC_LIDAR_OFFSET_M` — тоже лежат в той же форме.
 
 Пока заданы не все углы, `GET /api/sensors/layout` возвращает
 `calibrated: false`, а панель обследования показывает предупреждение; карта
@@ -120,8 +138,24 @@ curl http://127.0.0.1:8090/api/kiosk_map       # kinectScans, kinectPoints
 в `docs/ROS2_LIDAR.md`. Поле `drivers` в `/api/kinect/status` показывает, что
 реально импортируется на борту.
 
-Если нужен автозапуск — добавьте публикатор в `scripts/autostart.sh` рядом с
-киоском или отдельный systemd-юнит по образцу `scripts/robot-kiosk.service`.
+**Автозапуск уже настроен.** `scripts/start_robot.sh` после ответа киоска 8090
+поднимает `scripts/kinect_depth.sh` (по умолчанию
+`RC_KINECT_PUBLISHER_AUTOSTART=1`, отключается значением `0`), а
+`scripts/install_ubuntu.sh` вместе с `--autostart` ставит юнит
+`robot-kinect-depth.service`. `scripts/autostart.sh` и `scripts/stop.sh`
+умеют показывать, включать, выключать и гасить его наравне с киоском.
+
+```bash
+./scripts/kinect_depth.sh --list-backends   # что реально установлено
+./scripts/kinect_depth.sh --foreground      # для systemd / отладки
+./scripts/stop.sh                           # гасит и публикатор тоже
+```
+
+Важно: обёртка запускает публикатор строго с `--source auto` и **никогда не
+подменяет отсутствующий драйвер демо-кадром**. Без физического Kinect она
+завершится с подсказкой про `requirements-kinect.txt`, а панель так и покажет
+«Нет свежего кадра Kinect 360» — свежий демо-кадр не должен создавать иллюзию
+готовности к выезду.
 
 ## 4. Включение автообследования
 
@@ -210,11 +244,27 @@ ORB-SLAM3 требует калибровки каждой камеры, ROS 2 �
 ## 8. Чек-лист готовности перед пуском
 
 `/api/exploration/status` содержит `blockers` (то, что реально не даст
-запуститься), `warnings` (что стоит проверить) и `canStart`. Панель показывает
-их списком и держит кнопку «Начать» выключенной, пока есть blockers:
+запуститься), `warnings` (что стоит проверить), `navigation` (полная диагностика
+тяги) и `canStart`. Панель показывает их списком и держит кнопку «Начать»
+выключенной, пока есть blockers.
+
+`navigation.checks` — это те же 14 проверок, что `NavigationService` делает
+перед каждой поездкой: `enabled`, `speedCalibrated`, `speedWithinLimit`,
+`masterReady`, `driveStopped`, `mapFresh`, `mapReady`, `mapTrusted`,
+`mapIntegrity`, `scanReady`, `poseReady`, `mapDecayDisabled`,
+`footprintSufficient`, `estopClear`. Блок **«Готовность навигации»** на `/map` и
+`/route` рисует их все со статусом ✅/⚠ ещё до пуска; `navigation.errors`
+содержит human-readable названия невыполненных, а когда навигация уже включена,
+они дополнительно попадают в `blockers` с префиксом «Навигация:». Раньше
+оператор видел только первую причину (`RC_NAV_ENABLE`) и узнавал про пустой
+`RC_NAV_MPS_PER_PERCENT` уже по отказу планировщика.
 
 ```bash
+# полный ответ, включая navigation.checks
 curl http://127.0.0.1:8090/api/exploration/status | python3 -m json.tool
+# только «готов / что не так»
+curl http://127.0.0.1:8090/api/exploration/status | python3 -c \
+  'import json,sys; n=json.load(sys.stdin)["navigation"]; print(n["ready"], n["errors"])'
 ```
 
 | Поле | Источник |
@@ -225,6 +275,7 @@ curl http://127.0.0.1:8090/api/exploration/status | python3 -m json.tool
 | галка «Ближняя зона осмотрена» | физический осмотр оператором, не показание датчика |
 | все углы внесены | «Калибровка геометрии», `/api/sensors/layout → calibrated` |
 | карта не пуста, лидар свежий | `/api/kiosk_map → scans, quality, trusted` |
+| замеренная скорость, шасси, footprint, pose/scan | `/api/exploration/status → navigation.checks` (14 проверок) |
 
 Предупреждения не блокируют пуск: например, без калибровки робот поедет, но
 лучи Kinect будут смещены относительно реального монтажа.
