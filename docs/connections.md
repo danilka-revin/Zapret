@@ -18,8 +18,8 @@
                                       │  USB3  колесо RL (Arduino Mega)  │
    BMS ──USB-UART переходник─────────►│  USB4  колесо RR (Arduino Mega)  │
    лидар 360° ───────────────────────►│  USB5  лидар                     │
-   камера передняя ──────────────────►│  USB6  камера передняя (/dev/video0)
-   камера задняя ───────────────────►│  USB7  камера задняя  (/dev/video1)
+   4 × камера C930e (FL/FR/RL/RR) ──►│  USB6…9  /dev/video0…3 (или by-id)
+   Kinect 360 (глубина) ────────────►│  USB10 Kinect: freenect / OpenNI2 / ROS 2
    монитор бортового экрана ─HDMI───►│  HDMI  браузер-киоск  :8090       │
    (клавиатура/мышь — по желанию) ──►│                                  │
                                       └───────────────┬──────────────────┘
@@ -51,8 +51,11 @@
 | **Колесо RR** (`motor_wheel_RR.ino`) | свой USB | то же | роль fw24 `RR` | статус USB + физическая проверка кабеля |
 | **Лидар 360°** (RPLIDAR A1/A2/A3/S1/C1, LD06/LD19/STL-27L, LDS-01/02) | USB-адаптер лидара | `/dev/rplidar*`, `/dev/serial/by-id/*lidar*`, иначе `/dev/ttyUSB*` | `RC_LIDAR_PORT`, `RC_LIDAR_BAUD`, `RC_LIDAR_PROTOCOL`, `RC_LIDAR_SOURCE` | `.venv/bin/python scripts/lidar_check.py` (для ROS 2 — `--ros`), экран — панель «Лидар» |
 | **BMS аккумулятора** (JBD, диагностический UART) | USB-UART переходник: **TX→RX, RX→TX, GND→GND**, 9600 8N1 | `/dev/serial/by-id/…` (рекомендуется) | `RC_BMS_PORT` | бортовой экран → «Аккумулятор» → «Подключение BMS» → «Проверить» |
-| **Камера передняя** (USB-веб-камера, V4L2) | USB | `/dev/video0` (авто) или `/dev/v4l/by-id/…` | `RC_CAMERA_FRONT` | свайп «Камеры» → «Настройка камер» |
-| **Камера задняя** | USB | `/dev/video1` (авто) | `RC_CAMERA_REAR` | то же |
+| **Камера FL** (Logitech C930e, V4L2) | USB | `/dev/video0` (авто) или `/dev/v4l/by-id/…` | `RC_CAMERA_FRONT` (алиас `RC_CAMERA_FL_PORT`) | свайп «Камеры» → «Настройка камер» |
+| **Камера FR** | USB | `/dev/video2` (авто) | `RC_CAMERA_FRONT_RIGHT` | то же |
+| **Камера RL** | USB | `/dev/video1` (авто) | `RC_CAMERA_REAR` (алиас `RC_CAMERA_RL_PORT`) | то же |
+| **Камера RR** | USB | `/dev/video3` (авто) | `RC_CAMERA_REAR_RIGHT` | то же |
+| **Kinect 360** (глубина) | USB + отдельное питание | libfreenect / OpenNI2 / ROS 2 | `RC_KINECT_*`, `scripts/kinect_depth_publisher.py` | `GET /api/kinect/status`, [AUTONOMY.md](AUTONOMY.md) |
 | **Монитор бортового экрана** | HDMI (или встроенный дисплей) | графическая сессия Ubuntu | — (браузер-киоск сам) | открывается `http://127.0.0.1:8090/` |
 | Клавиатура / мышь (по желанию) | USB | — | — | — |
 
@@ -96,15 +99,28 @@
   подключить». Автопоиска BMS нет; предпочтителен `/dev/serial/by-id/…`.
 - Подробности: [battery.md](battery.md).
 
-### Камеры
+### Камеры и Kinect 360
 
-- Две USB-веб-камеры (V4L2): передняя — `/dev/video0`, задняя — `/dev/video1`
-  (это просто значения по умолчанию). Камеры показываются на обоих экранах как
-  MJPEG-поток; браузер планшета **не** берёт веб-камеру планшета и не конкурирует
-  за USB-порты робота.
-- Закрепить: `RC_CAMERA_FRONT`/`RC_CAMERA_REAR`, удобнее постоянный путь
-  `/dev/v4l/by-id/…`. Настроить можно с бортового экрана (свайп «Камеры» →
-  «Настройка камер») без PIN и без перезапуска.
+- Четыре USB-камеры **Logitech C930e** (V4L2): FL `/dev/video0`, RL
+  `/dev/video1`, FR `/dev/video2`, RR `/dev/video3` — значения по умолчанию.
+  На бортовом экране все четыре видны в свайпе «Камеры» сеткой 2×2; MJPEG-поток
+  доступен как `/api/camera/<0…3>/frame`. Браузер планшета **не** берёт свою
+  веб-камеру и не конкурирует за USB-порты робота.
+- Закрепить: `RC_CAMERA_FRONT`, `RC_CAMERA_REAR`, `RC_CAMERA_FRONT_RIGHT`,
+  `RC_CAMERA_REAR_RIGHT`, лучше постоянными путями `/dev/v4l/by-id/…`.
+  Настроить можно с бортового экрана (свайп «Камеры» → «Настройка камер»)
+  без PIN и без перезапуска. Четыре камеры + четыре Arduino + лидар + Kinect
+  требуют USB-хаба с **внешним питанием**.
+- **Kinect 360** стоит по центру спереди; кадры глубины уходят в общую карту
+  `POST /api/kinect/depth`; у Kinect v1 отдельный блок питания. Драйверы
+  (`freenect` / `openni2` / `rclpy`) описаны в `requirements-kinect.txt`, а
+  проверить их наличие можно `--list-backends`. Если сзади по центру установлен
+  **второй Kinect**, включите `RC_KINECT_REAR_ENABLE=1`, заполните
+  `RC_KINECT_REAR_*` и запустите второй публикатор с `--unit rear`.
+- Углы и смещения всех сенсоров вносятся в `.env` после замера — вручную или
+  с `/map` → «Калибровка геометрии». Пока `GET /api/sensors/layout` отдаёт
+  `calibrated=false`, карта строится по значениям по умолчанию. Автономное
+  обследование и чек-лист готовности — [AUTONOMY.md](AUTONOMY.md).
 
 ---
 
@@ -175,7 +191,8 @@ picocom, второй скрипт), плата «не видна». Прове�
 | `RC_LIDAR_SOURCE` | кто читает лидар: `auto` \| `ros` \| `serial` | `auto` |
 | `RC_LIDAR_EXCLUDE` | порты, которые лидару трогать нельзя | пусто |
 | `RC_BMS_PORT` | порт BMS (один, без glob) | пусто — чтение выключено |
-| `RC_CAMERA_FRONT` / `RC_CAMERA_REAR` | порты камер | авто: `/dev/video0`, `/dev/video1` |
+| `RC_CAMERA_FRONT` / `RC_CAMERA_REAR` / `RC_CAMERA_FRONT_RIGHT` / `RC_CAMERA_REAR_RIGHT` | порты четырёх C930e | авто: `/dev/video0`…`/dev/video3` |
+| `RC_CAMERA_*_YAW_DEG`, `RC_KINECT_*`, `RC_EXPLORE_*` | геометрия сенсоров и автообследование | см. `.env.example`, [AUTONOMY.md](AUTONOMY.md) |
 | `RC_PORT` / `RC_BIND_HOST` | веб-пульт | `8080` / `0.0.0.0` |
 | `RC_KIOSK_PORT` | бортовой экран | `8090` |
 | `RC_PC_TEMP_WARN_C` / `RC_PC_TEMP_CRIT_C` | пороги температуры бортового компьютера для панели и чипа | `75` / `85` °C |

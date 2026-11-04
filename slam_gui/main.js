@@ -531,14 +531,13 @@
     setText($('route-to'), parts[1] || '—');
   }
 
-  /* ------------------------------------------------------------ камеры — передняя и задняя, поддержка USB-вебок и потока */
+  /* ------------------------------------------------------------ камеры — 4 × C930e, USB-вебки и MJPEG с борта */
   const WEBCAM = {
     frontVideo: null,
     rearVideo: null,
     frontReady: false,
     rearReady: false,
-    backendFront: null,
-    backendRear: null,
+    backendCams: [null, null, null, null],
     backendActive: false,
     checkingBackend: false,
     starting: false,
@@ -553,21 +552,16 @@
       if (r.ok) {
         const j = await r.json();
         if (j && Array.isArray(j.cameras)) {
-          const activeCams = j.cameras.filter((c) => c.active || c.exists);
-          if (activeCams.length > 0) {
-            if (!WEBCAM.backendFront) {
-              const imgF = new Image();
-              imgF.src = 'api/camera/0/stream';
-              imgF.onload = () => { WEBCAM.backendActive = true; };
-              WEBCAM.backendFront = imgF;
-            }
-            if (activeCams.length > 1 && !WEBCAM.backendRear) {
-              const imgR = new Image();
-              imgR.src = 'api/camera/1/stream';
-              WEBCAM.backendRear = imgR;
-            }
-            WEBCAM.backendActive = true;
+          // Четыре C930e: 0 — передняя левая, 1 — задняя левая,
+          // 2 — передняя правая, 3 — задняя правая.
+          for (let i = 0; i < 4; i += 1) {
+            if (WEBCAM.backendCams[i]) continue;
+            const img = new Image();
+            img.src = 'api/camera/' + i + '/stream';
+            img.onload = () => { WEBCAM.backendActive = true; };
+            WEBCAM.backendCams[i] = img;
           }
+          WEBCAM.backendActive = true;
         }
       }
     } catch (e) {}
@@ -642,31 +636,31 @@
 
   function renderCamera(view, d) {
     const meta = $('cam-meta');
-    const front = $('cam-canvas');
-    const rear = $('cam-rear-canvas');
-    const emptyF = $('cam-empty');
-    const emptyR = $('cam-rear-empty');
-
-    const hasLiveF = (WEBCAM.frontReady && WEBCAM.frontVideo && WEBCAM.frontVideo.videoWidth > 0) ||
-                     (WEBCAM.backendFront && WEBCAM.backendFront.naturalWidth > 0);
-    const hasLiveR = (WEBCAM.rearReady && WEBCAM.rearVideo && WEBCAM.rearVideo.videoWidth > 0) ||
-                     (WEBCAM.backendRear && WEBCAM.backendRear.naturalWidth > 0);
-    const hasLive = hasLiveF || hasLiveR;
-
-    if (meta) {
-      if (hasLiveF && hasLiveR) setText(meta, '2× LIVE · 30 fps');
-      else if (hasLiveF) setText(meta, 'CAM 0 · LIVE · 30 fps');
-      else setText(meta, 'нет сигнала');
-    }
-
-    if (emptyF) emptyF.hidden = hasLiveF;
-    if (emptyR) emptyR.hidden = hasLiveR;
-
-    if (front) drawCamera(front, d, hasLiveF, false);
-    if (rear) drawCamera(rear, d, hasLiveR, true);
+    const canvases = ['cam-canvas', 'cam-rear-canvas', 'cam-right-canvas', 'cam-rear-right-canvas'];
+    const empties = ['cam-empty', 'cam-rear-empty', 'cam-right-empty', 'cam-rear-right-empty'];
+    const labels = ['CAM 0 · передняя левая', 'CAM 1 · задняя левая',
+      'CAM 2 · передняя правая', 'CAM 3 · задняя правая'];
+    const sources = canvases.map((id, index) => {
+      if (index === 0 && WEBCAM.frontReady && WEBCAM.frontVideo && WEBCAM.frontVideo.videoWidth > 0) {
+        return WEBCAM.frontVideo;
+      }
+      if (index === 1 && WEBCAM.rearReady && WEBCAM.rearVideo && WEBCAM.rearVideo.videoWidth > 0) {
+        return WEBCAM.rearVideo;
+      }
+      return WEBCAM.backendCams[index];
+    });
+    const liveCount = sources.filter((src) => src && (src.videoWidth > 0 || src.naturalWidth > 0)).length;
+    if (meta) setText(meta, liveCount ? liveCount + '× LIVE · 30 fps' : 'нет сигнала');
+    sources.forEach((src, index) => {
+      const canvas = $(canvases[index]);
+      const empty = $(empties[index]);
+      const live = !!(src && (src.videoWidth > 0 || src.naturalWidth > 0));
+      if (empty) empty.hidden = live;
+      if (canvas) drawCamera(canvas, d, live, labels[index], src);
+    });
   }
 
-  function drawCamera(canvas, d, live, isRear) {
+  function drawCamera(canvas, d, live, label, videoSource) {
     const ctx = canvas.getContext && canvas.getContext('2d');
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
@@ -681,22 +675,7 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const cw = w / dpr, ch = h / dpr;
 
-    let videoSource = null;
-    if (isRear) {
-      if (WEBCAM.rearReady && WEBCAM.rearVideo && WEBCAM.rearVideo.videoWidth > 0) {
-        videoSource = WEBCAM.rearVideo;
-      } else if (WEBCAM.backendRear && WEBCAM.backendRear.complete && WEBCAM.backendRear.naturalWidth > 0) {
-        videoSource = WEBCAM.backendRear;
-      }
-    } else {
-      if (WEBCAM.frontReady && WEBCAM.frontVideo && WEBCAM.frontVideo.videoWidth > 0) {
-        videoSource = WEBCAM.frontVideo;
-      } else if (WEBCAM.backendFront && WEBCAM.backendFront.complete && WEBCAM.backendFront.naturalWidth > 0) {
-        videoSource = WEBCAM.backendFront;
-      }
-    }
-
-    if (videoSource) {
+    if (live && videoSource) {
       try {
         ctx.drawImage(videoSource, 0, 0, cw, ch);
       } catch (e) {
@@ -715,7 +694,7 @@
       ctx.fillStyle = '#f4f4f6';
       ctx.font = '700 10px Inter, sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillText(isRear ? 'CAM 1 · задняя' : 'CAM 0 · передняя', 8, ch - 5);
+      ctx.fillText(label, 8, ch - 5);
       ctx.textAlign = 'right';
       ctx.fillStyle = '#f4f4f6';
       ctx.font = '10px ui-monospace, monospace';

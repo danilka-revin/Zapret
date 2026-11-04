@@ -1,0 +1,34 @@
+# Опциональные драйверы Kinect 360 для scripts/kinect_depth_publisher.py.
+#
+# НЕ подключён к requirements.txt намеренно: все три варианта требуют
+# системных библиотек/ROS 2 и отсутствуют в обычном pip-окружении робота.
+# Без них приложение, лидар и карта работают как обычно; публикатор в режиме
+# --source auto честно сообщит, что драйвера нет, вместо тихого демо-кадра.
+#
+# Проверить, что видит скрипт:
+#   ./scripts/kinect_depth_publisher.py --list-backends
+#
+# ---------------------------------------------------------------------------
+# 1) libfreenect (Kinect 360 по USB, самый прямой вариант)
+#    Debian/Ubuntu:  sudo apt install libfreenect-dev python3-dev
+#    Затем:          pip install freenect
+#    Запуск:         ./scripts/kinect_depth_publisher.py --source freenect
+#
+# 2) OpenNI2 (альтернативный USB-драйвер)
+#    Debian/Ubuntu:  sudo apt install libopenni2-dev
+#    Затем:          pip install openni2   # плюс библиотека libOpenNI2.so в LD_LIBRARY_PATH
+#    Запуск:         ./scripts/kinect_depth_publisher.py --source openni
+#
+# 3) ROS 2 (если глубину уже публикует драйвер камеры)
+#    rclpy ставится вместе с ROS 2, НЕ через pip:
+#      source /opt/ros/<дистрибутив>/setup.bash
+#   _topic:          /camera/depth/image_rect_raw ( sensor_msgs/Image, 16UC1, мм )
+#    Запуск:         ./scripts/kinect_depth_publisher.py --source ros2 --topic /camera/depth/image_rect_raw
+#    ROS 2 уже поднимается скриптом scripts/ros2_setup.sh; см. docs/ROS2_LIDAR.md.
+#
+# Строки ниже закомментированы: раскомментируйте только нужный вариант ПОСЛЕ
+# установки системных библиотек, иначе pip завершится с ошибкой сборки.
+#
+# freenect
+# openni2
+# rclpy   # только внутри sourced ROS 2, обычно уже установлен

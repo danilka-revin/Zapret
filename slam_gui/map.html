@@ -95,6 +95,43 @@
               <p class="nav-safety-note" id="nav-safety-note">Габариты робота 75×60×30 см, лидар спереди. Текущая прошивка не умеет разворот на месте: доступны прямые/крабовые отрезки в пределах ±28°. Препятствие в коридоре исполнитель объезжает (несколько попыток), остановленный маршрут можно продолжить кнопкой «Продолжить». Автотяга выключена по умолчанию.</p>
             </section>
 
+            <section class="nav-panel explore-panel" aria-label="Автономное обследование">
+              <header class="nav-panel-head">
+                <b>Автообследование</b>
+                <span id="explore-status" class="nav-status" data-phase="idle">ожидание</span>
+              </header>
+              <p class="nav-hint">Робот сам едет к границе неизведанного, строит карту лидаром и Kinect 360, сохраняет снимки с четырёх C930e. Скорость и проверки — как у обычного маршрута; E-STOP и «Стоп» останавливают сразу.</p>
+              <div class="explore-kpis">
+                <span>Покрытие: <b id="explore-coverage">—</b></span>
+                <span>Шаги: <b id="explore-steps">—</b></span>
+                <span>Границы: <b id="explore-frontiers">—</b></span>
+                <span>Kinect: <b id="explore-kinect">—</b></span>
+                <span>Режим: <b id="explore-enabled">—</b></span>
+              </div>
+              <label class="explore-check"><input type="checkbox" id="explore-blind" /> Ближняя зона осмотрена, рядом нет людей и препятствий</label>
+              <div class="nav-actions">
+                <button type="button" id="explore-start" class="map-btn map-btn--primary">Начать обследование</button>
+                <button type="button" id="explore-stop" class="map-btn map-btn--danger">Стоп</button>
+              </div>
+              <p class="nav-msg" id="explore-message" role="status" aria-live="polite">Обследование не запущено.</p>
+              <p class="explore-meta">Камеры: <span id="explore-cameras">—</span></p>
+              <p class="explore-meta">Калибровка: <span id="explore-calibration">—</span></p>
+              <div id="explore-blockers" class="explore-blockers" role="status" aria-live="polite"></div>
+              <details class="explore-cal" id="explore-cal">
+                <summary>Калибровка геометрии · <span id="explore-cal-state">—</span></summary>
+                <p class="nav-hint" id="explore-cal-hint">Замерьте углы и смещения на роботе и сохраните их здесь: значения попадут в .env на борту.</p>
+                <form id="explore-cal-form">
+                  <div id="explore-cal-fields" class="explore-cal-fields"></div>
+                  <div class="nav-actions">
+                    <button type="submit" id="explore-cal-save" class="map-btn map-btn--primary">Сохранить в .env</button>
+                    <button type="button" id="explore-cal-reload" class="map-btn">Перечитать</button>
+                  </div>
+                  <p class="nav-msg" id="explore-cal-message" role="status" aria-live="polite"></p>
+                </form>
+              </details>
+              <div id="explore-landmarks" class="explore-landmarks" aria-label="Визуальные ориентиры"></div>
+            </section>
+
             <section id="map-settings" class="map-settings" hidden aria-label="Настройки карты">
               <fieldset class="map-wheel-colors">
                 <legend>Углы колёс</legend>
@@ -238,7 +275,7 @@
         </section>
       </div>
 </main>
-<script src="/slam_auth.js"></script><script src="viewport.js"></script><script src="/robot_model.js"></script><script src="/lidar_view.js"></script><script src="map_view.js"></script>
+<script src="/slam_auth.js"></script><script src="viewport.js"></script><script src="/robot_model.js"></script><script src="/lidar_view.js"></script><script src="map_view.js"></script><script src="explore.js"></script>
 <script>
 const token = new URLSearchParams(location.search).get('st');
 if (token) {

@@ -708,6 +708,11 @@ class SlamMapService:
         self._scans = 0
         self._points = 0
         self._updated_at = 0.0
+        # Kinect 360 добавляет лучи в ту же сетку, но не участвует в
+        # scan matching и не подменяет «свежесть» скана лидара для навигации.
+        self._kinect_scans = 0
+        self._kinect_points = 0
+        self._kinect_updated_at = 0.0
         self._saved_at = 0.0
         self._last_decay_at = 0.0
         self._last_save_at = 0.0
@@ -745,6 +750,9 @@ class SlamMapService:
                 self._scans = 0
                 self._points = 0
                 self._updated_at = 0.0
+                self._kinect_scans = 0
+                self._kinect_points = 0
+                self._kinect_updated_at = 0.0
                 self._trusted = True
                 self._navigation_integrity = True
                 self._png_cache = None
@@ -777,6 +785,9 @@ class SlamMapService:
                     self._scans = 0
                     self._points = 0
                     self._updated_at = 0.0
+                    self._kinect_scans = 0
+                    self._kinect_points = 0
+                    self._kinect_updated_at = 0.0
                     self._trusted = True
                     self._navigation_integrity = True
                     self._png_cache = None
@@ -814,6 +825,37 @@ class SlamMapService:
             self._maybe_decay()
         return True
 
+    def ingest_kinect(self, points: Sequence[dict], stamp: Optional[float] = None,
+                      *, spec: Optional[dict] = None) -> int:
+        """Добавить лучи Kinect 360 в ту же сетку, минуя оценку позы.
+
+        Точки уже выражены в системе робота (угол от «вперёд»), но исходят из
+        точки установки Kinect, а не лидара. Поэтому сенсорная поза
+        вычисляется отдельно: перенос монтажа с учётом курса робота. Поза и
+        качество сопоставления берутся от лидара — Kinect не может «съехать»
+        локализацию, а свежесть лидарного скана для навигации не подменяется.
+        """
+        if not points:
+            return 0
+        from .sensor_layout import kinect_spec
+
+        cfg = dict(spec or kinect_spec())
+        with self._lock:
+            bx, by, yaw = self._body_pose()
+            cos_y, sin_y = math.cos(yaw), math.sin(yaw)
+            kx = bx + cfg["x_m"] * cos_y - cfg["y_m"] * sin_y
+            ky = by + cfg["x_m"] * sin_y + cfg["y_m"] * cos_y
+            touched = self._grid.insert_scan((kx, ky, yaw), points, self._settings)
+            self._kinect_scans += 1
+            self._kinect_points += len(points)
+            self._kinect_updated_at = time.time() if stamp is None else stamp
+            self._dirty = True
+            self._png_stale = True
+            # Ревизия нужна: планировщик обязан перепроверить путь, если карта
+            # изменилась между расчётом и отправкой моторам.
+            self._revision += 1
+            return touched
+
     def _maybe_decay(self) -> None:
         """Забыть старые препятствия (если включено)."""
         settings = self._settings
@@ -844,6 +886,9 @@ class SlamMapService:
             self._updated_at = time.time()
             self._scans = 0
             self._points = 0
+            self._kinect_scans = 0
+            self._kinect_points = 0
+            self._kinect_updated_at = 0.0
             self._trusted = True
             self._navigation_integrity = True
             self._revision += 1
@@ -912,6 +957,9 @@ class SlamMapService:
                 "matched": self._pose.matched,
                 "scans": self._scans,
                 "points": self._points,
+                "kinectScans": self._kinect_scans,
+                "kinectPoints": self._kinect_points,
+                "kinectUpdatedAt": self._kinect_updated_at,
                 "updatedAt": self._updated_at,
                 "savedAt": self._saved_at,
                 "paths": map_paths(self._directory),
@@ -944,6 +992,8 @@ class SlamMapService:
                 "matched": self._pose.matched,
                 "scans": self._scans,
                 "points": self._points,
+                "kinectScans": self._kinect_scans,
+                "kinectUpdatedAt": self._kinect_updated_at,
                 "updatedAt": self._updated_at,
                 "revision": self._revision,
                 "lidarOffsetM": self._lidar_offset_m,

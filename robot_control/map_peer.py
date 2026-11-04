@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 import json
+import re
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from flask import Response, jsonify, request
 
 MAX_REPLY_BYTES = 8 * 1024 * 1024
 MAX_NAV_REPLY_BYTES = 2 * 1024 * 1024
+MAX_LANDMARK_BYTES = 2 * 1024 * 1024
+LANDMARK_NAME_RE = re.compile(r"step\d{3}-cam[0-3]\.jpg")
 
 
 def _forward_json(origin: str, path: str, *, methods: set[str], limit: int,
@@ -71,6 +75,67 @@ def proxy_navigation(origin: str, suffix: str):
         return jsonify(ok=False, error="Неизвестная операция навигации"), 404
     methods, marker = routes[suffix]
     return _forward_json(origin, "/api/navigation" + suffix,
+                         methods=methods, limit=MAX_NAV_REPLY_BYTES,
+                         timeout=8.0, control_header=marker)
+
+
+def proxy_exploration(origin: str, suffix: str):
+    """Прокси фиксированных маршрутов автообследования на бортовой сервер."""
+    routes = {
+        "/status": ({"GET"}, ""),
+        "/start": ({"POST"}, "exploration"),
+        "/stop": ({"POST"}, "exploration"),
+        "/landmarks": ({"GET"}, ""),
+        "/landmarks/clear": ({"POST"}, "exploration"),
+    }
+    if suffix not in routes:
+        return jsonify(ok=False, error="Неизвестная операция обследования"), 404
+    methods, marker = routes[suffix]
+    return _forward_json(origin, "/api/exploration" + suffix,
+                         methods=methods, limit=MAX_NAV_REPLY_BYTES,
+                         timeout=8.0, control_header=marker)
+
+
+def proxy_landmark_file(origin: str, name: str):
+    """Отдать JPEG визуального ориентира с борта (не JSON)."""
+    if not LANDMARK_NAME_RE.fullmatch(name):
+        return jsonify(ok=False, error="Неверное имя файла ориентира"), 400
+    request_obj = Request(origin + "/api/exploration/landmark/" + quote(name),
+                          method="GET", headers={"Accept": "image/jpeg"})
+    try:
+        with urlopen(request_obj, timeout=4.0) as reply:
+            raw = reply.read(MAX_LANDMARK_BYTES + 1)
+            if len(raw) > MAX_LANDMARK_BYTES:
+                raise ValueError("landmark too large")
+            return Response(raw, status=reply.status, mimetype="image/jpeg",
+                            headers={"Cache-Control": "no-store"})
+    except (OSError, URLError, ValueError, HTTPException):
+        return jsonify(ok=False, error="Ориентир недоступен на бортовом сервере"), 503
+
+
+def proxy_sensors(origin: str, suffix: str):
+    """Только чтение геометрии сенсоров и статуса Kinect с борта."""
+    routes = {
+        "/layout": ("/api/sensors/layout", {"GET"}),
+        "/kinect": ("/api/kinect/status", {"GET"}),
+    }
+    if suffix not in routes:
+        return jsonify(ok=False, error="Неизвестная операция сенсоров"), 404
+    path, methods = routes[suffix]
+    return _forward_json(origin, path, methods=methods, limit=MAX_NAV_REPLY_BYTES,
+                         timeout=4.0)
+
+
+def proxy_calibration(origin: str, suffix: str):
+    """Чтение и сохранение замеров геометрии на бортовом сервере."""
+    routes = {
+        "/geometry": ({"GET"}, ""),
+        "/geometry/save": ({"POST"}, "calibration"),
+    }
+    if suffix not in routes:
+        return jsonify(ok=False, error="Неизвестная операция калибровки"), 404
+    methods, marker = routes[suffix]
+    return _forward_json(origin, "/api/calibration/geometry",
                          methods=methods, limit=MAX_NAV_REPLY_BYTES,
                          timeout=8.0, control_header=marker)
 

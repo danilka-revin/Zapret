@@ -1197,7 +1197,16 @@ class NavigationService:
             }
         return {"ok": True, "plan": plan, "status": self.status()}
 
-    def start(self, body: Any) -> tuple[dict, int]:
+    def start(self, body: Any, *, autonomous: bool = False) -> tuple[dict, int]:
+        """Запустить маршрут.
+
+        ``autonomous=True`` доступен только внутреннему сервису обследования:
+        план считается и сразу исполняется под теми же блокировками, без
+        требования «оператор посмотрел предпросмотр» на каждом шаге. Все
+        проверки (`_preflight`, свежесть скана, качество позы, E-STOP, тяга,
+        blind zone, длина пути) остаются обязательными. HTTP-роут вызывает
+        этот метод без флага и по-прежнему требует проверенный план.
+        """
         if not isinstance(body, dict):
             raise NavigationError("invalid_goal", "Ожидается JSON-объект с целью", 400)
         goal = body.get("goal", body)
@@ -1216,6 +1225,36 @@ class NavigationService:
             raise NavigationError("not_ready", reason, 409)
         with self._lock:
             preview = self._plan
+        if autonomous:
+            # Обследование строит собственный план по свежему снимку и сразу
+            # делает его «проверенным»: человека между plan() и start() нет.
+            # План затем всё равно пересчитывается ниже и сравнивается с собой,
+            # поэтому любая гонка с картой/позой ловится обычным plan_changed.
+            auto_goals = _route_goals(body, x, y)
+            auto_blind = _initial_blind_zone(snapshot)
+            with self._lock:
+                auto_avoid = set(self._avoid_cells)
+            try:
+                auto_plan = self._plan_route(snapshot, auto_goals,
+                                             blind_zone=auto_blind,
+                                             extra_blocked=auto_avoid)
+            except NavigationError as exc:
+                with self._lock:
+                    self._plan = None
+                    self._goal = None
+                    self._state = {
+                        "phase": "blocked", "message": exc.message, "progress": 0.0,
+                        "waypoint": 0, "totalWaypoints": 0, "updatedAt": self.clock(),
+                    }
+                raise
+            auto_plan["goalRequested"] = {"x": round(x, 3), "y": round(y, 3)}
+            if not auto_plan.get("executable", True):
+                raise NavigationError("frontier_blocked",
+                                      "Нет подтверждённого свободного пути к границе карты", 409)
+            with self._lock:
+                self._plan = auto_plan
+                self._goal = dict(auto_plan["goalRequested"])
+                preview = auto_plan
         if not preview:
             raise NavigationError("plan_required", "Сначала постройте маршрут и проверьте его на карте", 409)
         goals = _route_goals(body, x, y)

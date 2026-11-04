@@ -96,6 +96,10 @@ from robot_control.slam import (
 )
 from robot_control.slam_map import SlamMapService, map_paths
 from robot_control.navigation import NavigationError, NavigationService
+from robot_control.kinect import DepthError, KinectDepthService
+from robot_control.exploration import ExplorationError, ExplorationService
+from robot_control.sensor_layout import layout_payload, kinect_spec, rear_kinect_enabled
+from robot_control import calibration as geometry_calibration
 
 log = logging.getLogger("robot_control.kiosk")
 
@@ -620,6 +624,22 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     nav_lidar = None if config.testing else (app.extensions.get("rc_lidar") or LidarManager.get_instance())
     navigation = NavigationService(map_service, getattr(state, "source", None), nav_lidar)
     app.extensions["rc_navigation"] = navigation
+    # Kinect 360 и автообследование живут только здесь, на владельце железа:
+    # пульт 8080 получает статус и команды через proxy, а не второго исполнителя.
+    kinect_service = KinectDepthService()
+    app.extensions["rc_kinect"] = kinect_service
+    # Второй Kinect сзади — опция (RC_KINECT_REAR_ENABLE=1). Передний всегда
+    # доступен под прежним ключом rc_kinect, чтобы старые API и тесты не менялись.
+    kinect_services = {"front": kinect_service}
+    if rear_kinect_enabled():
+        kinect_services["rear"] = KinectDepthService(spec=kinect_spec("rear"))
+    app.extensions["rc_kinects"] = kinect_services
+    camera_provider = lambda: CameraManager.get_instance()  # noqa: E731 — ленивый синглтон
+    exploration = ExplorationService(
+        map_service, navigation, camera_provider=camera_provider, kinect=kinect_service,
+        landmarks=None,
+    )
+    app.extensions["rc_exploration"] = exploration
     keyboard = KeyboardControl(lambda: getattr(state, "source", None), dispatch_drive_command,
                                dispatch_steering_command, estop_latch.latched)
     app.extensions["rc_keyboard"] = keyboard
@@ -636,7 +656,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         "/api/kiosk_pot_hold", "/api/kiosk_maneuver",
         "/api/kiosk_maneuver_config", "/api/navigation/start", "/api/navigation/resume",
         "/api/navigation/cancel", "/api/navigation/estop", "/api/estop", "/api/estop/release",
-        "/api/system/stop",
+        "/api/exploration/start", "/api/exploration/stop", "/api/system/stop",
     }
 
     @app.before_request
@@ -656,12 +676,14 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             action = body.get("action")
             is_stop = isinstance(action, str) and action in {"stop", "end"}
         else:
-            is_stop = request.path in {"/api/estop", "/api/navigation/cancel", "/api/navigation/estop", "/api/system/stop"}
+            is_stop = request.path in {"/api/estop", "/api/navigation/cancel", "/api/navigation/estop",
+                                       "/api/exploration/stop", "/api/system/stop"}
         # STOP gets an immediate best-effort brake even if an earlier HTTP
         # motion request is still finishing. The normal STOP runs again under
         # the gate so that this in-flight request cannot overtake the final b.
         marker = ("steering" if request.path == "/api/kiosk_maneuver" else
                   "navigation" if request.path.startswith("/api/navigation/") else
+                  "exploration" if request.path.startswith("/api/exploration/") else
                   STOP_COMMAND_HEADER_VALUE if request.path == "/api/system/stop" else "drive")
         global_stop = (request.path != "/api/kiosk_drive" or body.get("module") in (None, "ALL", "all")
                        or arrival_locked or zero_locked)
@@ -724,7 +746,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "/api/kiosk_calibrate", "/api/kiosk_pot_mode", "/api/kiosk_pot_hold",
             "/api/kiosk_maneuver",
             "/api/estop", "/api/navigation/start", "/api/navigation/resume",
-            "/api/navigation/cancel", "/api/navigation/estop", "/api/system/stop",
+            "/api/navigation/cancel", "/api/navigation/estop",
+            "/api/exploration/start", "/api/exploration/stop", "/api/system/stop",
         }:
             # A global system STOP must retire live steering under the motion
             # gate too; the early best-effort brake alone can be overtaken by
@@ -751,6 +774,16 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                         # Сохраняем время получения скана, не время окончания
                         # медленного scan matching: устаревшая поза не свежая.
                         map_service.ingest(points, stamp=stamp, trusted=scan_info["trusted"])
+                # Kinect 360: отдельный псевдоскан в ту же сетку, ровно один
+                # раз на кадр. Задний датчик (если включён) вносит точки со
+                # своим смещением и курсом. Позу задаёт только лидар.
+                for unit, service in kinect_services.items():
+                    depth = service.consume()
+                    if depth is None:
+                        continue
+                    depth_points, depth_stamp = depth
+                    map_service.ingest_kinect(depth_points, stamp=depth_stamp,
+                                              spec=kinect_spec(unit))
                 map_service.maybe_autosave()
             except Exception as exc:  # noqa: BLE001 — карта не должна ронять сервер
                 log.debug("карта лидара: %s", exc)
@@ -843,6 +876,116 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         result = engage_estop(getattr(state, "source", None))
         result["status"] = navigation.status()
         return jsonify(result), 200, {"Cache-Control": "no-store"}
+
+    # ---------------- Автономное обследование и Kinect ------------------- #
+    # Владелец моторов — только этот процесс. Команды требуют маркера
+    # X-Robot-Control: exploration, как и остальные команды движения.
+    @app.get("/api/exploration/status")
+    def api_exploration_status():
+        return jsonify(exploration.status()), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/exploration/start")
+    def api_exploration_start():
+        if request.headers.get("X-Robot-Control") != "exploration":
+            return jsonify({"ok": False, "error": "Запрос без заголовка X-Robot-Control: exploration"}), 400
+        try:
+            payload, status = exploration.start(request.get_json(silent=True) or {})
+        except ExplorationError as exc:
+            return jsonify(exc.payload()), exc.status
+        return jsonify(payload), status
+
+    @app.post("/api/exploration/stop")
+    def api_exploration_stop():
+        if request.headers.get("X-Robot-Control") != "exploration":
+            return jsonify({"ok": False, "error": "Запрос без заголовка X-Robot-Control: exploration"}), 400
+        return jsonify(exploration.stop()), 200, {"Cache-Control": "no-store"}
+
+    @app.get("/api/exploration/landmarks")
+    def api_exploration_landmarks():
+        try:
+            limit = int(request.args.get("limit", 20))
+        except (TypeError, ValueError):
+            limit = 20
+        return jsonify({"ok": True, "landmarks": exploration.landmarks(limit=limit)}), 200, \
+            {"Cache-Control": "no-store"}
+
+    @app.post("/api/exploration/landmarks/clear")
+    def api_exploration_landmarks_clear():
+        if request.headers.get("X-Robot-Control") != "exploration":
+            return jsonify({"ok": False, "error": "Запрос без заголовка X-Robot-Control: exploration"}), 400
+        return jsonify({"ok": True, "removed": exploration.clear_landmarks()})
+
+    @app.get("/api/exploration/landmark/<name>")
+    def api_exploration_landmark_file(name: str):
+        import re
+        from flask import send_from_directory
+
+        if not re.fullmatch(r"step\d{3}-cam[0-3]\.jpg", name):
+            return jsonify({"ok": False, "error": "Неверное имя файла"}), 400
+        return send_from_directory(exploration.landmark_directory, name,
+                                   mimetype="image/jpeg", max_age=0)
+
+    def _kinect_for_request(body=None):
+        unit = (request.args.get("unit") or (body or {}).get("unit") or "front").strip().lower()
+        if unit not in {"front", "rear"}:
+            return None, None
+        service = kinect_services.get(unit)
+        if service is None:
+            return None, unit
+        return service, unit
+
+    @app.get("/api/kinect/status")
+    def api_kinect_status():
+        service, unit = _kinect_for_request()
+        if service is None:
+            return jsonify({"ok": False, "error": "Kinect %s не включён (RC_KINECT_REAR_ENABLE=1)" % unit}), 404
+        payload = service.status()
+        payload["unit"] = unit
+        payload["units"] = {name: item.status()["connected"] for name, item in kinect_services.items()}
+        return jsonify(payload), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/kinect/depth")
+    def api_kinect_depth():
+        """Принять кадр глубины от scripts/kinect_depth_publisher.py."""
+        if request.headers.get("X-Robot-Control") != "kinect":
+            return jsonify({"ok": False, "error": "Запрос без заголовка X-Robot-Control: kinect"}), 400
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"ok": False, "error": "Ожидается JSON-объект с кадром глубины"}), 400
+        service, unit = _kinect_for_request(body)
+        if service is None:
+            return jsonify({"ok": False, "error": "Kinect %s не включён" % unit}), 404
+        try:
+            result = service.feed(body)
+        except DepthError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        result["unit"] = unit
+        return jsonify(result)
+
+    @app.get("/api/sensors/layout")
+    def api_sensors_layout():
+        """Четыре C930e + Kinect 360: порты, углы, готовность калибровки."""
+        return jsonify(layout_payload()), 200, {"Cache-Control": "no-store"}
+
+    @app.get("/api/calibration/geometry")
+    def api_calibration_geometry():
+        """Поля для внесения замеров геометрии сенсоров."""
+        return jsonify(geometry_calibration.geometry_payload()), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/calibration/geometry")
+    def api_calibration_geometry_save():
+        """Сохранить замеры в .env (только известные ключи, с проверкой диапазонов)."""
+        body = request.get_json(silent=True) or {}
+        values = body.get("values", body)
+        try:
+            result = geometry_calibration.save_geometry(values)
+        except geometry_calibration.CalibrationError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except OSError as exc:
+            return jsonify({"ok": False, "error": "не удалось записать .env: %s" % exc}), 500
+        eventlog.record("ok", "Геометрия сенсоров: сохранено полей %d" % len(result["savedKeys"]),
+                        source="Калибровка")
+        return jsonify(result)
 
     @app.get("/api/kiosk_logs")
     def api_kiosk_logs():
@@ -1380,9 +1523,12 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except OSError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 500
-        eventlog.record("ok", "камеры: передняя %s, задняя %s — сохранено в .env" % (
-            result["settings"].get("front") or "авто (/dev/video0)",
-            result["settings"].get("rear") or "авто (/dev/video1)"), source="камеры")
+        ports = result["settings"]
+        eventlog.record("ok", "камеры (4): FL %s, FR %s, RL %s, RR %s — сохранено в .env" % (
+            ports.get("front") or "авто /dev/video0",
+            ports.get("front_right") or "авто /dev/video2",
+            ports.get("rear") or "авто /dev/video1",
+            ports.get("rear_right") or "авто /dev/video3"), source="камеры")
         return jsonify(result)
 
     @app.post("/api/camera/rescan")
@@ -1440,7 +1586,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     for filename in ("steer_dial.js", "steer_dial.css", "wheel_settings.js", "pot_mode.js",
                      "pot_hold.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "neutral.js", "battery.js", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "map_view.js",
-                     "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
+                     "explore.js", "map.css", "viewport.js", "camera_view.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
         def _view(name=filename):
