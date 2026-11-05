@@ -50,13 +50,17 @@ def wheel_simulator(tmp_path_factory):
 def boards(wheel_simulator, tmp_path):
     processes = []
 
-    def launch(name="wheels", *, bad_zero="", fail_eeprom=""):
+    def launch(name="wheels", *, bad_zero="", fail_eeprom="", pot_reverse="", pot_control=None):
         prefix = str(tmp_path / name)
         env = os.environ.copy()
         if bad_zero:
             env["RC_SIM_BAD_ZERO"] = bad_zero
         if fail_eeprom:
             env["RC_SIM_EEPROM_FAIL"] = fail_eeprom
+        if pot_reverse:
+            env["RC_SIM_POT_REVERSE"] = pot_reverse
+        if pot_control is not None:
+            env["RC_SIM_POT_CONTROL_DIR"] = str(pot_control)
         process = subprocess.Popen([str(wheel_simulator), "pty", prefix], env=env,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         processes.append(process)
@@ -1331,3 +1335,469 @@ def test_wrong_cached_hint_only_reorders_all_live_usb_candidates(boards, usb_con
         assert not unknown.read(), 'no motor/lidar/BMS command may be sent to unknown USB'
     finally:
         unknown.close()
+
+
+def silent_lds_device(*, invalid_crc=False):
+    """LDS-like UART emits nothing at all until it receives exactly `b`."""
+    dev = Device()
+
+    def packet(index):
+        pkt = bytearray(42)
+        pkt[0], pkt[1] = 0xFA, 0xA0 + index % 60
+        pkt[2:4] = (300).to_bytes(2, "little")
+        for i in range(6):
+            off = 4 + i * 6
+            pkt[off:off + 2] = (200).to_bytes(2, "little")
+            pkt[off + 2:off + 4] = (1500 + i).to_bytes(2, "little")
+        checksum = lidar.lds01_checksum(bytes(pkt[:40]))
+        pkt[40:42] = (checksum ^ (1 if invalid_crc else 0)).to_bytes(2, "little")
+        return bytes(pkt)
+
+    def run():
+        index, running = 0, False
+        while not dev.stop_flag.is_set():
+            incoming = dev.read()
+            if b"b" in incoming:
+                running = True
+            if running:
+                dev.write(packet(index))
+                index += 1
+            time.sleep(.003)
+    return dev.start(run)
+
+
+def lds_test_service(kiosk_client, source, paths, monkeypatch):
+    """Inject PTY-only topology/whitelist in tests, never in production."""
+    import re
+    from robot_control import lidar_start
+
+    class Topology:
+        def usb(self, *, refresh=False):
+            return {"available": True, "devices": [
+                {"topology": "1-%d" % index, "vidPid": "1234:5678", "serial": "",
+                 "nodes": [{"path": path, "kind": "serial", "aliases": [], "interface": "1.0"}]}
+                for index, path in enumerate(paths, 1)]}
+
+    monkeypatch.setattr(lidar_start, "SERIAL_RE", re.compile(r"/.+"))
+    service = kiosk_client.application.extensions["rc_lidar_start"]
+    service.registry = Topology()
+    kiosk_client.application.extensions["rc_slam"].source = source
+    monkeypatch.setattr(lidar.LidarManager.get_instance(), "restart_search", lambda: {"ros_rescan": "requested"})
+    return service
+
+
+def test_silent_lds_requires_physical_confirmation_then_crc_unlocks_ros(boards, usb_context, kiosk_client, monkeypatch):
+    """The real HTTP route, 4 PTYs and ROS guard; no physical device is tested."""
+    _, start = usb_context
+    monkeypatch.syspath_prepend(str(ROOT / "ros2_ws/src/zapret_lidar"))
+    from zapret_lidar import usb_guard
+    laser = silent_lds_device()
+    try:
+        wheel = boards("silent-lds")
+        paths = list(wheel.values()) + [laser.path]
+        source = start(paths)
+        service = lds_test_service(kiosk_client, source, paths, monkeypatch)
+        assert wait_for(lambda: len(source.modules) == 4 and source.manual_printer_port_allowed(laser.path), 8)
+        assert not source.serial_ready.is_set() and not usb_guard.permitted(laser.path)
+        assert not laser.received  # auto-discovery and a hint never transmit
+        headers = {"X-Robot-Control": "devices"}
+        assert kiosk_client.post("/api/devices/lidar/prepare", json={"port": laser.path}).status_code == 400
+        wheel_attempt = kiosk_client.post("/api/devices/lidar/prepare", json={"port": wheel["FL"]}, headers=headers)
+        assert wheel_attempt.status_code == 409
+        prepared = kiosk_client.post("/api/devices/lidar/prepare", json={"port": laser.path}, headers=headers)
+        assert prepared.status_code == 200, prepared.json
+        assert not laser.received and not usb_guard.permitted(laser.path)
+        token = prepared.json["token"]
+        rejected = kiosk_client.post("/api/devices/lidar/start", json={"token": token, "confirmed": False}, headers=headers)
+        assert rejected.status_code == 400 and not laser.received
+        started = kiosk_client.post("/api/devices/lidar/start", json={"token": token, "confirmed": True}, headers=headers)
+        assert started.status_code == 200, started.json
+        assert started.json["protocol"] == "lds01" and started.json["frames"] >= 6
+        assert started.json["rosRescan"] == "requested"
+        assert wait_for(lambda: bytes(laser.received) == b"b")
+        assert wait_for(lambda: usb_guard.permitted(laser.path) and source.serial_ready.is_set())
+        replay = kiosk_client.post("/api/devices/lidar/start", json={"token": token, "confirmed": True}, headers=headers)
+        assert replay.status_code == 409 and bytes(laser.received) == b"b"
+        assert not source._manual_lidar_probes
+    finally:
+        laser.close()
+
+
+def test_manual_lds_bad_crc_stays_unknown_and_cannot_enable_ros(boards, usb_context, kiosk_client, monkeypatch):
+    _, start = usb_context
+    monkeypatch.syspath_prepend(str(ROOT / "ros2_ws/src/zapret_lidar"))
+    from zapret_lidar import usb_guard
+    laser = silent_lds_device(invalid_crc=True)
+    try:
+        wheel = boards("bad-lds")
+        paths = list(wheel.values()) + [laser.path]
+        source = start(paths)
+        service = lds_test_service(kiosk_client, source, paths, monkeypatch)
+        service.READ_SECONDS = .6
+        assert wait_for(lambda: len(source.modules) == 4 and source.manual_printer_port_allowed(laser.path), 8)
+        prepared = service.prepare({"port": laser.path})
+        from robot_control.lidar_start import LidarStartError
+        with pytest.raises(LidarStartError, match="кадров"):
+            service.start({"token": prepared["token"], "confirmed": True})
+        assert bytes(laser.received) == b"b"
+        assert not usb_guard.permitted(laser.path) and not source.serial_ready.is_set()
+        assert not source._manual_lidar_probes
+        lock = lidar.try_lock_port(laser.path)
+        assert lock not in (None, -1)
+        lidar.unlock_port(lock)
+        # A new failed/replayed token must never send another byte.
+        with pytest.raises(LidarStartError):
+            service.start({"token": prepared["token"], "confirmed": True})
+        assert bytes(laser.received) == b"b"
+    finally:
+        laser.close()
+
+
+def test_manual_lds_fails_closed_for_replacement_reservations_and_lock(boards, usb_context, kiosk_client, monkeypatch, tmp_path):
+    _, start = usb_context
+    one, two = silent_lds_device(), silent_lds_device()
+    try:
+        alias = tmp_path / "serial-alias"
+        alias.symlink_to(one.path)
+        wheel = boards("lds-replacement")
+        paths = list(wheel.values()) + [str(alias)]
+        source = start(paths)
+        service = lds_test_service(kiosk_client, source, paths, monkeypatch)
+        assert wait_for(lambda: len(source.modules) == 4 and source.manual_printer_port_allowed(str(alias)), 8)
+        from robot_control.lidar_start import LidarStartError
+        # BMS, printer and explicit exclusions are never start candidates.
+        for env_name in ("RC_BMS_PORT", "RC_LIDAR_EXCLUDE"):
+            monkeypatch.setenv(env_name, str(alias))
+            with pytest.raises(LidarStartError):
+                service.prepare({"port": str(alias)})
+            monkeypatch.delenv(env_name)
+        from robot_control import printer
+        monkeypatch.setattr(printer, "printer_reserved_ports", lambda: {str(alias)})
+        with pytest.raises(LidarStartError):
+            service.prepare({"port": str(alias)})
+        monkeypatch.setattr(printer, "printer_reserved_ports", lambda: set())
+        assert not one.received and not two.received
+
+        prepared = service.prepare({"port": str(alias)})
+        lock = lidar.try_lock_port(str(alias))
+        try:
+            with pytest.raises(LidarStartError, match="замок|занят"):
+                service.start({"token": prepared["token"], "confirmed": True})
+        finally:
+            lidar.unlock_port(lock)
+        assert not one.received and not two.received
+
+        prepared = service.prepare({"port": str(alias)})
+        replacement = tmp_path / "replacement-lds"
+        replacement.symlink_to(two.path)
+        os.replace(replacement, alias)
+        with pytest.raises(LidarStartError, match="изменился"):
+            service.start({"token": prepared["token"], "confirmed": True})
+        assert not one.received and not two.received
+    finally:
+        one.close()
+        two.close()
+
+
+@pytest.mark.skipif(not shutil.which("node") or not os.environ.get("RC_TEST_CHROMIUM") or
+                    not os.environ.get("RC_TEST_PLAYWRIGHT_CORE"),
+                    reason="Chromium and Playwright required")
+def test_lidar_recovery_button_through_browser_and_simulated_uart(boards, usb_context, kiosk_client, monkeypatch):
+    from werkzeug.serving import make_server
+    _, start = usb_context
+    monkeypatch.syspath_prepend(str(ROOT / "ros2_ws/src/zapret_lidar"))
+    from zapret_lidar import usb_guard
+    laser = silent_lds_device()
+    server = thread = None
+    try:
+        wheel = boards("lds-browser")
+        paths = list(wheel.values()) + [laser.path]
+        source = start(paths)
+        service = lds_test_service(kiosk_client, source, paths, monkeypatch)
+        registry = kiosk_client.application.extensions["rc_devices"]
+        monkeypatch.setattr(registry, "usb", service.registry.usb)
+        assert wait_for(lambda: len(source.modules) == 4 and source.manual_printer_port_allowed(laser.path), 8)
+        server = make_server("127.0.0.1", 0, kiosk_client.application, threaded=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        result = subprocess.run([shutil.which("node"), str(ROOT / "tests/js/lidar_recovery_browser.mjs"),
+                                 f"http://127.0.0.1:{server.server_port}", laser.path],
+                                capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, result.stdout + "\n" + result.stderr
+        assert "LDS recovery UI + simulated UART: OK" in result.stdout
+        assert bytes(laser.received) == b"b" and usb_guard.permitted(laser.path)
+    finally:
+        if server:
+            server.shutdown()
+            server.server_close()
+        if thread:
+            thread.join(timeout=3)
+        laser.close()
+
+
+def test_lidar_replacement_during_crc_wait_never_confirms_new_device(boards, usb_context, kiosk_client, monkeypatch, tmp_path):
+    _, start = usb_context
+    monkeypatch.syspath_prepend(str(ROOT / "ros2_ws/src/zapret_lidar"))
+    from zapret_lidar import usb_guard
+    old, replacement = silent_lds_device(invalid_crc=True), silent_lds_device()
+    try:
+        alias = tmp_path / "lds-live-alias"
+        alias.symlink_to(old.path)
+        wheel = boards("lds-swap-live")
+        paths = list(wheel.values()) + [str(alias)]
+        source = start(paths)
+        service = lds_test_service(kiosk_client, source, paths, monkeypatch)
+        assert wait_for(lambda: len(source.modules) == 4 and source.manual_printer_port_allowed(str(alias)), 8)
+        prepared = service.prepare({"port": str(alias)})
+        result = []
+        def run():
+            try:
+                result.append(service.start({"token": prepared["token"], "confirmed": True}))
+            except Exception as exc:  # outcome is asserted below
+                result.append(exc)
+        worker = threading.Thread(target=run)
+        worker.start()
+        assert wait_for(lambda: bytes(old.received) == b"b", 3)
+        new_link = tmp_path / "new-lds-link"
+        new_link.symlink_to(replacement.path)
+        os.replace(new_link, alias)
+        worker.join(timeout=5)
+        assert not worker.is_alive() and len(result) == 1
+        from robot_control.lidar_start import LidarStartError
+        assert isinstance(result[0], LidarStartError) and "изменился" in str(result[0])
+        assert not replacement.received and not usb_guard.permitted(str(alias))
+        assert not source._manual_lidar_probes
+        assert not source.serial_ready.is_set()
+    finally:
+        old.close()
+        replacement.close()
+
+
+def test_lds_expired_confirmation_and_parallel_classifiers_fail_closed(boards, usb_context, kiosk_client, monkeypatch):
+    _, start = usb_context
+    monkeypatch.syspath_prepend(str(ROOT / "ros2_ws/src/zapret_lidar"))
+    from zapret_lidar import usb_guard
+    from robot_control.lidar_start import LidarStartError
+    laser = silent_lds_device(invalid_crc=True)
+    worker = None
+    try:
+        wheel = boards("lds-concurrency")
+        paths = list(wheel.values()) + [laser.path]
+        source = start(paths)
+        service = lds_test_service(kiosk_client, source, paths, monkeypatch)
+        assert wait_for(lambda: len(source.modules) == 4 and source.manual_printer_port_allowed(laser.path), 8)
+        now = [time.monotonic()]
+        real_clock = service.clock
+        service.clock = lambda: now[0]
+        expired = service.prepare({"port": laser.path})
+        now[0] += service.CONFIRM_SECONDS + 1
+        with pytest.raises(LidarStartError, match="устарело"):
+            service.start({"token": expired["token"], "confirmed": True})
+        assert not laser.received
+        service.clock = real_clock
+
+        # Two confirmations can exist, but only one active check may write.
+        # While it is waiting for CRC, BMS/printer/passive wheel discovery
+        # must all be excluded from the same UART.
+        first = service.prepare({"port": laser.path})
+        second = service.prepare({"port": laser.path})
+        service.READ_SECONDS = 1.0
+        result = []
+        def run():
+            try:
+                service.start({"token": first["token"], "confirmed": True})
+            except LidarStartError as exc:
+                result.append(exc)
+        worker = threading.Thread(target=run)
+        worker.start()
+        assert wait_for(lambda: bytes(laser.received) == b"b", 3)
+        real = os.path.realpath(laser.path)
+        assert real in source._manual_lidar_probes
+        assert not source.manual_bms_port_allowed(laser.path)
+        assert not source.manual_printer_port_allowed(laser.path)
+        with source.lock:
+            source._unknown_checked_at[real] = 0  # force the normal passive re-check deadline
+        source._open_new_links()
+        with source.lock:
+            assert not any(os.path.realpath(p) == real for p in source._spawning)
+            assert not any(link.device == real for link in source.links.values())
+            assert real not in source._bms_results
+            # We forced a passive recheck due while the manual probe was
+            # reserved. Restore its timestamp before the probe releases:
+            # otherwise the legitimate background rescan may take the lock
+            # before the release assertion below, racing the test itself.
+            source._unknown_checked_at[real] = time.monotonic()
+        with pytest.raises(LidarStartError, match="уже выполняется"):
+            service.start({"token": second["token"], "confirmed": True})
+        worker.join(timeout=4)
+        assert not worker.is_alive() and len(result) == 1 and "кадров" in str(result[0])
+        assert bytes(laser.received) == b"b" and not source._manual_lidar_probes
+        assert not usb_guard.permitted(laser.path) and not source.serial_ready.is_set()
+        lock = lidar.try_lock_port(laser.path)
+        assert lock not in (None, -1)
+        lidar.unlock_port(lock)
+    finally:
+        if worker and worker.is_alive():
+            worker.join(timeout=4)
+        laser.close()
+
+
+def test_pot_hold_after_calibrating_four_autodiscovered_firmwares(boards, usb_context, kiosk_client):
+    """UI API -> real dispatcher -> four simulated firmwares, not physical motors."""
+    _, start = usb_context
+    wheel = boards("pot-hold-on")
+    source = start(list(wheel.values()))
+    kiosk_client.application.extensions["rc_slam"].source = source
+    assert wait_for(lambda: len(source.modules) == 4 and source.serial_ready.is_set(), 8), source.read()
+    for module in MODULES:
+        assert source.zero_module(module)["ok"]
+    assert wait_for(lambda: all(m["homed"] for m in source.read()["motors"]), 5), source.read()
+    headers = {"X-Robot-Control": "steering"}
+    response = kiosk_client.post("/api/kiosk_pot_mode", json={"action": "calibrate"}, headers=headers)
+    assert response.status_code == 200, response.json
+    assert wait_for(lambda: all(m["calibrating"] for m in source.read()["motors"]), 5), source.read()
+    assert wait_for(lambda: all(m["pot"] and not m["calibrating"] and not m["moving"]
+                                for m in source.read()["motors"]), 20), source.read()
+    response = kiosk_client.post("/api/kiosk_pot_hold", json={"action": "on"}, headers=headers)
+    assert response.status_code == 200, response.json
+    assert wait_for(lambda: all(m["potHold"] is True for m in source.read()["motors"]), 8), source.read()
+    response = kiosk_client.post("/api/kiosk_pot_hold", json={"action": "off"}, headers=headers)
+    assert response.status_code == 200, response.json
+    assert wait_for(lambda: all(m["potHold"] is False for m in source.read()["motors"]), 8), source.read()
+
+
+def test_pot_angle_and_hold_with_four_calibrated_firmwares(boards, usb_context, kiosk_client, tmp_path):
+    """Actual firmware encoders -> four PTYs -> server; movement is simulated, not hardware."""
+    control = tmp_path / "pot-input"
+    control.mkdir()
+    for mid in MODULES:
+        (control / mid).write_text("0 1")
+    _, start = usb_context
+    wheel = boards("pot-feedback", pot_reverse="FR,RL", pot_control=control)
+    source = start(list(wheel.values()))
+    kiosk_client.application.extensions["rc_slam"].source = source
+
+    def motors():
+        return {m["id"]: m for m in source.read()["motors"]}
+
+    def set_external(mid, degrees, connected=True):
+        # Atomic replacement avoids a partially-written test control record.
+        staging = control / (mid + ".tmp")
+        staging.write_text(f"{degrees} {int(connected)}")
+        staging.replace(control / mid)
+
+    assert wait_for(lambda: len(source.modules) == 4 and source.serial_ready.is_set(), 8), source.read()
+    for mid in MODULES:
+        assert source.zero_module(mid)["ok"]
+    assert wait_for(lambda: all(m["homed"] for m in motors().values()), 5)
+    assert source.set_pot_mode("calibrate")["ok"]
+    assert wait_for(lambda: all(m["calibrating"] for m in motors().values()), 5)
+    assert wait_for(lambda: all(m["pot"] and not m["calibrating"] and not m["moving"]
+                                for m in motors().values()), 20), motors()
+    assert all(m["angleSource"] == "pot" and abs(m["potAngle"]) < 1 for m in motors().values()), motors()
+
+    set_external("FL", -6)
+    set_external("FR", 8)  # reversed wiring still reports the physical sign
+    set_external("RL", 20)
+    assert wait_for(lambda: all(abs(motors()[mid]["potAngle"] - value) < 1
+                                for mid, value in (("FL", -6), ("FR", 8), ("RL", 20))), 5), motors()
+    data = motors()
+    assert all(abs(data[mid]["angle"]) < .1 for mid in MODULES), data  # no steps generated
+    assert data["FR"]["displayAngle"] == data["FR"]["potAngle"]
+    blocked = source.set_pot_hold("on")
+    assert blocked["reason"] == "pot_hold_far" and blocked["modules"] == ["RL"]
+    assert not any(m["potHold"] for m in motors().values())
+
+    set_external("RL", 20, connected=False)
+    assert wait_for(lambda: motors()["RL"]["pot"] is False, 5), motors()
+    disconnected = motors()["RL"]
+    assert disconnected["potAngle"] is None and disconnected["angleSource"] == "steps"
+    assert disconnected["displayAngle"] == disconnected["angle"]
+    blocked = source.set_pot_hold("on")
+    assert blocked["reason"] == "pot_not_calibrated" and "RL" in blocked["modules"]
+    assert not any(m["potHold"] for m in motors().values())
+
+    set_external("FL", 0)
+    set_external("FR", 0)
+    set_external("RL", 0, connected=True)
+    assert wait_for(lambda: all(m["potAngle"] is not None and abs(m["potAngle"]) < 1
+                                for m in motors().values()), 5), motors()
+    headers = {"X-Robot-Control": "steering"}
+    response = kiosk_client.post("/api/kiosk_pot_hold", json={"action": "on"}, headers=headers)
+    assert response.status_code == 200, response.json
+    assert wait_for(lambda: all(m["potHold"] is True for m in motors().values()), 5), motors()
+    set_external("FR", 6)
+    assert wait_for(lambda: motors()["FR"]["moving"], 5), motors()
+    assert wait_for(lambda: not motors()["FR"]["moving"] and abs(motors()["FR"]["potAngle"]) < 2.5, 7), motors()
+    assert all(m["potHold"] is True for m in motors().values()), motors()
+
+    set_external("FR", 12)
+    assert wait_for(lambda: motors()["FR"]["moving"], 5), motors()
+    set_external("FR", 12, connected=False)
+    assert wait_for(lambda: (not motors()["FR"]["moving"] and not motors()["FR"]["potHold"]
+                             and not motors()["FR"]["pot"]), 5), motors()
+    assert all(motors()[mid]["potHold"] for mid in ("FL", "RL", "RR")), motors()
+    stopped = motors()["FR"]["angle"]
+    set_external("FR", 12, connected=True)
+    assert wait_for(lambda: motors()["FR"]["potAngle"] is not None, 5), motors()
+    time.sleep(.4)
+    assert not motors()["FR"]["potHold"] and abs(motors()["FR"]["angle"] - stopped) < .1, motors()
+    response = kiosk_client.post("/api/kiosk_pot_hold", json={"action": "off"}, headers=headers)
+    assert response.status_code == 200, response.json
+    assert wait_for(lambda: all(m["potHold"] is False for m in motors().values()), 5), motors()
+
+
+@pytest.mark.skipif(not os.environ.get("RC_TEST_CHROMIUM") or not os.environ.get("RC_TEST_PLAYWRIGHT_CORE")
+                    or not shutil.which("node"), reason="optional Chromium/playwright-core not installed")
+@pytest.mark.parametrize("remote", [False, True], ids=["onboard", "remote-proxy"])
+def test_pot_feedback_in_real_browser_through_four_firmwares(
+        boards, usb_context, kiosk_client, app, operator, monkeypatch, tmp_path, remote):
+    """Actual pages and proxy -> backend -> fw26 PTYs. No physical robot."""
+    from werkzeug.serving import WSGIRequestHandler, make_server
+
+    control = tmp_path / "browser-pot-controls"
+    control.mkdir()
+    for mid in MODULES:
+        (control / mid).write_text("0 1")
+    wheel = boards("browser-pot", pot_reverse="FR", pot_control=control)
+    _, start = usb_context
+    source = start(list(wheel.values()))
+    kiosk_client.application.extensions["rc_slam"].source = source
+    assert wait_for(lambda: len(source.modules) == 4 and source.serial_ready.is_set(), 8)
+    for mid in MODULES:
+        assert source.zero_module(mid)["ok"]
+    assert wait_for(lambda: all(m["homed"] for m in source.read()["motors"]), 5)
+    assert source.set_pot_mode("calibrate")["ok"]
+    assert wait_for(lambda: all(m["calibrating"] for m in source.read()["motors"]), 5)
+    assert wait_for(lambda: all(m["pot"] and m["potAngle"] is not None and not m["moving"] and
+                                not m["calibrating"] for m in source.read()["motors"]), 20), source.read()
+
+    class Quiet(WSGIRequestHandler):
+        def log_request(self, *args, **kwargs):
+            pass
+
+    onboard = make_server("127.0.0.1", 0, kiosk_client.application, threaded=True, request_handler=Quiet)
+    board_origin = f"http://127.0.0.1:{onboard.server_port}"
+    servers = [onboard]
+    if remote:
+        monkeypatch.setenv("RC_SLAM_PEER_URL", board_origin + "/api/kiosk_state")
+        web = make_server("127.0.0.1", 0, app, threaded=True, request_handler=Quiet)
+        servers.append(web)
+        origin = f"http://127.0.0.1:{web.server_port}"
+    else:
+        origin = board_origin
+    threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in servers]
+    for thread in threads:
+        thread.start()
+    try:
+        result = subprocess.run([shutil.which("node"), str(ROOT / "tests/js/pot_feedback_browser.mjs"),
+                                 origin, board_origin, str(control), "remote" if remote else "onboard"],
+                                capture_output=True, text=True, timeout=90)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "four simulated potentiometers and confirmed hold: OK" in result.stdout
+    finally:
+        for server in reversed(servers):
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=3)

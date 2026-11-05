@@ -198,10 +198,18 @@
     const ros = status && status.ros;
     if (!ros) return '';
     const parts = [];
-    if (ros.supervisor && ros.supervisor.driver) {
-      const driver = ros.supervisor.driver_title || ros.supervisor.driver;
-      const port = ros.supervisor.port ? ' · ' + String(ros.supervisor.port).split('/').pop() : '';
+    const supervisor = ros.supervisor;
+    if (supervisor && supervisor.driver) {
+      const driver = supervisor.driver_title || supervisor.driver;
+      const port = supervisor.port ? ' · ' + String(supervisor.port).split('/').pop() : '';
       parts.push('драйвер ROS 2: ' + String(driver) + port);
+    }
+    // `failed` is a symptom, not a diagnosis. Show the supervisor's actual
+    // reason/hint, including missing packages or a port still being checked.
+    if (supervisor && !ros.connected) {
+      if (supervisor.state) parts.push('состояние: ' + String(supervisor.state));
+      if (supervisor.reason) parts.push(String(supervisor.reason));
+      if (supervisor.hint) parts.push(String(supervisor.hint));
     }
     if (ros.connected) {
       parts.push(String(ros.points || 0) + ' точек · ' + String(ros.hz || 0) + ' Гц');

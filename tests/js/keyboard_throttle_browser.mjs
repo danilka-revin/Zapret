@@ -8,6 +8,22 @@ const browser = await chromium.launch({executablePath: process.env.RC_TEST_CHROM
 const page = await browser.newPage({viewport: {width: 1200, height: 900}});
 page.setDefaultTimeout(8000);
 const actions = [], errors = [];
+let interceptStop = false, stops = 0, releaseIntercepted;
+let interceptLive = false, delayed = false, sawHeartbeat;
+// Install the route before requests begin so the very first STOP is always
+// intercepted even when Chromium has an active telemetry stream.
+await page.route('**/api/kiosk_keyboard', async route => {
+  const body = route.request().postDataJSON();
+  if (interceptStop && body.action === 'stop' && ++stops === 1) {
+    releaseIntercepted();
+    await new Promise(resolve => setTimeout(resolve, 450));
+  } else if (interceptLive && body.action === 'live' && !delayed) {
+    delayed = true;
+    sawHeartbeat();
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  await route.continue().catch(() => {});
+});
 async function expectRequest(promise, label) {
   let timer;
   try {
@@ -36,7 +52,7 @@ async function poll(predicate, timeout = 7000) {
     actions: actions.slice(-20), motors: data && data.motors,
     focused: await page.evaluate(() => document.activeElement && document.activeElement.id)}));
 }
-const moving = () => poll(data => data.motors.length === 4 && data.motors.every(m => m.online && m.drivePercent > 0));
+const moving = () => poll(data => data.motors.length === 4 && data.motors.every(m => m.online && m.drivePercent < 0));
 const stopped = () => poll(data => data.motors.length === 4 && data.motors.every(m => m.online && m.drivePercent === 0));
 let failure;
 try {
@@ -51,18 +67,8 @@ try {
 
   // The first STOP is delayed, while new press/release events arrive. A later
   // stale STOP must not silently brake a subsequently started live session.
-  let releaseIntercepted;
   const firstStop = new Promise(resolve => { releaseIntercepted = resolve; });
-  let stops = 0;
-  const pattern = '**/api/kiosk_keyboard';
-  await page.route(pattern, async route => {
-    const body = route.request().postDataJSON();
-    if (body.action === 'stop' && ++stops === 1) {
-      releaseIntercepted();
-      await new Promise(resolve => setTimeout(resolve, 450));
-    }
-    await route.continue();
-  });
+  interceptStop = true;
   await page.keyboard.up('ArrowUp');
   await expectRequest(firstStop, 'first STOP');
   await page.keyboard.down('ArrowUp');
@@ -76,7 +82,7 @@ try {
     'WASD unexpectedly disabled after reordered stops: ' + await page.locator('#keyboard-status').textContent());
   await moving();
   assert.equal(stops, 1, 'a single in-flight STOP should coalesce rapid re-planning');
-  await page.unroute(pattern);
+  interceptStop = false;
   await page.keyboard.up('ArrowUp');
   await stopped();
   await poll(data => data.motors.every(m => !m.scRecent && m.scRpm <= 1));
@@ -96,26 +102,17 @@ try {
 
   // Input changes while a heartbeat is in flight must converge to the most
   // recent speed immediately after that response, without braking/re-arming.
-  let sawHeartbeat;
   const delayedHeartbeat = new Promise(resolve => { sawHeartbeat = resolve; });
-  let delayed = false;
-  await page.route(pattern, async route => {
-    if (route.request().postDataJSON().action === 'live' && !delayed) {
-      delayed = true;
-      sawHeartbeat();
-      await new Promise(resolve => setTimeout(resolve, 250));
-    }
-    await route.continue();
-  });
+  interceptLive = true;
   await expectRequest(delayedHeartbeat, 'speed-update heartbeat');
   const changes = actions.length;
   await slider.click({position: {x: Math.floor(box.width * .4), y: Math.floor(box.height / 2)}});
   await slider.click({position: {x: Math.floor(box.width * .7), y: Math.floor(box.height / 2)}});
   const finalSpeed = Number(await slider.inputValue());
-  await poll(data => data.motors.every(m => m.online && m.drivePercent === finalSpeed));
-  assert.ok(actions.slice(changes).some(a => a.action === 'live' && a.percent === finalSpeed));
+  await poll(data => data.motors.every(m => m.online && m.drivePercent === -finalSpeed));
+  assert.ok(actions.slice(changes).some(a => a.action === 'live' && a.percent === -finalSpeed));
   assert.ok(!actions.slice(changes).some(a => a.action === 'stop' || a.action === 'arm'), 'speed adjustment restarted traction');
-  await page.unroute(pattern);
+  interceptLive = false;
   await page.keyboard.up('ArrowUp');
   await stopped();
   assert.deepEqual(errors, []);

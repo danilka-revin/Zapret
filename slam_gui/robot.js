@@ -40,6 +40,7 @@
   let lastData = null;
   let keyboardControl = null;
   let keyboardData = null, keyboardDataAt = 0, keyboardDataSession = null;
+  let keyboardSessionStarted = null, keyboardSessionStartedAt = 0;
   let keyboardFetchPending = false;
   let brakeRecovery = null;
   let live = false;
@@ -52,6 +53,23 @@
   // Calibration controls fail closed on the first failed telemetry poll,
   // independently of the visual connection chip's 3.2 s debounce.
   let calibrationTelemetryCurrent = false;
+  // A wheel-only sample belongs to exactly one keyboard lease. A missed
+  // heavyweight map/camera poll is not a loss of that independent stream.
+  function keyboardSampleCurrent(session, maxAge) {
+    const age = Date.now() - keyboardDataAt;
+    return !!(session && keyboardDataSession === session && keyboardData && age >= 0 && age <= maxAge);
+  }
+  // At lease start only, retry missed fast requests against the still-current
+  // general snapshot. This ends after 350 ms, never applies
+  // to a previous lease, and cannot extend the general snapshot's 850 ms TTL.
+  function keyboardInitialSampleGrace(session) {
+    const now = Date.now(), startAge = now - keyboardSessionStartedAt, stateAge = now - lastLiveAt;
+    return !!(session && keyboardSessionStarted === session && keyboardDataSession !== session &&
+      lastData && startAge >= 0 && startAge <= 350 && stateAge >= 0 && stateAge <= 850);
+  }
+  function keyboardTransportCurrent(session, maxAge) {
+    return keyboardSampleCurrent(session, maxAge) || keyboardInitialSampleGrace(session);
+  }
   // Ползунок задаёт число; кнопка включает направление до СТОП.
   const SERVO_IDS = ['FL', 'FR', 'RL', 'RR'];
   const SERVO_MAX = 150;
@@ -132,24 +150,32 @@
       } else {
         calibrationTelemetryCurrent = false;
         setLive(false);
-        if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Нет телеметрии · WASD выключено.');
+        if (keyboardControl && keyboardControl.isActive() &&
+            !keyboardTransportCurrent(keyboardControl.session(), 550)) {
+          keyboardControl.disable('Нет телеметрии · WASD выключено.');
+        }
         if (brakeRecovery) brakeRecovery.stateChanged();
         if (window.RCRemoteControls) {
           releaseDrive();
           if (window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
-          lastData = null;
+          if (!keyboardInitialSampleGrace(keyboardControl && keyboardControl.session())) lastData = null;
         }
       }
     } catch (e) {
-      // Экран может не мигать на сетевых сбоях, но WASD fail-closed сразу.
+      // Map/camera requests can time out even while the separate wheel stream
+      // and server interlocks remain healthy. Never invalidate that lease just
+      // because this heavier, unrelated request failed.
       calibrationTelemetryCurrent = false;
       setLive(false);
-      if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Связь потеряна · WASD выключено.');
+      if (keyboardControl && keyboardControl.isActive() &&
+          !keyboardTransportCurrent(keyboardControl.session(), 550)) {
+        keyboardControl.disable('Связь потеряна · WASD выключено.');
+      }
       if (brakeRecovery) brakeRecovery.stateChanged();
       if (window.RCRemoteControls) {
         releaseDrive();
         if (window.RCRemoteLegacyStop) window.RCRemoteLegacyStop();
-        lastData = null;
+        if (!keyboardInitialSampleGrace(keyboardControl && keyboardControl.session())) lastData = null;
       }
     } finally {
       clearTimeout(t);
@@ -181,7 +207,10 @@
       keyboardDataAt = started;
       keyboardControl.stateChanged();
     } catch (error) {
-      if (keyboardControl && keyboardControl.session() === session) {
+      if (keyboardControl && keyboardControl.session() === session &&
+          !keyboardTransportCurrent(session, 500)) {
+        // One missed poll can recover within the last sample's short budget;
+        // a sustained loss terminates the lease and cannot resume itself.
         keyboardControl.disable('Связь с колёсами потеряна · WASD выключено.');
       }
     } finally {
@@ -294,10 +323,18 @@
         chip.textContent = modStateText(m);
         chip.className = 'chip ' + tone;
       }
-      const hasAngle = m.angle != null && Number.isFinite(+m.angle);
-      const angle = hasAngle ? Math.max(-90, Math.min(90, +m.angle)) : 0;
-      setText($('angle-' + id), hasAngle ? Math.round(angle) + '°' : '—');
-      if (wheel) wheel.style.transform = 'rotate(' + angle.toFixed(1) + 'deg)';
+      const reading = window.RCWheelAngle
+        ? window.RCWheelAngle.read(m, calibrationTelemetryCurrent)
+        : {value: null, source: 'unknown', label: 'нет свежих данных'};
+      const angle = reading.value;
+      const source = $('angle-source-' + id);
+      if (source) {
+        source.textContent = reading.source === 'pot' ? 'A0'
+          : reading.source === 'steps' ? 'шаги' : 'угол';
+        source.title = reading.label;
+      }
+      setText($('angle-' + id), angle === null ? '—' : angle.toFixed(1) + '°');
+      if (wheel) wheel.style.transform = 'rotate(' + (angle === null ? 0 : angle).toFixed(1) + 'deg)';
       // 0: нет достаточных недавних переходов; обрыв и остановка неотличимы.
       setText($('rpm-' + id), rpmText(m));
       setText($('temp-' + id), m.temp == null ? '—' : fmt(m.temp, 0));
@@ -2673,6 +2710,9 @@
       const motor = motors.find((m) => m && m.id === id) || null;
       if (window.RCWheelPorts) window.RCWheelPorts.render($('steer-usb-port-' + id), motor, live);
       const current = motor && motor.angle != null && Number.isFinite(+motor.angle) ? +motor.angle : null;
+      const reading = window.RCWheelAngle
+        ? window.RCWheelAngle.read(motor, calibrationTelemetryCurrent)
+        : {value: null, source: 'unknown', label: 'нет свежих данных'};
       const target = motor && motor.targetAngle != null && Number.isFinite(+motor.targetAngle) ? +motor.targetAngle : null;
       const online = !!(motor && motor.online === true && current != null);
       const homed = !!(motor && motor.homed === true);
@@ -2748,7 +2788,9 @@
       // и показывал цель, которой на борту не существует.
       const hasData = !!pending || (moving && target != null) || current != null;
       if (!dirty && hasData) slider.value = String(value);
-      if (currentEl) currentEl.textContent = current == null ? '—' : Math.round(current) + '°';
+      if (currentEl) currentEl.textContent = reading.value == null ? '—' : reading.value.toFixed(1) + '°';
+      const angleSource = $('steer-angle-source-' + id);
+      if (angleSource) angleSource.textContent = reading.label;
       // Ползунок ограничен ходом руля, а при калибровке поиск может выходить за него: показываем настоящую цель.
       if (targetEl) targetEl.textContent = (!dirty && busy && target != null ? Math.round(target) : Math.round(+slider.value || 0)) + '°';
 
@@ -2758,7 +2800,7 @@
         !calibPending && !tractionActive && !steerPresetBusy;
       const canCalibrate = canSetZero && !!control.calibration;
       slider.disabled = !ready;
-      if (window.RCSteerDial) window.RCSteerDial.sync(slider, online ? current : null);
+      if (window.RCSteerDial) window.RCSteerDial.sync(slider, reading.value);
       card.querySelectorAll('[data-steer-adjust="' + id + '"], [data-steer-zero="' + id + '"]').forEach((button) => {
         button.disabled = !ready;
       });
@@ -3503,7 +3545,13 @@
         keyboardDataSession === keyboardControl.session() ? keyboardData : lastData),
       freshAt: () => (keyboardControl && keyboardControl.session() &&
         keyboardDataSession === keyboardControl.session() ? keyboardDataAt : lastLiveAt),
-      onReady: () => { void fetchKeyboardState(); },
+      sessionFresh: () => !!(keyboardControl && keyboardControl.session() &&
+        keyboardDataSession === keyboardControl.session()),
+      onReady: () => {
+        keyboardSessionStarted = keyboardControl.session();
+        keyboardSessionStartedAt = Date.now();
+        void fetchKeyboardState();
+      },
       stopManual: () => stopDrive(true)
     });
     if (window.RCBrakeRecovery) brakeRecovery = window.RCBrakeRecovery.create({
@@ -3639,10 +3687,10 @@
       // занят»). Если фактический угол расходится с целью — отправляем: это
       // рабочий способ докрутить колесо, которое не доехало.
       const motor = ((lastData && lastData.motors) || []).find((m) => m && m.id === id) || null;
-      const currentAngle = motor && Number.isFinite(+motor.angle) ? +motor.angle : null;
+      const currentAngle = motor && motor.angle != null && Number.isFinite(+motor.angle) ? +motor.angle : null;
       if (motor && currentAngle !== null && !motor.moving && Math.abs(currentAngle - angle) <= 1) {
         card.dataset.steerDirty = 'false';
-        steerResult[id] = { text: 'колесо уже на ' + angle + '°', error: false, until: Date.now() + 4000 };
+        steerResult[id] = { text: 'по шагам уже ' + angle + '° · показание A0 может отличаться', error: false, until: Date.now() + 4000 };
         renderSteeringControls(lastData || {});
         return;
       }

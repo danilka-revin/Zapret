@@ -145,6 +145,7 @@
             <header><b>${id}<small>${WHEEL_NAMES[id]}</small></b><span data-status>нет связи</span></header>
             <div class="wheel-port"><span>USB</span><span data-port>—</span></div>
             <div class="rc-steering-values"><span>Сейчас <b data-current>—</b></span><span>Цель <b data-target>0°</b></span></div>
+            <div class="rc-angle-source" data-angle-source>нет свежих данных</div>
             <input data-range type="range" min="-100" max="100" step="1" value="0" aria-label="${id}, целевой угол" disabled>
             <div class="rc-steering-actions">
               <button type="button" data-calib disabled>Калибровка</button>
@@ -508,7 +509,7 @@
       ? snapshot.motors.find((item) => item && item.id === id) : null;
     if (window.RCWheelPorts) window.RCWheelPorts.render(card.querySelector('[data-port]'), motor, !!snapshot);
     const control = (snapshot && snapshot.steeringControl) || {};
-    const online = !!(motor && motor.online === true && Number.isFinite(+motor.angle));
+    const online = !!(motor && motor.online === true && motor.angle != null && Number.isFinite(+motor.angle));
     const zeroed = !!(motor && motor.homed === true);
     const calibrating = !!(motor && motor.calibrating);
     const moving = !!(motor && (motor.moving || motor.calibrating));
@@ -516,6 +517,9 @@
     const drive = (snapshot && snapshot.drive) || {};
     const tractionActive = !!drive.active || Number(drive.commandedPercent || 0) !== 0;
     const current = online ? Number(motor.angle) : null;
+    const reading = window.RCWheelAngle
+      ? window.RCWheelAngle.read(motor, !!snapshot)
+      : {value: null, source: 'unknown', label: 'нет свежих данных'};
     const target = online && Number.isFinite(+motor.targetAngle) ? Number(motor.targetAngle) : current;
     const entry = pending[id];
     if (entry && entry.calib && calibrating) entry.started = true;
@@ -554,10 +558,11 @@
     const canZero = !!control.available && authorized && online && !moving && !activePending && !tractionActive;
     const range = card.querySelector('[data-range]');
     if (!card.dataset.dirty && current != null) range.value = String(Math.round(target));
-    card.querySelector('[data-current]').textContent = current == null ? '—' : current.toFixed(1) + '°';
+    card.querySelector('[data-current]').textContent = reading.value == null ? '—' : reading.value.toFixed(1) + '°';
+    card.querySelector('[data-angle-source]').textContent = reading.label;
     card.querySelector('[data-target]').textContent = Math.round(+range.value || 0) + '°';
     range.disabled = !ready;
-    if (window.RCSteerDial) window.RCSteerDial.sync(range, current);
+    if (window.RCSteerDial) window.RCSteerDial.sync(range, reading.value);
     card.querySelectorAll('[data-step], [data-center]').forEach((button) => { button.disabled = !ready; });
     card.querySelector('[data-send]').disabled = !ready || !card.dataset.dirty;
     card.querySelector('[data-origin]').disabled = !canZero;

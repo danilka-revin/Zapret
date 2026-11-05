@@ -614,7 +614,16 @@ class DeviceRegistry:
                         updates["lidar"] = (reported, "Порт сообщил ROS-супервизор; источник скана не привязан")
                     item["detail"] = "ROS-супервизор сообщает порт %s; связь порта с топиком не доказана." % reported
         else:
-            item["detail"] = str(lidar.get("reason") or "Нет свежего проверенного скана.")
+            ros = lidar.get("ros") if isinstance(lidar.get("ros"), dict) else {}
+            supervisor = ros.get("supervisor") if isinstance(ros.get("supervisor"), dict) else {}
+            reasons = [str(lidar.get("reason") or "Нет свежего проверенного скана.")]
+            if supervisor.get("state"):
+                reasons.append("ROS: " + str(supervisor["state"]))
+            if supervisor.get("reason") and str(supervisor["reason"]) not in reasons:
+                reasons.append(str(supervisor["reason"]))
+            if supervisor.get("hint") and str(supervisor["hint"]) not in reasons:
+                reasons.append(str(supervisor["hint"]))
+            item["detail"] = " · ".join(reasons)
         entries.append(item)
 
         item = base("kinect")

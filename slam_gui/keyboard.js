@@ -23,7 +23,7 @@
       return {angles: {...spin.angles}, direction: left ? -1 : 1, pattern: 'spin'};
     }
     if ((w && s) || (a && d) || (up && down)) return stopped;
-    const arrow = Number(up) - Number(down);
+    const arrow = Number(down) - Number(up);
     const right = Number(d) - Number(a);
     const forward = w || s ? Number(w) - Number(s) : (right ? 0 : 1);
     if (mode === 'normal') {
@@ -180,7 +180,11 @@
       return result;
     }
     function snapshotError(data) {
-      if (!data || Date.now() - options.freshAt() > 850 || data.linkOk === false) return 'module_offline';
+      // While a lease is active, don't keep using an old fast-wheel reply
+      // through a hung request. The server independently validates each frame.
+      const maxAge = state.enabled && typeof options.sessionFresh === 'function' && options.sessionFresh() ? 550 : 850;
+      const age = Date.now() - options.freshAt();
+      if (!data || age < 0 || age > maxAge || data.linkOk === false) return 'module_offline';
       if (data.estop) return 'estop';
       if (data.neutral && data.neutral.locked) return 'neutral_locked';
       if (!data.steeringControl || !data.steeringControl.available || !data.drive || !data.drive.available) return 'serial_unavailable';
@@ -388,7 +392,9 @@
         let data = await waitFor(gen, (current) => stopped(current) &&
           IDS.every((id) => motorMap(current)[id].brakeId === brakeId), 6000);
         if (!data || !valid(gen)) return;
-        const tolerance = desired.pattern === 'spin' ? 0.15 : 1.5;
+        // Potentiometer feedback can legitimately settle 0.7° from target;
+        // 0.15° stranded real wheels after steering despite correct geometry.
+        const tolerance = desired.pattern === 'spin' ? 1.0 : 1.5;
         const steerThreshold = desired.pattern === 'spin' ? tolerance : 1.0;
         const sentSteer = IDS.some((id) => Math.abs(motorMap(data)[id].angle - desired.angles[id]) > steerThreshold);
         if (sentSteer) {

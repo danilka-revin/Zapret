@@ -833,6 +833,7 @@ ASSETS = {
     # общие пресеты руления: одни и те же углы на киоске и веб-пульте
     "steer_presets.js": "steer_presets_js",
     "pot_mode.js": "pot_mode_js",
+    "wheel_angle.js": "wheel_angle_js",
     # переключатель активного удержания угла (ph): общий для киоска и пульта
     "pot_hold.js": "pot_hold_js",
     "update.css": "update_css",

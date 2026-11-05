@@ -608,6 +608,13 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     printer = PrinterService(device_registry, battery, lambda: getattr(state, "source", None))
     app.extensions["rc_printer"] = printer
 
+    # A silent LDS-01 cannot be positively auto-identified. The operator may
+    # request exactly one start only after a physical cable/model check; CRC
+    # frames are still required before the USB owner can publish an identity.
+    from .lidar_start import LidarStartError, LidarStartService
+    lidar_start = LidarStartService(device_registry, battery, lambda: getattr(state, "source", None))
+    app.extensions["rc_lidar_start"] = lidar_start
+
     def printer_body():
         import json
         if request.headers.get("X-Robot-Control") != "printer":
@@ -971,6 +978,51 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify(ok=False, error=str(exc)), 400
         except OSError as exc:
             return jsonify(ok=False, error="Не удалось сохранить подтверждение: " + str(exc)), 500
+        return jsonify(result), 200, {"Cache-Control": "no-store"}
+
+    def lidar_start_body():
+        import json
+        if request.headers.get("X-Robot-Control") != "devices":
+            raise LidarStartError("Требуется запрос со страницы устройств.", 400)
+        if request.content_length is not None and request.content_length > 4096:
+            raise LidarStartError("Слишком большой запрос.", 413)
+        raw = request.stream.read(4097)
+        if len(raw) > 4096:
+            raise LidarStartError("Слишком большой запрос.", 413)
+        try:
+            body = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise LidarStartError("Ожидается JSON-объект.", 400) from None
+        if not isinstance(body, dict):
+            raise LidarStartError("Ожидается JSON-объект.", 400)
+        return body
+
+    @app.post("/api/devices/lidar/prepare")
+    def api_device_lidar_prepare():
+        try:
+            with usb_assignment_lock:
+                result = lidar_start.prepare(lidar_start_body())
+            return jsonify(result), 200, {"Cache-Control": "no-store"}
+        except LidarStartError as exc:
+            return jsonify(ok=False, error=str(exc)), exc.status
+
+    @app.post("/api/devices/lidar/start")
+    def api_device_lidar_start():
+        try:
+            with usb_assignment_lock:
+                result = lidar_start.start(lidar_start_body())
+        except LidarStartError as exc:
+            eventlog.record("warn", "LDS-01: проверка не завершена — " + str(exc), source="Лидар")
+            return jsonify(ok=False, error=str(exc)), exc.status
+        eventlog.record("ok", "LDS-01: получены проверенные кадры с " + result["port"], source="Лидар")
+        # Stop navigation before restarting a driver. A valid UART stream does
+        # not yet mean ROS is publishing a usable scan or navigation is safe.
+        navigation.cancel("Лидар пересканируется — навигация остановлена.")
+        try:
+            rescan = LidarManager.get_instance().restart_search()
+            result["rosRescan"] = rescan.get("ros_rescan") if isinstance(rescan, dict) else None
+        except Exception as exc:  # noqa: BLE001 — frame proof remains true, driver is still unconfirmed
+            result["rescanError"] = str(exc)
         return jsonify(result), 200, {"Cache-Control": "no-store"}
 
     @app.get("/map")
@@ -1740,7 +1792,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
     for filename in ("steer_dial.js", "steer_dial.css", "calibration.css", "wheel_settings.js", "pot_mode.js",
-                     "pot_hold.js", "devices.css", "devices.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "brake_recovery.js", "battery.js", "receipt.js", "receipt.css", "lidar_settings.css",
+                     "wheel_angle.js", "pot_hold.js", "devices.css", "devices.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "brake_recovery.js", "battery.js", "receipt.js", "receipt.css", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
                      "explore.js", "map.css", "viewport.js", "camera_view.js", "camera_frames.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):

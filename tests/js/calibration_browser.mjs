@@ -165,6 +165,10 @@ async function exerciseSurface(origin, isRemote) {
     assert.doesNotMatch(await page.locator('.pot-mode [role="status"]').textContent(), /доводка включена/);
     assert.equal(await hold.getAttribute('role'), 'switch');
     assert.equal(await hold.getAttribute('aria-checked'), 'false');
+    // A calibrated fw24 still reports only steps, never a fabricated A0 value.
+    await page.waitForFunction(() => document.querySelector('#steer-angle-source-FR')?.textContent.includes('fw26'));
+    assert.equal(await page.locator('#steer-current-FR').textContent(), '0.0°');
+    await page.waitForFunction(() => document.querySelector('#angle-source-FR')?.textContent.includes('шаги'));
     await page.evaluate(() => {
       window.testLiveUpdates = 0;
       window.testLiveObserver = new MutationObserver(records => { window.testLiveUpdates += records.length; });

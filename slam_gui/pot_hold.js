@@ -22,7 +22,10 @@
     module_offline: 'Нужна связь со всеми четырьмя платами.',
     module_busy: 'Сначала остановите движение и дождитесь конца калибровки.',
     pot_mode_off: 'Сначала включите режим с потенциометром.',
-    pot_not_calibrated: 'Колесо не откалибровано по потенциометру: нужны ноль руля и q.',
+    pot_not_calibrated: 'Колесо не откалибровано по потенциометру или нет сигнала A0: нужны ноль руля и q.',
+    pot_angle_unavailable: 'Нет достоверного угла A0: проверьте датчик и калибровку.',
+    pot_hold_far: 'Отклонение датчика от цели больше 15°: проверьте положение и причину расхождения.',
+    keyboard_active: 'Выйдите из режима WASD и дождитесь остановки.',
     serial_unavailable: 'Нет связи с платами.',
     pin_required: 'Разблокируйте управление PIN-кодом.',
     estop: 'Включён E-STOP.',
@@ -32,6 +35,7 @@
     payload: 'Непонятная команда удержания.',
     command_queue_full: 'Очередь команд переполнена — повторите.',
     full_zero_active: 'Идёт настройка полного нуля — дождитесь конца.',
+    full_zero_eeprom_fault: 'Ошибка памяти полного нуля — удержание заблокировано.',
     navigation_stopping: 'Останавливается автономный маршрут — повторите.'
   };
 
@@ -113,12 +117,22 @@
         : online.every((m) => m.potHold === false) ? 'off' : 'mixed';
     // Без датчика (pm 0 или нет q) удержание невозможно — переключатель
     // недоступен, а не «тихо включён».
-    const sensorReady = online.length === MODULES.length &&
-      online.every((m) => m.pot === true && m.potMode !== false);
+    const sensorProblems = online.filter((m) => m.pot !== true || m.potMode === false || m.homed !== true ||
+      (m.firmware >= 26 && (m.fullZeroFault !== false ||
+        typeof m.potAngle !== 'number' || !Number.isFinite(m.potAngle))));
+    const sensorReady = online.length === MODULES.length && sensorProblems.length === 0;
+    const zeroFault = online.filter((m) => m.fullZeroFault === true);
+    const live = online.filter((m) => Number(m.liveId) > 0);
+    // The fw26 measurement is diagnostic and only blocks an unsafe enable;
+    // it never commands a correction or replaces the controller's step count.
+    const far = online.filter((m) => m.firmware >= 26 && m.pot === true &&
+      typeof m.potAngle === 'number' && Number.isFinite(m.potAngle) &&
+      typeof m.targetAngle === 'number' && Number.isFinite(m.targetAngle) &&
+      Math.abs(m.potAngle - m.targetAngle) > 15);
     const busy = online.some((m) => m.moving || m.calibrating || m.cycling || m.drivePercent);
     const estop = !!(state && state.estop && (state.estop.latched || state.estop.unknown));
     const neutral = !!(state && state.neutral && state.neutral.locked);
-    return { motors, online, confirmed, mode, sensorReady, busy, estop, neutral, authorized };
+    return { motors, online, confirmed, mode, sensorReady, sensorProblems, zeroFault, live, far, busy, estop, neutral, authorized };
   }
 
   function label(info) {
@@ -137,8 +151,17 @@
       if (info.online.length < MODULES.length) return 'Нужна связь со всеми четырьмя платами.';
       return 'Нужна прошивка fw24: платы не сообщают состояние удержания.';
     }
+    const sensorIds = info.sensorProblems.map(m => m.id).join(', ');
+    const problem = info.zeroFault.length ? 'ошибка памяти нуля: ' + info.zeroFault.map(m => m.id).join(', ')
+      : sensorIds ? 'датчик не готов: ' + sensorIds : '';
     if (info.mode === 'mixed') {
-      return 'Платы расходятся: выключите удержание и включите заново.';
+      return 'Платы расходятся' + (problem ? '; ' + problem : '') +
+        '. Выключите удержание и проверьте причину.';
+    }
+    // Older firmware may retain ph=1 while A0 is unavailable. Show the
+    // reported switch state, but never claim that correction is healthy.
+    if (info.mode === 'on' && problem) {
+      return 'Платы сообщают «вкл», но ' + problem + '. Выключите удержание и проверьте причину.';
     }
     // Пока удержание само подтягивает угол, «идёт движение» — это его работа,
     // а не причина запретить выключатель.
@@ -147,10 +170,16 @@
         : 'Подтверждено: колесо само возвращается к заданному углу.';
     }
     if (info.busy) return 'Идёт движение или калибровка — сначала остановите.';
+    if (info.zeroFault.length) return 'Ошибка памяти полного нуля: ' + info.zeroFault.map(m => m.id).join(', ') + '.';
+    if (info.live.length) return 'Выйдите из WASD и дождитесь остановки: ' + info.live.map(m => m.id).join(', ') + '.';
     if (!info.sensorReady) {
-      return 'Без потенциометра удержание невозможно: включите режим с датчиком и выполните q.';
+      const ids = info.sensorProblems.map(m => m.id).join(', ');
+      return 'Датчик потенциометра не готов' + (ids ? ': ' + ids : '') + '. Проверьте ноль, q, режим и сигнал A0.';
     }
-    return 'Подтверждено: колесо остаётся там, куда его повернули.';
+    if (info.far.length) {
+      return 'Отклонение от цели больше 15°: ' + info.far.map(m => m.id).join(', ') + '. Проверьте положение и датчик.';
+    }
+    return 'Подтверждено: удержание выключено; калибровка q не включает его автоматически.';
   }
 
   function disabledFor(info) {
@@ -162,7 +191,7 @@
     // запрет «идёт движение» оставил бы оператора без выключателя. Расхождение
     // плат лечится тем же выключением.
     if (info.mode !== 'off') return false;
-    if (info.busy) return true;
+    if (info.busy || info.live.length || info.far.length) return true;
     if (!info.sensorReady || !info.motors.every((m) => m.online)) return true;
     return false;
   }
@@ -182,8 +211,14 @@
           desired = null;
           alertBox.textContent = '';
         } else if (Date.now() > deadline) {
+          const missing = MODULES.filter(id => {
+            const motor = info.motors.find(m => m && m.id === id);
+            return !motor || !motor.online || motor.potHold !== target;
+          });
           desired = null;
-          alertBox.textContent = 'Платы не подтвердили состояние. Проверьте связь и повторите.';
+          alertBox.textContent = 'Платы не подтвердили: ' + missing.join(', ') +
+            '. Проверьте связь, сигнал A0, отклонение от цели и журнал плат.' +
+            (info.mode === 'mixed' ? ' Часть плат включена — выключите удержание.' : '');
         }
       }
       button.disabled = disabledFor(info);
@@ -240,7 +275,9 @@
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result.ok) {
-        throw new Error(errors[result.reason] || ('Команда отклонена: ' + (result.reason || response.status)));
+        const detail = Array.isArray(result.modules) && result.modules.length
+          ? ' Колёса: ' + result.modules.join(', ') + '.' : '';
+        throw new Error((errors[result.reason] || ('Команда отклонена: ' + (result.reason || response.status))) + detail);
       }
       // Оптимистичного переключения нет: состояние подтвердит только телеметрия.
       desired = action;

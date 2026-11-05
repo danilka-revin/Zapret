@@ -64,7 +64,7 @@ global.fetch = async (_url, init) => {
     if (body.action === 'stop' && holdStop) { const gate = holdStop; holdStop = null; await gate.promise; }
     brake(); result.brakeId = brakeId;
   } else if (body.action === 'steer_all') {
-    for (const motor of motors) motor.angle = body.angles[motor.id];
+    for (const motor of motors) motor.angle = body.angles[motor.id] + (body.pattern === 'spin' ? 0.6 : 0);
   } else if (body.action === 'arm') {
     if (holdArm) { const gate = holdArm; holdArm = null; await gate.promise; }
     result.permit = 'permit';

@@ -238,6 +238,11 @@ def test_live_lidar_bms_and_ros_reported_port_stay_distinct(fake_topology, tmp_p
     item = {d['id']: d for d in reg.snapshot(lidar=ros)['devices']}['lidar']
     assert item['port'] is None and item['reportedPort'] == '/dev/ttyUSB1'
     assert 'не доказана' in item['detail']
+    failed = {'connected': False, 'reason': 'Нет скана', 'ros': {'supervisor': {
+        'state': 'failed', 'reason': 'нет пакета hls_lfcd_lds_driver', 'hint': 'проверьте установку'}}}
+    item = {d['id']: d for d in reg.snapshot(lidar=failed)['devices']}['lidar']
+    assert item['status'] != 'verified' and item['port'] is None
+    assert all(text in item['detail'] for text in ('failed', 'нет пакета hls_lfcd_lds_driver', 'проверьте установку'))
 
 
 @pytest.mark.parametrize('bad', [True, False, float('nan'), float('inf'), -1.0, 10 ** 400])
@@ -348,6 +353,10 @@ def test_web_device_api_auth_csrf_and_fixed_onboard_proxy(client, operator, kios
     good = {'X-Robot-Control': 'devices', 'X-CSRF-Token': token}
     assert client.post('/api/devices/hint', json=payload, headers=good).status_code == 200
     assert client.post('/api/devices/camera/confirm', json={'role': 'camera_FL'}, headers=good).status_code == 400
+    # Starting an unclassified LDS after physical cable confirmation is an
+    # onboard-only service action; no web proxy may forward it.
+    assert client.post('/api/devices/lidar/prepare', json={'port': '/dev/ttyUSB7'}, headers=good).status_code == 404
+    assert client.post('/api/devices/lidar/start', json={'token': 'x', 'confirmed': True}, headers=good).status_code == 404
     assert calls[0][0] == 'http://owner.example:8090/api/devices?refresh=1'
     assert calls[-2][0] == 'http://owner.example:8090/api/devices/hint'
     assert calls[-1][0] == 'http://owner.example:8090/api/devices/camera/confirm'

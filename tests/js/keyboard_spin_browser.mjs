@@ -36,10 +36,10 @@ const stopped = () => wait(data => data.motors.length === 4 && data.motors.every
 const settled = () => wait(data => data.motors.length === 4 && data.motors.every(m => m.online &&
   m.drivePercent === 0 && !m.moving && m.scRpm <= 1 && m.scRecent === false));
 const atAngles = wanted => wait(data => data.motors.every(m => m.online && !m.moving &&
-  Math.abs(m.angle - wanted[m.id]) <= 0.15));
+  Math.abs(m.angle - wanted[m.id]) <= 1.0));
 const zeroAngles = {FL: 0, FR: 0, RL: 0, RR: 0};
 const pivot = direction => wait(data => data.motors.length === 4 && data.motors.every(m =>
-  m.online && !m.moving && Math.abs(m.angle - angles[m.id]) <= 0.15 &&
+  m.online && !m.moving && Math.abs(m.angle - angles[m.id]) <= 1.0 &&
   m.drivePercent === (['FL', 'RL'].includes(m.id) ? direction * 20 : -direction * 20)));
 async function enable() {
   await page.locator('#keyboard-enable').click();
@@ -85,7 +85,9 @@ try {
   await pivot(-1);
   const live = actions.slice(leftStart).filter(a => a.action === 'live');
   assert.ok(live.length >= 10 && live.every(a => a.pattern === 'spin' && a.percent === -20));
-  for (const m of left.motors) assert.ok(Math.abs(m.angle - angles[m.id]) <= 0.15);
+  for (const m of left.motors) assert.ok(Math.abs(m.angle - angles[m.id]) <= 1.0);
+  assert.ok(left.motors.some(m => Math.abs(m.angle - angles[m.id]) > 0.15),
+    'firmware simulator did not reproduce a potentiometer residual');
   await page.keyboard.up('ArrowLeft');
   await stopped();
   await settled();

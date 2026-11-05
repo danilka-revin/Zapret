@@ -159,7 +159,7 @@ static long count_since(const sim::Board& board, const char* text, size_t from) 
 
 struct FastFrame {
   unsigned firmware = 0, identity = 0, status = 0, maximum = 0, servo = 0, hz = 0, ppr = 0, recent = 0, neutral_lock = 0;
-  long deg = 0, target = 0;
+  long deg = 0, target = 0, pot_c = 0;
   int drive = 0;
   unsigned long rpm10 = 0, edges = 0, brake = 0, neutral = 0, live = 0, sequence = 0, time = 0;
 };
@@ -180,7 +180,7 @@ static bool latest_fast_frame(const sim::Board& board, FastFrame* out) {
   std::string prefix;
   input >> prefix >> out->firmware >> out->identity >> out->deg >> out->target >> out->status >> out->drive
         >> out->maximum >> out->servo >> out->rpm10 >> out->hz >> out->ppr >> out->edges
-        >> out->recent >> out->brake >> out->neutral >> out->neutral_lock >> out->live >> out->sequence >> out->time;
+        >> out->recent >> out->brake >> out->neutral >> out->neutral_lock >> out->live >> out->sequence >> out->time >> out->pot_c;
   return !input.fail() && prefix == "@F";
 }
 
@@ -502,7 +502,7 @@ static void scenario_pot_calibration() {
   CHECK(FR::moduleStatus() & FR::STATUS_POT, "бит STATUS_POT в кадре состояния");
   CHECK(has(board_fr, "Потенциометр: 3.78 отсч/°, 0° = 512"),
         "наклон и ноль напечатаны: %s", board_fr.serial.output.c_str());
-  CHECK(has(board_fr, "калибровка завершена, доводка включена"), "сообщение о завершении q");
+  CHECK(has(board_fr, "калибровка завершена; разовая доводка готова"), "сообщение о завершении q");
   board_fr.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_fr, "Потенциометр A0: 512 = 0.00° (наклон измерен)"), "p: %s",
@@ -799,6 +799,92 @@ static void scenario_pot_hold_off_busy() {
   sim::run_for_ms(5);
   CHECK(!FR::pot_hold && has(board_fr, "сначала s"), "ph 1 на ходу отклонена");
   CHECK(wait_until(fr_settled, 30000), "w 20 закончилась");
+}
+
+// A railed A0 while ph is active is not an active, healthy hold. It stops an
+// in-flight autonomous correction and never restarts it on reconnection.
+static void scenario_pot_hold_sensor_fault() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(FR::pot_hold, "hold starts with a calibrated sensor");
+  manual_shift(8.0);
+  CHECK(wait_until([] { return FR::pot_hold_correction_active && FR::motorBusy(); }, 4000),
+        "autonomous correction started");
+  board_fr.serial.output.clear();
+  board_fr.pot_present = false;  // simulator fault = raw ADC rail
+  CHECK(wait_until([] { return !FR::pot_hold && !FR::motorBusy(); }, 300),
+        "rail stops hold and its active correction immediately");
+  CHECK(!(FR::moduleStatus() & FR::STATUS_POT_HOLD) &&
+        !(FR::moduleStatus() & FR::STATUS_POT), "fault is visible in the status bits");
+  CHECK(has(board_fr, "Удержание отключено"), "fault logged");
+  const long stopped_steps = board_fr.steps;
+  board_fr.pot_present = true;
+  CHECK(wait_until([] { return FR::potFeedbackAllowed(); }, 500), "sensor reading recovers");
+  sim::run_for_ms(1200);
+  CHECK(!FR::pot_hold && board_fr.steps == stopped_steps,
+        "reconnection never silently resumes hold or steering");
+
+  // Explicitly enable again and start a second correction; even if ph 0 was
+  // requested mid-pass, losing the sensor must stop the remaining pass.
+  board_fr.serial.send("ph 1");
+  CHECK(wait_until([] { return FR::pot_hold && FR::pot_hold_correction_active && FR::motorBusy(); }, 4000),
+        "explicit re-enable starts another correction");
+  board_fr.serial.send("ph 0");
+  sim::run_for_ms(2);
+  CHECK(!FR::pot_hold && FR::motorBusy(), "ph 0 alone still allows the current pass to finish");
+  board_fr.pot_present = false;
+  CHECK(wait_until([] { return !FR::motorBusy(); }, 300),
+        "A0 loss also cancels a pass finishing after ph 0");
+  const long stopped_after_off = board_fr.steps;
+  board_fr.pot_present = true;
+  sim::run_for_ms(1000);
+  CHECK(!FR::pot_hold && board_fr.steps == stopped_after_off, "off remains off on reconnection");
+
+  // A later explicit w command is not a hold correction. Losing A0 turns
+  // hold off without confusing and cancelling that operator-requested move.
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(2);
+  CHECK(FR::pot_hold, "hold can be explicitly enabled after recovery");
+  board_fr.serial.send("w 30");
+  sim::run_for_ms(2);
+  CHECK(FR::motorBusy() && !FR::pot_hold_correction_active, "w replaces the correction marker");
+  board_fr.pot_present = false;
+  CHECK(wait_until([] { return !FR::pot_hold; }, 300), "loss also clears the hold bit during w");
+  CHECK(FR::motorBusy(), "sensor fault does not misidentify the explicit w move as ph");
+  board_fr.serial.send("s");
+  sim::run_for_ms(20);
+  CHECK(!FR::motorBusy() && !FR::pot_hold, "normal STOP still halts everything");
+
+  // Direct serial use must not bypass the full-zero EEPROM interlock.
+  board_fr.pot_present = true;
+  sim::run_for_ms(100);
+  FR::full_zero_storage_fault = true;
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  CHECK(!FR::pot_hold && has(board_fr, "ошибка EEPROM полного нуля"), "memory fault rejects ph 1");
+}
+
+static void scenario_pot_hold_memory_fault() {
+  boot({&board_fr});
+  calibrate_fr();
+  calibrate_pot_fr();
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(5);
+  manual_shift(8.0);
+  CHECK(wait_until([] { return FR::pot_hold_correction_active && FR::motorBusy(); }, 4000),
+        "correction started before storage fault");
+  FR::full_zero_storage_fault = true;
+  CHECK(wait_until([] { return !FR::pot_hold && !FR::motorBusy(); }, 100),
+        "storage fault stops active hold correction");
+  CHECK(FR::potTelemetryAngleC(FR::moduleStatus()) == FR::POT_ANGLE_UNAVAILABLE_C,
+        "storage fault invalidates physical angle telemetry");
+  const long stopped_steps = board_fr.steps;
+  FR::full_zero_storage_fault = false;
+  sim::run_for_ms(1000);
+  CHECK(!FR::pot_hold && board_fr.steps == stopped_steps, "storage recovery never auto-resumes");
 }
 
 static void scenario_pot_mode() {
@@ -1147,7 +1233,7 @@ static void scenario_system_calibrate_all() {
     const std::string done = std::string("# ") + board->name + ": Калибровка ЗАВЕРШЕНА!";
     CHECK(board->serial.output.find(done) != std::string::npos,
           "%s сам сообщает о калибровке", board->name);
-    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=25"), "поля home/err/fw в @TLM %s",
+    CHECK(has(*board, "home=opto err=0") && has(*board, "fw=26"), "поля home/err/fw в @TLM %s",
           board->name);
     check_signals(*board);
   }
@@ -1264,7 +1350,7 @@ static void scenario_system_broadcast() {
   board_rl.serial.send("p");
   sim::run_for_ms(5);
   CHECK(has(board_rl, "# RL: Текущий: 0.00° | Целевой: 0.00° [СТОИТ]"), "p показывает своё колесо");
-  CHECK(has(board_rl, "колесо RL, прошивка v25"), "p называет колесо и прошивку");
+  CHECK(has(board_rl, "колесо RL, прошивка v26"), "p называет колесо и прошивку");
   for (sim::Board* board : all_boards()) board->serial.send("pm 0");
   sim::run_for_ms(600);
   CHECK(!M::pot_enabled && !wheel_fr::pot_enabled && !wheel_rl::pot_enabled && !wheel_rr::pot_enabled,
@@ -1375,6 +1461,62 @@ static void scenario_pot_slope_survives_reboot() {
 }
 
 
+// A reversed A0 is calibrated with a negative slope. q persists its sign;
+// after a simulated processor reset a fresh steering zero is still required.
+static void scenario_pot_negative_reboot_and_telemetry() {
+  board_fr.pot_counts_per_degree = -1023.0 / 270.0;
+  boot({&board_fr});
+  board_fr.serial.send("z");
+  sim::run_for_ms(10);
+  calibrate_pot_fr();
+  const float slope = FR::pot_counts_per_degree;
+  CHECK(slope < -3.7f && slope > -3.9f, "q measured negative slope %f", (double)slope);
+  CHECK(FR::potSlopeFromEeprom() == slope, "signed slope survives EEPROM serialization");
+
+  // Simulate startup RAM reset (the host's setup() alone does not clear globals).
+  FR::pot_calibrated = false;
+  FR::pot_zero_valid = false;
+  FR::zero_set = false;
+  FR::pot_counts_per_degree = FR::POT_NOMINAL_COUNTS_PER_DEG;
+  FR::setup();
+  sim::run_for_ms(10);
+  CHECK(FR::pot_calibrated && FR::pot_counts_per_degree == slope,
+        "negative slope restored from EEPROM");
+  CHECK(!(FR::moduleStatus() & FR::STATUS_POT), "no measurement before a new steering zero");
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(10);
+  CHECK(!FR::pot_hold, "hold is not allowed without the new zero");
+  board_fr.serial.send("z");
+  sim::run_for_ms(50);
+  board_fr.serial.send("ph 1");
+  sim::run_for_ms(50);
+  CHECK(FR::pot_hold, "hold works with restored negative slope and new zero");
+  board_fr.serial.send("ph 0");
+  sim::run_for_ms(20);
+  const long steps = FR::stepNow();
+  board_fr.phys += 800;  // external displacement: 6 degrees without pulses
+  sim::run_for_ms(200);
+  FastFrame f;
+  CHECK(latest_fast_frame(board_fr, &f) && std::labs(f.deg) < 10 &&
+        f.pot_c > 500 && f.pot_c < 700 && FR::stepNow() == steps,
+        "fast frame separates stationary step counter from measured displacement: steps=%ld pot=%ld",
+        FR::stepNow(), f.pot_c);
+  FR::tx_position = FR::tx_length = 0;
+  FR::appendTelemetry();
+  const std::string full(FR::tx_buf, FR::tx_length);
+  CHECK(full.find(" pa=") != std::string::npos, "full frame includes ADC angle");
+  board_fr.pot_present = false;  // simulator models disconnected A0 as rail
+  sim::run_for_ms(350);
+  CHECK(!(FR::moduleStatus() & FR::STATUS_POT), "railed A0 no longer ready");
+  CHECK(latest_fast_frame(board_fr, &f) && f.pot_c == FR::POT_ANGLE_UNAVAILABLE_C,
+        "railed A0 must be unavailable, never a physical angle");
+
+  for (float bad : {NAN, INFINITY, -INFINITY, 0.5f, -9.0f}) {
+    std::memcpy(&board_fr.eeprom[FR::EEPROM_POT_SLOPE_SLOT], &bad, sizeof(bad));
+    CHECK(FR::potSlopeFromEeprom() == 0.0f, "invalid EEPROM slope rejected: %f", (double)bad);
+  }
+}
+
 // Пресет бортового экрана — это четыре адресные команды подряд: FL, FR, RL, RR
 // с интервалом в десятки миллисекунд, каждая на свой порт. Последнее в пачке
 // колесо (RR) не должно теряться: жалоба «RR всегда ничего не исполняет»
@@ -1477,12 +1619,31 @@ static int run_pty(const char* link_base) {
   board_fr.phys = 2500;
   board_rl.phys = 40;
   board_rr.phys = -9000;
+  // Test-only: reverse A0 polarity on selected simulated boards before q.
+  if (const char* reversed = std::getenv("RC_SIM_POT_REVERSE")) {
+    const std::string selected = std::string(",") + reversed + ",";
+    for (sim::Board* board : all_boards())
+      if (selected.find(std::string(",") + board->name + ",") != std::string::npos)
+        board->pot_counts_per_degree = -std::fabs(board->pot_counts_per_degree);
+  }
   // Test-only initial EEPROM corruption, applied before the firmware boots.
   if (const char* bad_zero = std::getenv("RC_SIM_BAD_ZERO")) {
     const std::string selected = std::string(",") + bad_zero + ",";
     for (sim::Board* board : all_boards()) {
       if (selected.find(std::string(",") + board->name + ",") != std::string::npos)
         board->eeprom[16] = 0x42;  // non-empty invalid full-zero slot
+    }
+  }
+  // Test-only: a calibrated potentiometer with a small angle-dependent sensor
+  // offset. At pivot angles the real firmware will settle inside its 0.7°
+  // correction deadband and reattach the step count to the ADC reading.
+  // This models a residual, not the mechanics or accuracy of a real robot.
+  const bool pivot_pot_residual = std::getenv("RC_SIM_POT_PIVOT_RESIDUAL") != nullptr;
+  if (pivot_pot_residual) {
+    const float slope = 1023.0f / 270.0f;
+    for (sim::Board* board : all_boards()) {
+      board->eeprom[2] = 0x51;
+      std::memcpy(&board->eeprom[3], &slope, sizeof(slope));
     }
   }
   // Simulate an EEPROM that remains unwritable during service recovery.
@@ -1514,12 +1675,40 @@ static int run_pty(const char* link_base) {
   std::fflush(stdout);
   const auto wall_start = std::chrono::steady_clock::now();
   const int64_t sim_start = sim::now_us;
+  // Optional test-only files <dir>/FL etc.: "external_degrees connected(0|1)".
+  // Applied as a change in physical wheel position, not generated step pulses.
+  // No such command or backdoor exists in the actual Arduino firmware.
+  const char* pot_controls = std::getenv("RC_SIM_POT_CONTROL_DIR");
+  long external_steps[4] = {0, 0, 0, 0};
   for (;;) {
     std::vector<sim::Board*> boards = all_boards();
+    if (pot_controls) {
+      for (size_t i = 0; i < boards.size(); ++i) {
+        const std::string path = std::string(pot_controls) + "/" + boards[i]->name;
+        if (FILE* input = std::fopen(path.c_str(), "r")) {
+          double degrees = 0;
+          int connected = 1;
+          if (std::fscanf(input, "%lf %d", &degrees, &connected) == 2 &&
+              std::isfinite(degrees) && std::fabs(degrees) <= 130 && (connected == 0 || connected == 1)) {
+            const long steps = std::lround(degrees * boards[i]->phys_per_degree);
+            boards[i]->phys += steps - external_steps[i];
+            external_steps[i] = steps;
+            boards[i]->pot_present = connected != 0;
+          }
+          std::fclose(input);
+        }
+      }
+    }
     for (size_t i = 0; i < links.size(); ++i) {
       char buffer[256];
       const ssize_t got = read(links[i].fd, buffer, sizeof(buffer));
       for (ssize_t j = 0; j < got; ++j) boards[i]->serial.input.push_back((uint8_t)buffer[j]);
+    }
+    if (pivot_pot_residual) {
+      const int32_t targets[4] = {wheel_fl::feedback_target_step, wheel_fr::feedback_target_step,
+                                  wheel_rl::feedback_target_step, wheel_rr::feedback_target_step};
+      for (size_t i = 0; i < boards.size(); ++i)
+        boards[i]->pot_bias_steps = std::labs(targets[i]) > 4000 ? 0.6 * boards[i]->phys_per_degree : 0.0;
     }
     if (follow_drive) {
       const int values[4] = {wheel_fl::drive_percent, wheel_fr::drive_percent,
@@ -1948,7 +2137,7 @@ static void scenario_neutral() {
       FastFrame frame;
       CHECK(drive_idle(*boards[i]) && boards[i]->brake_releases == releases[i],
             "%s: «%s» не должен даже кратковременно отпускать тормоз", boards[i]->name, command);
-      CHECK(latest_fast_frame(*boards[i], &frame) && frame.firmware == 25 &&
+      CHECK(latest_fast_frame(*boards[i], &frame) && frame.firmware == 26 &&
             frame.neutral == 0 && frame.neutral_lock == 0,
             "%s: нейтраль не отображается в телеметрии", boards[i]->name);
     }
@@ -2292,7 +2481,7 @@ static void scenario_telemetry_capacity() {
   const std::string full(wheel_fr::tx_buf, wheel_fr::tx_length);
   CHECK(!full.empty() && full.size() < wheel_fr::TELEMETRY_LINE_CAPACITY,
         "максимально длинный @TLM помещается в локальный буфер");
-  CHECK(full.find("sc_rpm=429496729.5 sc_hz=65535 sc_ppr=90 sc_count=4294967295 sc_recent=0 brake_id=2147483647 neutral_id=2147483646 neutral_lock=0 live_id=2147483646 live_seq=2147483646 t=4294967295 crc=") != std::string::npos,
+  CHECK(full.find("sc_rpm=429496729.5 sc_hz=65535 sc_ppr=90 sc_count=4294967295 sc_recent=0 brake_id=2147483647 neutral_id=2147483646 neutral_lock=0 live_id=2147483646 live_seq=2147483646 t=4294967295 pa=32767 crc=") != std::string::npos,
         "максимально длинный @TLM целиком, включая конец: %s", full.c_str());
   wheel_fr::tx_position = wheel_fr::tx_length = 0;
   CHECK(wheel_fr::appendFastTelemetry(), "максимальный быстрый кадр помещается");
@@ -2343,13 +2532,13 @@ static void scenario_full_zero_reboot() {
   board_fr.serial.send("zq 201");
   sim::run_for_ms(250);
   CHECK(FR::zero_reply_status == 1 && FR::zero_reply_id == 201, "preflight ready");
-  CHECK(has(board_fr, "@Z 25 2 201 1 "), "checked preflight returned");
+  CHECK(has(board_fr, "@Z 26 2 201 1 "), "checked preflight returned");
   board_fr.serial.send("zc 202");
   sim::run_for_ms(250);
   CHECK(FR::zero_reply_status == 2 && FR::full_zero_steps == physical && FR::stepNow() == 0,
         "EEPROM committed and coordinates rebased: %ld %ld %ld", (long)FR::full_zero_steps,
         physical, (long)FR::stepNow());
-  CHECK(has(board_fr, "@Z 25 2 202 2 "), "checked commit returned");
+  CHECK(has(board_fr, "@Z 26 2 202 2 "), "checked commit returned");
   const uint32_t generation = FR::full_zero_generation;
   board_fr.serial.send("zc 202"); // retry is idempotent
   sim::run_for_ms(2);
@@ -2531,6 +2720,8 @@ static const Scenario SCENARIOS[] = {
     {"pot_hold_guard", scenario_pot_hold_guard},
     {"pot_hold_stop", scenario_pot_hold_stop},
     {"pot_hold_off_busy", scenario_pot_hold_off_busy},
+    {"pot_hold_sensor_fault", scenario_pot_hold_sensor_fault},
+    {"pot_hold_memory_fault", scenario_pot_hold_memory_fault},
     {"swing", scenario_swing},
     {"pause_resume", scenario_pause_resume},
     {"zero_manual", scenario_zero_manual},
@@ -2547,6 +2738,7 @@ static const Scenario SCENARIOS[] = {
     {"stalled_wheel_without_pot", scenario_stalled_wheel_without_pot},
     {"stalled_wheel_with_pot", scenario_stalled_wheel_with_pot},
     {"pot_slope_survives_reboot", scenario_pot_slope_survives_reboot},
+    {"pot_negative_reboot_and_telemetry", scenario_pot_negative_reboot_and_telemetry},
     {"drive_hardware", scenario_drive_hardware},
     {"drive_one_wheel", scenario_drive_one_wheel},
     {"drive_speed", scenario_drive_speed},

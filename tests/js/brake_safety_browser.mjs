@@ -44,7 +44,7 @@ try {
     await page.waitForFunction(() => typeof window._showSteeringPage === 'function');
     await page.evaluate(() => window._showSteeringPage());
   }
-  await wait(data => data.neutral.phase === 'idle' && data.motors.every(m => m.online && m.firmware === 25));
+  await wait(data => data.neutral.phase === 'idle' && data.motors.every(m => m.online && m.firmware === 26));
   assert.equal(await page.locator('#neutral-panel, #neutral-toggle').count(), 0);
   assert.equal(await page.getByRole('button', {name: 'Снять тормоз'}).count(), 0);
   assert(await page.locator('#brake-recovery').isHidden());

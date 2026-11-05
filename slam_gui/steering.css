@@ -118,6 +118,7 @@
 .rc-steering-card .wheel-port span:last-child { min-width: 0; color: #f4f4f6; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
 .rc-steering-values { margin-bottom: 8px; color: #a2949a; font-size: 11px; }
 .rc-steering-values b { color: #f4f4f6; font-size: 14px; font-variant-numeric: tabular-nums; }
+.rc-angle-source { color: #a2949a; font-size: 11px; margin: -4px 0 8px; }
 .rc-steering-card input[type=range] { width: 100%; accent-color: #c0505a; }
 .rc-steering-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin-top: 7px; }
 .rc-steering-actions button {
