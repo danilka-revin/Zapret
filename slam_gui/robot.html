@@ -189,8 +189,6 @@
         <h2 id="swipe-title-text">Камеры и логи</h2>
         <small id="swipe-title-hint">камеры и журнал · свайп вправо — назад к статистике</small>
       </div>
-      <!-- Маленькая кнопка ⚙: открывает окно настройки портов камер (видна только на вкладке камер). -->
-      <button id="cam-settings-open" class="swipe-close cam-gear" type="button" aria-controls="cam-settings-modal" aria-expanded="false" title="Настройка портов камер" hidden>⚙</button>
       <a id="swipe-map-open" class="swipe-close" href="/map">Карта</a>
       <button id="swipe-battery-open" class="swipe-close battery-open" type="button" aria-controls="swipe-battery-view">АКБ</button>
       <span class="swipe-live" id="swipe-live">● LIVE</span>
@@ -316,9 +314,13 @@
         </section>
       </section>
       <div id="swipe-cameras-view" class="swipe-view swipe-camera-view">
-      <!-- Настройка портов камер (передняя/задняя) убрана в отдельное окно:
-           открывается маленькой кнопкой ⚙ в шапке. Здесь только камеры и логи. -->
+      <!-- Только камеры и логи. Порты всех камер настраиваются на странице
+           «Устройства» (/devices) — там же, где порты колёс, лидара, BMS,
+           Kinect и принтера. -->
       <!-- левая часть — круговой обзор: 4 × Logitech C930e -->
+      <div class="cam-column">
+      <p class="cam-ports-hint">Порты камер назначаются на странице
+        <a href="/devices">«Устройства» →</a></p>
       <div class="cam-stack">
         <section class="cam-card" aria-label="Камера 1 передняя">
           <header class="cam-head">
@@ -392,6 +394,7 @@
           </div>
           <footer class="cam-foot"><span id="cam4-meta">ожидание кадра · зум: +/−, колесо или два пальца</span><span id="cam4-dot" class="cam-dot" aria-hidden="true"></span></footer>
         </section>
+      </div>
       </div>
       <!-- правая колонка — логи на всю высоту -->
       <aside class="log-panel" aria-label="Логи">
@@ -649,14 +652,15 @@
         </header>
 
         <details id="wheel-port-settings" class="bms-setup">
-          <summary>USB-устройства · автоматическое определение колёс</summary>
-          <p>Программа сама находит каждую плату по имени FL/FR/RL/RR в защищённой телеметрии. Если имена совпадают или старая прошивка не сообщает имя, движение блокируется.</p>
+          <summary>USB-устройства · порты заданы вручную</summary>
+          <p>Автопоиск портов отключён. Четыре порта колёсных плат назначаются на странице <a href="/devices">«Устройства»</a>. Роль FL/FR/RL/RR каждая плата сообщает сама в защищённой телеметрии; порядок портов не важен. Если имена совпадают или старая прошивка не сообщает имя, движение блокируется.</p>
           <p><b>Один раз прошейте каждую плату fw22 с её настоящим именем.</b> Определить, правильно ли плата физически установлена, по USB невозможно: проверьте это на вывешенных колёсах с независимым E-STOP.</p>
           <div id="wheel-port-fields" class="cam-settings-grid"></div>
           <div class="cam-settings-actions">
             <button id="wheel-ports-refresh" type="button">Обновить состояние</button>
+            <a class="cam-settings-link" href="/devices">Назначить порты →</a>
           </div>
-          <p id="wheel-ports-msg" role="status">Проверяю USB-устройства…</p>
+          <p id="wheel-ports-msg" role="status">Читаю назначенные порты…</p>
         </details>
 
         <section class="steer-modes" aria-labelledby="steer-modes-title">
@@ -989,39 +993,6 @@
     </div>
     </div>
 
-    <!-- Окно настройки портов камер: открывается маленькой кнопкой ⚙ в шапке вкладки камер.
-         Закрывается кнопкой ✕, кликом по фону или Esc. -->
-    <div id="cam-settings-modal" class="cam-modal" hidden role="dialog" aria-modal="true" aria-labelledby="cam-settings-title">
-      <div class="cam-modal-backdrop" id="cam-modal-backdrop" aria-hidden="true"></div>
-      <div class="cam-modal-window">
-        <header class="cam-modal-head">
-          <div class="cam-modal-title">
-            <b id="cam-settings-title">Камеры · настройка портов</b>
-            <small id="cam-settings-current">передняя: авто · задняя: авто</small>
-          </div>
-          <button id="cam-modal-close" class="cam-modal-close" type="button" aria-label="Закрыть окно настройки камер">✕</button>
-        </header>
-        <p class="cam-settings-hint">Выберите V4L2-устройство для каждой камеры. Путь <code>/dev/v4l/by-id/…</code> стабилен после перезагрузки; <code>/dev/video0</code> может меняться. Порты сохраняются в <code>.env</code> (RC_CAMERA_FRONT / RC_CAMERA_REAR) и применяются сразу без перезапуска. Настройка доступна без PIN.</p>
-        <div class="cam-settings-grid">
-          <label class="cam-settings-field">
-            <span>Передняя камера (CAM 0)</span>
-            <select id="cam-front-select" aria-label="Порт передней камеры"></select>
-            <small id="cam-front-hint" class="cam-settings-note">авто — /dev/video0</small>
-          </label>
-          <label class="cam-settings-field">
-            <span>Задняя камера (CAM 1)</span>
-            <select id="cam-rear-select" aria-label="Порт задней камеры"></select>
-            <small id="cam-rear-hint" class="cam-settings-note">авто — /dev/video1</small>
-          </label>
-        </div>
-        <div class="cam-settings-actions">
-          <button id="cam-scan" type="button">Обновить список</button>
-          <button id="cam-save" type="button" class="primary">Сохранить</button>
-          <button id="cam-reset" type="button" class="quiet">Сброс на авто</button>
-        </div>
-        <p id="cam-settings-msg" class="cam-settings-msg" role="status"></p>
-      </div>
-    </div>
   </div>
 
   <!-- ============ ФУНКЦИИ БЕЗ PIN · PIN ТОЛЬКО ДЛЯ ОТКРЫТИЯ КЕЙСА ============ -->

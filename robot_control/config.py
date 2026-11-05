@@ -52,6 +52,8 @@ class Config:
     # --- интерфейс RUS SLAM ---
     slam_source: str = "master"        # master | auto | sim | serial | ros
     slam_ports: tuple[str, ...] = ()   # UART-порты для serial
+    #: Ручные порты колёсных модулей (RC_WHEEL_PORTS). Роли платы сообщают сами.
+    wheel_ports: tuple[str, ...] = ()
     slam_lock_file: Path = PROJECT_ROOT / "data" / "lock.json"
     slam_pin: str = ""                 # пусто → заводской PIN из backend.py
     slam_max_attempts: int = 5
@@ -86,6 +88,11 @@ class Config:
             slam_ports=tuple(
                 p.strip()
                 for p in (os.environ.get("RC_SLAM_PORTS") or "").split(",")
+                if p.strip()
+            ),
+            wheel_ports=tuple(
+                p.strip()
+                for p in (os.environ.get("RC_WHEEL_PORTS") or "").split(",")
                 if p.strip()
             ),
             slam_lock_file=(

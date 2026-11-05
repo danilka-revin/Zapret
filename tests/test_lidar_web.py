@@ -996,6 +996,7 @@ def test_lidar_does_not_probe_the_port_of_the_chassis_modules(state_dir, fake_us
                                                               monkeypatch, manager):
     """Лидар не открывает порт модулей шасси и видно, почему: ``tried`` и ``chassis_ports``."""
     monkeypatch.setenv("RC_LIDAR_PEER_URLS", "")
+    manager.autoprobe = True  # перебор включён явно только для этой проверки
     monkeypatch.setattr(lidar, "LIDAR_RESCAN_S", 0.05)
     monkeypatch.setattr(lidar, "LIDAR_PROBE_TIMEOUT_S", 0.05)
     monkeypatch.setattr(lidar, "LIDAR_ATTEMPT_MAX_S", 0.2)

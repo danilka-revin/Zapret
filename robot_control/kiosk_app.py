@@ -582,6 +582,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         state = build_state(
             mode=config.slam_source,
             ports=config.slam_ports,
+            wheel_ports=config.wheel_ports,
             lock_file=config.slam_lock_file,
             pin=config.slam_pin,
             max_attempts=config.slam_max_attempts,
@@ -979,6 +980,148 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         except OSError as exc:
             return jsonify(ok=False, error="Не удалось сохранить подтверждение: " + str(exc)), 500
         return jsonify(result), 200, {"Cache-Control": "no-store"}
+
+    # --------------------- Ручное назначение портов --------------------- #
+    # Автопоиск отключён: оператор сам указывает порты всех 12 устройств на
+    # странице «Устройства». Сохранённое назначение — это его решение, а не
+    # доказательство типа устройства: колесо всё равно требует свежей
+    # телеметрии с CRC, камеру — свежего кадра, принтер — физического
+    # подтверждения в диалоге.
+    from . import device_ports
+
+    def _wheel_status():
+        try:
+            source = getattr(state, "source", None) if state is not None else None
+            info = source.read().get("masterPort") if source is not None else None
+            return info if isinstance(info, dict) else {}
+        except Exception:  # noqa: BLE001 — экран настроек без телеметрии
+            return {}
+
+    def _ports_payload():
+        return device_ports.payload(registry=device_registry, wheel_status=_wheel_status())
+
+    def _camera_assign(role, port):
+        from .camera_settings import (apply_camera_settings, current_camera_settings,
+                                      normalize_camera_settings)
+        role_key = device_ports.CAMERA_SETTING[role]
+        settings = current_camera_settings()
+        settings[role_key] = port
+        normalized = normalize_camera_settings(settings)
+        # Подсказка реестра фиксирует USB-идентичность открытого устройства.
+        # Очистка оставляет отключённую подсказку: камера выключена до нового
+        # назначения, а не открывается по старому пути.
+        try:
+            if not port:
+                device_registry.set_hint(role, "")
+            else:
+                hint = (device_registry.set_hint(role, port) or {}).get("hint") or {}
+                if not hint.get("identity"):
+                    # Устройства сейчас нет в топологии: назначение хранит .env,
+                    # камера откроется, когда путь появится и совпадёт с ним.
+                    device_registry.clear_hint(role)
+        except ValueError as exc:
+            raise device_ports.PortError(str(exc)) from exc
+        result = apply_camera_settings(normalized)
+        return "Камера %s: %s" % (device_ports.ROLE_TITLES[role].split("·")[-1].strip(),
+                                  port or "порт не назначен — камера выключена"), result
+
+    def _lidar_assign(port):
+        from .lidar_settings import apply_lidar_settings
+        settings = LidarManager.get_instance().current_settings()
+        settings["port"] = port
+        settings["autoprobe"] = False
+        result = apply_lidar_settings(settings)
+        return "Лидар: %s" % (port or "порт не назначен"), result
+
+    def _kinect_assign(port):
+        device_ports.save_role("kinect", port)
+        return ("Kinect: %s. Публикатор глубины подхватит порт при следующем запуске."
+                % (port or "порт не назначен")), {"port": port}
+
+    def _bms_assign(port):
+        result = bms_setup.apply_port(battery, port, operator_confirmed=True)
+        return "BMS: %s" % (port or "порт не назначен"), result
+
+    def _printer_assign(port):
+        from .printer import DEFAULTS, PrinterError
+        previous = device_ports.role_port("printer")
+        device_ports.save_role("printer", port)
+        body = {key: printer.settings().get(key) for key in DEFAULTS if key != "identity"}
+        body["port"] = port
+        body["confirmed"] = True
+        try:
+            result = printer.configure(body)
+        except PrinterError:
+            device_ports.save_role("printer", previous)
+            raise
+        except Exception:
+            device_ports.save_role("printer", previous)
+            raise
+        return "Принтер: %s" % (port or "порт не назначен"), result
+
+    def _ports_body(limit=8192):
+        import json
+        if request.headers.get("X-Robot-Control") != "devices":
+            raise device_ports.PortError("Требуется запрос со страницы устройств")
+        if request.content_length is not None and request.content_length > limit:
+            raise device_ports.PortError("Слишком большой запрос")
+        raw = request.stream.read(limit + 1)
+        if len(raw) > limit:
+            raise device_ports.PortError("Слишком большой запрос")
+        try:
+            body = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise device_ports.PortError("Ожидается JSON-объект") from None
+        if not isinstance(body, dict):
+            raise device_ports.PortError("Ожидается JSON-объект")
+        return body
+
+    @app.get("/api/devices/ports")
+    def api_device_ports():
+        payload = _ports_payload()
+        payload["canEdit"] = True
+        return jsonify(payload), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/devices/ports")
+    def api_device_ports_save():
+        from .printer import PrinterError
+        try:
+            body = _ports_body()
+            role = body.get("role")
+            if not isinstance(role, str) or (role != "wheels" and role not in device_ports.ROLE_ENV):
+                raise device_ports.PortError("Неизвестное устройство")
+            with usb_assignment_lock:
+                if role == "wheels":
+                    ports = device_ports.save_wheels(body.get("ports") or [])
+                    message = "Порты колёс: %s. Роли FL/FR/RL/RR определит телеметрия плат." % (
+                        ", ".join(p for p in ports if p) or "не назначены")
+                    result = {"wheels": ports}
+                else:
+                    if not isinstance(body.get("port"), str):
+                        raise device_ports.PortError("Нужен путь порта")
+                    port = device_ports.validate(role, body["port"])
+                    if role.startswith("camera_"):
+                        message, result = _camera_assign(role, port)
+                    elif role == "lidar":
+                        message, result = _lidar_assign(port)
+                    elif role == "kinect":
+                        message, result = _kinect_assign(port)
+                    elif role == "bms":
+                        message, result = _bms_assign(port)
+                    else:
+                        message, result = _printer_assign(port)
+            eventlog.record("ok", message, source="устройства")
+            payload = _ports_payload()
+            return jsonify(ok=True, message=message, result=result, ports=payload), 200, {
+                "Cache-Control": "no-store"}
+        except device_ports.PortError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        except PrinterError as exc:
+            return jsonify(ok=False, error=str(exc)), getattr(exc, "status", 409)
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        except OSError as exc:
+            return jsonify(ok=False, error="Не удалось записать .env: " + str(exc)), 500
 
     def lidar_start_body():
         import json

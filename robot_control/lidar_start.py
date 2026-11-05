@@ -58,8 +58,21 @@ class LidarStartService:
         paths.update((getattr(self.battery, "port", ""), lidar_active_port()))
         return os.path.realpath(port) in {os.path.realpath(str(p)) for p in paths if p}
 
+    def _manual_assignment(self, port, source):
+        """Оператор назначил этот порт лидару на странице «Устройства»."""
+        if source is None:
+            return False
+        try:
+            return bool(source.operator_assigned_port_allowed(port, "lidar"))
+        except Exception:  # noqa: BLE001 — нет проверки — нет разрешения
+            return False
+
     def _assert_safe(self, port, real, fp, source, identity, *, reserved=False):
-        if os.environ.get("RC_USB_DISCOVERY_MODE") != "1" or source is None or source is not self.source_provider():
+        manual = self._manual_assignment(port, source)
+        if not manual and (os.environ.get("RC_USB_DISCOVERY_MODE") != "1" or
+                           source is None or source is not self.source_provider()):
+            raise LidarStartError("Нужен активный бортовой владелец USB колёс в режиме master.")
+        if source is None or source is not self.source_provider():
             raise LidarStartError("Нужен активный бортовой владелец USB колёс в режиме master.")
         if not getattr(source, "auto_discovery", False) or getattr(source, "_stop", True):
             raise LidarStartError("Проверка USB колёс не работает.")
@@ -72,6 +85,8 @@ class LidarStartService:
             raise LidarStartError("USB-адаптер отсутствует или изменился. Проверьте кабель заново.")
         if self._blocked(port):
             raise LidarStartError("Порт занят или зарезервирован колесом, BMS, принтером или лидаром.")
+        if manual:
+            return
         try:
             allowed = (source.manual_lidar_probe_allowed(port, fp) if reserved else
                        source.manual_printer_port_allowed(port))

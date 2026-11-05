@@ -24,7 +24,7 @@
         const name = document.createElement('span');
         name.textContent = module + ' · ' + title;
         const value = document.createElement('strong');
-        value.textContent = (data.settings && data.settings[module]) || 'Не обнаружено';
+        value.textContent = (data.settings && data.settings[module]) || 'Не опознано';
         row.append(name, value);
         fields.append(row);
       }
@@ -33,8 +33,8 @@
         message.textContent = 'Старая прошивка без защищённого имени: ' + data.legacy.join(', ') + '. Обновите до fw22; движение заблокировано.';
       } else {
         message.textContent = data.ready
-          ? 'USB-порты определены автоматически. Проверьте физическое расположение плат и колёс.'
-          : 'Проверяю USB-устройства. Если колесо не найдено, проверьте питание, кабель и прошивку fw22.';
+          ? 'Все четыре платы опознались по телеметрии. Проверьте физическое расположение плат и колёс.'
+          : 'Автопоиск отключён. Назначьте четыре порта на странице «Устройства»; колесо считается найденным только после свежей телеметрии fw22 с CRC.';
       }
     } catch (error) {
       message.textContent = 'Ошибка: ' + error.message;

@@ -34,9 +34,10 @@ ENV_KEYS_BY_ROLE: dict[str, tuple[str, ...]] = {
 }
 ENV_PRIMARY_KEYS: dict[str, str] = {role: keys[0] for role, keys in ENV_KEYS_BY_ROLE.items()}
 SETTING_KEYS: tuple[str, ...] = tuple(ENV_KEYS_BY_ROLE)
+#: Автопоиск портов отключён: пустая строка означает «камера не назначена».
+#: Раньше здесь были /dev/video0…3 — это была догадка, а не настройка.
 DEFAULT_PORTS: dict[str, str] = {
-    "front": "/dev/video0", "rear": "/dev/video1",
-    "front_right": "/dev/video2", "rear_right": "/dev/video3",
+    "front": "", "rear": "", "front_right": "", "rear_right": "",
 }
 ROLE_LABELS: dict[str, str] = {
     "front": "передняя левая", "front_right": "передняя правая",
@@ -82,7 +83,7 @@ def camera_rear_from_env() -> str:
 
 
 def current_camera_settings() -> dict[str, str]:
-    """Текущие порты из окружения; пустая строка = авто/значение по умолчанию."""
+    """Текущие порты из окружения; пустая строка = камера не назначена."""
     return {role: _env_camera_value(keys) for role, keys in ENV_KEYS_BY_ROLE.items()}
 
 
@@ -162,12 +163,6 @@ def describe_camera_ports() -> list[dict[str, Any]]:
             role, note = "missing", "устройство не подключено"
         result.append({"port": path, "real": real, "exists": exists,
                        "role": role, "note": note})
-    if not result:
-        result = [
-            {"port": path, "real": path, "exists": False, "role": role,
-             "note": f"по умолчанию {ROLE_LABELS[role]} (авто)"}
-            for role, path in DEFAULT_PORTS.items()
-        ]
     return result
 
 
@@ -183,8 +178,8 @@ def normalize_camera_settings(payload: Any) -> dict[str, str]:
     """Проверяет и нормализует порты четырёх камер.
 
     Принимает dict с ключами front/rear/front_right/rear_right (и алиасами).
-    Пустая строка = авто (`/dev/video0`…`/dev/video3`). Две камеры не могут
-    делить один порт.
+    Пустая строка = камера не назначена (автопоиск отключён). Две камеры не
+    могут делить один порт.
     """
     if not isinstance(payload, dict):
         raise ValueError("настройки камер: ожидается объект с портами front/rear/front_right/rear_right")
@@ -218,6 +213,10 @@ def normalize_camera_settings(payload: Any) -> dict[str, str]:
 
 
 def env_file_path() -> Path:
+    """``.env`` проекта; ``RC_CAMERA_ENV_FILE`` — изоляция в тестах/на другом борту."""
+    override = (os.environ.get("RC_CAMERA_ENV_FILE") or "").strip()
+    if override:
+        return Path(override)
     return PROJECT_ROOT / ".env"
 
 
@@ -285,7 +284,7 @@ def settings_payload(manager=None) -> dict[str, Any]:
     except Exception:
         cameras = []
     raw = current_camera_settings()
-    display = {role: raw[role] or DEFAULT_PORTS[role] for role in SETTING_KEYS}
+    display = {role: raw[role] for role in SETTING_KEYS}
     return {
         "ok": True,
         "settings": raw,

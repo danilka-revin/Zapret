@@ -1152,10 +1152,14 @@ def test_second_process_takes_scan_over_http(fake_serial, monkeypatch):
 def test_manager_goes_through_every_usb_port(fake_serial, fake_usb, monkeypatch):
     """Лидар переподключили на соседний порт — перебор обязан пройти все.
 
+    Автопоиск портов по умолчанию выключен; здесь он включён явно, чтобы
+    проверить сам механизм перебора (диагностика оператора).
+
     Раньше поиск начинался всегда с одного и того же порта, и после
     переподключения лидара на другой /dev/ttyUSBx приложение могло упереться
     в пустой порт и никогда не дойти до остальных.
     """
+    monkeypatch.setenv("RC_LIDAR_AUTOPROBE", "1")
     ports = [fake_usb("ttyUSB0"), fake_usb("ttyUSB1"), fake_usb("ttyUSB2")]
     FakeSerial.devices[ports[2]] = FakeRplidar()       # лидар — на третьем порту
     manager = LidarManager()
@@ -1197,6 +1201,7 @@ def test_manager_finds_lidar_on_other_port_when_port_is_pinned(fake_serial, fake
 
 def test_manager_reports_every_port_it_checked(fake_serial, fake_usb, monkeypatch):
     """Мёртвый порт не сбивает перебор: порты проверяются по очереди, результат виден в статусе."""
+    monkeypatch.setenv("RC_LIDAR_AUTOPROBE", "1")
     ports = [fake_usb("ttyUSB0"), fake_usb("ttyUSB1")]
     FakeSerial.devices[ports[1]] = FakeLd06()          # лидар — на втором порту
     manager = LidarManager()
@@ -1214,12 +1219,13 @@ def test_manager_reports_every_port_it_checked(fake_serial, fake_usb, monkeypatc
         worker.join(timeout=2.0)
 
 
-def test_manager_logs_one_result_per_round_not_every_cycle(fake_serial, fake_usb, caplog):
+def test_manager_logs_one_result_per_round_not_every_cycle(fake_serial, fake_usb, caplog, monkeypatch):
     """Итог перебора идёт в журнал один раз, а не каждые 2 секунды.
 
     Раньше причина менялась от круга к кругу (порядок портов вращался), и
     journalctl на роботе без лидара забивался одинаковыми строками.
     """
+    monkeypatch.setenv("RC_LIDAR_AUTOPROBE", "1")
     fake_usb("ttyUSB0")
     fake_usb("ttyUSB1")
     manager = LidarManager()

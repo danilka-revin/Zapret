@@ -259,14 +259,16 @@ def proxy_connections(origin: str):
 def proxy_devices(origin: str, *, operation: str = 'snapshot'):
     """Only the fixed onboard inventory endpoints, with a small POST body."""
     paths = {'snapshot': '/api/devices', 'hint': '/api/devices/hint',
+             'ports': '/api/devices/ports', 'save-ports': '/api/devices/ports',
              'confirm': '/api/devices/camera/confirm'}
     if operation not in paths:
         return jsonify(ok=False, error='Неизвестная операция'), 404
     mutate = operation != 'snapshot'
+    limit = 8192 if operation == 'save-ports' else 4096
     if mutate:
-        if request.content_length is not None and request.content_length > 4096:
+        if request.content_length is not None and request.content_length > limit:
             return jsonify(ok=False, error="Слишком большой запрос"), 413
-        request.max_content_length = 4096
+        request.max_content_length = limit
     path = paths[operation]
     if not mutate and request.args.get('refresh') == '1':
         path += '?refresh=1'

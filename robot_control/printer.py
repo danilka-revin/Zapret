@@ -202,6 +202,13 @@ class PrinterService:
             except Exception:  # noqa: BLE001 — no owner check means no printing
                 allowed = False
             if not allowed:
+                # Явное назначение порта принтера оператором на странице
+                # «Устройства» — это его подтверждение физического подключения.
+                try:
+                    allowed = source.operator_assigned_port_allowed(port, "printer")
+                except Exception:  # noqa: BLE001
+                    allowed = False
+            if not allowed:
                 raise PrinterError("Порт ещё проверяется или опознан как колесо, BMS либо лидар. Дождитесь проверки USB.")
 
     def configure(self, body):

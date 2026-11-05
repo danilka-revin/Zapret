@@ -29,7 +29,7 @@
         <div>
           <p class="eyebrow">БОРТОВОЙ КОМПЬЮТЕР · ОБОРУДОВАНИЕ</p>
           <h1>Устройства робота</h1>
-          <p class="lead">Где подключено оборудование и что действительно удалось проверить.</p>
+          <p class="lead">Единственное место настройки портов: здесь назначается каждое устройство и здесь же видно, что действительно подтвердилось.</p>
         </div>
       </div>
       <button class="refresh" id="devices-refresh" type="button"><span aria-hidden="true">↻</span> Обновить</button>
@@ -46,25 +46,50 @@
       <div><span class="dot dim" id="server-dot"></span><strong id="server-status">Ожидание бортового сервера…</strong></div>
       <span id="last-update">—</span>
     </div>
-    <div class="notice" id="discovery-status">Поиск колёс: ожидание данных.</div>
+    <div class="notice" id="discovery-status">Автопоиск портов отключён: порты задаёт оператор.</div>
     <div class="notice notice-warning" id="device-alert" role="alert" hidden></div>
+
+    <section class="device-section" aria-labelledby="ports-title" id="ports-panel">
+      <header class="section-heading"><div><p class="section-index">00 / НАСТРОЙКА</p><h2 id="ports-title">Порты устройств · вручную</h2></div><span class="section-count">12 УСТРОЙСТВ</span></header>
+      <p class="section-description">Автопоиск портов отключён. Порты назначает оператор: программа не перебирает USB-порты и не решает за вас, где какое устройство. Колесо считается найденным только после свежей телеметрии с CRC, камера — после свежего кадра.</p>
+
+      <div class="ports-block" aria-labelledby="wheel-ports-title">
+        <header class="ports-head">
+          <div>
+            <h3 id="wheel-ports-title">Колёсные модули · 4 порта</h3>
+            <p>Укажите четыре USB-порта подключённых плат. Порядок не важен: каждая плата сама сообщает свою роль FL/FR/RL/RR в защищённой телеметрии.</p>
+          </div>
+          <span class="chip" id="wheel-slots-state">не назначены</span>
+        </header>
+        <div class="wheel-slots" id="wheel-slots"></div>
+        <div class="ports-actions">
+          <button type="button" class="primary" id="wheel-slots-save">Сохранить порты колёс</button>
+          <button type="button" class="quiet" id="wheel-slots-clear">Очистить</button>
+        </div>
+        <p class="ports-map" id="wheel-slots-map">Опознание колёс: ожидание телеметрии.</p>
+        <p class="ports-msg" id="wheel-slots-message" role="status"></p>
+        <datalist id="wheel-slots-options"></datalist>
+      </div>
+
+      <ul class="ports-index" id="ports-index" aria-label="Назначения остальных устройств"></ul>
+    </section>
 
     <section class="device-section" aria-labelledby="wheels-title">
       <header class="section-heading"><div><p class="section-index">01 / ХОДОВАЯ</p><h2 id="wheels-title">Колёсные модули</h2></div><span class="section-count">04 УСТРОЙСТВА</span></header>
-      <p class="section-description">Положение определяет сама плата по телеметрии с CRC. Подсказки не назначают колёса и не обходят проверку остальных USB-портов.</p>
+      <p class="section-description">Порт назначается один раз в блоке выше. Роль каждого колеса определяет сама плата по телеметрии с CRC: здесь видно, какая плата где опозналась. Совпавшие имена или старая прошивка блокируют движение.</p>
       <div class="cards" id="wheel-cards"></div>
     </section>
     <section class="device-section" aria-labelledby="cameras-title">
       <header class="section-heading"><div><p class="section-index">02 / ОБЗОР</p><h2 id="cameras-title">Камеры</h2></div><span class="section-count">04 УСТРОЙСТВА</span></header>
-      <p class="section-description">Укажите порт и проверьте изображение рукой перед объективом. Одинаковые камеры нельзя различить по модели; расположение подтверждает оператор. Без уникального серийного номера проверяйте его снова после перестановки.</p>
+      <p class="section-description">У каждой камеры свой видеопорт — назначьте его здесь и проверьте изображение рукой перед объективом. Одинаковые камеры нельзя различить по модели; расположение подтверждает оператор.</p>
       <div class="cards" id="camera-cards"></div>
     </section>
     <section class="device-section" aria-labelledby="other-title">
       <header class="section-heading"><div><p class="section-index">03 / ПЕРИФЕРИЯ</p><h2 id="other-title">Остальные устройства</h2></div><span class="section-count">04 УСТРОЙСТВА</span></header>
-      <p class="section-description">Реальное состояние берётся у существующих драйверов. Подсказка для BMS не заменяет ручной выбор порта на бортовом экране.</p>
+      <p class="section-description">Лидар, Kinect, чековый принтер и BMS тоже назначаются вручную — по одному порту на устройство. Совпадение пути ничего не доказывает: состояние берётся у драйверов.</p>
       <div class="cards" id="other-cards"></div>
     </section>
-    <footer><b>Как это работает</b> · Сначала читаем состав USB, затем сверяем сохранённые подсказки с текущими устройствами и данными драйверов. Один USB-девайс может иметь несколько портов. Подсказка и совпадение гнезда не являются доказательством роли. Печать принтера здесь не проверяется.</footer>
+    <footer><b>Как это работает</b> · Порты сохраняются в <code>.env</code> (камеры, лидар, BMS, Kinect, порты колёс) и в конфигурацию принтера, применяются сразу или при следующем запуске драйвера. Подтверждение устройства появляется только из данных драйвера: телеметрия с CRC для колеса, свежий кадр для камеры, ответ JBD для BMS. Автопоиска нет.</footer>
   </main>
   <script src="slam_auth.js"></script>
   <script src="camera_frames.js"></script>

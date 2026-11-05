@@ -57,6 +57,14 @@ def isolated_device_registry(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_device_ports_file(tmp_path, monkeypatch):
+    """Ручные назначения портов в тестах — во временный файл, не в рабочий .env."""
+    monkeypatch.setenv("RC_DEVICE_PORTS_FILE", str(tmp_path / "device-ports.env"))
+    monkeypatch.setenv("RC_CAMERA_ENV_FILE", str(tmp_path / "camera-ports.env"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def isolated_printer_config(tmp_path, monkeypatch):
     """Printer tests and inventory must never inspect or overwrite robot settings."""
     monkeypatch.setenv("RC_PRINTER_CONFIG", str(tmp_path / "printer.json"))

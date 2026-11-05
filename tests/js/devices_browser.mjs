@@ -6,7 +6,13 @@ const modules = process.env.ZAPRET_BROWSER_NODE_MODULES;
 const require = createRequire(import.meta.url);
 const {chromium} = require(join(modules, 'playwright-core'));
 const chrome = (await import(join(modules, '@sparticuz/chromium/build/index.js'))).default;
-const {inflate} = await import(join(modules, '@sparticuz/chromium/build/lambdafs.js'));
+// @sparticuz/chromium exports differ between versions: older ones export a
+// standalone inflate(), newer ones a LambdaFS class with a static inflate().
+const lambdafs = await import(join(modules, '@sparticuz/chromium/build/lambdafs.js'));
+const lambdaFS = lambdafs.default?.default || lambdafs.default;
+const inflate = typeof lambdafs.inflate === 'function' ? lambdafs.inflate
+  : (typeof lambdaFS?.inflate === 'function' ? lambdaFS.inflate.bind(lambdaFS) : null);
+assert(inflate, 'unsupported @sparticuz/chromium lambdafs version');
 await inflate(join(modules, '@sparticuz/chromium/bin/al2023.tar.br'));
 process.env.LD_LIBRARY_PATH = '/tmp/al2023/lib' + (process.env.LD_LIBRARY_PATH ? ':' + process.env.LD_LIBRARY_PATH : '');
 const origin = process.argv[2];
@@ -61,7 +67,10 @@ try {
       }
       for (const card of document.querySelectorAll('.card')) {
         if (card.scrollWidth > card.clientWidth + 1) issues.push('card clipped: ' + card.dataset.role);
-        const row = card.querySelector('.hint-row').getBoundingClientRect();
+        // У колёс нет своей формы: четыре порта назначаются общим блоком выше.
+        const rowNode = card.querySelector('.hint-row');
+        if (!rowNode) continue;
+        const row = rowNode.getBoundingClientRect();
         for (const control of card.querySelectorAll('.hint-row input, .hint-row button')) {
           const rect = control.getBoundingClientRect();
           if (rect.left < row.left - 1 || rect.right > row.right + 1 || rect.height < 39) {
@@ -82,6 +91,10 @@ try {
   assert.equal(await input.inputValue(), '/dev/video', 'poll must not erase an edit');
   await input.fill('/dev/video0');
   await page.locator('[data-role="camera_FL"] .save').click();
+  await page.waitForTimeout(2500);
+  console.log('DEBUG message:', await page.locator('[data-role="camera_FL"] .hint-message').textContent());
+  console.log('DEBUG assigned:', await page.locator('[data-role="camera_FL"] .fact-value.assigned').textContent());
+  console.log('DEBUG state:', await page.locator('[data-role="camera_FL"]').getAttribute('data-state'));
   await page.waitForSelector('[data-role="camera_FL"] .confirm:visible', {timeout: 12000});
   await page.locator('[data-role="camera_FL"] .confirm').click();
   await page.waitForFunction(() => document.querySelector('[data-role="camera_FL"]')?.dataset.state === 'verified',

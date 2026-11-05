@@ -399,7 +399,7 @@ def normalize_lidar_settings(raw: Any) -> dict[str, Any]:
     if motor not in MOTOR_MODES:
         raise ValueError(
             "Мотор RPLIDAR: ожидается auto, none, dtr-low, dtr-high, rts-low или rts-high.")
-    autoprobe_raw = raw.get("autoprobe", True)
+    autoprobe_raw = raw.get("autoprobe", False)
     if isinstance(autoprobe_raw, bool):
         autoprobe = autoprobe_raw
     elif isinstance(autoprobe_raw, (int, float)):
@@ -419,7 +419,7 @@ def lidar_settings_from_env(env: Optional[dict[str, str]] = None) -> dict[str, A
         "protocol": values.get("RC_LIDAR_PROTOCOL") or "auto",
         "baud": values.get("RC_LIDAR_BAUD") or "",
         "motor": values.get("RC_LIDAR_MOTOR") or "auto",
-        "autoprobe": values.get("RC_LIDAR_AUTOPROBE") or "1",
+        "autoprobe": values.get("RC_LIDAR_AUTOPROBE") or "0",
     })
 
 
@@ -1026,6 +1026,7 @@ def excluded_ports() -> set[str]:
         # Legacy/standalone serial mode only. In master auto mode these old
         # paths can now refer to a completely different device.
         for name in ("RC_SLAM_PORT", "RC_SLAM_MASTER_PORT", "RC_SLAM_PORTS",
+                     "RC_WHEEL_PORTS",
                      "RC_WHEEL_FL_PORT", "RC_WHEEL_FR_PORT",
                      "RC_WHEEL_RL_PORT", "RC_WHEEL_RR_PORT"):
             value = os.environ.get(name)
@@ -1577,10 +1578,15 @@ def lidar_holds_port(port: str) -> bool:
         return True
     # Explicit wheel assignments need not wait for a scan of unrelated USB ports.
     # An already active lidar above still owns its port.
+    try:
+        from .device_ports import wheel_ports as manual_wheel_ports
+        assigned_ports = list(manual_wheel_ports())
+    except Exception:  # noqa: BLE001 — без настроек живём как раньше
+        assigned_ports = []
     for module in ("FL", "FR", "RL", "RR"):
-        assigned = os.environ.get(f"RC_WHEEL_{module}_PORT", "").strip()
-        if assigned and _same_port(assigned, port):
-            return False
+        assigned_ports.append(os.environ.get(f"RC_WHEEL_{module}_PORT", "").strip())
+    if any(assigned and _same_port(assigned, port) for assigned in assigned_ports):
+        return False
     return lidar_search_priority() > 0.0
 
 
@@ -1937,7 +1943,7 @@ def startup_summary() -> list[str]:
             os.environ.get("RC_LIDAR_PROTOCOL") or "auto",
             os.environ.get("RC_LIDAR_BAUD") or "(автоподбор)",
             os.environ.get("RC_LIDAR_MOTOR") or "auto",
-            os.environ.get("RC_LIDAR_AUTOPROBE") or "1",
+            os.environ.get("RC_LIDAR_AUTOPROBE") or "0",
         ),
     ]
     blocked = sorted(p for p in excluded_ports() if p)
@@ -2266,7 +2272,8 @@ class LidarManager:
             )
         raw_motor = (os.environ.get("RC_LIDAR_MOTOR") or "auto").strip().lower()
         self.motor = raw_motor if raw_motor in MOTOR_MODES else "auto"
-        self.autoprobe = _env_bool("RC_LIDAR_AUTOPROBE", True)
+        # Автопоиск отключён по умолчанию: лидар слушает только назначенный порт.
+        self.autoprobe = _env_bool("RC_LIDAR_AUTOPROBE", False)
         self.excluded = excluded_ports()
         self.peer_urls = peer_urls()
 
@@ -2515,7 +2522,7 @@ class LidarManager:
                 "protocol": values.get("RC_LIDAR_PROTOCOL", "auto"),
                 "baud": values.get("RC_LIDAR_BAUD", ""),
                 "motor": values.get("RC_LIDAR_MOTOR", "auto"),
-                "autoprobe": values.get("RC_LIDAR_AUTOPROBE", "1"),
+                "autoprobe": values.get("RC_LIDAR_AUTOPROBE", "0"),
             })
         except ValueError as exc:
             log.warning("Лидар: настройки в .env не применены: %s", exc)

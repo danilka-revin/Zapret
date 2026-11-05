@@ -722,9 +722,13 @@ class MasterSource:
                  port_provider=None, probe=None, claim=None, release=None,
                  yield_to_lidar=None, tag_module=None, untag_module=None,
                  module_ports=None, auto_discovery=False, blocked_ports=None,
-                 publish_discovery=None, passive_lidar_probe=None):
+                 publish_discovery=None, passive_lidar_probe=None,
+                 manual_ports=False):
         self.passive_lidar_probe = passive_lidar_probe if auto_discovery else None
         self.auto_discovery = bool(auto_discovery)
+        #: True — список портов задал оператор (RC_WHEEL_PORTS). Сканирования
+        #: USB нет: открываются только эти порты, роли доказывает телеметрия.
+        self.manual_ports = bool(manual_ports)
         self.port_provider = port_provider if self.auto_discovery else None
         self.blocked_ports = blocked_ports if self.auto_discovery else None
         self.publish_discovery = publish_discovery if self.auto_discovery else None
@@ -2412,6 +2416,38 @@ class MasterSource:
                         not (result and result[0] == fingerprint) and
                         not occupied and not spawning)
 
+    def operator_assigned_port_allowed(self, path, role):
+        """Explicit manual assignment is the operator's confirmation for one role.
+
+        Used only where the operator personally assigned the port on the
+        Devices screen (BMS, printer, lidar). The port must still be present,
+        must not be one of the wheel ports and must not be opened as a wheel.
+        Silence/VID/PID are never treated as proof of the device type.
+        """
+        if not path or not role:
+            return False
+        try:
+            from robot_control.device_ports import role_port, wheel_ports
+        except Exception:                     # noqa: BLE001 — without config: deny
+            return False
+        assigned = role_port(role)
+        if not assigned:
+            return False
+        real = os.path.realpath(path)
+        if os.path.realpath(assigned) != real:
+            return False
+        if not os.path.exists(path) or self._device_fingerprint(path) is None:
+            return False
+        wheels = {os.path.realpath(p) for p in wheel_ports() if p}
+        if real in wheels:
+            return False
+        with self.lock:
+            occupied = any(link.device == real for link in self.links.values())
+            spawning = any(os.path.realpath(p) == real for p in self._spawning)
+            if occupied or spawning:
+                return False
+        return True
+
     def reserve_manual_lidar_probe(self, path, fingerprint):
         """Prevent a passive rescan while the explicit, locked LDS test runs."""
         real = os.path.realpath(path)
@@ -3165,6 +3201,7 @@ class MasterSource:
             "unclassified": unclassified,
             "error": fault or (getattr(self, "last_error", "") if not ready else "") or None,
             "auto": auto,
+            "manual": bool(getattr(self, "manual_ports", False)),
             "ready": ready,
             "legacy": [path for path, item in links.items() if item[4]],
             "modules": verified_paths if auto else modules,

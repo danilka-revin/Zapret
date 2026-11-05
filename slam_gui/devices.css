@@ -268,7 +268,7 @@ h1 { margin: 0; font-size: clamp(24px, 2.5vw, 32px); line-height: 1.15; letter-s
 .hint-caption, .hint-message { overflow-wrap: anywhere; margin: 7px 0 0; color: var(--faint); font-size: 11px; line-height: 1.4; }
 .hint-message { min-height: 1em; color: var(--amber); }
 .remembered { overflow-wrap: anywhere; margin: 7px 0 12px; color: var(--faint); font-size: 11px; }
-.card-link { display: block; margin-top: 7px; color: #e7acb2; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.card-link { display: inline-flex; align-items: center; min-height: 39px; margin-top: 7px; color: #e7acb2; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
 footer { max-width: 1040px; margin-top: 46px; padding-top: 20px; border-top: 1px solid var(--line-2); color: var(--faint); font-size: 12px; }
 footer b { color: #c9bec1; }
 
@@ -313,4 +313,102 @@ footer b { color: #c9bec1; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
+}
+
+/* ---------------------- блок ручного назначения портов ---------------------- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border: 1px solid #3b373c;
+  border-radius: 999px;
+  background: #1b1a1d;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.chip[data-tone="good"] { border-color: #3a5248; color: var(--good); }
+.chip[data-tone="warn"] { border-color: #604f39; color: var(--amber); }
+.ports-block {
+  margin: 6px 0 4px;
+  padding: 18px;
+  border: 1px solid #3f3438;
+  border-radius: 16px;
+  background: linear-gradient(160deg, #1b1618, #121113 70%);
+}
+.ports-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.ports-head h3 { margin: 0 0 4px; font-size: 16px; }
+.ports-head p { max-width: 760px; margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.wheel-slots {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 15px;
+}
+.wheel-slot { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.wheel-slot-title { color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.wheel-slot input,
+.ports-index-row input {
+  min-width: 0;
+  min-height: 42px;
+  padding: 9px 10px;
+  border: 1px solid #54494d;
+  border-radius: 9px;
+  background: #09090a;
+  color: var(--text);
+  font: 12px var(--mono);
+}
+.ports-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
+.ports-actions button {
+  min-height: 42px;
+  padding: 9px 16px;
+  border: 1px solid #3d363a;
+  border-radius: 10px;
+  background: #1a191b;
+  color: #d7cccf;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.ports-actions button.primary { border-color: #7d5158; background: #35262a; color: #f5e3e5; }
+.ports-actions button:hover { border-color: #d58c94; }
+.ports-map, .ports-msg {
+  overflow-wrap: anywhere;
+  margin: 11px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ports-msg { min-height: 1em; color: var(--amber); font-weight: 700; }
+.ports-index {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.ports-index-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #121113;
+}
+.ports-index-title { font-size: 12.5px; font-weight: 700; }
+.ports-index-value { overflow-wrap: anywhere; color: #dfd5d8; font: 12px var(--mono); }
+.ports-index-value.empty { color: var(--faint); font-style: italic; }
+.ports-index-key { color: var(--faint); font: 10.5px var(--mono); }
+@media (max-width: 900px) {
+  .wheel-slots { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ports-index-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .ports-index-key { display: none; }
+}
+@media (max-width: 560px) {
+  .wheel-slots { grid-template-columns: 1fr; }
+  .ports-block { padding: 14px; }
 }

@@ -204,7 +204,7 @@ python3 ros2_ws/src/zapret_lidar/zapret_lidar/supervisor.py --list-drivers
 | `RC_LIDAR_ROS_TOPIC` | `/scan` | топик скана, который слушают оба экрана |
 | `RC_LIDAR_ROS_GRACE_S` | `20` | сколько секунд в `auto` ждать скан из ROS 2, прежде чем вернуться к USB-порту; `0` — читать USB сразу |
 | `RC_LIDAR_PROTOCOL` | `auto` | в ROS 2-режиме это модель лидара: `lds01`, `rplidar`, `ld06`, `turtlebot3`… — супервизор запускает соответствующий пакет |
-| `RC_LIDAR_PORT` | пусто | порт для драйвера; пусто — автопоиск |
+| `RC_LIDAR_PORT` | пусто | порт для драйвера; задаётся вручную на странице «Устройства» (`/devices`), автопоиск выключен |
 | `RC_LIDAR_BAUD` | пусто | скорость порта; пусто — по умолчанию драйвера |
 | `RC_LIDAR_ROS_STATUS_TOPIC` | `/zapret/lidar/status` | топик состояния супервизора |
 | `RC_ROS_PREFIX` | `/opt/ros/<дистрибутив>` | где искать ROS 2, если он не в `/opt/ros` |
