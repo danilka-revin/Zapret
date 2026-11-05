@@ -28,7 +28,8 @@ def test_four_cameras_have_stable_ids_roles_and_angles(monkeypatch):
     assert [s["id"] for s in specs] == [0, 1, 2, 3]
     assert [s["role"] for s in specs] == ["front_left", "rear_left", "front_right", "rear_right"]
     assert all(s["model"] == "Logitech C930e" for s in specs)
-    assert specs[0]["port"] == "/dev/video0" and specs[3]["port"] == "/dev/video3"
+    # Автопоиск выключен: без ручного назначения порта камера не открывается.
+    assert specs[0]["port"] == "" and specs[3]["port"] == ""
     assert not layout.geometry_calibrated()
     payload = layout.layout_payload()
     assert payload["cameraCount"] == 4

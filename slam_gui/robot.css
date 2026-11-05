@@ -2055,6 +2055,7 @@ body.swipe-open .kiosk {
 .cam-settings-actions button { padding: 10px 16px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--bg-2); color: var(--text); font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; }
 .cam-settings-actions button.primary { border-color: var(--accent); background: rgba(192, 80, 90, .14); color: var(--accent-strong); }
 .cam-settings-actions button.quiet { margin-left: auto; color: var(--muted); }
+.cam-settings-actions .cam-settings-link { display: inline-flex; align-items: center; min-height: 38px; margin-left: auto; color: var(--accent-text); font-size: 13px; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
 .cam-settings-actions button:disabled { opacity: .45; cursor: not-allowed; }
 .cam-settings-msg { margin: 0; min-height: 18px; font-size: 14px; font-weight: 700; color: var(--muted); }
 .cam-settings-msg[data-tone="ok"] { color: var(--text); }
@@ -2207,3 +2208,9 @@ body[data-remote-view="motors"] .remote-drive-panel small { display: block; marg
 .full-zero-recovery p { margin: 6px 0; line-height: 1.4; }
 .full-zero-recovery button { margin-top: 6px; padding: 10px 14px; border: 1px solid #d68b3a; border-radius: 9px; background: var(--panel); color: var(--text); font: inherit; font-weight: 800; cursor: pointer; }
 .full-zero-recovery button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Камеры: настройка портов вынесена на /devices, здесь только ссылка. */
+.cam-column { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.cam-column .cam-stack { flex: 1 1 auto; }
+.cam-ports-hint { flex: none; margin: 0 0 10px; color: #9a8f93; font-size: 13px; }
+.cam-ports-hint a { color: #e7acb2; text-decoration: underline; text-underline-offset: 3px; }

@@ -10,7 +10,13 @@ const ports = JSON.parse(encodedPorts);
 const require = createRequire(import.meta.url);
 const {chromium} = require(join(modules, 'playwright-core'));
 const chrome = (await import(join(modules, '@sparticuz/chromium/build/index.js'))).default;
-const {inflate} = await import(join(modules, '@sparticuz/chromium/build/lambdafs.js'));
+// @sparticuz/chromium exports differ between versions: older ones export a
+// standalone inflate(), newer ones a LambdaFS class with a static inflate().
+const lambdafs = await import(join(modules, '@sparticuz/chromium/build/lambdafs.js'));
+const lambdaFS = lambdafs.default?.default || lambdafs.default;
+const inflate = typeof lambdafs.inflate === 'function' ? lambdafs.inflate
+  : (typeof lambdaFS?.inflate === 'function' ? lambdaFS.inflate.bind(lambdaFS) : null);
+assert(inflate, 'unsupported @sparticuz/chromium lambdafs version');
 await inflate(join(modules, '@sparticuz/chromium/bin/al2023.tar.br'));
 process.env.LD_LIBRARY_PATH = '/tmp/al2023/lib' + (process.env.LD_LIBRARY_PATH ? ':' + process.env.LD_LIBRARY_PATH : '');
 // The Lambda-specific single-process/SwiftShader flags can freeze a busy page
@@ -147,21 +153,22 @@ try {
   ]);
   await waitPorts('#steer-usb-port-%s');
 
-  // The dedicated page presents all twelve roles on both surfaces and lets an
-  // operator save an untrusted hint without overriding the live wheel role.
+  // The dedicated page presents all twelve roles on both surfaces. Wheel ports
+  // are assigned as one manual list of four; the role still comes from the
+  // board's CRC telemetry, so a saved port never overrides a live role.
   await page.goto(onboard + '/devices', {waitUntil: 'domcontentloaded'});
   await page.waitForSelector('[data-role="wheel_FL"] .fact-value.port');
   assert.equal(await page.locator('.card').count(), 12);
   await page.waitForFunction(expected => document.querySelector('[data-role="wheel_FL"] .fact-value.port')
     ?.textContent.trim() === expected, ports.FL, {timeout: 12000});
-  const onboardHint = page.locator('#hint-wheel_FL');
-  await onboardHint.fill('/dev/ttyUSB88');
-  await page.locator('[data-role="wheel_FL"] .save').click();
-  await page.waitForFunction(() => document.querySelector('[data-role="wheel_FL"] .hint-caption')
-    ?.textContent.includes('/dev/ttyUSB88'));
+  const wheelSlot = page.locator('#wheel-slot-1');
+  await wheelSlot.fill('/dev/ttyUSB88');
+  await page.locator('#wheel-slots-save').click();
+  await page.waitForFunction(() => document.querySelector('#wheel-slots-message')
+    ?.textContent.includes('Порты колёс'));
   assert.equal((await page.locator('[data-role="wheel_FL"] .fact-value.port').textContent()).trim(), ports.FL);
   await page.reload({waitUntil: 'domcontentloaded'});
-  await page.waitForFunction(() => document.querySelector('#hint-wheel_FL')?.value === '/dev/ttyUSB88');
+  await page.waitForFunction(() => document.querySelector('#wheel-slot-1')?.value === '/dev/ttyUSB88');
   assert((await page.request.post(onboard + '/__test/unplug')).ok());
   await page.waitForFunction(() => document.querySelector('[data-role="wheel_RL"] .fact-value.port')
     ?.textContent.includes('Не подтверждён'), null, {timeout: 12000});
@@ -176,10 +183,9 @@ try {
   await page.goto(remote + '/devices', {waitUntil: 'domcontentloaded'});
   await page.waitForSelector('[data-role="wheel_FL"] .fact-value.port');
   assert.equal(await page.locator('.card').count(), 12);
-  await page.locator('#hint-wheel_FR').fill('/dev/ttyUSB99');
-  await page.locator('[data-role="wheel_FR"] .save').click();
-  await page.waitForFunction(() => document.querySelector('[data-role="wheel_FR"] .hint-caption')
-    ?.textContent.includes('/dev/ttyUSB99'));
+  await page.locator('#wheel-slot-2').fill('/dev/ttyUSB99');
+  await page.locator('#wheel-slots-save').click();
+  await page.waitForFunction(() => (document.querySelector('#wheel-slot-2')?.value || '') === '/dev/ttyUSB99');
   assert.equal((await page.locator('[data-role="wheel_FR"] .fact-value.port').textContent()).trim(), ports.FR);
   await page.setViewportSize({width: 390, height: 844});
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'device page overflows mobile');

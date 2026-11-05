@@ -1276,14 +1276,12 @@
     const logClear = $('log-clear');
     const logCopy = $('log-copy');
     const logAuto = $('log-autoscroll');
-    const camGearBtn = $('cam-settings-open');
     const mapView = $('swipe-map-view');
     if (!page || !kiosk) return;
 
     let isOpen = false;
     let activeSwipeView = 'cameras';
     let activeSwipeDirection = 'left';
-    let camLoopsStarted = false;
     let mapRefreshPending = false;
 
     const sheet = page.querySelector('.swipe-sheet');
@@ -1306,8 +1304,6 @@
       if (motorView) motorView.hidden = !showMotors;
       if (batteryView) batteryView.hidden = !showBattery;
       if (mapView) mapView.hidden = !showMap;
-      // Маленькая кнопка ⚙ настройки портов камер — только на вкладке камер.
-      if (camGearBtn) camGearBtn.hidden = activeSwipeView !== 'cameras';
       if (swipeTitle) {
         swipeTitle.textContent = showMotors ? 'Руление и тяга'
           : (showBattery ? '4 · Аккумулятор'
@@ -1740,11 +1736,10 @@
       mOrigin = null; mView = null; mType = null; mFrom = null;
     });
 
-    // Esc закрывает: сначала окно настройки камер, потом сам свайп-экран
+    // Esc закрывает свайп-экран
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && isOpen) {
         e.preventDefault();
-        if (camSettingsOpen) { closeCamSettingsModal(); return; }
         closeSwipe();
       }
     });
@@ -1752,202 +1747,10 @@
     // также клик по оверлею вне? не нужно
 
     // --- КАМЕРЫ: кадры бортового сервера, без захвата USB из браузера ---
-    // + настройка портов: передняя и задняя камеры — отдельные V4L2-устройства
-    let camSettings = null;
-    let camPorts = [];
-    let camSettingsOpen = false;
-
-    function camMsg(text, tone) {
-      const el = $('cam-settings-msg');
-      if (!el) return;
-      el.textContent = text || '';
-      if (el.dataset) el.dataset.tone = tone || '';
-    }
-
-    function renderCamSettings() {
-      const cur = $('cam-settings-current');
-      const selF = $('cam-front-select');
-      const selR = $('cam-rear-select');
-      const hintF = $('cam-front-hint');
-      const hintR = $('cam-rear-hint');
-      if (!camSettings) {
-        if (cur) cur.textContent = 'загрузка…';
-        return;
-      }
-      const front = (camSettings.front || '').trim();
-      const rear = (camSettings.rear || '').trim();
-      if (cur) {
-        const tf = front || 'авто (/dev/video0)';
-        const tr = rear || 'авто (/dev/video1)';
-        cur.textContent = 'передняя: ' + tf + ' · задняя: ' + tr;
-      }
-      // Заполняем селекты только если список портов уже есть
-      const ports = Array.isArray(camPorts) ? camPorts : [];
-      const opts = [{port:'', label:'Авто (/dev/video0 для передней, /dev/video1 для задней)'}];
-      ports.forEach((p) => {
-        const exists = p.exists ? '' : ' (нет устройства)';
-        opts.push({port: p.port, label: p.port + exists + (p.note ? ' — ' + p.note : '')});
-      });
-      // Добавить текущие значения, если их нет в списке (кастомный путь)
-      [front, rear].forEach((v) => {
-        if (v && !opts.some((o) => o.port === v)) opts.push({port: v, label: v + ' (текущий)'});
-      });
-      function fillSelect(sel, value, fallbackLabel) {
-        if (!sel) return;
-        const curVal = sel.value;
-        const keep = value || '';
-        // Пересоздаём только если набор изменился
-        const key = JSON.stringify(opts.map(o=>o.port)) + '|' + keep;
-        if (sel.dataset.key === key && sel.options.length === opts.length) {
-          sel.value = keep;
-          return;
-        }
-        sel.dataset.key = key;
-        sel.innerHTML = '';
-        opts.forEach((o) => {
-          const opt = document.createElement('option');
-          opt.value = o.port;
-          opt.textContent = o.label;
-          sel.appendChild(opt);
-        });
-        sel.value = keep;
-      }
-      fillSelect(selF, front, 'передняя');
-      fillSelect(selR, rear, 'задняя');
-      if (hintF) hintF.textContent = front ? 'выбран: ' + front : 'авто — /dev/video0';
-      if (hintR) hintR.textContent = rear ? 'выбран: ' + rear : 'авто — /dev/video1';
-    }
-
-    async function fetchCamSettings() {
-      try {
-        const r = await fetch('api/camera/settings', {cache:'no-store'});
-        const j = await r.json();
-        if (j && j.ok) {
-          camSettings = j.settings || {front:'', rear:''};
-          const opts = j.options && j.options.ports ? j.options.ports : (j.ports || []);
-          if (Array.isArray(opts) && opts.length) camPorts = opts;
-          else if (Array.isArray(j.cameras)) {
-            // fallback из /api/cameras — построим список из камер
-          }
-          renderCamSettings();
-        } else {
-          camMsg(j && j.error ? j.error : 'не удалось загрузить настройки камер', 'error');
-        }
-      } catch (e) {
-        camMsg('нет связи с /api/camera/settings', 'error');
-      }
-    }
-
-    async function rescanCamPorts() {
-      camMsg('обновляю список видеопортов…', '');
-      try {
-        const r = await fetch('api/camera/rescan', {method:'POST', cache:'no-store'});
-        const j = await r.json();
-        if (j && j.ok) {
-          camPorts = j.ports || j.options && j.options.ports || camPorts;
-          camMsg('список обновлён: найдено ' + (camPorts.length || 0) + ' портов', 'ok');
-          renderCamSettings();
-          setTimeout(() => camMsg('', ''), 1600);
-        } else {
-          camMsg(j && j.error ? j.error : 'не удалось обновить список', 'error');
-        }
-      } catch (e) {
-        camMsg('нет связи с сервером', 'error');
-      }
-    }
-
-    async function saveCamSettings() {
-      const selF = $('cam-front-select');
-      const selR = $('cam-rear-select');
-      const front = selF ? selF.value.trim() : '';
-      const rear = selR ? selR.value.trim() : '';
-      if (front && rear && front === rear) {
-        camMsg('передняя и задняя камеры не могут использовать один порт', 'error');
-        return;
-      }
-      camMsg('сохраняю…', '');
-      const btn = $('cam-save');
-      if (btn) btn.disabled = true;
-      try {
-        const r = await fetch('api/camera/settings', {
-          method:'POST', headers:{'Content-Type':'application/json'}, cache:'no-store',
-          body: JSON.stringify({front, rear})
-        });
-        const j = await r.json().catch(()=>null);
-        if (!r.ok || !j || !j.ok) {
-          camMsg(j && j.error ? j.error : 'не удалось сохранить (HTTP ' + r.status + ')', 'error');
-          return;
-        }
-        camSettings = j.settings || {front, rear};
-        camMsg('сохранено в .env: передняя ' + (front || 'авто') + ', задняя ' + (rear || 'авто') + ' — камеры переключены', 'ok');
-        renderCamSettings();
-        // Перезапустить бэкенд-стримы локально без перезагрузки всего окна
-        if (window.RCCameraView) {
-          window.RCCameraView.setActive(false);
-          window.RCCameraView.setActive(isOpen && activeSwipeView === 'cameras');
-        }
-        setTimeout(() => camMsg('', ''), 2200);
-      } catch (e) {
-        camMsg('нет связи с сервером', 'error');
-      } finally {
-        if (btn) btn.disabled = false;
-      }
-    }
-
-    // Окно настройки портов камер: маленькая кнопка ⚙ в шапке открывает
-    // отдельное окно; закрытие — ✕, клик по фону или Esc.
-    function openCamSettingsModal() {
-      const modal = $('cam-settings-modal');
-      if (!modal) return;
-      camSettingsOpen = true;
-      modal.hidden = false;
-      if (camGearBtn) camGearBtn.setAttribute('aria-expanded', 'true');
-      void fetchCamSettings();
-    }
-
-    function closeCamSettingsModal() {
-      const modal = $('cam-settings-modal');
-      if (!modal) return;
-      camSettingsOpen = false;
-      modal.hidden = true;
-      if (camGearBtn) camGearBtn.setAttribute('aria-expanded', 'false');
-    }
-
-    function bindCamSettingsUI() {
-      const btnOpen = $('cam-settings-open');
-      const btnClose = $('cam-modal-close');
-      const modalBackdrop = $('cam-modal-backdrop');
-      const btnScan = $('cam-scan');
-      const btnSave = $('cam-save');
-      const btnReset = $('cam-reset');
-      if (btnOpen) btnOpen.addEventListener('click', openCamSettingsModal);
-      if (btnClose) btnClose.addEventListener('click', closeCamSettingsModal);
-      if (modalBackdrop) modalBackdrop.addEventListener('click', closeCamSettingsModal);
-      if (btnScan) btnScan.addEventListener('click', () => { void rescanCamPorts(); void fetchCamSettings(); });
-      if (btnSave) btnSave.addEventListener('click', () => { void saveCamSettings(); });
-      if (btnReset) btnReset.addEventListener('click', () => {
-        const selF = $('cam-front-select');
-        const selR = $('cam-rear-select');
-        if (selF) selF.value = '';
-        if (selR) selR.value = '';
-        void saveCamSettings();
-      });
-      // При открытии вкладки камер — подгрузить настройки
-      const camView = $('swipe-cameras-view');
-      if (camView) {
-        const mo = new MutationObserver(() => {
-          if (!camView.hidden) void fetchCamSettings();
-        });
-        mo.observe(camView, {attributes:true, attributeFilter:['hidden']});
-      }
-    }
-
+    // Порты камер здесь не настраиваются: единственное место настройки —
+    // страница «Устройства» (/devices), там же назначены колёса, лидар,
+    // BMS, Kinect и принтер.
     function startCamLoops() {
-      if (!camLoopsStarted) {
-        camLoopsStarted = true;
-        bindCamSettingsUI();
-        void fetchCamSettings();
-      }
       if (window.RCCameraView) window.RCCameraView.setActive(true);
     }
 

@@ -978,7 +978,8 @@ def peer_kiosk_url() -> str:
     return f"http://127.0.0.1:{port}/api/kiosk_state"
 
 
-def make_source(mode: str = "auto", ports=None, master_role: str = "owner", device_registry=None):
+def make_source(mode: str = "auto", ports=None, master_role: str = "owner", device_registry=None,
+                wheel_ports=None):
     """Источник данных робота.
 
     ``master``: четыре колеса по одному USB каждое (см. firmware/motor_wheel).
@@ -1007,29 +1008,34 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner", devi
     if mode == "master" and master_role == "peer":
         return mod.MasterPeerSource(peer_kiosk_url())
     if mode == "master":
-        from .master_port import serial_ports, autodiscovery_reserved_ports
+        from .master_port import autodiscovery_reserved_ports
         from .lidar import publish_usb_scan, passive_lidar_probe
+        from .device_ports import wheel_ports as manual_wheel_ports
 
-        # Old RC_WHEEL_*_PORT settings are deliberately ignored. Identity is
-        # proven anew from fw22 CRC telemetry after each open/reconnect.
-        # Hints reorder the already enumerated candidates only. MasterSource
-        # still passively checks every port, detects conflicts and requires
-        # fresh CRC telemetry before routing any motion command.
+        # Автопоиск портов отключён. Открываются только четыре порта, которые
+        # оператор назначил на странице «Устройства» (RC_WHEEL_PORTS). Роль
+        # FL/FR/RL/RR доказывает сама плата в CRC-телеметрии fw22+, поэтому
+        # порядок портов в списке не важен. Пока список пуст, колёс нет:
+        # сканирование USB вместо настройки не выполняется.
+        static_ports = tuple(p for p in (wheel_ports or ports or ()) if p)
+
+        def manual_ports():
+            live = [p for p in manual_wheel_ports() if p]
+            values = live or list(static_ports)
+            return [p for p in values if os.path.exists(p)]
+
         def prioritized_ports():
-            ports = serial_ports()
-            if device_registry is None:
+            ports = manual_ports()
+            if device_registry is None or not ports:
                 return ports
             try:
-                ordered = device_registry.order_serial(list(ports))
-                if len(ordered) == len(ports) and sorted(ordered) == sorted(ports):
-                    return ordered
-            except Exception:  # noqa: BLE001 — cache failure never disables the complete search
-                log.exception("Не удалось применить USB-подсказки; полный поиск продолжается")
+                return device_registry.order_serial(ports)
+            except Exception:  # noqa: BLE001 — подсказки только меняют порядок
+                log.exception("Не удалось применить USB-подсказки; порядок портов сохранён")
             return ports
-        provider = prioritized_ports if device_registry else serial_ports
         return mod.MasterSource(
             auto_discovery=True,
-            port_provider=provider,
+            port_provider=prioritized_ports,
             blocked_ports=autodiscovery_reserved_ports,
             publish_discovery=publish_usb_scan,
             passive_lidar_probe=passive_lidar_probe,
@@ -1039,6 +1045,7 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner", devi
             release=unlock_port,
             tag_module=tag_module_port,
             untag_module=untag_module_port,
+            manual_ports=True,
         )
 
     if mode != "auto":
@@ -1058,10 +1065,12 @@ def make_source(mode: str = "auto", ports=None, master_role: str = "owner", devi
 
 
 def build_state(mode="auto", ports=None, lock_file=None, pin=None,
-                max_attempts=None, lock_sec=None, master_role="owner", device_registry=None):
+                max_attempts=None, lock_sec=None, master_role="owner", device_registry=None,
+                wheel_ports=None):
     """Собирает ``App`` из backend.py: источник данных + PIN-хранилище."""
     mod = load_backend()
-    source = make_source(mode, ports, master_role=master_role, device_registry=device_registry)
+    source = make_source(mode, ports, master_role=master_role, device_registry=device_registry,
+                         wheel_ports=wheel_ports)
     path = str(lock_file) if lock_file else str(GUI_DIR / "state" / "lock.json")
     directory = os.path.dirname(path)
     if directory:
@@ -1239,6 +1248,19 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
             return jsonify(ok=False, reason="csrf_required"), 400
         from .map_peer import proxy_devices
         return proxy_devices(peer_kiosk_url().removesuffix("/api/kiosk_state"), operation="hint")
+
+    @bp.get("/api/devices/ports")
+    def devices_ports():
+        from .map_peer import proxy_devices
+        return proxy_devices(peer_kiosk_url().removesuffix("/api/kiosk_state"), operation="ports")
+
+    @bp.post("/api/devices/ports")
+    def devices_ports_save():
+        if request.headers.get(STEERING_COMMAND_HEADER) != "devices":
+            return jsonify(ok=False, error="Требуется запрос со страницы устройств"), 400
+        from .map_peer import proxy_devices
+        return proxy_devices(peer_kiosk_url().removesuffix("/api/kiosk_state"),
+                             operation="save-ports")
 
     @bp.post("/api/devices/camera/confirm")
     @guard

@@ -149,7 +149,7 @@ def camera_specs() -> list[dict[str, Any]]:
             "id": cam_id,
             "role": role,
             "label": CAMERA_LABELS[role],
-            "port": _env_port(role, str(defaults["port"])),
+            "port": _env_port(role, ""),  # только ручное назначение: без порта камера не открывается
             "x_m": _env_float(x_key, float(defaults["x_m"]), -2.0, 2.0),
             "y_m": _env_float(y_key, float(defaults["y_m"]), -2.0, 2.0),
             "z_m": _env_float(z_key, float(defaults["z_m"]), 0.0, 2.0),
@@ -262,5 +262,6 @@ def layout_payload() -> dict[str, Any]:
         "rearKinectEnableKey": REAR_KINECT_ENABLE_KEY,
         "cameraEnvKeys": {role: camera_env_keys(role) for role in CAMERA_ROLES},
         "kinectEnvKeys": dict(KINECT_ENV_KEYS),
-        "duplicatePorts": sorted({p for p in ports if ports.count(p) > 1}),
+        # Пустой порт = «не назначен», это не дубль.
+        "duplicatePorts": sorted({p for p in ports if p and ports.count(p) > 1}),
     }

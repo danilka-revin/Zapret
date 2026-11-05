@@ -61,7 +61,8 @@ def master_ports() -> set[str]:
             value = os.environ.get(f"RC_WHEEL_{module}_PORT", "").strip()
             if value:
                 ports |= {value, _real(value)}
-        for chunk in (os.environ.get("RC_SLAM_PORTS") or "").split(","):
+        for chunk in ((os.environ.get("RC_SLAM_PORTS") or "") + "," +
+                      (os.environ.get("RC_WHEEL_PORTS") or "")).split(","):
             chunk = chunk.strip()
             if chunk:
                 ports |= {chunk, _real(chunk)}
@@ -295,8 +296,14 @@ def save_port(port: str, env_path: Path | None = None) -> str:
     return port
 
 
-def apply_port(manager, port: str, env_path: Path | None = None) -> dict[str, Any]:
-    """Проверить, сохранить в .env и сразу переподключить BMS (пустой порт — отключить)."""
+def apply_port(manager, port: str, env_path: Path | None = None, *,
+               operator_confirmed: bool = False) -> dict[str, Any]:
+    """Проверить, сохранить в .env и сразу переподключить BMS (пустой порт — отключить).
+
+    ``operator_confirmed`` используется страницей «Устройства»: оператор сам
+    назначает порт, поэтому проверка «порт уже прочёсан владельцем колёс» не
+    требуется. Порты колёс, лидара и принтера по-прежнему запрещены.
+    """
     port = (port or "").strip()
     if port:
         if not os.path.exists(port):
@@ -313,7 +320,10 @@ def apply_port(manager, port: str, env_path: Path | None = None) -> dict[str, An
             raise ValueError("это порт колеса")
         if getattr(manager, "_requires_wheel_check", False):
             source = getattr(manager, "_manual_source", None)
-            if source is None or not source.manual_bms_port_allowed(port):
+            allowed = bool(source is not None and source.manual_bms_port_allowed(port))
+            if not allowed and operator_confirmed and source is not None:
+                allowed = bool(getattr(source, "operator_assigned_port_allowed", lambda *_: False)(port, "bms"))
+            if not allowed:
                 raise ValueError("порт ещё не проверен или занят колесом/лидаром")
         from .lidar import port_locked_by_other
         old = getattr(manager, "port", "") or ""

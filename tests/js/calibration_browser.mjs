@@ -10,7 +10,13 @@ if (!modules || !onboard || !remote) throw new Error('browser modules and two UR
 const require = createRequire(import.meta.url);
 const {chromium} = require(join(modules, 'playwright-core'));
 const chrome = (await import(join(modules, '@sparticuz/chromium/build/index.js'))).default;
-const {inflate} = await import(join(modules, '@sparticuz/chromium/build/lambdafs.js'));
+// @sparticuz/chromium exports differ between versions: older ones export a
+// standalone inflate(), newer ones a LambdaFS class with a static inflate().
+const lambdafs = await import(join(modules, '@sparticuz/chromium/build/lambdafs.js'));
+const lambdaFS = lambdafs.default?.default || lambdafs.default;
+const inflate = typeof lambdafs.inflate === 'function' ? lambdafs.inflate
+  : (typeof lambdaFS?.inflate === 'function' ? lambdaFS.inflate.bind(lambdaFS) : null);
+assert(inflate, 'unsupported @sparticuz/chromium lambdafs version');
 await inflate(join(modules, '@sparticuz/chromium/bin/al2023.tar.br'));
 process.env.LD_LIBRARY_PATH = '/tmp/al2023/lib' + (process.env.LD_LIBRARY_PATH ? ':' + process.env.LD_LIBRARY_PATH : '');
 const browser = await chromium.launch({executablePath: await chrome.executablePath(), headless: true,

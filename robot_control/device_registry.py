@@ -352,6 +352,27 @@ class DeviceRegistry:
         self._refresh_priorities(topology)
         return {"ok": True, "role": role, "hint": copy.deepcopy(hint)}
 
+    def clear_hint(self, role: str) -> dict:
+        """Убрать подсказку роли; назначение порта остаётся в настройках (.env)."""
+        if role not in ROLES:
+            raise ValueError("Неизвестное устройство")
+        with self._lock:
+            if role not in self._data["hints"]:
+                return {"ok": True, "role": role, "hint": None}
+            previous = copy.deepcopy(self._data)
+            self._data["hints"].pop(role, None)
+            try:
+                self._save_locked()
+            except OSError:
+                self._data = previous
+                raise
+            self._fast_hints = copy.deepcopy(self._data["hints"])
+        try:
+            self._refresh_priorities(self.usb())
+        except Exception:  # noqa: BLE001 — подсказка уже удалена
+            pass
+        return {"ok": True, "role": role, "hint": None}
+
     def confirm_camera(self, role: str, cameras: list) -> dict:
         """Record the operator's visual confirmation, never an inferred role."""
         if role not in {"camera_" + key for key in WHEELS}:
@@ -481,6 +502,12 @@ class DeviceRegistry:
                  kinect: dict | None = None, refresh: bool = False) -> dict:
         """Combine producer snapshots. Missing/error snapshots are never cached as live."""
         now = self.clock()
+        try:
+            from .device_ports import ROLE_ENV as _manual_roles, role_port as _manual_port
+            from .device_ports import wheel_ports as _manual_wheels
+        except Exception:  # noqa: BLE001 — страница работает и без настроек
+            _manual_roles, _manual_port = {}, lambda role: ""
+            _manual_wheels = lambda: []
         topology = self.usb(refresh=refresh)
         hints, remembered = self.records()
         wheels = wheels if isinstance(wheels, dict) else {}
@@ -704,6 +731,13 @@ class DeviceRegistry:
             item["detail"] = "Принтер не распознан по USB-классу; модель и способ подключения неизвестны."
         entries.append(item)
 
+        # Ручное назначение видно на карточке отдельно от подтверждения:
+        # сохранённый путь — решение оператора, а не доказательство типа.
+        for item in entries:
+            if item["id"] in _manual_roles:
+                item["assignedPort"] = _manual_port(item["id"]) or None
+        wheels_manual = [port for port in _manual_wheels() if port]
+
         self.remember(updates, topology)
         # Expose candidate lists, never as proof or a whitelist. Suppress hubs
         # and root controllers; one USB device may have many V4L2 interfaces.
@@ -725,6 +759,7 @@ class DeviceRegistry:
         return {"ok": True, "generatedAt": now, "usbAvailable": bool(topology.get("available")),
                 "storageError": self.error or None, "devices": entries, "options": options,
                 "wheelDiscovery": {"ready": bool(master.get("ready")), "error": master.get("error"),
+                                   "manual": True, "manualPorts": wheels_manual,
                                    "unclassified": master.get("unclassified") or [],
                                    "excluded": master.get("excluded") or [],
                                    "candidates": master.get("candidates") or []}}
