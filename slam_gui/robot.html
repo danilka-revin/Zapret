@@ -96,7 +96,7 @@
               <header class="mod-head"><b class="mod-id">FL</b><span class="chip idle" id="mod-state-FL">—</span></header>
               <div class="wheel-port"><span>USB</span><span id="usb-port-FL">—</span></div>
               <div class="mod-metrics">
-                <div class="metric"><span class="metric-label">°</span><span class="metric-value"><b id="angle-FL">—</b></span></div>
+                <div class="metric"><span class="metric-label" id="angle-source-FL">угол · —</span><span class="metric-value"><b id="angle-FL">—</b></span></div>
                 <div class="metric"><span class="metric-label">об/м</span><span class="metric-value"><b id="rpm-FL">—</b></span></div>
                 <div class="metric"><span class="metric-label">°C</span><span class="metric-value"><b id="temp-FL">—</b></span></div>
               </div>
@@ -118,7 +118,7 @@
               <header class="mod-head"><b class="mod-id">FR</b><span class="chip idle" id="mod-state-FR">—</span></header>
               <div class="wheel-port"><span>USB</span><span id="usb-port-FR">—</span></div>
               <div class="mod-metrics">
-                <div class="metric"><span class="metric-label">°</span><span class="metric-value"><b id="angle-FR">—</b></span></div>
+                <div class="metric"><span class="metric-label" id="angle-source-FR">угол · —</span><span class="metric-value"><b id="angle-FR">—</b></span></div>
                 <div class="metric"><span class="metric-label">об/м</span><span class="metric-value"><b id="rpm-FR">—</b></span></div>
                 <div class="metric"><span class="metric-label">°C</span><span class="metric-value"><b id="temp-FR">—</b></span></div>
               </div>
@@ -128,7 +128,7 @@
               <header class="mod-head"><b class="mod-id">RL</b><span class="chip idle" id="mod-state-RL">—</span></header>
               <div class="wheel-port"><span>USB</span><span id="usb-port-RL">—</span></div>
               <div class="mod-metrics">
-                <div class="metric"><span class="metric-label">°</span><span class="metric-value"><b id="angle-RL">—</b></span></div>
+                <div class="metric"><span class="metric-label" id="angle-source-RL">угол · —</span><span class="metric-value"><b id="angle-RL">—</b></span></div>
                 <div class="metric"><span class="metric-label">об/м</span><span class="metric-value"><b id="rpm-RL">—</b></span></div>
                 <div class="metric"><span class="metric-label">°C</span><span class="metric-value"><b id="temp-RL">—</b></span></div>
               </div>
@@ -140,7 +140,7 @@
               <header class="mod-head"><b class="mod-id">RR</b><span class="chip idle" id="mod-state-RR">—</span></header>
               <div class="wheel-port"><span>USB</span><span id="usb-port-RR">—</span></div>
               <div class="mod-metrics">
-                <div class="metric"><span class="metric-label">°</span><span class="metric-value"><b id="angle-RR">—</b></span></div>
+                <div class="metric"><span class="metric-label" id="angle-source-RR">угол · —</span><span class="metric-value"><b id="angle-RR">—</b></span></div>
                 <div class="metric"><span class="metric-label">об/м</span><span class="metric-value"><b id="rpm-RR">—</b></span></div>
                 <div class="metric"><span class="metric-label">°C</span><span class="metric-value"><b id="temp-RR">—</b></span></div>
               </div>
@@ -738,6 +738,7 @@
               <header><b>FL<small>Переднее левое</small></b><span id="steer-state-FL" class="steer-state">—</span></header>
               <div class="wheel-port"><span>USB</span><span id="steer-usb-port-FL">—</span></div>
               <div class="steer-readout"><span>Сейчас <b id="steer-current-FL">—</b></span><span>Цель <output id="steer-target-FL">0°</output></span></div>
+              <div class="steer-angle-source" id="steer-angle-source-FL">нет свежих данных</div>
               <div class="steer-meta"><span id="steer-home-FL" data-home="none">ноль: —</span><span id="steer-opto-FL" data-opto="unknown">датчик: —</span></div>
               <input id="steer-slider-FL" data-steer-slider="FL" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол переднего левого рулевого модуля" disabled />
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
@@ -769,6 +770,7 @@
               <header><b>FR<small>Переднее правое</small></b><span id="steer-state-FR" class="steer-state">—</span></header>
               <div class="wheel-port"><span>USB</span><span id="steer-usb-port-FR">—</span></div>
               <div class="steer-readout"><span>Сейчас <b id="steer-current-FR">—</b></span><span>Цель <output id="steer-target-FR">0°</output></span></div>
+              <div class="steer-angle-source" id="steer-angle-source-FR">нет свежих данных</div>
               <div class="steer-meta"><span id="steer-home-FR" data-home="none">ноль: —</span><span id="steer-opto-FR" data-opto="unknown">датчик: —</span></div>
               <input id="steer-slider-FR" data-steer-slider="FR" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол переднего правого рулевого модуля" disabled />
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
@@ -800,6 +802,7 @@
               <header><b>RL<small>Заднее левое</small></b><span id="steer-state-RL" class="steer-state">—</span></header>
               <div class="wheel-port"><span>USB</span><span id="steer-usb-port-RL">—</span></div>
               <div class="steer-readout"><span>Сейчас <b id="steer-current-RL">—</b></span><span>Цель <output id="steer-target-RL">0°</output></span></div>
+              <div class="steer-angle-source" id="steer-angle-source-RL">нет свежих данных</div>
               <div class="steer-meta"><span id="steer-home-RL" data-home="none">ноль: —</span><span id="steer-opto-RL" data-opto="unknown">датчик: —</span></div>
               <input id="steer-slider-RL" data-steer-slider="RL" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол заднего левого рулевого модуля" disabled />
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
@@ -831,6 +834,7 @@
               <header><b>RR<small>Заднее правое</small></b><span id="steer-state-RR" class="steer-state">—</span></header>
               <div class="wheel-port"><span>USB</span><span id="steer-usb-port-RR">—</span></div>
               <div class="steer-readout"><span>Сейчас <b id="steer-current-RR">—</b></span><span>Цель <output id="steer-target-RR">0°</output></span></div>
+              <div class="steer-angle-source" id="steer-angle-source-RR">нет свежих данных</div>
               <div class="steer-meta"><span id="steer-home-RR" data-home="none">ноль: —</span><span id="steer-opto-RR" data-opto="unknown">датчик: —</span></div>
               <input id="steer-slider-RR" data-steer-slider="RR" type="range" min="-100" max="100" step="1" value="0" aria-label="Целевой угол заднего правого рулевого модуля" disabled />
               <div class="steer-range-labels" data-steer-range-labels><span>−100° ← влево</span><span>прямо</span><span>вправо → +100°</span></div>
@@ -883,7 +887,7 @@
               <label>Тяга, % шкалы Servo <output id="keyboard-speed-value">20</output><input id="keyboard-speed" type="range" min="1" max="100" step="1" value="20"></label>
               <button id="keyboard-stop" type="button" class="traction-stop">СТОП WASD</button>
             </div>
-            <small>W/S/A/D выбирают направление колёс, ↑ включает движение по нему, ↓ — обратно. Стрелки ← / → разворачивают робота на месте, пока их удерживают; при отпускании тяга выключается. Разворот работает отдельно от ↑ / ↓: при одновременном нажатии несовместимых стрелок отпустите все стрелки перед следующим движением. После настройки мышью стрелки снова управляют движением; при настройке клавиатурой нажмите Esc для выхода из поля. В «крабе» A/D выставляют колёса боком, сочетания дают диагональ; противоположная сторона использует обратное вращение. В обычном режиме A/D поворачивают передние и задние колёса в противоположные стороны, отпускание возвращает руль прямо. Руление возможно на ходу; перед сменой направления вращения система тормозит. Нужна fw20 или новее на всех платах. Первые проверки — с вывешенными колёсами и независимым E-STOP.</small>
+            <small>W/S/A/D выбирают направление колёс, ↓ включает движение по нему, ↑ — обратно (направления стрелок реверсированы). Стрелки ← / → разворачивают робота на месте, пока их удерживают; при отпускании тяга выключается. Разворот работает отдельно от ↑ / ↓: при одновременном нажатии несовместимых стрелок отпустите все стрелки перед следующим движением. После настройки мышью стрелки снова управляют движением; при настройке клавиатурой нажмите Esc для выхода из поля. В «крабе» A/D выставляют колёса боком, сочетания дают диагональ; противоположная сторона использует обратное вращение. В обычном режиме A/D поворачивают передние и задние колёса в противоположные стороны, отпускание возвращает руль прямо. Руление возможно на ходу; перед сменой направления вращения система тормозит. Нужна fw20 или новее на всех платах. Первые проверки — с вывешенными колёсами и независимым E-STOP.</small>
             <small id="keyboard-spin-geometry">Углы разворота появятся после включения управления.</small>
             <div id="keyboard-status" role="status" aria-live="polite">WASD выключено.</div>
           </section>
@@ -1259,7 +1263,7 @@
     </section>
   </div>
 
-  <script src="/robot_model.js"></script><script src="lidar_view.js"></script>
+  <script src="/wheel_angle.js"></script><script src="/robot_model.js"></script><script src="lidar_view.js"></script>
   <script src="wheel_ports.js"></script>
   <script src="steer_presets.js"></script>
   <script src="viewport.js"></script>

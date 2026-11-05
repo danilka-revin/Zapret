@@ -372,6 +372,7 @@ function load(name) {
   const file = path.join(ROOT, 'slam_gui', name);
   vm.runInThisContext(fs.readFileSync(file, 'utf8'), { filename: file });
 }
+load('wheel_angle.js');
 load('robot_model.js');
 load('wheel_ports.js');
 load('steer_presets.js');      // как в robot.html: общий модуль грузится до экрана

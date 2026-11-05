@@ -150,6 +150,31 @@
     row.append(card.input, card.save, card.clear); form.append(row, card.datalist);
     card.hint = element('p', 'hint-caption'); form.appendChild(card.hint);
     card.message = element('p', 'hint-message'); card.message.setAttribute('role', 'status'); form.appendChild(card.message);
+    if (role === 'lidar') {
+      const instructions = element('p', 'detail', 'Молчащий LDS‑01/LDS‑02: сначала физически проследите кабель до USB‑UART и укажите его порт выше. Запуск доступен только на бортовом экране и может включить вращение лидара. USB-автопоиск экспериментальный: не эксплуатируйте робота до устранения известных гонок USB.');
+      card.lidarStart = element('button', 'confirm', 'Проверить и запустить LDS‑01');
+      card.lidarStart.type = 'button';
+      card.lidarStart.hidden = true; // shown only after the local kiosk is identified
+      session.then(token => { if (!token) card.lidarStart.hidden = false; }).catch(() => {});
+      card.lidarStart.addEventListener('click', async () => {
+        const port = card.input.value.trim();
+        card.lidarStart.disabled = true;
+        try {
+          card.message.textContent = 'Проверяем текущий USB-порт…';
+          const prepared = await post('/api/devices/lidar/prepare', {port});
+          const confirmed = window.confirm('Проверьте кабель ФИЗИЧЕСКИ: ' + prepared.port + ' → ' + prepared.device +
+            '. Это именно LDS‑01/LDS‑02 (HLS‑LFCD2) на 230400 бод, а не колесо, BMS или принтер? ' +
+            'После подтверждения будет отправлен один байт запуска и лидар может начать вращаться.');
+          if (!confirmed) { card.message.textContent = 'Запуск отменён; команду не отправляли.'; return; }
+          card.message.textContent = 'Запускаем и ждём проверенные кадры LDS‑01…';
+          const result = await post('/api/devices/lidar/start', {token: prepared.token, confirmed: true});
+          card.message.textContent = result.message + (result.rescanError ? ' Перезапуск драйвера: ' + result.rescanError : '');
+          await refresh(true);
+        } catch (err) { card.message.textContent = err.message || 'Не удалось проверить LDS‑01.'; }
+        finally { card.lidarStart.disabled = false; }
+      });
+      card.lidarInstructions = instructions;
+    }
     async function save(port) {
       card.save.disabled = card.clear.disabled = true;
       card.message.textContent = 'Сохраняем…';
@@ -171,6 +196,7 @@
       void save('');
     });
     body.appendChild(form);
+    if (card.lidarStart) body.append(card.lidarInstructions, card.lidarStart);
     const container = role.startsWith('wheel_') ? $('wheel-cards') : role.startsWith('camera_') ? $('camera-cards') : $('other-cards');
     container.appendChild(root);
     cards.set(role, card);

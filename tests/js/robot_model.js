@@ -8,6 +8,7 @@ const events = {};
 const localStorage = { getItem: key => stored[key] || null, setItem: (key, value) => { stored[key] = value; } };
 const sandbox = { window: { addEventListener: (name, callback) => { events[name] = callback; } }, localStorage, Date, Math, Number, String, Array };
 vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../../slam_gui/wheel_angle.js'), 'utf8'), sandbox);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../../slam_gui/robot_model.js'), 'utf8'), sandbox);
 const model = sandbox.window.RCRobotModel;
 const angles = [24, -18, 7.5, -3];
@@ -23,6 +24,24 @@ const live = model.state(10001);
 assert.deepEqual(Array.from(live.wheels, w => w.angle), angles);
 assert.equal(live.driving, true);
 assert.equal(live.speed, .25);
+assert.ok(live.wheels.every(w => w.angleSource === 'steps'));
+// The picture uses the same distinct A0 reading as the cards, while stale,
+// disabled, and old-firmware samples remain labelled step estimates.
+const fl = payload.motors.find(w => w.id === 'FL');
+Object.assign(fl, {firmware: 26, pot: true, potMode: true, fullZeroFault: false, potAngle: -8.25});
+model.update(payload, 10000);
+assert.equal(model.state(10001).wheels[0].angle, -8.25);
+assert.equal(model.state(10001).wheels[0].angleSource, 'pot');
+assert.match(model.summary(model.state(10001)).rows[0], /FL -8\.3° A0/);
+fl.pot = false;
+model.update(payload, 10000);
+assert.equal(model.state(10001).wheels[0].angle, 24);
+assert.equal(model.state(10001).wheels[0].angleSource, 'steps');
+fl.pot = true;
+model.update(payload, 10000);
+assert.equal(model.state(13000).wheels[0].angle, null);
+delete fl.firmware; delete fl.pot; delete fl.potMode; delete fl.fullZeroFault; delete fl.potAngle;
+model.update(payload, 10000);
 
 const operations = [];
 const ctx = new Proxy({}, {

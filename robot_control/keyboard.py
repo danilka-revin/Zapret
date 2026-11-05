@@ -28,9 +28,11 @@ class KeyboardControl:
     TELEMETRY_AGE_S = 0.75
     SC_SILENCE_S = 3.0
     ANGLE_TOLERANCE_DEG = 1.5
-    # Telemetry is reported in hundredths of a degree. For a pivot, don't
-    # silently reuse a wheel that is nearly a degree away from its tangent.
-    SPIN_ANGLE_TOLERANCE_DEG = 0.15
+    # The target remains the calculated tangent, but real potentiometer
+    # feedback has a 0.7° deadband (and ADC quantisation). A 0.15° gate
+    # could never arm even when the firmware had correctly finished steering.
+    # Still reject any stationary wheel over 1° away, including while moving.
+    SPIN_ANGLE_TOLERANCE_DEG = 1.0
     # A missing board ACK must not be hidden by heartbeats to the other three.
     LIVE_ACK_TTL = 0.45
     LIVE_STEER_TTL = 6.0
@@ -393,7 +395,8 @@ class KeyboardControl:
         if self.is_preempted(body):
             return {"ok": False, "reason": "stale_command"}, 409
         # Left/right arrows use opposite wheel directions. Negative percent
-        # means counter-clockwise (left), matching manoeuvres.steering_targets.
+        # means counter-clockwise in the model, matching manoeuvres.steering_targets.
+        # Physical directions still need checking with the wheels off the floor.
         wheel_percents = ({m: percent if m in ("FL", "RL") else -percent for m in MODULES}
                           if pattern == "spin" else {m: percent for m in MODULES})
         try:

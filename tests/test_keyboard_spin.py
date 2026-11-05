@@ -150,7 +150,7 @@ def test_spin_requires_exact_plan_close_actual_angles_and_the_right_permit():
     token, geometry = session(ctl)
     angles = geometry["angles"]
     assert send(ctl, token, 1, "steer_all", pattern="spin", angles=angles)[0]["ok"]
-    source.motors["RR"]["angle"] += 0.3  # old 1.5° tolerance is not enough
+    source.motors["RR"]["angle"] += 1.01  # still reject a wheel outside the 1° bound
     result, _ = send(ctl, token, 2, "arm", pattern="spin", direction=-1, angles=angles)
     assert result["reason"] == "steering_changed" and not source.commanded_modules
 
@@ -159,6 +159,25 @@ def test_spin_requires_exact_plan_close_actual_angles_and_the_right_permit():
     # A spin permit cannot be used to energize all boards in the same direction.
     result, _ = send(ctl, token, 3, "live", percent=-20, angles=geometry["angles"], permit=permit)
     assert result["reason"] == "keyboard_expired" and not source.commanded_modules
+
+
+def test_pivot_accepts_realistic_potentiometer_residual_but_still_requires_all_wheels():
+    source, clock = LiveWheels(), Clock()
+    ctl = controller(source, clock)
+    token, geometry = session(ctl)
+    angles = geometry["angles"]
+    assert send(ctl, token, 1, "steer_all", pattern="spin", angles=angles)[0]["ok"]
+    for m in source.motors.values():
+        m["angle"] += 0.6
+    armed, _ = send(ctl, token, 2, "arm", pattern="spin", direction=1, angles=angles)
+    assert armed["ok"], armed
+    assert send(ctl, token, 3, "live", pattern="spin", percent=20, angles=angles,
+                permit=armed["permit"])[0]["ok"]
+    source.pulses()
+    clock.now += 0.1
+    assert send(ctl, token, 4, "live", pattern="spin", percent=20, angles=angles)[0]["ok"]
+    assert send(ctl, token, 5, "stop")[0]["ok"]
+    assert not source.commanded_modules
 
 
 def test_missing_geometry_or_individual_drive_disables_only_spin():
@@ -269,7 +288,7 @@ def test_spin_stops_if_confirmed_angle_drifts_beyond_tolerance():
     assert launch(ctl, token, geometry)[0]["ok"]
     clock.now += 0.1
     source.pulses()
-    source.motors["RR"]["angle"] += 0.2
+    source.motors["RR"]["angle"] += 1.01
     reply, _ = send(ctl, token, 4, "live", pattern="spin", percent=-20, angles=geometry["angles"])
     assert reply["reason"] == "steering_changed" and not source.commanded_modules
 

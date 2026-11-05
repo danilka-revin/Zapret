@@ -8,6 +8,28 @@ const browser = await chromium.launch({executablePath: process.env.RC_TEST_CHROM
 const page = await browser.newPage({viewport: {width: 1200, height: 900}});
 page.setDefaultTimeout(8000);
 const actions = [], responses = [], errors = [];
+let routeMode = 'normal', resolveIntercept = null, firstDelayed = false;
+let beginCount = 0, endCount = 0;
+// Avoid modifying Chromium's routing while keyboard and telemetry traffic is
+// active: that can let the target BEGIN/ARM/STOP bypass interception entirely.
+await page.route('**/api/kiosk_keyboard', async route => {
+  const action = route.request().postDataJSON().action;
+  if (routeMode === 'begin' && action === 'begin') {
+    resolveIntercept();
+    await new Promise(resolve => setTimeout(resolve, 300));
+  } else if (routeMode === 'lifecycle') {
+    if (action === 'begin' && ++beginCount === 1) {
+      resolveIntercept();
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    if (action === 'end' && ++endCount === 1) await new Promise(resolve => setTimeout(resolve, 250));
+  } else if (routeMode === action && !firstDelayed) {
+    firstDelayed = true;
+    resolveIntercept();
+    await new Promise(resolve => setTimeout(resolve, 300));
+  }
+  await route.continue().catch(() => {});
+});
 async function expectRequest(promise, label) {
   let timer;
   try {
@@ -51,7 +73,6 @@ const disabled = () => page.waitForFunction(() => document.getElementById('keybo
 const focusButton = () => page.locator('#keyboard-enable').focus();
 const assertNoLive = (since, message) => assert.ok(!actions.slice(since).some(a => a.action === 'live'),
   message + ': ' + JSON.stringify(actions.slice(since)));
-const pattern = '**/api/kiosk_keyboard';
 let failure, stage = 'setup';
 try {
   await page.goto(origin + '/main.html', {waitUntil: 'domcontentloaded'});
@@ -61,29 +82,22 @@ try {
 
   stage = 'quick BEGIN';
   // A key tapped while BEGIN is delayed must NOT start after it is released.
-  let sawBegin;
-  const beginIntercepted = new Promise(resolve => { sawBegin = resolve; });
-  await page.route(pattern, async route => {
-    if (route.request().postDataJSON().action === 'begin') {
-      sawBegin();
-      await new Promise(resolve => setTimeout(resolve, 300));
-    }
-    await route.continue();
-  });
+  const beginIntercepted = new Promise(resolve => { resolveIntercept = resolve; });
+  routeMode = 'begin';
   const quick = actions.length;
   await page.locator('#keyboard-enable').click();
   await expectRequest(beginIntercepted, 'delayed BEGIN');
   await page.keyboard.down('ArrowUp');
   await page.keyboard.up('ArrowUp');
   await enabled();
-  await page.unroute(pattern);
+  routeMode = 'normal';
   await page.waitForTimeout(400);
   await sign(0);
   assertNoLive(quick, 'released key started after enabling');
 
   // A held key DOES start as soon as the safe BEGIN/ACK/permit chain finishes.
   await page.keyboard.down('ArrowUp');
-  await sign(1);
+  await sign(-1);
   await page.keyboard.up('ArrowUp');
   await settled();
 
@@ -96,7 +110,7 @@ try {
   assert.notEqual(await page.evaluate(() => document.activeElement.id), 'keyboard-mode');
   const afterMouseMode = actions.length;
   await page.keyboard.down('ArrowUp');
-  await sign(1);
+  await sign(-1);
   assert.ok(actions.slice(afterMouseMode).some(a => a.action === 'live'));
   await page.keyboard.up('ArrowUp');
   await settled();
@@ -126,7 +140,7 @@ try {
   assertNoLive(keyboardSlider, 'editing slider generated traction');
   await page.keyboard.press('Escape');
   await page.keyboard.down('ArrowUp');
-  await sign(1);
+  await sign(-1);
   await page.keyboard.up('ArrowUp');
   await settled();
 
@@ -159,24 +173,15 @@ try {
   stage = 'late ARM and live';
   // An ARM delivered after release must not start, even when the reply arrives.
   for (const delayedAction of ['arm', 'live']) {
-    let sawDelayed;
-    const delayed = new Promise(resolve => { sawDelayed = resolve; });
-    let first = true;
-    await page.route(pattern, async route => {
-      const action = route.request().postDataJSON().action;
-      if (first && action === delayedAction) {
-        first = false;
-        sawDelayed();
-        await new Promise(resolve => setTimeout(resolve, 300));
-      }
-      await route.continue();
-    });
+    const delayed = new Promise(resolve => { resolveIntercept = resolve; });
+    firstDelayed = false;
+    routeMode = delayedAction;
     const at = actions.length;
     await page.keyboard.down('ArrowUp');
     await expectRequest(delayed, delayedAction);
     await page.keyboard.up('ArrowUp');
     await page.waitForTimeout(650);
-    await page.unroute(pattern);
+    routeMode = 'normal';
     await settled();
     assert.equal(await page.locator('#keyboard-enable').getAttribute('aria-pressed'), 'true',
       'late ' + delayedAction + ' disabled WASD: ' + await page.locator('#keyboard-status').textContent());
@@ -192,16 +197,16 @@ try {
   // Conflicting arrows brake; releasing Up leaves Down held and reverses only
   // after the tagged STOP, four ACKs, stopped SC and a new permit.
   await page.keyboard.down('ArrowUp');
-  await sign(1);
+  await sign(-1);
   const reverse = actions.length;
   await page.keyboard.down('ArrowDown');
   await sign(0);
   await page.keyboard.up('ArrowUp');
-  await sign(-1);
+  await sign(1);
   const reversal = actions.slice(reverse);
   const stop = reversal.findIndex(a => a.action === 'stop');
-  const arm = reversal.findIndex(a => a.action === 'arm' && a.direction === -1);
-  const live = reversal.findIndex(a => a.action === 'live' && a.percent < 0);
+  const arm = reversal.findIndex(a => a.action === 'arm' && a.direction === 1);
+  const live = reversal.findIndex(a => a.action === 'live' && a.percent > 0);
   assert.ok(stop >= 0 && arm > stop && live > arm, JSON.stringify(reversal));
   await page.keyboard.up('ArrowDown');
   await settled();
@@ -215,7 +220,7 @@ try {
   await page.keyboard.down('d');
   await poll(data => data.motors.some(m => m.moving));
   await page.keyboard.down('ArrowUp');
-  await poll(data => data.motors.every(m => m.online && m.drivePercent > 0 && !m.moving && Math.abs(m.angle - 90) <= 1.5));
+  await poll(data => data.motors.every(m => m.online && m.drivePercent < 0 && !m.moving && Math.abs(m.angle - 90) <= 1.5));
   const prepared = actions.slice(steering);
   const steerIndex = prepared.findIndex(a => a.action === 'steer_all');
   const driveIndex = prepared.findIndex(a => a.action === 'live');
@@ -250,7 +255,7 @@ try {
   await page.waitForTimeout(4200);
   const oldBrake = actions.length;
   await page.keyboard.down('ArrowUp');
-  await sign(1);
+  await sign(-1);
   const refreshed = actions.slice(oldBrake);
   assert.ok(refreshed.findIndex(a => a.action === 'stop') >= 0 &&
     refreshed.findIndex(a => a.action === 'arm') > refreshed.findIndex(a => a.action === 'stop'), JSON.stringify(refreshed));
@@ -262,18 +267,9 @@ try {
   stage = 'session lifecycle';
   // Disable/re-enable during an in-flight BEGIN: old END must finish before
   // the new BEGIN, and a key still held during opening should take effect.
-  let markFirstBegin;
-  const firstBegin = new Promise(resolve => { markFirstBegin = resolve; });
-  let beginCount = 0, endCount = 0;
-  await page.route(pattern, async route => {
-    const action = route.request().postDataJSON().action;
-    if (action === 'begin' && ++beginCount === 1) {
-      markFirstBegin();
-      await new Promise(resolve => setTimeout(resolve, 300));
-    }
-    if (action === 'end' && ++endCount === 1) await new Promise(resolve => setTimeout(resolve, 250));
-    await route.continue();
-  });
+  const firstBegin = new Promise(resolve => { resolveIntercept = resolve; });
+  beginCount = endCount = 0;
+  routeMode = 'lifecycle';
   const lifecycle = actions.length;
   const replyStart = responses.length;
   await page.locator('#keyboard-enable').click();
@@ -282,7 +278,7 @@ try {
   await page.locator('#keyboard-enable').click();
   await page.keyboard.down('ArrowUp');
   await enabled();
-  await sign(1);
+  await sign(-1);
   const life = actions.slice(lifecycle);
   const begins = life.filter(a => a.action === 'begin');
   const oldEnd = life.find(a => a.action === 'end');
@@ -290,7 +286,7 @@ try {
   assert.equal(begins.length, 2, JSON.stringify(life));
   assert.ok(oldEnd && endReply && endReply.status === 200 && endReply.at <= begins[1].at,
     'new BEGIN overtook old END: ' + JSON.stringify({life, endReply}));
-  await page.unroute(pattern);
+  routeMode = 'normal';
   await page.keyboard.up('ArrowUp');
   await settled();
   assert.deepEqual(errors, []);

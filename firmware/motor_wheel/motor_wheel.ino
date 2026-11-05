@@ -235,7 +235,7 @@ const uint32_t TACH_MIN_SILENCE_US = 300000UL;
 // v21: короткая полная телеметрия с CRC и совместимый подробный кадр.
 // Старое поле tach остаётся выключенным для совместимости со старым сервером.
 // v24: команда ph — активное удержание угла по потенциометру, бит 0x8000 и ph=
-const uint8_t FIRMWARE_PROTOCOL = 25;          // нейтраль удалена, n только тормозит
+const uint8_t FIRMWARE_PROTOCOL = 26;          // отдельный угол A0, deg по-прежнему шаги
 
 // ---- состояние руля (общие с прерыванием поля — volatile) ----
 volatile int32_t current_step = 0;
@@ -245,6 +245,10 @@ volatile bool pulse_high = false;
 volatile int8_t step_dir = 1;
 volatile uint8_t half_period_ticks = 1;
 volatile uint8_t tick_count = 0;
+// Loop-owned marker: only an autonomous ph correction may be aborted on A0
+// loss without confusing it with a later explicit steering/drive command.
+// Cleared on every halt/new motor command.
+bool pot_hold_correction_active = false;
 
 // Прерывание считает принятые переходы и интервалы. Счётчик монотонный по
 // модулю 2^32, сбрасывается только при перезагрузке; знак SC не измеряет.
@@ -707,6 +711,7 @@ bool motorBusy() {
 
 // Остановить ход из loop(). Начатый импульс прерывание доведёт за ≤ 50 мкс.
 void haltMotor() {
+  pot_hold_correction_active = false;
   noInterrupts();
   is_moving = false;
   opto_watch = OPTO_WATCH_NONE;
@@ -821,7 +826,9 @@ void updatePot() {
     pot_raw = (int16_t)(((int32_t)pot_raw * ((1 << POT_FILTER_SHIFT) - 1) + raw +
                          (1 << (POT_FILTER_SHIFT - 1))) >> POT_FILTER_SHIFT);
   }
-  pot_railed = potRawOnRail(pot_raw);
+  // Fail closed immediately on a raw rail; waiting for the EMA to reach a
+  // rail would let an active correction continue on a disconnected sensor.
+  pot_railed = potRawOnRail(raw) || potRawOnRail(pot_raw);
 }
 
 float potAngleDeg() {
@@ -863,7 +870,12 @@ float potSlopeFromEeprom() {
   }
   float slope;
   memcpy(&slope, bytes, sizeof(slope));
-  if (slope < POT_CAL_MIN_COUNTS_PER_DEG || slope > POT_CAL_MAX_COUNTS_PER_DEG) return 0.0f;
+  // q допускает оба направления подключения крайних выводов. Проверять надо
+  // модуль наклона и конечность: иначе отрицательный наклон теряется после
+  // перезагрузки, а повреждённый EEPROM с NaN обходит обычные сравнения.
+  const float magnitude = fabsf(slope);
+  if (!isfinite(slope) || magnitude < POT_CAL_MIN_COUNTS_PER_DEG ||
+      magnitude > POT_CAL_MAX_COUNTS_PER_DEG) return 0.0f;
   return slope;
 }
 
@@ -884,7 +896,7 @@ void potSlopeForget() {
 
 void potBootNote() {
   const float saved_slope = potSlopeFromEeprom();
-  if (saved_slope > 0.0f) {
+  if (saved_slope != 0.0f) {  // 0 — ошибка EEPROM; допустимы оба знака q
     pot_counts_per_degree = saved_slope;
     pot_calibrated = true;
   }
@@ -1036,7 +1048,7 @@ void updatePotCalibration() {
     case POT_CAL_BACK:
       pot_cal_state = POT_CAL_IDLE;
       if (pot_cal_ok) {
-        note(PSTR("Потенциометр: калибровка завершена, доводка включена"));
+        note(PSTR("Потенциометр: калибровка завершена; разовая доводка готова, активное удержание — ph 1"));
       }
       break;
     default:
@@ -1143,7 +1155,7 @@ void updateFeedback() {
 // поправка удержания её не переписывает.
 bool potHoldAllowed() {
   return pot_hold && pot_enabled && pot_calibrated && pot_zero_valid && !pot_railed &&
-         !motorBusy() && !feedback_pending && drive_percent == 0 &&
+         !full_zero_storage_fault && !motorBusy() && !feedback_pending && drive_percent == 0 &&
          calib_state == CAL_IDLE && pot_cal_state == POT_CAL_IDLE && !cycle_active &&
          !neutral_active && !neutral_inhibit;
 }
@@ -1164,8 +1176,29 @@ void stopPotHold() {
   }
 }
 
+// Never leave an autonomous hold correction running after loss of the A0
+// sample (or a full-zero memory fault). An unrelated later steering command
+// clears the marker in startMotor(), so it is not mistaken for a correction.
+void stopPotHoldOnSensorFault() {
+  const bool interrupted_correction = pot_hold_correction_active && motorBusy();
+  if (interrupted_correction) haltMotor();
+  stopPotHold();
+  if (interrupted_correction) {
+    noInterrupts();
+    target_step = current_step;
+    interrupts();
+    resume_allowed = false;
+    move_report_pending = false;
+  }
+  note(PSTR("Удержание отключено: нет сигнала A0 или ошибка памяти нуля"));
+}
+
 // ph 1: включить удержание. Калибровку, в отличие от pm, НЕ сбрасывает.
 bool startPotHold() {
+  if (full_zero_storage_fault) {
+    note(PSTR("Удержание: ошибка EEPROM полного нуля"));
+    return false;
+  }
   if (!pot_enabled) {
     note(PSTR("Удержание: сначала pm 1 — включить потенциометр"));
     return false;
@@ -1202,6 +1235,13 @@ bool startPotHold() {
 }
 
 void updatePotHold() {
+  if (pot_hold_correction_active && !motorBusy()) pot_hold_correction_active = false;
+  // ph 0 is allowed during a correction and normally lets that one pass
+  // finish, but sensor loss must stop even that already-started pass.
+  if ((pot_hold || pot_hold_correction_active) && (pot_railed || full_zero_storage_fault)) {
+    stopPotHoldOnSensorFault();
+    return;
+  }
   if (!pot_hold) return;
   // Режим потенциометра или калибровку сбросили — держать больше нечего.
   if (!pot_enabled || !pot_calibrated || !pot_zero_valid ||
@@ -1229,7 +1269,7 @@ void updatePotHold() {
   if ((int32_t)(now - pot_hold_wait_ms) < 0) return;          // механика успокаивается
 
   potMeasureRaw();
-  if (pot_railed) return;                    // край датчика — не наша забота
+  if (pot_railed) { stopPotHoldOnSensorFault(); return; }
   const float actual = potAngleDeg();
   const float wanted = (float)pot_hold_target_step / STEPS_PER_DEGREE;
   const float error = actual - wanted;
@@ -1312,6 +1352,7 @@ void updatePotHold() {
   ++pot_hold_passes;
   pot_hold_confirm_ms = 0;
   startMotor(stepNow() + correction, POT_HOLD_STEP_PERIOD_US, OPTO_WATCH_NONE);
+  pot_hold_correction_active = motorBusy();
   pot_hold_wait_ms = 0;
 }
 
@@ -2409,25 +2450,41 @@ bool appendFullZeroReply() {
   return appendCheckedFrame(line, sizeof(line), n, false);
 }
 
+// fw26 transmits the ADC-derived angle separately. 32767 is NOT an angle:
+// it means no trustworthy calibrated sample for this snapshot. Keep `deg`
+// as the step estimate so old controllers and safety checks do not silently
+// switch feedback sources. A floating wire away from the rails cannot be
+// detected by software alone; this is not a hardware integrity guarantee.
+const long POT_ANGLE_UNAVAILABLE_C = 32767L;
+long potTelemetryAngleC(uint16_t status) {
+  if (!(status & STATUS_POT) || (status & (STATUS_CALIB | STATUS_FULL_ZERO_FAULT)) || !pot_sampled) {
+    return POT_ANGLE_UNAVAILABLE_C;
+  }
+  const float angle = potAngleDeg();
+  if (!isfinite(angle) || fabsf(angle) > 180.0f) return POT_ANGLE_UNAVAILABLE_C;
+  return lroundf(angle * 100.0f);
+}
+
 // The compact record contains the same safety and diagnostic state as @TLM;
 // no acknowledgement is combined with an older steering/SC snapshot.
 bool appendFastTelemetry() {
   const uint16_t status = moduleStatus();
   const long deg_c = lroundf((float)stepNow() * 100.0f / STEPS_PER_DEGREE);
   const long tgt_c = lroundf((float)targetNow() * 100.0f / STEPS_PER_DEGREE);
+  const long pot_c = potTelemetryAngleC(status);
   const uint8_t saved_sreg = SREG;
   cli();
   const uint32_t edges = tach_edges_total;
   SREG = saved_sreg;
   char line[FAST_TELEMETRY_LINE_CAPACITY];
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@F %u %u %ld %ld %u %d %u %u %lu %u %u %lu %u %lu %lu %u %lu %lu %lu"),
+      PSTR("@F %u %u %ld %ld %u %d %u %u %lu %u %u %lu %u %lu %lu %u %lu %lu %lu %ld"),
       (unsigned)FIRMWARE_PROTOCOL, (unsigned)wheelIdentityCode(), deg_c, tgt_c, (unsigned)status, (int)drive_percent,
       (unsigned)DRIVE_MAX_PERCENT, (unsigned)drive_servo_value, (unsigned long)tach_display_rpm_x10,
       (unsigned)tach_display_hz, (unsigned)TACH_EDGES_PER_REV, (unsigned long)edges,
       (unsigned)tachMotionRecent(), (unsigned long)brake_id, (unsigned long)neutral_id,
       (unsigned)neutral_inhibit, (unsigned long)live_id, (unsigned long)live_seq,
-      (unsigned long)millis());
+      (unsigned long)millis(), pot_c);
   return appendCheckedFrame(line, sizeof(line), n, false);
 }
 
@@ -2439,6 +2496,7 @@ void appendTelemetry() {
   char line[TELEMETRY_LINE_CAPACITY];
   formatDegrees(stepNow(), deg, sizeof(deg));
   formatDegrees(targetNow(), tgt, sizeof(tgt));
+  const long pot_c = potTelemetryAngleC(status);
   const char* home = !(status & STATUS_ZERO) ? "none"
       : ((status & STATUS_HOME_OPTO) ? "opto" : "manual");
   // 32-битное чтение ISR должно быть атомарным на 8-битном AVR.
@@ -2449,7 +2507,7 @@ void appendTelemetry() {
   // Старый сервер по-прежнему видит tach=0; новый может явно использовать
   // sc_count для одометрии, не смешивая его с историческим rpm/tach.
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@TLM mod=%s deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u drive=%d fw=%u pot=%d pm=%d ph=%d zfault=%d tach=0 dmax=%u sv=%u duty=%u sc_rpm=%lu.%lu sc_hz=%u sc_ppr=%u sc_count=%lu sc_recent=%u brake_id=%lu neutral_id=%lu neutral_lock=%u live_id=%lu live_seq=%lu t=%lu"),
+      PSTR("@TLM mod=%s deg=%s tgt=%s moving=%d cal=%d cycle=%d calib=%d opto=%d home=%s err=%u drive=%d fw=%u pot=%d pm=%d ph=%d zfault=%d tach=0 dmax=%u sv=%u duty=%u sc_rpm=%lu.%lu sc_hz=%u sc_ppr=%u sc_count=%lu sc_recent=%u brake_id=%lu neutral_id=%lu neutral_lock=%u live_id=%lu live_seq=%lu t=%lu pa=%ld"),
       MODULE_ID, deg, tgt, (status & STATUS_MOVING) ? 1 : 0, (status & STATUS_ZERO) ? 1 : 0,
       (status & STATUS_CYCLE) ? 1 : 0, (status & STATUS_CALIB) ? 1 : 0, (status & STATUS_OPTO) ? 1 : 0,
       home, (unsigned)((status >> 8) & 0x0F), (int)drive_percent, (unsigned)FIRMWARE_PROTOCOL,
@@ -2462,7 +2520,7 @@ void appendTelemetry() {
       (unsigned long)(tach_display_rpm_x10 % 10), (unsigned)tach_display_hz,
       (unsigned)TACH_EDGES_PER_REV, (unsigned long)edges, (unsigned)tachMotionRecent(),
       (unsigned long)brake_id, (unsigned long)neutral_id, (unsigned)neutral_inhibit,
-      (unsigned long)live_id, (unsigned long)live_seq, (unsigned long)millis());
+      (unsigned long)live_id, (unsigned long)live_seq, (unsigned long)millis(), pot_c);
   appendCheckedFrame(line, sizeof(line), n, true);
 }
 

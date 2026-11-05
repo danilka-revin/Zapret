@@ -41,6 +41,8 @@ try {
   assert.equal(await page.locator('.card').count(), 12);
   assert.equal(await page.locator('[data-role="camera_FL"]').getAttribute('data-state'), 'warning');
   assert.equal(await page.locator('.topbar nav .remote-only').isHidden(), !remote);
+  await page.waitForFunction(() => document.body.dataset.surface === 'kiosk' || document.body.dataset.surface === 'remote');
+  assert.equal(await page.locator('[data-role="lidar"]').getByRole('button', {name: 'Проверить и запустить LDS‑01'}).isHidden(), remote);
   const theme = await page.evaluate(() => ({
     body: getComputedStyle(document.body).backgroundColor,
     card: getComputedStyle(document.querySelector('.card')).backgroundColor,

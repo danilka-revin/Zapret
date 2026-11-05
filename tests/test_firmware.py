@@ -177,7 +177,7 @@ def test_firmware_transmits_its_wheel_role_in_checked_telemetry():
     # Addressed commands remain compatible; the server verifies the role
     # before sending anything to an automatically discovered port.
     assert 'classifyModuleToken' in text
-    assert _const(text, 'FIRMWARE_PROTOCOL') == '25'
+    assert _const(text, 'FIRMWARE_PROTOCOL') == '26'
 
 
 def test_telemetry_period_and_safety_fields_are_present():
@@ -389,7 +389,7 @@ def test_fast_and_full_simulated_frames_encode_the_same_instant(simulator):
     fast = backend.parse_master_line(short, module="FR")
     slow = backend.parse_master_line(full, module="FR")
     assert fast is not None and fast == slow
-    assert fast["firmware"] == 25 and fast["mod"] == "FR" and fast["liveId"] == 42 and fast["liveSeq"] == 3
+    assert fast["firmware"] == 26 and fast["mod"] == "FR" and fast["liveId"] == 42 and fast["liveSeq"] == 3
     assert backend.parse_master_line(short) == fast
     assert backend.parse_master_line(full) == slow
     assert backend.parse_master_line(short, module="FL") is None
@@ -423,7 +423,7 @@ def test_server_parses_simulated_wheel_telemetry(simulator):
     assert set(frames) == set(MODULE_IDS)
     for module, frame in frames.items():
         assert frame["cal"] is True and frame["home"] == "opto", (module, frame)
-        assert frame["firmware"] == 25 and frame["calibError"] == 0
+        assert frame["firmware"] == 26 and frame["calibError"] == 0
         assert frame["drivePercent"] == 0 and frame["rpm"] is None
         assert frame["tach"] is False and frame["tachHz"] is None
         assert frame["scRpm"] == 0.0 and frame["scHz"] == 0 and frame["scPpr"] == 90
@@ -1039,7 +1039,8 @@ def test_keyboard_pivot_in_real_browser_through_four_simulated_boards(
     base = tmp_path / "pivot-wheel"
     process = subprocess.Popen([str(simulator), "pty", str(base)], stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True,
-                               env=dict(os.environ, RC_SIM_SC_FOLLOW_DRIVE="1"))
+                               env=dict(os.environ, RC_SIM_SC_FOLLOW_DRIVE="1",
+                                        RC_SIM_POT_PIVOT_RESIDUAL="1"))
     source = board_server = web_server = None
     threads = []
 

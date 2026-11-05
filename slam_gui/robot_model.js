@@ -69,11 +69,14 @@
     const motors = data && Array.isArray(data.motors) ? data.motors : [];
     const wheels = IDS.map(id => {
       const motor = motors.find(m => m && m.id === id) || {};
-      const valid = fresh && motor.online === true && finite(motor.angle) && Math.abs(Number(motor.angle)) <= 180;
-      const angle = valid ? Number(motor.angle) : null;
+      const reading = window.RCWheelAngle ? window.RCWheelAngle.read(motor, fresh)
+        : {value: fresh && motor.online === true && finite(motor.angle) ? Number(motor.angle) : null,
+           source: 'steps'};
+      const valid = reading.value !== null && Math.abs(reading.value) <= 180;
+      const angle = valid ? reading.value : null;
       const targetAngle = fresh && motor.online === true && finite(motor.targetAngle) && Math.abs(Number(motor.targetAngle)) <= 180
         ? Number(motor.targetAngle) : null;
-      return { id, angle, targetAngle, targetRadians: targetAngle === null ? null : targetAngle * Math.PI / 180, radians: angle === null ? null : angle * Math.PI / 180,
+      return { id, angle, angleSource: valid ? reading.source : 'unknown', targetAngle, targetRadians: targetAngle === null ? null : targetAngle * Math.PI / 180, radians: angle === null ? null : angle * Math.PI / 180,
         fault: valid && !!(motor.fault || motor.calibError),
         homed: valid && motor.homed === true, calibrating: valid && motor.calibrating === true,
         moving: valid && motor.moving === true, rpm: valid && finite(motor.rpm) ? Number(motor.rpm) : null };
@@ -145,7 +148,8 @@
 
   function summary(live = state()) {
     const status = live.estop ? 'E-STOP' : !live.fresh ? 'нет свежей телеметрии' : live.driving ? 'тяга активна' : 'тяга выключена';
-    const angles = live.wheels.map(w => w.id + ' ' + (w.angle === null ? '—' : w.angle.toFixed(1) + '°' + (w.fault ? ' ошибка' : w.calibrating ? ' калибр.' : !w.homed ? ' без нуля' : '')));
+    const angles = live.wheels.map(w => w.id + ' ' + (w.angle === null ? '—' : w.angle.toFixed(1) + '° ' +
+      (w.angleSource === 'pot' ? 'A0' : 'шаги') + (w.fault ? ' ошибка' : w.calibrating ? ' калибр.' : !w.homed ? ' без нуля' : '')));
     return { status: (live.demo ? 'ДЕМО · ' : '') + status,
       rows: [angles.slice(0, 2).join('   '), angles.slice(2).join('   ')],
       targetRows: [0, 2].map(start => live.wheels.slice(start, start + 2).map(w => w.id + ' ' + (w.targetAngle == null ? '—' : w.targetAngle.toFixed(1) + '°')).join('   ')),
@@ -164,11 +168,11 @@
     [colors.actual, colors.target].forEach((color, index) => {
       ctx.fillStyle = color;
       const rows = index === 0 ? info.rows : info.targetRows;
-      ctx.fillText((index === 0 ? 'Факт: ' : 'Цель: ') + rows[0], x + 8, y + 24 + index * 32, w - 16);
+      ctx.fillText((index === 0 ? 'Угол: ' : 'Цель: ') + rows[0], x + 8, y + 24 + index * 32, w - 16);
       ctx.fillText(rows[1], x + 8, y + 40 + index * 32, w - 16);
     });
     ctx.fillStyle = pal.text;
-    ctx.fillText('Контур — цель · заливка — факт · — нет данных', x + 8, y + 91, w - 16);
+    ctx.fillText('Контур — цель · заливка — A0 или шаги · — нет данных', x + 8, y + 91, w - 16);
     ctx.restore();
   }
 

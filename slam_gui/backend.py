@@ -101,6 +101,11 @@ DRIVE_DIRECT_FIRMWARE = 15
 #: 0x8000 / поле ``ph=`` появились в fw24. Старые платы удержания не знают —
 #: экран обязан показать «нужна прошивка», а не выдать выключенное за «выкл.».
 POT_HOLD_FIRMWARE = 24
+# fw26 adds a separate calibrated A0 angle in centidegrees. The original
+# `deg` remains the step counter used by motion/safety logic.
+POT_ANGLE_FIRMWARE = 26
+POT_ANGLE_UNAVAILABLE_C = 32767
+POT_HOLD_MAX_DEG = 15.0
 #: Бит состояния @TLM/@F «удержание включено» (firmware/motor_wheel).
 STATUS_POT_HOLD = 0x8000
 #: Разброс углов, при котором экран называет колёса ровными. Тягу он больше не
@@ -327,6 +332,19 @@ def _valid_telemetry_crc(payload, checksum):
         return False
 
 
+def _sensor_angle(raw_centidegrees, firmware, ready, calibrating):
+    """A diagnostic measurement from this same checked frame, never a motion estimate.
+
+    Missing/invalid/railed samples must not be promoted to a measured angle;
+    they also must not discard an otherwise valid drive/watchdog snapshot.
+    """
+    if (firmware is None or firmware < POT_ANGLE_FIRMWARE or not ready or calibrating
+            or not isinstance(raw_centidegrees, int)
+            or not -18000 <= raw_centidegrees <= 18000):
+        return None
+    return raw_centidegrees / 100.0
+
+
 def parse_fast_wheel_line(line, module=None):
     """Checked complete snapshot; fw22 carries the wheel role inside its CRC."""
     if len(line) > 160 or not line.startswith("@F "):
@@ -335,13 +353,18 @@ def parse_fast_wheel_line(line, module=None):
     if not sep or not _valid_telemetry_crc(payload, checksum):
         return None
     parts = payload.split(" ")
-    if len(parts) not in (19, 20) or parts[0] != "@F" or any(
+    if len(parts) not in (19, 20, 21) or parts[0] != "@F" or any(
             not re.fullmatch(r"-?[0-9]+", part) for part in parts[1:]):
         return None
     try:
         values = list(map(int, parts[1:]))
         firmware = values[0]
-        if len(parts) == 20:
+        # Never graft a sensor reading from a previous frame onto a newer
+        # safety snapshot. fw26 has exactly one extra field in the same CRC.
+        if (firmware >= POT_ANGLE_FIRMWARE) != (len(parts) == 21):
+            return None
+        pot_c = values.pop() if len(parts) == 21 else None
+        if len(parts) >= 20:
             # FL/FR/RL/RR are wire identities, not paths or order of detection.
             role = {1: "FL", 2: "FR", 3: "RL", 4: "RR"}.get(values.pop(1))
             if firmware < 22 or role is None or (module is not None and module != role):
@@ -373,6 +396,9 @@ def parse_fast_wheel_line(line, module=None):
         "calibError": (status >> 8) & 0x0F, "firmware": firmware,
         "fullZeroFault": bool(status & 0x4000) if firmware >= 23 else None,
         "pot": bool(status & 0x80), "potMode": bool(status & 0x1000),
+        "potAngle": _sensor_angle(pot_c, firmware, bool(status & 0x80) and zeroed
+                                  and bool(status & 0x1000) and not bool(status & 0x4000),
+                                  bool(status & 0x04)),
         "potHold": bool(status & STATUS_POT_HOLD) if firmware >= POT_HOLD_FIRMWARE else None,
         "tach": False,
         "driveMaxPercent": drive_max, "driveDutyPermille": servo * 1000 // 180,
@@ -470,6 +496,7 @@ def parse_master_line(line, module=None):
             except (KeyError, ValueError, OverflowError):
                 return None
 
+        pot_c = display_field("pa", int, lambda value: -18000 <= value <= 18000)
         sc_rpm = display_field("sc_rpm", float, lambda value: math.isfinite(value) and value >= 0)
         sc_hz = display_field("sc_hz", int, lambda value: 0 <= value <= TACH_HZ_MAX)
         sc_ppr = display_field("sc_ppr", int, lambda value: 1 <= value <= TACH_PPR_MAX)
@@ -556,6 +583,9 @@ def parse_master_line(line, module=None):
             # Поле появилось в прошивке v2 после руля; старые кадры его не содержат.
             "pot": fields.get("pot") == "1",
             "potMode": fields.get("pm") == "1" if fields.get("pm") in {"0", "1"} else None,
+            "potAngle": _sensor_angle(pot_c, firmware, fields.get("pot") == "1" and zeroed
+                                      and fields.get("pm") == "1" and fields.get("zfault") == "0",
+                                      fields.get("calib") == "1"),
             # potHold — активное удержание угла (ph). None у прошивок до fw24:
             # переключатель на экране остаётся заблокированным, а не «выключенным».
             "potHold": (fields.get("ph") == "1") if (firmware is not None and
@@ -794,6 +824,7 @@ class MasterSource:
         self._unknown_devices = {}       # real path → fingerprint after passive probe
         self._unknown_checked_at = {}     # real path → monotonic check time
         self._bms_results = {}           # real path → (fingerprint, BMS=True / lidar=False)
+        self._manual_lidar_probes = set()  # one-shot, operator-confirmed LDS start
         self.identity_fault = ""         # latched until restart after a conflict
         self._discovery_stops = 0       # prevent re-enabling while STOP is being queued
         #: Пока True, порты не открываются. Нужно только для ручной прошивки
@@ -1298,14 +1329,35 @@ class MasterSource:
         if action not in {"on", "off"}:
             return {"ok": False, "reason": "invalid_action"}
         if action == "on":
+            storage_fault = [mid for mid in MODULE_TITLES if frames[mid][0].get("fullZeroFault") is True]
+            if storage_fault:
+                return {"ok": False, "reason": "full_zero_eeprom_fault", "modules": storage_fault}
             if drive_active or any(f.get("moving") or f.get("calib") or f.get("cycle")
                                    or (f.get("drivePercent") or 0) != 0 for f in values):
                 return {"ok": False, "reason": "module_busy"}
             if any(f.get("potMode") is False for f in values):
                 return {"ok": False, "reason": "pot_mode_off"}
             # pot=1 — датчик откалиброван командой q и ноль руля задан.
-            if any(not f.get("pot") for f in values):
-                return {"ok": False, "reason": "pot_not_calibrated"}
+            if any(not f.get("pot") or not f.get("cal") for f in values):
+                return {"ok": False, "reason": "pot_not_calibrated",
+                        "modules": [mid for mid in MODULE_TITLES
+                                    if not frames[mid][0].get("pot") or not frames[mid][0].get("cal")]}
+            live = [mid for mid in MODULE_TITLES if frames[mid][0].get("liveId")]
+            if live:
+                return {"ok": False, "reason": "keyboard_active", "modules": live}
+            # fw26 provides a same-frame calibrated sensor reading. An invalid
+            # sample or a >15° deviation would be rejected by the board anyway;
+            # stop before broadcasting so the other boards cannot enable alone.
+            missing = [mid for mid in MODULE_TITLES
+                       if (frames[mid][0].get("firmware") or 0) >= POT_ANGLE_FIRMWARE
+                       and frames[mid][0].get("potAngle") is None]
+            if missing:
+                return {"ok": False, "reason": "pot_angle_unavailable", "modules": missing}
+            far = [mid for mid in MODULE_TITLES
+                   if frames[mid][0].get("potAngle") is not None
+                   and abs(frames[mid][0]["potAngle"] - frames[mid][0]["tgt"]) > POT_HOLD_MAX_DEG]
+            if far:
+                return {"ok": False, "reason": "pot_hold_far", "modules": far}
         # Выключение проходит и на ходу, и без калибровки: пока удержание само
         # подтягивает угол, плата занята, и запрет «идёт движение» оставил бы
         # оператора без выключателя. Ничего опасного ph 0 не делает.
@@ -2337,6 +2389,7 @@ class MasterSource:
         with self.lock:
             result = self._bms_results.get(real)
             return bool(fingerprint is not None and
+                        real not in getattr(self, "_manual_lidar_probes", set()) and
                         self._unknown_devices.get(real) == fingerprint and
                         (result is None or result == (fingerprint, True)))
 
@@ -2354,9 +2407,58 @@ class MasterSource:
             occupied = any(link.device == real for link in self.links.values())
             spawning = any(os.path.realpath(p) == real for p in self._spawning)
             return bool(fingerprint is not None and
+                        real not in getattr(self, "_manual_lidar_probes", set()) and
                         self._unknown_devices.get(real) == fingerprint and
                         not (result and result[0] == fingerprint) and
                         not occupied and not spawning)
+
+    def reserve_manual_lidar_probe(self, path, fingerprint):
+        """Prevent a passive rescan while the explicit, locked LDS test runs."""
+        real = os.path.realpath(path)
+        with self.lock:
+            occupied = any(link.device == real for link in self.links.values())
+            spawning = any(os.path.realpath(p) == real for p in self._spawning)
+            present = any(os.path.realpath(p) == real for p in self.candidates)
+            if (not self.auto_discovery or self._stop or self._hold_ports or not present or
+                    fingerprint is None or self._device_fingerprint(path) != fingerprint or
+                    self._unknown_devices.get(real) != fingerprint or
+                    self._bms_results.get(real) is not None or occupied or spawning or
+                    real in self._manual_lidar_probes):
+                return False
+            self._manual_lidar_probes.add(real)
+            return True
+
+    def manual_lidar_probe_allowed(self, path, fingerprint):
+        real = os.path.realpath(path)
+        with self.lock:
+            return bool(not self._stop and not self._hold_ports and
+                        real in self._manual_lidar_probes and
+                        any(os.path.realpath(p) == real for p in self.candidates) and
+                        self._device_fingerprint(path) == fingerprint and
+                        self._unknown_devices.get(real) == fingerprint and
+                        self._bms_results.get(real) is None and
+                        not any(link.device == real for link in self.links.values()))
+
+    def confirm_manual_lidar(self, path, fingerprint):
+        """Publish an LDS identity only after the caller verified CRC frames."""
+        real = os.path.realpath(path)
+        with self.lock:
+            if (self._stop or self._hold_ports or fingerprint is None or
+                    real not in self._manual_lidar_probes or
+                    not any(os.path.realpath(p) == real for p in self.candidates) or
+                    self._device_fingerprint(path) != fingerprint or
+                    self._unknown_devices.get(real) != fingerprint or
+                    self._bms_results.get(real) is not None or
+                    any(link.device == real for link in self.links.values())):
+                return False
+            self._bms_results[real] = (fingerprint, False)
+        self._publish_auto_discovery()
+        self._refresh_auto_readiness()
+        return True
+
+    def release_manual_lidar_probe(self, path):
+        with self.lock:
+            self._manual_lidar_probes.discard(os.path.realpath(path))
 
     def forget_manual_bms_port(self, path):
         """A deselected BMS must not keep an old classification alive."""
@@ -2695,6 +2797,7 @@ class MasterSource:
                 device = os.path.realpath(candidate)
                 busy = {link.device for link in self.links.values()}
                 busy.update(os.path.realpath(p) for p in self._spawning)
+                busy.update(getattr(self, "_manual_lidar_probes", set()))
                 if device in busy:
                     continue
                 fingerprint = self._device_fingerprint(candidate)
@@ -2716,7 +2819,8 @@ class MasterSource:
                 waiting_for_lidar = True
                 continue
             with self.lock:
-                if candidate in self.links or candidate in self._spawning:
+                if (candidate in self.links or candidate in self._spawning or
+                        os.path.realpath(candidate) in getattr(self, "_manual_lidar_probes", set())):
                     continue
                 self._spawning.add(candidate)
             link = _WheelLink(candidate)
@@ -2958,8 +3062,22 @@ class MasterSource:
                 link = True
                 frame = entry[0]
                 error = frame.get("calibError")
+                # Keep angle/deg as the step estimate used by the control stack.
+                # The UI may show the separate, same-frame A0 measurement, and
+                # must label a fallback to steps instead of calling it actual.
+                pot_angle = frame.get("potAngle")
+                if (not frame.get("pot") or frame.get("potMode") is not True or not frame.get("cal")
+                        or frame.get("calib") or frame.get("fullZeroFault") is not False
+                        or not isinstance(pot_angle, (int, float))
+                        or isinstance(pot_angle, bool) or not math.isfinite(pot_angle)
+                        or abs(pot_angle) > 180):
+                    pot_angle = None
+                step_angle = round(frame["deg"], 2)
                 motors.append({"id": mid, "title": MODULE_TITLES[mid],
-                               "angle": round(frame["deg"], 2),
+                               "angle": step_angle,
+                               "potAngle": round(pot_angle, 2) if pot_angle is not None else None,
+                               "displayAngle": round(pot_angle, 2) if pot_angle is not None else step_angle,
+                               "angleSource": "pot" if pot_angle is not None else "steps",
                                "targetAngle": round(frame["tgt"], 2),
                                "rpm": frame.get("rpm"), "temp": None,
                                "drivePercent": frame.get("drivePercent"),
@@ -2990,6 +3108,7 @@ class MasterSource:
                                "cycling": frame.get("cycle", False)})
             else:
                 motors.append({"id": mid, "title": MODULE_TITLES[mid], "angle": None,
+                               "potAngle": None, "displayAngle": None, "angleSource": None,
                                "targetAngle": None, "rpm": None, "temp": None,
                                "drivePercent": None, "homed": None, "online": False, "fault": None,
                                "pot": None, "potMode": None, "potHold": None,

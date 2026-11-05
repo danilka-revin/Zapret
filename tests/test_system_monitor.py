@@ -193,7 +193,7 @@ def test_monitor_serves_cached_snapshot_without_blocking(tmp_path):
     assert monitor.snapshot()['data']['hostname'] == 'robot-pc'
 
 
-def test_connections_monitor_merges_system_and_keeps_it_when_inventory_fails(tmp_path):
+def test_connections_monitor_merges_system_and_keeps_it_when_inventory_fails(tmp_path, monkeypatch):
     readings = []
 
     class Reader:
@@ -205,6 +205,11 @@ def test_connections_monitor_merges_system_and_keeps_it_when_inventory_fails(tmp
     monitor = ConnectionsMonitor(lambda: {'hostname': 'robot-pc', 'updatedAt': 1.0,
                                          'sections': {}}, interval=0.0,
                                 system=Reader(), system_interval=0.0)
+    # This test explicitly drives synchronous refreshes. Otherwise snapshot()
+    # schedules another interval=0 background refresh, which can finish after
+    # the intended failing one and nondeterministically clear its error.
+    # Separate tests cover the real asynchronous scheduler.
+    monkeypatch.setattr(monitor, '_maybe_start', lambda: None)
     monitor._refresh()
     data = monitor.snapshot()['data']
     assert data['sections'] == {} and data['system']['temperature']['maxC'] == 54.0

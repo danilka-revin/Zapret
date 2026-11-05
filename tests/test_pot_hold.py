@@ -481,3 +481,56 @@ def test_screens_mount_the_switch():
     component = (ROOT / "slam_gui" / "pot_hold.js").read_text(encoding="utf-8")
     assert "aria-checked" in component and "role', 'switch'" in component
     assert "Ждём подтверждения плат" in component
+
+
+def test_switch_names_missing_sensor_large_deviation_and_live_wheel(tmp_path):
+    motors = _motors(firmware=26, potAngle=0, fullZeroFault=False)
+    missing = [dict(m, potAngle=None if m['id'] == 'RL' else 0) for m in motors]
+    far = [dict(m, potAngle=15.1 if m['id'] == 'FR' else 0) for m in motors]
+    live = [dict(m, liveId=42 if m['id'] == 'RR' else 0) for m in motors]
+    memory = [dict(m, fullZeroFault=m['id'] == 'FL') for m in motors]
+    old_on_with_fault = _motors(potHold=True)
+    old_on_with_fault[1]['pot'] = False
+    mixed_with_fault = [dict(m, potHold=m['id'] != 'FR', pot=m['id'] != 'FR',
+                             potAngle=None if m['id'] == 'FR' else 0) for m in motors]
+    report = run_screen(tmp_path, {"steps": [
+        {"name": "missing", "motors": missing, "click": True},
+        {"name": "far", "motors": far, "click": True},
+        {"name": "live", "motors": live, "click": True},
+        {"name": "memory", "motors": memory, "click": True},
+        {"name": "old_on_fault", "motors": old_on_with_fault},
+        {"name": "mixed_fault", "motors": mixed_with_fault},
+        {"name": "ready", "motors": motors},
+    ]})
+    by_name = {x["step"]: x for x in report["seen"]}
+    assert by_name["missing"]["disabled"] and 'RL' in by_name["missing"]["status"]
+    assert by_name["far"]["disabled"] and 'FR' in by_name["far"]["status"] and '15°' in by_name["far"]["status"]
+    assert by_name["live"]["disabled"] and 'RR' in by_name["live"]["status"] and 'WASD' in by_name["live"]["status"]
+    assert by_name["memory"]["disabled"] and 'FL' in by_name["memory"]["status"] and 'памяти' in by_name["memory"]["status"]
+    assert not by_name["old_on_fault"]["disabled"] and by_name["old_on_fault"]["ariaChecked"] == 'true'
+    assert 'FR' in by_name["old_on_fault"]["status"] and 'датчик не готов' in by_name["old_on_fault"]["status"]
+    assert not by_name["mixed_fault"]["disabled"] and by_name["mixed_fault"]["ariaChecked"] is None
+    assert 'FR' in by_name["mixed_fault"]["status"] and 'датчик не готов' in by_name["mixed_fault"]["status"]
+    assert not by_name["ready"]["disabled"] and report["requests"] == []
+
+
+def test_partial_confirmation_names_refusing_board_and_off_is_available(tmp_path):
+    mixed = [_motor(mid, potHold=mid != 'RL') for mid in MODULES]
+    report = run_screen(tmp_path, {"steps": [
+        {"name": "click", "click": True},
+        {"name": "partial", "motors": mixed, "advanceMs": 6000},
+        {"name": "switch-off", "motors": mixed, "click": True},
+    ]})
+    partial = report["seen"][2]
+    assert partial["role"] is None and partial["ariaChecked"] is None
+    assert 'RL' in partial["alert"] and 'Часть плат включена' in partial["alert"]
+    assert not partial["disabled"]
+    assert [item["action"] for item in report["requests"]] == ['on', 'off']
+
+
+def test_server_reason_contains_the_specific_modules(tmp_path):
+    report = run_screen(tmp_path, {
+        "responses": [{"status": 409, "json": {"ok": False, "reason": "pot_hold_far", "modules": ["RL"]}}],
+        "steps": [{"name": "click", "click": True}],
+    })
+    assert '15°' in report["seen"][-1]["alert"] and 'RL' in report["seen"][-1]["alert"]

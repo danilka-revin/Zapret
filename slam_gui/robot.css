@@ -1787,6 +1787,7 @@ body.swipe-open .kiosk {
 .steer-card[data-ready="true"] { border-color: var(--accent); }
 .steer-card[data-error="true"] { border-color: #713838; }
 .steer-readout { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 12px; }
+.steer-angle-source { color: var(--muted); font-size: 11px; margin: 3px 0 5px; }
 .steer-readout b, .steer-readout output { color: var(--text); font-size: 16px; font-weight: 900; font-variant-numeric: tabular-nums; }
 .steer-card input[type="range"] { width: 100%; margin: 2px 0; accent-color: var(--accent); touch-action: pan-y; }
 .steer-range-labels { display: flex; justify-content: space-between; margin-top: -8px; color: var(--muted); font-size: 10px; }
