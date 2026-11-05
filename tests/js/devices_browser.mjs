@@ -85,6 +85,21 @@ try {
   // Exercise the same controls on a narrow touchscreen layout as well.
   await page.setViewportSize({width: 390, height: 900});
   assert(await page.locator('#options-camera_FL option[value="/dev/video0"]').count());
+  // Любой список показывает все подключённые порты, а не только свой тип:
+  // у камеры видно последовательные, у лидара — видеопорты.
+  const cameraPorts = await page.evaluate(() =>
+    [...document.querySelectorAll('#options-camera_FL option')].map(o => o.value));
+  const lidarPorts = await page.evaluate(() =>
+    [...document.querySelectorAll('#options-lidar option')].map(o => o.value));
+  const wheelPorts = await page.evaluate(() =>
+    [...document.querySelectorAll('#wheel-slots-options option')].map(o => o.value));
+  assert(cameraPorts.includes('/dev/video0') && cameraPorts.includes('/dev/ttyUSB0'),
+         'камера: свой видеопорт и последовательные в одном списке: ' + cameraPorts);
+  assert(lidarPorts.includes('/dev/video0'), 'лидар: видеопорты тоже видны: ' + lidarPorts);
+  assert(wheelPorts.includes('/dev/ttyUSB0') && wheelPorts.includes('/dev/video0'),
+         'колёса: все порты, подходящие первыми: ' + wheelPorts);
+  const found = (await page.locator('#ports-found').textContent()).trim();
+  assert(found.startsWith('Подключено портов:'), 'строка о найденных портах: ' + found);
   const input = page.locator('#hint-camera_FL');
   await input.fill('/dev/video');
   await page.waitForTimeout(3000);

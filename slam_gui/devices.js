@@ -73,10 +73,56 @@
     }
     return out;
   }
+  // Списки портов показывают ВСЁ, что подключено, а не только подходящий тип:
+  // оператор видит полную картину USB, а подходящий тип идёт первым.
+  const KIND_TITLES = {serial: 'последовательный', video: 'видео', usb: 'USB',
+    printer: 'принтер (USB)'};
+  const KIND_ORDER = ['serial', 'video', 'usb', 'printer'];
+  function kindFor(role) {
+    if (role.startsWith('camera_')) return 'video';
+    if (role === 'kinect') return 'usb';
+    return 'serial';
+  }
+  function allOptions() {
+    const out = [], seen = new Set();
+    for (const kind of KIND_ORDER) {
+      for (const option of combinedOptions(kind)) {
+        const key = String(option.port).toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(Object.assign({}, option, {kind, kindTitle: KIND_TITLES[kind]}));
+      }
+    }
+    return out;
+  }
   function optionsFor(role) {
-    if (role.startsWith('camera_')) return combinedOptions('video');
-    if (role === 'kinect') return combinedOptions('usb');
-    return combinedOptions('serial');
+    const preferred = kindFor(role);
+    return allOptions().sort((a, b) => {
+      if ((a.kind === preferred) !== (b.kind === preferred)) return a.kind === preferred ? -1 : 1;
+      if ((a.exists !== false) !== (b.exists !== false)) return a.exists !== false ? -1 : 1;
+      return String(a.port).localeCompare(String(b.port));
+    });
+  }
+  function optionLabel(option) {
+    return [option.name, option.kindTitle, option.kinect ? 'Kinect' : '',
+      option.exists === false ? 'не подключено' : 'подключено'].filter(Boolean).join(' · ');
+  }
+  function renderFound() {
+    const node = $('ports-found');
+    if (!node) return;
+    const all = allOptions();
+    if (!all.length) {
+      node.textContent = 'Подключённых портов не найдено. Проверьте USB-кабели, питание и права ' +
+        'dialout; список обновляется каждые 2,5 с и при «Обновить».';
+      node.dataset.tone = 'warn';
+      return;
+    }
+    const parts = KIND_ORDER.map(kind => [kind, all.filter(o => o.kind === kind).length])
+      .filter(([, count]) => count > 0)
+      .map(([kind, count]) => KIND_TITLES[kind] + ' ' + count);
+    node.textContent = 'Подключено портов: ' + all.length + ' · ' + parts.join(' · ') +
+      '. В каждом списке показаны все порты, подходящий тип — первым.';
+    node.dataset.tone = 'good';
   }
   function placeholderFor(role) {
     if (role.startsWith('camera_')) return '/dev/v4l/by-id/…';
@@ -96,8 +142,7 @@
       seen.add(option.port);
       const node = document.createElement('option');
       node.value = option.port;
-      node.label = [option.name, option.note, option.kinect ? 'Kinect' : '',
-        option.exists === false ? 'не подключено' : ''].filter(Boolean).join(' · ');
+      node.label = optionLabel(option);
       card.datalist.appendChild(node);
     }
   }
@@ -268,6 +313,23 @@
     return out;
   }
 
+  // Список портов для колёс не зависит от ответа /api/devices/ports: на пульте
+  // 8080 он может быть недоступен, а порты из /api/devices уже известны.
+  function renderWheelOptions() {
+    const list = $('wheel-slots-options');
+    if (list) {
+      list.replaceChildren();
+      for (const option of optionsFor('wheels')) {
+        if (!option || !option.port) continue;
+        const node = document.createElement('option');
+        node.value = option.port;
+        node.label = optionLabel(option);
+        list.appendChild(node);
+      }
+    }
+    renderFound();
+  }
+
   function renderWheelSlots(data) {
     const wheels = (data && data.wheels) || {};
     const slots = Array.isArray(wheels.slots) ? wheels.slots : ['', '', '', ''];
@@ -279,17 +341,7 @@
         input.value = slots[index - 1] || '';
       }
     }
-    const list = $('wheel-slots-options');
-    if (list) {
-      list.replaceChildren();
-      for (const option of combinedOptions('serial')) {
-        if (!option || !option.port) continue;
-        const node = document.createElement('option');
-        node.value = option.port;
-        node.label = [option.name, option.exists === false ? 'не подключено' : ''].filter(Boolean).join(' · ');
-        list.appendChild(node);
-      }
-    }
+    renderWheelOptions();
     const assigned = slots.filter(Boolean).length;
     const state = $('wheel-slots-state');
     if (state) {
@@ -490,7 +542,8 @@
       $('device-alert').textContent = warnings.join(' · ');
       snapshotOptions = data.options || null;
       for (const item of data.devices) renderCard(item);
-      if (portsData) renderWheelSlots(portsData); // списки портов обновились
+      if (portsData) renderWheelSlots(portsData);
+      renderWheelOptions(); // список портов и счётчик — из всех источников
       if (previews && !document.hidden && !started) { previews.start(); started = true; }
     } catch (err) {
       markOffline(err.name === 'AbortError' ? 'Бортовой сервер не ответил вовремя.' : (err.message || 'Нет связи с бортом.'));

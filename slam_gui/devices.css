@@ -412,3 +412,8 @@ footer b { color: #c9bec1; }
   .wheel-slots { grid-template-columns: 1fr; }
   .ports-block { padding: 14px; }
 }
+
+/* Найдено портов: в каждом списке видны все подключённые порты. */
+.ports-found { margin: 0 0 14px; color: var(--faint); font-size: 12px; line-height: 1.5; }
+.ports-found[data-tone="good"] { color: #cfc3c7; }
+.ports-found[data-tone="warn"] { color: var(--amber); }
