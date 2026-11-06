@@ -15,11 +15,16 @@
   габариты, стоп и поворотники дублируются адресной лентой; яркость габаритов
   задаётся командой dim.
 
+Лента пока не подключена: SENSOR_STRIP_ENABLED = 0 (по умолчанию). Тогда
+прошивка не трогает D6 (держит LOW), ничего не пишет в пиксели и сообщает
+strip=0; команда strip auto|off принимается молча. После монтажа ленты
+поставьте SENSOR_STRIP_ENABLED в 1 или соберите с -DSENSOR_STRIP_ENABLED=1.
+
 Связь с сервером — только USB Serial 115200, строки с CRC-16/Modbus.
 Это не аутентификация и не аппаратный E-STOP: CRC ловит только порчу линии.
 
-  @S fw=1 hdg=12345 pitch=-120 roll=35 gz=12 press=69964 temp=150 alt=301674
-     door=0 lock=0 light=5 dim=80 rfid=0 cards=2 link=1 err=0 t=123456
+  @S fw=2 hdg=12345 pitch=-120 roll=35 gz=12 press=69964 temp=150 alt=301674
+     door=0 lock=0 light=5 dim=80 strip=0 rfid=0 cards=2 link=1 err=0 t=123456
      crc=ABCD                                         (5 Гц)
   @CARD uid=A1B2C3D4 ok=1 cards=2 t=1234 crc=ABCD     (событие карты)
   @EVT kind=door open=1 t=1234 crc=ABCD               (дверь/замок)
@@ -50,7 +55,8 @@ LINK_TIMEOUT_MS он закрывается принудительно. Карт
 
 // ------------------------------- версия и пины ------------------------------
 //: Версия протокола модуля датчиков. Меняется вместе с разбором на сервере.
-const uint8_t SENSOR_PROTOCOL = 1;
+//: 2 — в телеметрию добавлено поле strip (признак подключённой ленты).
+const uint8_t SENSOR_PROTOCOL = 2;
 //: Своё π: strict ISO C++ не отдаёт M_PI, а avr-gcc считает float быстрее double.
 static const float PI_F = 3.14159265358979f;
 
@@ -65,6 +71,14 @@ static const uint8_t LOCK_SERVO_PIN = 7;
 static const uint8_t DOOR_SWITCH_PIN = 8;
 //: Замкнут на GND = дверь закрыта.
 static const uint8_t DOOR_CLOSED_LEVEL = LOW;
+
+//: Лента светодиодов пока не подключена. 0 — прошивка не трогает D6 и не
+//: обещает габаритов (телеметрия strip=0), 1 — лента на D6 смонтирована.
+//: Можно переопределить при сборке: -DSENSOR_STRIP_ENABLED=1.
+#ifndef SENSOR_STRIP_ENABLED
+#define SENSOR_STRIP_ENABLED 0
+#endif
+static const bool STRIP_ENABLED = SENSOR_STRIP_ENABLED != 0;
 
 //: Сколько светодиодов в ленте. Лента длиннее — увеличьте, короче — уменьшите.
 static const uint16_t STRIP_LEDS = 30;
@@ -652,6 +666,7 @@ void applyRelays(uint8_t mask) {
 //: Лента повторяет свет: стоп — красный, поворотники — янтарные полосы,
 //: габариты — белый на заданной яркости. Иначе лента погашена.
 void applyStrip(uint8_t mask) {
+  if (!STRIP_ENABLED) return;      // ленты нет: D6 не трогаем вовсе
   if (!strip_auto) return;
   strip.clear();
   const uint8_t scale = (uint8_t)((uint16_t)STRIP_BRIGHTNESS * (uint16_t)dim_level / 255);
@@ -738,11 +753,12 @@ void emitTelemetry() {
   char line[192];
   const int n = snprintf_P(line, sizeof(line),
       PSTR("@S fw=%u hdg=%d pitch=%d roll=%d gz=%d press=%ld temp=%d alt=%ld "
-           "door=%d lock=%d light=%u dim=%u rfid=%u cards=%u link=%d err=%u t=%lu"),
+           "door=%d lock=%d light=%u dim=%u strip=%d rfid=%u cards=%u link=%d err=%u t=%lu"),
       (unsigned)SENSOR_PROTOCOL, (int)heading_cd, (int)pitch_cd, (int)roll_cd,
       (int)gyro_z_dps10, (long)baro_pressure_pa, (int)baro_temp_c10, (long)baro_altitude_cm,
       door_closed ? 0 : 1, lock_open ? 1 : 0,
-      (unsigned)effectiveLights(), (unsigned)dim_level, (unsigned)rfid_state,
+      (unsigned)effectiveLights(), (unsigned)dim_level, STRIP_ENABLED ? 1 : 0,
+      (unsigned)rfid_state,
       (unsigned)card_count, link_ok ? 1 : 0, (unsigned)error_mask,
       (unsigned long)millis());
   appendCheckedFrame(line, sizeof(line), n);
@@ -1061,8 +1077,14 @@ void handleCommand(char* line) {
     if (strcmp_P(value, PSTR("auto")) == 0) strip_auto = true;
     else if (strcmp_P(value, PSTR("off")) == 0) {
       strip_auto = false;
-      strip.clear();
-      strip.show();
+      if (STRIP_ENABLED) {
+        strip.clear();
+        strip.show();
+      } else {
+        // Ленты нет — линия данных остаётся прижатой к земле.
+        pinMode(STRIP_PIN, OUTPUT);
+        digitalWrite(STRIP_PIN, LOW);
+      }
     } else { emitAck("strip", false); return; }
     lightsRefresh();
     emitAck("strip", true);
@@ -1207,10 +1229,16 @@ void setup() {
   lockServo.attach(LOCK_SERVO_PIN);
   lockSet(false, 0);
 
-  strip.begin();
-  strip.setBrightness(STRIP_BRIGHTNESS);
-  strip.clear();
-  strip.show();
+  if (STRIP_ENABLED) {
+    strip.begin();
+    strip.setBrightness(STRIP_BRIGHTNESS);
+    strip.clear();
+    strip.show();
+  } else {
+    // Ленты нет: держим линию данных на земле, чтобы вход ленты не ловил помехи.
+    pinMode(STRIP_PIN, OUTPUT);
+    digitalWrite(STRIP_PIN, LOW);
+  }
 
   cardsLoad();
   magLoadOffsets();
@@ -1228,7 +1256,8 @@ void setup() {
 
   note(PSTR("модуль датчиков fw%u: карт %u, ошибки 0x%02X"), (unsigned)SENSOR_PROTOCOL,
        (unsigned)card_count, (unsigned)error_mask);
-  note(PSTR("I2C 20/21 · RC522 SS53 RST9 · лента D6 · реле D2-D5 · замок D7 · концевик D8"));
+  note(PSTR("I2C 20/21 · RC522 SS53 RST9 · лента D6 %s · реле D2-D5 · замок D7 · концевик D8"),
+       STRIP_ENABLED ? "(есть)" : "(не подключена)");
 
   last_sensor_ms = 0;
   last_telemetry_ms = millis();

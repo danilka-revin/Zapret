@@ -26,7 +26,8 @@ import time
 from typing import Any, Callable, Iterable
 
 #: Версия протокола платы; сервер понимает ровно её (см. поле ``fw=``).
-SENSOR_PROTOCOL = 1
+#: 2 — в телеметрии появилось поле ``strip`` (лента светодиодов подключена).
+SENSOR_PROTOCOL = 2
 
 TELEMETRY_PREFIX = "@S "
 CARD_PREFIX = "@CARD "
@@ -67,7 +68,7 @@ UID_RE = re.compile(r"^[0-9A-Fa-f]{8}$")
 KEY_RE = re.compile(r"([a-z]+)=(\S+)")
 TELEMETRY_FIELDS = (
     "fw", "hdg", "pitch", "roll", "gz", "press", "temp", "alt",
-    "door", "lock", "light", "dim", "rfid", "cards", "link", "err", "t",
+    "door", "lock", "light", "dim", "strip", "rfid", "cards", "link", "err", "t",
 )
 
 #: Пределы, за которыми кадр считается испорченным, а не просто странным.
@@ -169,6 +170,9 @@ def parse_telemetry(line: str) -> dict[str, Any]:
         "lightMask": mask,
         "lights": {name: bool(mask & bit) for name, bit in LIGHT_BITS.items()},
         "dim": dim,
+        # Лента пока не подключена: прошивка сама сообщает strip=0, и экран
+        # не должен обещать габаритов, которых физически нет.
+        "stripEnabled": _int(fields, "strip") == 1,
         "rfid": RFID_STATES[rfid_code],
         "cards": cards,
         "linkOk": _int(fields, "link") == 1,
@@ -485,6 +489,7 @@ class SensorModule:
                     "gyroZ": None, "pressurePa": None, "pressureHpa": None,
                     "temperatureC": None, "altitudeM": None, "doorOpen": None,
                     "lockOpen": None, "lightMask": 0, "lights": {}, "dim": None,
+                    "stripEnabled": False,
                     "rfid": "none", "cards": 0, "linkOk": False, "errors": [],
                     "errorsMask": 0, "uptimeMs": None,
                 })
@@ -505,6 +510,7 @@ class SensorModule:
             "stale": state["stale"],
             "doorOpen": state["doorOpen"],
             "lockOpen": state["lockOpen"],
+            "stripEnabled": state["stripEnabled"],
             "errors": state["errors"],
         }
 

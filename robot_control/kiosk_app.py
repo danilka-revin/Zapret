@@ -948,6 +948,12 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     def device_page():
         return _send("devices.html")
 
+    @app.get("/sensors")
+    def sensor_page():
+        # Отдельный экран модуля датчиков: связь, свет, замок, карты, компас.
+        # Плата может быть не подключена — страница всё равно открывается.
+        return _send("sensors.html")
+
     @app.get("/api/devices")
     def api_devices():
         return jsonify(device_snapshot(refresh=request.args.get("refresh") == "1")), 200, {"Cache-Control": "no-store"}
@@ -1816,7 +1822,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     def sensor_state_payload():
         module = current_sensor_module()
         if module is None:
-            return {"configured": False, "ok": False, "error": "не настроен (RC_SENSOR_PORT)"}
+            return {"configured": False, "ok": False, "stripEnabled": False,
+                    "error": "не настроен (RC_SENSOR_PORT)"}
         try:
             return module.state()
         except Exception as exc:  # noqa: BLE001 — экран не должен падать из-за платы
@@ -2055,7 +2062,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
     for filename in ("steer_dial.js", "steer_dial.css", "calibration.css", "wheel_settings.js", "pot_mode.js",
-                     "wheel_angle.js", "pot_hold.js", "devices.css", "devices.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "brake_recovery.js", "battery.js", "receipt.js", "receipt.css", "lidar_settings.css",
+                     "wheel_angle.js", "pot_hold.js", "devices.css", "devices.js", "sensors.css", "sensors.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "brake_recovery.js", "battery.js", "receipt.js", "receipt.css", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
                      "explore.js", "map.css", "viewport.js", "camera_view.js", "camera_frames.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):

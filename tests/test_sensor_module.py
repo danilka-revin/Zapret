@@ -54,7 +54,8 @@ def telemetry(**overrides) -> str:
     fields = {
         "fw": sm.SENSOR_PROTOCOL, "hdg": 0, "pitch": 0, "roll": 0, "gz": 0,
         "press": 69964, "temp": 150, "alt": 301674, "door": 0, "lock": 0,
-        "light": 0, "dim": 80, "rfid": 0, "cards": 0, "link": 1, "err": 0, "t": 1234,
+        "light": 0, "dim": 80, "strip": 0, "rfid": 0, "cards": 0, "link": 1, "err": 0,
+        "t": 1234,
     }
     fields.update(overrides)
     body = " ".join("%s=%s" % (key, value) for key, value in fields.items())
@@ -110,7 +111,26 @@ def test_sketch_avoids_heap_and_blocking_prints():
 
 
 def test_sketch_version_matches_server_protocol():
-    assert int(_const("SENSOR_PROTOCOL")) == sm.SENSOR_PROTOCOL == 1
+    # 2 — в кадр добавлено поле strip: разбор на сервере обязан идти в ногу.
+    assert int(_const("SENSOR_PROTOCOL")) == sm.SENSOR_PROTOCOL == 2
+
+
+def test_led_strip_is_off_until_it_is_actually_wired():
+    """Ленты пока нет: прошивка не должна зависеть от неё ни в чём, кроме света."""
+    text = _text()
+    # По умолчанию лента выключена и включается одной строкой или флагом сборки.
+    assert re.search(r"#ifndef SENSOR_STRIP_ENABLED\s*\n#define SENSOR_STRIP_ENABLED 0", text)
+    assert '"-DSENSOR_STRIP_ENABLED=1"' in text or "-DSENSOR_STRIP_ENABLED=1" in text
+    assert re.search(r"static const bool STRIP_ENABLED = SENSOR_STRIP_ENABLED != 0;", text)
+    # Без ленты пиксели не пишутся, а линия данных прижата к земле.
+    strip_fn = text[text.index("void applyStrip"):text.index("void lightsRefresh")]
+    assert strip_fn.index("if (!STRIP_ENABLED) return;") < strip_fn.index("if (!strip_auto) return;")
+    setup = text[text.index("void setup()"):text.index("void loop()")]
+    assert "if (STRIP_ENABLED) {" in setup and "digitalWrite(STRIP_PIN, LOW)" in setup
+    # Команда strip принимается и без ленты: сервер не должен получать отказ.
+    assert 'strcmp_P(word, PSTR("strip"))' in text
+    # Признак ленты уезжает в телеметрию — экран не обещает габаритов зря.
+    assert "strip=%d" in text
 
 
 # ============================== хост-симуляция ============================== #
@@ -118,19 +138,29 @@ def _compiler() -> str | None:
     return shutil.which(os.environ.get("CXX", "g++")) or shutil.which("clang++")
 
 
-@pytest.fixture(scope="module")
-def simulator(tmp_path_factory):
+def _build(binary: Path, *, strip: bool = False) -> Path:
+    """Собрать хост-симуляцию: по умолчанию без ленты, с флагом — с лентой."""
     compiler = _compiler()
     if not compiler:
         pytest.skip("нет g++/clang++ — симуляция модуля датчиков пропущена")
-    binary = tmp_path_factory.mktemp("sensor-sim") / "sensor_sim"
-    result = subprocess.run(
-        [compiler, "-std=c++17", "-O1", "-w", "-I", str(SIM_DIR / "stubs"),
-         str(SIM_DIR / "sensor_sim.cpp"), "-o", str(binary)],
-        capture_output=True, text=True, timeout=300,
-    )
+    command = [compiler, "-std=c++17", "-O1", "-w"]
+    if strip:
+        command.append("-DSENSOR_STRIP_ENABLED=1")
+    command += ["-I", str(SIM_DIR / "stubs"), str(SIM_DIR / "sensor_sim.cpp"),
+                "-o", str(binary)]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=300)
     assert result.returncode == 0, result.stderr[-4000:]
     return binary
+
+
+@pytest.fixture(scope="module")
+def simulator(tmp_path_factory):
+    return _build(tmp_path_factory.mktemp("sensor-sim") / "sensor_sim")
+
+
+@pytest.fixture(scope="module")
+def simulator_with_strip(tmp_path_factory):
+    return _build(tmp_path_factory.mktemp("sensor-sim-strip") / "sensor_sim", strip=True)
 
 
 def test_firmware_simulation_scenarios(simulator):
@@ -141,6 +171,16 @@ def test_firmware_simulation_scenarios(simulator):
     assert summary and summary.group(1) == summary.group(2), report
     # Свет, замок, карты, компас и отказы датчиков — все сценарии на месте.
     assert int(summary.group(2)) >= 14, report
+
+
+def test_firmware_with_the_strip_wired_still_paints_it(simulator_with_strip):
+    """Ленту подключат позже: тот же скетч с флагом сборки должен её красить."""
+    result = subprocess.run([str(simulator_with_strip)], capture_output=True, text=True,
+                            timeout=900)
+    report = result.stdout + "\n" + result.stderr[-6000:]
+    assert result.returncode == 0, report
+    summary = re.search(r"(\d+)/(\d+) сценариев прошли", result.stdout)
+    assert summary and summary.group(1) == summary.group(2), report
 
 
 def test_simulated_frames_parse_with_the_server_parser(simulator):
@@ -208,6 +248,7 @@ def test_telemetry_parses_into_degrees_and_flags():
     assert parsed["doorOpen"] is True and parsed["lockOpen"] is True
     assert parsed["lights"] == {"head": True, "stop": False, "left": True,
                                 "right": False, "dim": False}
+    assert parsed["stripEnabled"] is False        # лента пока не подключена
     assert parsed["rfid"] == "granted" and parsed["cards"] == 2
     assert parsed["errors"] == ["RC522"]
     assert parsed["uptimeMs"] == 98765
@@ -225,8 +266,11 @@ def test_truncated_or_alien_frames_are_rejected():
     without_door = good.replace(" door=0", "")
     with pytest.raises(sm.SensorFrameError):
         sm.parse_telemetry(without_door)          # поле пропало — кадр не наш
+    # Плата новее сервера: та же форма кадра, но другая версия протокола.
+    alien = good.replace("fw=%d" % sm.SENSOR_PROTOCOL, "fw=%d" % (sm.SENSOR_PROTOCOL + 1))
+    assert alien != good
     with pytest.raises(sm.SensorFrameError):
-        sm.parse_telemetry(frame("@S fw=2 " + good.split(" ", 2)[2].split(" crc=")[0]))
+        sm.parse_telemetry(alien)
     with pytest.raises(sm.SensorFrameError):
         sm.parse_line("hello world")
     with pytest.raises(sm.SensorFrameError):

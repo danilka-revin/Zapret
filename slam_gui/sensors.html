@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#000000">
+  <title>Модуль датчиков · RUS SLAM</title>
+  <link rel="stylesheet" href="sensors.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="На главный экран">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M12 6.5v3M12 14.5v3M6.5 12h3M14.5 12h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          <circle cx="12" cy="12" r="1.6" fill="currentColor"/>
+        </svg>
+      </span>
+      <span>RUS SLAM <small>· ДАТЧИКИ</small></span>
+    </a>
+    <nav aria-label="Разделы">
+      <a href="/">Главный экран</a>
+      <a href="/map">Карта</a>
+      <a href="/devices">Устройства</a>
+      <a href="/sensors" aria-current="page">Датчики</a>
+    </nav>
+  </header>
+
+  <main>
+    <!-- Состояние связи с платой: порт, свежесть кадра, отказы датчиков. -->
+    <section class="status" id="sm-status" data-tone="idle">
+      <div class="status-main">
+        <span class="status-dot" aria-hidden="true"></span>
+        <div>
+          <p class="eyebrow">МОДУЛЬ ДАТЧИКОВ · Arduino Mega</p>
+          <h1 id="sm-state">нет связи</h1>
+          <p class="status-sub" id="sm-sub">RC_SENSOR_PORT не задан — плата не подключена</p>
+        </div>
+      </div>
+      <dl class="status-meta">
+        <div><dt>порт</dt><dd id="sm-port">—</dd></div>
+        <div><dt>кадр</dt><dd id="sm-age">—</dd></div>
+        <div><dt>ошибки</dt><dd id="sm-errors">—</dd></div>
+      </dl>
+    </section>
+
+    <div class="grid">
+      <!-- Компас: GY-87 (MPU6050 + HMC5883L с наклонной компенсацией). -->
+      <article class="card compass" aria-labelledby="sm-compass-title">
+        <header class="card-head">
+          <h2 id="sm-compass-title">Компас</h2>
+          <span class="hint">GY-87 · MPU6050 + HMC5883L</span>
+        </header>
+        <div class="compass-body">
+          <div class="rose" aria-hidden="true">
+            <span class="rose-letter n">С</span>
+            <span class="rose-letter e">В</span>
+            <span class="rose-letter s">Ю</span>
+            <span class="rose-letter w">З</span>
+            <i class="needle" id="sm-needle"></i>
+          </div>
+          <div class="compass-value">
+            <b id="sm-heading">—</b><small id="sm-cardinal"></small>
+            <p id="sm-tilt">крен — · тангаж — · — °/с</p>
+          </div>
+        </div>
+        <div class="row">
+          <button type="button" class="btn" id="sm-cal-start">Калибровка: начать</button>
+          <button type="button" class="btn" id="sm-cal-stop">Сохранить поправку</button>
+          <button type="button" class="btn btn--ghost" id="sm-cal-reset">Сбросить</button>
+        </div>
+        <p class="note">При калибровке робот медленно поворачивают на 360°: плата запоминает
+          минимум и максимум поля, убирает жёсткое смещение и хранит поправку в EEPROM.</p>
+      </article>
+
+      <!-- Барометр BMP180. -->
+      <article class="card" aria-labelledby="sm-baro-title">
+        <header class="card-head">
+          <h2 id="sm-baro-title">Барометр</h2>
+          <span class="hint">BMP180 · 2 Гц</span>
+        </header>
+        <dl class="metrics">
+          <div><dt>давление</dt><dd><b id="sm-pressure">—</b><small> гПа</small></dd></div>
+          <div><dt>температура</dt><dd><b id="sm-temp">—</b><small> °C</small></dd></div>
+          <div><dt>высота</dt><dd><b id="sm-alt">—</b><small> м</small></dd></div>
+        </dl>
+        <p class="note">Высота считается от давления 1013,25 гПа и для компаса не нужна:
+          это подсказка, а не барометрический альтиметр.</p>
+      </article>
+
+      <!-- Свет: четыре реле. Габариты — лента, а её пока не подключили. -->
+      <article class="card" aria-labelledby="sm-lights-title">
+        <header class="card-head">
+          <h2 id="sm-lights-title">Свет</h2>
+          <span class="hint">реле D2–D5</span>
+        </header>
+        <div class="lights" id="sm-lights">
+          <button type="button" class="light" data-light="head" aria-pressed="false">Передний</button>
+          <button type="button" class="light" data-light="stop" aria-pressed="false">Стопы</button>
+          <button type="button" class="light" data-light="left" aria-pressed="false">Левый поворотник</button>
+          <button type="button" class="light" data-light="right" aria-pressed="false">Правый поворотник</button>
+        </div>
+        <div class="row">
+          <button type="button" class="btn" id="sm-lights-off">Всё выключить</button>
+        </div>
+        <div class="dim-row">
+          <label for="sm-dim">Габариты (лёнта): <output id="sm-dim-value">80</output></label>
+          <input type="range" id="sm-dim" min="0" max="255" step="5" value="80"
+                 aria-describedby="sm-strip-note">
+          <p class="warn" id="sm-strip-note" hidden>Адресная лента не подключена: габариты,
+            стопы и поворотники на неё пока не выводятся — работают только реле.</p>
+        </div>
+      </article>
+
+      <!-- Дверь и замок: открытие только по PIN кейса. -->
+      <article class="card" aria-labelledby="sm-door-title">
+        <header class="card-head">
+          <h2 id="sm-door-title">Дверь и замок</h2>
+          <span class="hint">концевик D8 · серво D7</span>
+        </header>
+        <dl class="metrics">
+          <div><dt>дверь</dt><dd id="sm-door">—</dd></div>
+          <div><dt>замок</dt><dd id="sm-lock">—</dd></div>
+        </dl>
+        <label class="pin-field" for="sm-pin">PIN кейса — нужен для открытия и для карт</label>
+        <div class="row">
+          <input type="password" id="sm-pin" inputmode="numeric" autocomplete="off"
+                 placeholder="PIN" maxlength="8">
+          <button type="button" class="btn btn--danger" id="sm-lock-open">Открыть на 3 с</button>
+          <button type="button" class="btn btn--ghost" id="sm-lock-close">Закрыть</button>
+        </div>
+        <p class="note">Замок закрывается сам через 3 с и через 10 с без связи с сервером.
+          Закрыть его можно без PIN — это безопасное действие.</p>
+      </article>
+
+      <!-- Карты доступа к хранилищу: до 12 UID в EEPROM платы. -->
+      <article class="card" aria-labelledby="sm-cards-title">
+        <header class="card-head">
+          <h2 id="sm-cards-title">Карты доступа</h2>
+          <span class="hint">EEPROM платы · до 12</span>
+        </header>
+        <p class="cards-count">в памяти: <b id="sm-cards-count">—</b></p>
+        <div class="row">
+          <input type="text" id="sm-card-uid" placeholder="UID, 8 hex" maxlength="8"
+                 spellcheck="false" autocomplete="off">
+          <button type="button" class="btn" id="sm-card-add">Добавить</button>
+          <button type="button" class="btn btn--ghost" id="sm-card-del">Удалить</button>
+        </div>
+        <div class="row">
+          <button type="button" class="btn" id="sm-card-learn">Записать карту с платы</button>
+          <button type="button" class="btn" id="sm-card-list">Показать список</button>
+          <button type="button" class="btn btn--danger" id="sm-card-clear">Очистить</button>
+        </div>
+        <p class="note">Изменения списка требуют PIN кейса. UID карты Mifare Classic
+          клонируется: замок вспомогательный, физический ключ остаётся основным.</p>
+      </article>
+
+      <!-- Журнал платы: строки «# SENSORS: …», включая ответ на «показать список». -->
+      <article class="card log" aria-labelledby="sm-log-title">
+        <header class="card-head">
+          <h2 id="sm-log-title">Журнал платы</h2>
+          <span class="hint" id="sm-rfid">карта: —</span>
+        </header>
+        <ol class="log-list" id="sm-log"></ol>
+        <p class="msg" id="sm-msg" role="status" aria-live="polite"></p>
+      </article>
+    </div>
+  </main>
+
+  <script src="sensors.js"></script>
+</body>
+</html>
