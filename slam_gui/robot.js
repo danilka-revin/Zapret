@@ -341,22 +341,6 @@
     });
   }
 
-  //: Отсек открыт — движение запрещено: это должно быть видно без перехода на /sensors.
-  function renderCompartment(d) {
-    const chip = $('compartment-chip');
-    if (!chip) return;
-    const gate = d.compartment || {};
-    const window_ = d.sensorModule || {};
-    const opened = gate.open === true;
-    chip.hidden = !opened;
-    if (!opened) return;
-    const parts = ['ОТСЕК ОТКРЫТ · ДВИЖЕНИЕ ЗАПРЕЩЕНО'];
-    if (window_.windowKind && window_.windowKind !== 'none') {
-      parts.push(window_.windowKind === 'load' ? 'погрузка' : 'выгрузка');
-    }
-    chip.textContent = parts.join(' · ');
-  }
-
   function renderMode(d) {
     const pill = $('mode-pill');
     if (!pill) return;
@@ -471,7 +455,6 @@
     });
     step('stale', () => document.body.classList.toggle('is-stale', !live));
 
-    step('compartment', () => renderCompartment(d));
     step('mode', () => renderMode(d));
     step('battery', () => renderBattery(d));
     step('chassis', () => renderChassis(d));
@@ -774,7 +757,7 @@
         } else {
           compartmentBtn.disabled = false;
           compartmentTitle.textContent = 'Открыть отсек';
-          compartmentHint.textContent = 'грузовой отсек закрыт';
+          compartmentHint.textContent = 'замок закрыт';
           compartmentBtn.classList.remove('opened');
         }
       }

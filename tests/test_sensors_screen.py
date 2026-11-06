@@ -37,7 +37,7 @@ def snapshot(**kwargs) -> dict:
         "ok": True,
         "configured": True,
         "port": "/dev/ttyUSB0",
-        "protocol": 3,
+        "protocol": 4,
         "ageMs": 420,
         "stale": False,
         "error": None,
@@ -49,7 +49,6 @@ def snapshot(**kwargs) -> dict:
         "pressureHpa": 1004.2,
         "temperatureC": 23.5,
         "altitudeM": 77,
-        "doorOpen": False,
         "lockOpen": False,
         "lightMask": 0,
         "lights": {"head": False, "stop": False, "left": False, "right": False, "dim": False},
@@ -119,7 +118,7 @@ def test_telemetry_frame_fills_the_whole_screen(tmp_path):
     out = run_screen(screen(heading=123.4, lights={"head": True, "stop": False,
                                                    "left": False, "right": True,
                                                    "dim": True},
-                            dim=120, doorOpen=False, lockOpen=True, cards=3), tmp_path)
+                            dim=120, lockOpen=True, cards=3), tmp_path)
     assert out["errors"] == []
     assert out["status"] == {
         "tone": "live", "title": "на связи",
@@ -137,7 +136,8 @@ def test_telemetry_frame_fills_the_whole_screen(tmp_path):
     assert out["lights"]["head"]["pressed"] == "true"
     assert out["lights"]["right"]["pressed"] == "true"
     assert out["lights"]["stop"]["pressed"] == "false"
-    assert out["door"] == {"door": "закрыт", "lock": "открыт"}
+    # Двери (концевика) нет вовсе — на экране только замок.
+    assert out["lock"] == {"text": "открыт", "state": "open"}
     assert out["cards"]["count"] == "3"
     assert out["log"] == ["SENSORS: карта записана"]
     assert out["calls"] == [{"url": "api/sensor_module", "method": "GET", "body": None}]
@@ -173,7 +173,7 @@ def test_stale_or_missing_board_is_shown_honestly(tmp_path):
     assert unconfigured["status"]["title"] == "не подключён"
     assert "RC_SENSOR_PORT" in unconfigured["status"]["sub"]
     assert unconfigured["compass"]["heading"] == "—"
-    assert unconfigured["door"]["door"] == "—"
+    assert unconfigured["lock"]["text"] == "—"
 
     port_error = run_screen(screen(ok=False, stale=False, error="[Errno 5] ввод/вывод"),
                             tmp_path)
@@ -232,28 +232,26 @@ def test_lock_and_cards_require_the_case_pin(tmp_path):
                         "body": {"action": "start"}}
 
 
-def test_open_compartment_is_the_loudest_thing_on_the_screen(tmp_path):
-    """Концевик разомкнут — экран обязан сказать, что движение запрещено."""
-    closed = run_screen(screen(doorOpen=False, lockOpen=False), tmp_path)
-    assert closed["compartment"]["motion"] == "разрешено"
-    assert closed["compartment"]["motionState"] == "free"
-    assert closed["compartment"]["blockedHidden"] is True
+def test_the_compartment_card_shows_only_the_lock(tmp_path):
+    """Концевика отсека нет: карточка замка не обещает ничего про движение."""
+    closed = run_screen(screen(lockOpen=False), tmp_path)
+    assert closed["lock"] == {"text": "закрыт", "state": "closed"}
 
-    opened = run_screen(screen(doorOpen=True, lockOpen=True, windowKind="load"), tmp_path)
-    assert opened["compartment"]["door"] == "открыт"
-    assert opened["compartment"]["header"] == "открыт"
-    assert opened["compartment"]["motion"] == "запрещено"
-    assert opened["compartment"]["motionState"] == "blocked"
-    assert opened["compartment"]["blockedHidden"] is False
+    opened = run_screen(screen(lockOpen=True, windowKind="load"), tmp_path)
+    assert opened["lock"] == {"text": "открыт", "state": "open"}
+    assert "door" not in opened and "compartment" not in opened
+
+    unknown = run_screen({"snapshot": {"ok": True, "data": {
+        "configured": True, "ok": False, "stale": True, "lockOpen": None}}}, tmp_path)
+    assert unknown["lock"] == {"text": "—", "state": "closed"}
 
 
-def test_unknown_compartment_does_not_claim_the_robot_can_move(tmp_path):
-    """Нет кадра — нет и обещания, что движение разрешено."""
-    out = run_screen({"snapshot": {"ok": True, "data": {
-        "configured": True, "ok": False, "stale": True, "doorOpen": None}}}, tmp_path)
-    assert out["compartment"]["motion"] == "неизвестно"
-    assert out["compartment"]["motionState"] == "unknown"
-    assert out["compartment"]["blockedHidden"] is True
+def test_the_screen_has_no_door_switch_left(tmp_path):
+    """В разметке не осталось ни поля двери, ни запрета движения по ней."""
+    html = (ROOT / "slam_gui" / "sensors.html").read_text(encoding="utf-8")
+    js = (ROOT / "slam_gui" / "sensors.js").read_text(encoding="utf-8")
+    for token in ("sm-door", "sm-motion", "sm-blocked", "sm-compartment"):
+        assert token not in html and token not in js
 
 
 def test_cargo_window_is_shown_and_started_with_the_case_pin(tmp_path):

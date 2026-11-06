@@ -41,26 +41,19 @@
       <dl class="status-meta">
         <div><dt>порт</dt><dd id="sm-port">—</dd></div>
         <div><dt>кадр</dt><dd id="sm-age">—</dd></div>
-        <div><dt>отсек</dt><dd id="sm-compartment">—</dd></div>
         <div><dt>ошибки</dt><dd id="sm-errors">—</dd></div>
       </dl>
     </section>
 
-    <!-- Запрет движения: пока концевик отсека разомкнут, робот не едет. -->
-    <p class="blocked" id="sm-blocked" hidden role="alert">Отсек открыт: движение робота
-      запрещено. Закройте отсек картой, кнопкой «Закрыть» или физическим ключом.</p>
-
     <div class="grid">
-      <!-- Отсек: карта переключает, кнопки дублируют. -->
-      <article class="card" aria-labelledby="sm-door-title">
+      <!-- Замок отсека: карта переключает, кнопки дублируют. Концевика нет. -->
+      <article class="card" aria-labelledby="sm-lock-title">
         <header class="card-head">
-          <h2 id="sm-door-title">Отсек и замок</h2>
-          <span class="hint">концевик D8 · серво D7</span>
+          <h2 id="sm-lock-title">Замок отсека</h2>
+          <span class="hint">серво D7</span>
         </header>
         <dl class="metrics">
-          <div><dt>отсек</dt><dd id="sm-door">—</dd></div>
           <div><dt>замок</dt><dd id="sm-lock">—</dd></div>
-          <div><dt>движение</dt><dd id="sm-motion">—</dd></div>
         </dl>
         <label class="pin-field" for="sm-pin">PIN кейса — нужен для открытия, карт и окна погрузки</label>
         <div class="row">

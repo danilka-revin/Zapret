@@ -471,8 +471,9 @@ def setup_note(state: Optional[dict[str, Any]] = None) -> str:
     if kind in ("running", "background"):
         return "сейчас идёт автоустановка ROS 2: %s (ход: %s --status)" % (text or "работает", SETUP_COMMAND)
     if kind == "need_root":
-        return ("автоустановке ROS 2 нужен пароль администратора: запусти ярлык "
-                "«Запустить робот» (откроет терминал) или %s" % SETUP_COMMAND)
+        return ("автоустановке ROS 2 нужен пароль администратора: робот спрашивает его "
+                "окном системы при запуске (без терминала); если окно не появилось — %s"
+                % SETUP_COMMAND)
     if kind == "failed":
         return "прошлая автоустановка ROS 2 не удалась: %s" % (text or "см. var/ros2_setup.log")
     if kind == "interrupted":

@@ -5,7 +5,7 @@
 * распиновка и правила безопасности в скетче ``firmware/sensor_module`` —
   они заданы разводкой платы, а не кодом сервера;
 * хост-симуляция `tests/firmware_sim/sensor_sim.cpp`: GY-87 на I²C, RC522 на SPI
-  с картой в поле, лента, реле, серво замка и концевик. Сценарии идут в
+  с картой в поле, лента, реле и серво замка. Сценарии идут в
   отдельных процессах, как после сброса платы;
 * разбор кадров ``@S``/``@CARD``/``@EVT``/``@ACK`` сервером: те же числа, что
   печатает прошивка, включая CRC-16/Modbus;
@@ -56,7 +56,7 @@ def frame(payload: str) -> str:
 def telemetry(**overrides) -> str:
     fields = {
         "fw": sm.SENSOR_PROTOCOL, "hdg": 0, "pitch": 0, "roll": 0, "gz": 0,
-        "press": 69964, "temp": 150, "alt": 301674, "door": 0, "lock": 0,
+        "press": 69964, "temp": 150, "alt": 301674, "lock": 0,
         "light": 0, "dim": 80, "strip": 0, "cargo": 0, "rfid": 0, "cards": 0, "link": 1,
         "err": 0, "t": 1234,
     }
@@ -73,7 +73,9 @@ def test_pinout_is_exactly_the_wired_one():
     assert _const("RC522_RST_PIN") == "9"
     assert _const("STRIP_PIN") == "6"
     assert _const("LOCK_SERVO_PIN") == "7"
-    assert _const("DOOR_SWITCH_PIN") == "8"
+    # Концевик отсека (D8) пока не подключён и из прошивки убран: пина нет,
+    # состояние двери не передаётся, запрета движения по ней тоже нет.
+    assert "DOOR_SWITCH_PIN" not in text and "doorTick" not in text
     assert re.search(r"RELAY_PINS\[4\]\s*=\s*\{2,\s*3,\s*4,\s*5\}", text)
     # GY-87 на аппаратном I²C Mega: SDA = 20, SCL = 21 (Wire.begin() без аргументов).
     assert "Wire.begin()" in text and "Wire.begin(" not in text.replace("Wire.begin()", "")
@@ -114,9 +116,11 @@ def test_sketch_avoids_heap_and_blocking_prints():
 
 
 def test_sketch_version_matches_server_protocol():
-    # 3 — роли карт, окно погрузки и кадры @CARDINFO: разбор на сервере идёт
-    # в ногу с прошивкой, иначе экран не поймёт, кто и почему открыл отсек.
-    assert int(_const("SENSOR_PROTOCOL")) == sm.SENSOR_PROTOCOL == 3
+    # 4 — убран концевик отсека: нет поля door= и кадра kind=door. Разбор на
+    # сервере идёт в ногу с прошивкой.
+    assert int(_const("SENSOR_PROTOCOL")) == sm.SENSOR_PROTOCOL == 4
+    # Старая прошивка (fw3) продолжает работать: плату прошивают вручную.
+    assert 3 in sm.SENSOR_PROTOCOLS
 
 
 def test_led_strip_is_off_until_it_is_actually_wired():
@@ -242,14 +246,16 @@ def test_avr_build_when_toolchain_available():
 # ============================== разбор кадров =============================== #
 def test_telemetry_parses_into_degrees_and_flags():
     parsed = sm.parse_telemetry(telemetry(hdg=12345, pitch=-120, roll=35, gz=12,
-                                          door=1, lock=1, light=0b00101, dim=128,
+                                          lock=1, light=0b00101, dim=128,
                                           rfid=1, cards=2, err=0b1000, t=98765))
     assert parsed["heading"] == 123.45
     assert parsed["pitch"] == -1.2 and parsed["roll"] == 0.35
     assert parsed["gyroZ"] == 1.2
     assert parsed["pressureHpa"] == 699.6
     assert parsed["altitudeM"] == 3016.74
-    assert parsed["doorOpen"] is True and parsed["lockOpen"] is True
+    assert parsed["lockOpen"] is True
+    # Концевика нет: состояние двери из кадра не берётся вовсе.
+    assert "doorOpen" not in parsed
     assert parsed["lights"] == {"head": True, "stop": False, "left": True,
                                 "right": False, "dim": False}
     assert parsed["stripEnabled"] is False        # лента пока не подключена
@@ -268,9 +274,12 @@ def test_broken_crc_is_rejected():
 
 def test_truncated_or_alien_frames_are_rejected():
     good = telemetry()
-    without_door = good.replace(" door=0", "")
+    without_lock = good.replace(" lock=0", "")
     with pytest.raises(sm.SensorFrameError):
-        sm.parse_telemetry(without_door)          # поле пропало — кадр не наш
+        sm.parse_telemetry(without_lock)          # поле пропало — кадр не наш
+    # Старая прошивка (fw3) ещё присылает door=: лишнее поле не мешает.
+    legacy = telemetry(fw=3, door=0)
+    assert sm.parse_telemetry(legacy)["lockOpen"] is False
     # Плата новее сервера: та же форма кадра, но другая версия протокола.
     alien = good.replace("fw=%d" % sm.SENSOR_PROTOCOL, "fw=%d" % (sm.SENSOR_PROTOCOL + 1))
     assert alien != good
@@ -334,10 +343,13 @@ def test_card_list_frames_carry_roles():
 
 
 def test_event_and_ack_frames():
-    event = sm.parse_event(frame("@EVT kind=door open=1 t=42"))
-    assert event == {"event": "door", "open": True, "atMs": 42}
-    assert sm.parse_line(frame("@EVT kind=door open=1 t=42")) == {
-        "kind": "event", "event": "door", "open": True, "atMs": 42}
+    event = sm.parse_event(frame("@EVT kind=lock open=1 t=42"))
+    assert event == {"event": "lock", "open": True, "atMs": 42}
+    assert sm.parse_line(frame("@EVT kind=lock open=1 t=42")) == {
+        "kind": "event", "event": "lock", "open": True, "atMs": 42}
+    # Кадра о двери больше нет: концевик не подключён.
+    with pytest.raises(sm.SensorFrameError):
+        sm.parse_event(frame("@EVT kind=door open=1 t=42"))
     ack = sm.parse_ack(frame("@ACK id=7 cmd=lock ok=1 t=99"))
     assert ack == {"id": 7, "cmd": "lock", "ok": True, "atMs": 99}
     with pytest.raises(sm.SensorFrameError):
@@ -486,18 +498,15 @@ def test_cargo_window_comes_from_telemetry():
     assert module.state()["windowActive"] is False
 
 
-def test_compartment_open_blocks_motion_only_on_a_fresh_frame():
+def test_there_is_no_door_state_without_the_switch():
+    """Концевика нет — нет ни состояния двери, ни запрета движения по нему."""
     module, _, clock = make_module()
-    assert module.compartment_open() is False    # кадра нет — не запираем молча
     clock.now = 2.0
-    module.feed(telemetry(door=1))
-    assert module.compartment_open() is True
-    module.feed(telemetry(door=0))
-    assert module.compartment_open() is False
-    module.feed(telemetry(door=1))
-    clock.now = 60.0                             # кадр устарел
-    assert module.state()["ok"] is False
-    assert module.compartment_open() is False
+    module.feed(telemetry(lock=1))
+    state = module.state()
+    assert state["ok"] is True and state["lockOpen"] is True
+    assert "doorOpen" not in state
+    assert not hasattr(module, "compartment_open")
 
 
 def test_cards_acks_and_events_are_kept_for_the_screen():
@@ -531,10 +540,10 @@ def test_commands_go_out_as_crlf_lines():
 def test_compass_snapshot_for_the_map():
     module, _, clock = make_module()
     clock.now = 5.0
-    module.feed(telemetry(hdg=27000, door=0, lock=1, err=0))
+    module.feed(telemetry(hdg=27000, lock=1, err=0))
     compass = module.compass()
     assert compass["ok"] is True and compass["heading"] == 270.0
-    assert compass["lockOpen"] is True and compass["doorOpen"] is False
+    assert compass["lockOpen"] is True and "doorOpen" not in compass
     assert compass["errors"] == [] and compass["port"] == "/dev/ttyACM2"
 
 
@@ -605,7 +614,7 @@ class FakeModule:
 
     def compass(self):
         return {"ok": True, "heading": 123.45, "port": "/dev/ttyACM9", "stale": False,
-                "doorOpen": False, "lockOpen": False, "errors": []}
+                "lockOpen": False, "errors": []}
 
     def light(self, name, on):
         sm.command_light(name, on)          # валидация — как у настоящего клиента
@@ -629,9 +638,6 @@ class FakeModule:
     def card(self, action, uid=None, role=None):
         sm.command_card(action, uid, role)
         self.calls.append(("card", action, uid, role))
-
-    def compartment_open(self):
-        return bool(self.frame.get("doorOpen"))
 
     def mag_calibration(self, action):
         sm.command_mag(action)
@@ -783,8 +789,12 @@ def test_map_without_module_still_works(kiosk_app):
     assert "compass" in payload and payload["compass"] is None
 
 
-def test_open_compartment_blocks_motion(kiosk_app):
-    """Отсек открыт — робот не едет; STOP и тормоз по-прежнему проходят."""
+def test_motion_does_not_depend_on_the_door_switch(kiosk_app):
+    """Концевика нет — движение не запирается: робот едет как обычно.
+
+    D8 не подключён, поэтому состояние двери не приходит вовсе. Раньше из-за
+    этого «открытый отсек» вычислялся по висящему входу и робот не ехал.
+    """
     class FakeDriveSource:
         name = "master"
         supports_drive = True
@@ -797,48 +807,17 @@ def test_open_compartment_blocks_motion(kiosk_app):
             return {"ok": True, "percent": round(percent)}
 
     source = FakeDriveSource()
-    kiosk_app.extensions["rc_slam"].source = source
-    module = FakeModule()
-    kiosk_app.extensions["rc_sensor_module"] = module
+    kiosk_app.extensions["rc_sensor_module"] = FakeModule()
     client = kiosk_app.test_client()
+    # В состоянии экрана нет ни отсека, ни запрета движения по нему.
+    data = client.get("/api/kiosk_state").get_json()["data"]
+    assert "compartment" not in data
+    kiosk_app.extensions["rc_slam"].source = source
     header = {"X-Robot-Control": "drive"}
 
-    # Отсек закрыт — движение разрешено как раньше.
     assert client.post("/api/kiosk_drive", json={"percent": 10}, headers=header).status_code == 200
-    assert source.commands == [10]
-
-    module.frame["doorOpen"] = True
-    blocked = client.post("/api/kiosk_drive", json={"percent": 10}, headers=header)
-    assert blocked.status_code == 409
-    assert blocked.get_json()["reason"] == "compartment_open"
-    assert "Отсек открыт" in blocked.get_json()["error"]
-    assert source.commands == [10]                      # команда не дошла до колёс
-
-    # STOP проходит: робота нельзя запереть с открытым отсеком.
-    assert client.post("/api/kiosk_drive", json={"percent": 0}, headers=header).status_code == 200
-    assert source.commands == [10, 0]
-
-    module.frame["doorOpen"] = False
     assert client.post("/api/kiosk_drive", json={"percent": 15}, headers=header).status_code == 200
-    assert source.commands == [10, 0, 15]
-
-
-def test_motion_is_not_locked_silently_without_the_sensor_board(kiosk_app):
-    """Нет платы — нет данных о концевике: движение не запираем молча."""
-    class FakeDriveSource:
-        name = "master"
-        supports_drive = True
-
-        def drive(self, percent):
-            return {"ok": True, "percent": round(percent)}
-
-    client = kiosk_app.test_client()
-    gate = client.get("/api/kiosk_state").get_json()["data"]["compartment"]
-    assert gate["known"] is False and gate["motionBlocked"] is False
-    assert "модуль датчиков не подключён" in gate["error"]
-    kiosk_app.extensions["rc_slam"].source = FakeDriveSource()
-    assert client.post("/api/kiosk_drive", json={"percent": 5},
-                       headers={"X-Robot-Control": "drive"}).status_code == 200
+    assert source.commands == [10, 15]
 
 
 def test_kiosk_state_carries_the_sensor_block():

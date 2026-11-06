@@ -1,6 +1,6 @@
 // Хост-симуляция модуля датчиков: одна плата Mega, но всё «железо» на ней —
 // модели: GY-87 (MPU6050 + HMC5883L + BMP180 на I²C), RC522 на SPI с картой в
-// поле, адресная лента, 4 реле, серво замка и концевик двери.
+// поле, адресная лента, 4 реле и серво замка.
 //
 // Сборка и запуск (это делает tests/test_sensor_module.py):
 //   g++ -std=c++17 -I tests/firmware_sim/stubs tests/firmware_sim/sensor_sim.cpp -o sensor_sim
@@ -324,15 +324,6 @@ struct Rc522Model {
 Gy87Model gy87;
 Rc522Model rc522;
 
-//: Состояние двери в модели: INPUT_PULLUP в setup() поднимает линию в HIGH,
-//: поэтому после каждой загрузки стенд выставляет её заново.
-static bool sim_door_open = false;
-
-static void setDoor(bool open) {
-  sim_door_open = open;
-  board.level[8] = open ? HIGH : LOW;
-}
-
 static void bind_hardware() {
   board.i2c_fn = [](uint8_t address, const uint8_t* tx, uint8_t tx_length,
                     uint8_t* rx, uint8_t rx_length) {
@@ -340,8 +331,6 @@ static void bind_hardware() {
   };
   board.spi_fn = [](uint8_t out) { return rc522.transfer(out); };
   board.write_fn = [](uint8_t pin, uint8_t level) { rc522.onPinChange(pin, level); };
-  // Концевик двери: замкнут на GND = дверь закрыта.
-  setDoor(sim_door_open);
 }
 
 
@@ -354,7 +343,6 @@ static void boot() {
   board.serial.output.clear();
   board.serial.input.clear();
   board.setup_fn();
-  setDoor(sim_door_open);      // pull-up в setup() перебил положение концевика
   // 250 мс — первый кадр телеметрии; ничего не командуем, реле и замок в покое.
   sim::run_for_ms(250);
 }
@@ -477,7 +465,6 @@ static void scenario_boot_safe() {
   const std::string frame = lastFrame(fresh, "@S ");
   CHECK(field(frame, "cards") == 0, "карт в чистой EEPROM нет");
   CHECK(field(frame, "err") == 0, "все датчики ответили, err=%ld", field(frame, "err"));
-  CHECK(field(frame, "door") == 0, "дверь закрыта");
   CHECK(field(frame, "lock") == 0, "замок закрыт");
   CHECK(field(frame, "fw") == sensors::SENSOR_PROTOCOL, "версия протокола в кадре");
   CHECK(field(frame, "strip") == (sensors::STRIP_ENABLED ? 1 : 0),
@@ -672,31 +659,17 @@ static void scenario_lock_servo() {
         "даже lock open 60 закрывается не позже 10 с, angle=%d", board.servo_value);
 }
 
-static void scenario_door_switch() {
+static void scenario_no_door_switch() {
+  // Концевик (D8) не подключён и убран из прошивки: ни поля door=, ни кадров
+  // kind=door быть не должно, а свободный вход ничего не запирает.
   boot();
-  size_t mark = board.serial.output.size();
-  setDoor(true);
-  CHECK(wait_until([&]() {
-          return contains(board.serial.output.substr(mark), "kind=door open=1");
-        }, 300), "открытие двери даёт событие");
-  mark = board.serial.output.size();
-  const std::string frame = telemetry(mark);
-  CHECK(field(frame, "door") == 1, "в телеметрии дверь открыта");
-
-  mark = board.serial.output.size();
-  setDoor(false);
-  CHECK(wait_until([&]() {
-          return contains(board.serial.output.substr(mark), "kind=door open=0");
-        }, 300), "закрытие двери даёт событие");
-
-  // Дребезг: короткий импульс короче 40 мс не должен считаться открытием.
-  mark = board.serial.output.size();
-  setDoor(true);
-  run(15);
-  setDoor(false);
-  run(200);
-  CHECK(!contains(board.serial.output.substr(mark), "kind=door open=1"),
-        "дребезг концевика отфильтрован");
+  board.level[8] = LOW;        // «дверь открыта» на старом входе
+  run(300);
+  size_t mark = 0;
+  const std::string out = take_output(mark);
+  CHECK(!contains(out, "door="), "в телеметрии нет поля door=");
+  CHECK(!contains(out, "kind=door"), "кадров о двери нет");
+  CHECK(sim::wdt_enabled != 0, "watchdog включён");
 }
 
 static void scenario_card_denied() {
@@ -1089,7 +1062,7 @@ static const Scenario SCENARIOS[] = {
     {"turn_blink", scenario_turn_blink},
     {"dim_strip", scenario_dim_strip},
     {"lock_servo", scenario_lock_servo},
-    {"door_switch", scenario_door_switch},
+    {"no_door_switch", scenario_no_door_switch},
     {"card_denied", scenario_card_denied},
     {"card_granted", scenario_card_granted},
     {"card_learn_persists", scenario_card_learn_persists},

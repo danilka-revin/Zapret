@@ -32,6 +32,7 @@ from flask import Blueprint, Response, jsonify, request, send_from_directory, se
 
 from robot_control import estop as estop_latch
 from robot_control import eventlog
+from robot_control import lidar_boot
 from robot_control.camera import CameraManager
 from robot_control.lidar import (
     LidarManager,
@@ -1165,6 +1166,10 @@ def start_lidar(*, testing: bool = False, port: int | None = None, force: bool =
     manager = LidarManager.get_instance()
     for line in startup_summary():
         log.info("Лидар: %s", line)
+    # Драйвер ROS 2 поднимаем сами: приложение может быть запущено не ярлыком
+    # «Запустить робот» (автозапуск, systemd, kiosk.sh), и тогда /scan никто не
+    # публиковал — оператору приходилось вводить команды в терминале.
+    lidar_boot.start(manager, testing=testing)
     return manager
 
 

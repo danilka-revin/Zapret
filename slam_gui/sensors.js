@@ -1,9 +1,9 @@
-/* Экран «Модуль датчиков» бортового экрана: отсек, карты с ролями, окно погрузки.
+/* Экран «Модуль датчиков» бортового экрана: замок, карты с ролями, окно погрузки.
  *
  * Плата живёт своей жизнью: сервер только показывает её состояние и передаёт
  * команды. Поэтому экран никогда не рисует «всё хорошо» из воздуха — нет кадра,
- * значит нет данных; нет ленты — значит габариты честно помечены как отключённые;
- * отсек открыт — значит движение запрещено и это видно первой строкой.
+ * значит нет данных; нет ленты — значит габариты честно помечены как отключённые.
+ * Концевика отсека нет, поэтому карточка показывает только замок.
  */
 (function () {
   'use strict';
@@ -88,24 +88,14 @@
     setText($('sm-age'), Number.isFinite(age) ? (age / 1000).toFixed(1) + ' с назад' : '—');
     const errors = Array.isArray(data.errors) ? data.errors : [];
     setText($('sm-errors'), errors.length ? errors.join(', ') : (ok ? 'нет' : '—'));
-    const door = data.doorOpen === true ? 'открыт' : data.doorOpen === false ? 'закрыт' : '—';
-    setText($('sm-compartment'), door);
   }
 
+  // Концевика отсека пока нет (D8 не подключён): показываем только замок.
   function renderCompartment(data) {
-    const opened = data.doorOpen === true;
-    const known = data.doorOpen === true || data.doorOpen === false;
-    setText($('sm-door'), !known ? '—' : opened ? 'открыт' : 'закрыт');
     setText($('sm-lock'), data.lockOpen === true ? 'открыт'
       : data.lockOpen === false ? 'закрыт' : '—');
     const lockEl = $('sm-lock');
     if (lockEl) lockEl.dataset.state = data.lockOpen ? 'open' : 'closed';
-    // Движение запрещено, пока концевик разомкнут; без кадра — «неизвестно».
-    setText($('sm-motion'), !known ? 'неизвестно' : opened ? 'запрещено' : 'разрешено');
-    const motionEl = $('sm-motion');
-    if (motionEl) motionEl.dataset.state = !known ? 'unknown' : opened ? 'blocked' : 'free';
-    const banner = $('sm-blocked');
-    if (banner) banner.hidden = !opened;
   }
 
   function renderWindow(data) {
