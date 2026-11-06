@@ -2375,21 +2375,46 @@ class LidarManager:
     _instance: Optional["LidarManager"] = None
 
     def __init__(self, port: Optional[str] = None):
+        # Resolve the same model preset used by the settings panel and .env
+        # watcher. In particular, RC_LIDAR_PROTOCOL=lds01 alone means the ROS
+        # driver owns the UART; reading each variable independently here used
+        # to silently turn that profile back into source=auto on cold startup.
+        try:
+            settings = lidar_settings_from_env()
+        except ValueError as exc:
+            # A malformed legacy .env must not prevent either web application
+            # from starting. Preserve the previous forgiving startup behavior;
+            # the settings API will report validation errors when edited.
+            log.warning(
+                "Лидар: некорректные настройки окружения (%s), "
+                "сохраняю совместимое поведение запуска", exc,
+            )
+            raw_protocol = (os.environ.get("RC_LIDAR_PROTOCOL") or "auto").strip().lower()
+            settings = {
+                "source": normalize_source(os.environ.get("RC_LIDAR_SOURCE") or "auto"),
+                "port": os.environ.get("RC_LIDAR_PORT") or "",
+                "protocol": normalize_protocol(raw_protocol),
+                "baud": str(_env_int("RC_LIDAR_BAUD") or ""),
+                "motor": (os.environ.get("RC_LIDAR_MOTOR") or "auto").strip().lower(),
+                "autoprobe": _env_bool("RC_LIDAR_AUTOPROBE", False),
+            }
+            if settings["motor"] not in MOTOR_MODES:
+                settings["motor"] = "auto"
+
         #: Откуда берём скан: auto | ros | serial (RC_LIDAR_SOURCE).
-        self.source_mode = normalize_source(os.environ.get("RC_LIDAR_SOURCE") or "auto")
-        self.port = port or os.environ.get("RC_LIDAR_PORT") or None
-        self.baud = _env_int("RC_LIDAR_BAUD")
+        self.source_mode = settings["source"]
+        self.port = port or settings["port"] or None
+        self.baud = int(settings["baud"]) if settings["baud"] else None
         raw_protocol = (os.environ.get("RC_LIDAR_PROTOCOL") or "auto").strip().lower()
-        self.protocol = normalize_protocol(raw_protocol)
+        self.protocol = settings["protocol"]
         if raw_protocol and self.protocol == "auto" and raw_protocol != "auto":
             log.warning(
                 "Лидар: неизвестный RC_LIDAR_PROTOCOL=%r — беру auto (%s)",
                 raw_protocol, " | ".join(LIDAR_PROTOCOLS),
             )
-        raw_motor = (os.environ.get("RC_LIDAR_MOTOR") or "auto").strip().lower()
-        self.motor = raw_motor if raw_motor in MOTOR_MODES else "auto"
+        self.motor = settings["motor"]
         # Автопоиск отключён по умолчанию: лидар слушает только назначенный порт.
-        self.autoprobe = _env_bool("RC_LIDAR_AUTOPROBE", False)
+        self.autoprobe = bool(settings["autoprobe"])
         self.excluded = excluded_ports()
         self.peer_urls = peer_urls()
 

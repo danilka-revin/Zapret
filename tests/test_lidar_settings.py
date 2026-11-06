@@ -325,6 +325,38 @@ def test_protocol_lds01_in_env_means_ros_driver(monkeypatch):
     assert serial["source"] == "serial" and serial["port"] == "/dev/ttyUSB0"
 
 
+def test_manager_applies_lds01_env_profile_on_cold_start(monkeypatch):
+    """Один protocol в .env не должен превращаться в auto при старте сервера."""
+    monkeypatch.setenv("RC_LIDAR_PROTOCOL", "lds01")
+    for key in ("RC_LIDAR_SOURCE", "RC_LIDAR_PORT", "RC_LIDAR_BAUD",
+                "RC_LIDAR_MOTOR", "RC_LIDAR_AUTOPROBE"):
+        monkeypatch.delenv(key, raising=False)
+
+    manager = LidarManager()
+    try:
+        assert manager.current_settings() == LDS01_EXPECTED
+        assert manager.ros_holds_lidar() is True
+    finally:
+        manager.stop()
+
+
+def test_manager_explicit_source_overrides_lds01_env_profile(monkeypatch):
+    """Явное serial важнее профиля и остаётся доступным для прямого USB-чтения."""
+    monkeypatch.setenv("RC_LIDAR_PROTOCOL", "lds01")
+    monkeypatch.setenv("RC_LIDAR_SOURCE", "serial")
+    monkeypatch.setenv("RC_LIDAR_PORT", "/dev/ttyUSB0")
+
+    manager = LidarManager()
+    try:
+        assert manager.current_settings() == {
+            "source": "serial", "port": "/dev/ttyUSB0", "protocol": "lds01",
+            "baud": "230400", "motor": "none", "autoprobe": False,
+        }
+        assert manager.ros_holds_lidar() is False
+    finally:
+        manager.stop()
+
+
 def test_other_protocols_do_not_get_lds01_defaults():
     settings = lidar.lidar_settings_from_env({"RC_LIDAR_PROTOCOL": "rplidar"})
     assert settings["source"] == "auto" and settings["motor"] == "auto"
