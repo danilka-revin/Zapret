@@ -28,7 +28,9 @@
 #      оператором ros/serial не трогается). Именно auto, а не ros: драйвер может
 #      не подняться (модель лидара не опознана, порт занят), и тогда приложение
 #      вернётся к чтению USB-порта (окно RC_LIDAR_ROS_GRACE_S) вместо того,
-#      чтобы оставить оба экрана без скана.
+#      чтобы оставить оба экрана без скана. Для LDS-01/LDS-02 (TurtleBot3
+#      Burger, RC_LIDAR_PROTOCOL=lds01) пишется ros: этот лидар отдаётся
+#      драйвером, и порт остаётся драйверу (см. ./scripts/lidar_lds01.sh).
 # Пароль sudo спрашивается один раз и только если что-то ставится. Без терминала
 # (служба, автозапуск) установка с паролем невозможна — код 3 и подсказка.
 # Коды: 0 — готово, 1 — ошибка, 3 — нужен пароль администратора, 4 — ROS 2
@@ -1228,12 +1230,22 @@ write_env() {
   current="$(env_file_value RC_LIDAR_SOURCE)"
   case "${current,,}" in
     ""|auto|ros|ros2)
-      local topic
+      local topic protocol value
       topic="$(env_file_value RC_LIDAR_ROS_TOPIC)"
-      # auto, а не ros: «ROS 2 есть» не значит «драйвер поднялся». В auto ROS 2
-      # остаётся первым источником, а если /scan молчит дольше
+      protocol="$(env_file_value RC_LIDAR_PROTOCOL)"
+      # Обычно auto, а не ros: «ROS 2 есть» не значит «драйвер поднялся». В auto
+      # ROS 2 остаётся первым источником, а если /scan молчит дольше
       # RC_LIDAR_ROS_GRACE_S — приложение само читает USB-порт (см. lidar.py).
-      touch_env RC_LIDAR_SOURCE auto
+      #
+      # Исключение — LDS-01/LDS-02 от TurtleBot3 Burger: он отдаётся драйвером
+      # hls_lfcd_lds_driver, и порт должен остаться драйверу. Там пишем строгий
+      # ros, иначе приложение через 20 с отбирало бы у драйвера тот же адаптер.
+      value=auto
+      case "${protocol,,}" in
+        lds01|lds-01|lds_01|lds02|lds-02|lds_02|hls-lfcd2|hls_lfcd2|turtlebot|turtlebot3)
+          value=ros ;;
+      esac
+      touch_env RC_LIDAR_SOURCE "$value"
       touch_env RC_LIDAR_ROS_TOPIC "${topic:-/scan}"
       ;;
     *)

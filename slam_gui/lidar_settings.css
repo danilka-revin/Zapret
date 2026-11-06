@@ -15,6 +15,9 @@
 .rc-lidar-check{display:flex!important;grid-template-columns:none!important;flex-direction:row;align-items:center;gap:8px}.rc-lidar-check input{min-height:auto}
 .rc-lidar-msg{min-height:18px;margin:0;color:#a2949a;font-size:12px;line-height:1.5}.rc-lidar-msg[data-bad="1"]{color:#f4f4f6}
 .rc-lidar-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}
+.rc-lidar-presets{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 0 2px;border-top:1px solid #2a2428}
+.rc-lidar-presets .rc-lidar-hint{margin:0;color:#a2949a;font-size:11.5px}
+.rc-lidar-presets .rc-lidar-btn{border-color:#3d5a44;background:#10201a}
 .rc-lidar-btn{min-height:36px;padding:0 12px;border:1px solid #3a3035;border-radius:8px;background:#17171a;color:#f4f4f6;font:inherit;font-size:12px;font-weight:700;cursor:pointer}
 .rc-lidar-btn.primary{border-color:#7a2a30;background:#2a0d10;color:#f4f4f6}
 @media(max-width:700px){.rc-lidar-overlay{padding:8px}.rc-lidar-dialog{padding:14px}.rc-lidar-actions button{flex:1 1 140px}}

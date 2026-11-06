@@ -129,10 +129,72 @@ LIDAR_PROTOCOLS: Tuple[str, ...] = ("auto", "rplidar", "ld06", "lds01")
 
 _PROTOCOL_ALIASES = {
     "lds": "lds01", "lds-01": "lds01", "lds_01": "lds01", "lds1": "lds01",
-    "lds02": "lds01", "lds-02": "lds01", "lds2": "lds01",
+    "lds02": "lds01", "lds-02": "lds01", "lds_02": "lds01", "lds2": "lds01",
     "hls": "lds01", "hls-lfcd2": "lds01", "hls_lfcd2": "lds01", "lfcd2": "lds01",
     "turtlebot": "lds01", "turtlebot3": "lds01",
 }
+
+#: Готовые наборы настроек под конкретную модель лидара — то, что оператор
+#: выбирает одной кнопкой в панели «Лидар» или одним ключом в ``.env``
+#: (``RC_LIDAR_PROTOCOL=lds01``). Ключ совпадает со значением протокола.
+#:
+#: Робот Zapret ездит с LDS-01 от TurtleBot3 Burger. Этот лидар отдаёт виток
+#: драйвер ROS 2 (``hls_lfcd_lds_driver``/``hlds_laser_publisher``): он сам
+#: включает вращение и держит USB-порт. Поэтому в профиле источник ``ros``
+#: (скан из ``/scan``), скорость 230400, линия мотора не трогается, а перебор
+#: портов выключен — иначе приложение открывало бы тот же порт, что и драйвер,
+#: и оба оставались без скана («порт занят другой программой»).
+LIDAR_PRESETS: dict[str, dict[str, Any]] = {
+    "lds01": {
+        "title": "LDS-01 / LDS-02 (TurtleBot3 Burger)",
+        "source": "ros",
+        "protocol": "lds01",
+        "baud": str(LDS01_BAUD),
+        "motor": "none",
+        "autoprobe": False,
+        "note": "скан из /scan: драйвер ROS 2 hls_lfcd_lds_driver держит порт "
+                "лидара, приложение его не открывает",
+    },
+}
+
+#: Поля профиля, которые попадают в настройки (``title``/``note`` — только текст).
+_PRESET_FIELDS: Tuple[str, ...] = ("source", "protocol", "baud", "motor", "autoprobe")
+
+
+def preset_names() -> Tuple[str, ...]:
+    """Имена известных профилей лидара (порядок — как в :data:`LIDAR_PRESETS`)."""
+    return tuple(LIDAR_PRESETS)
+
+
+def lidar_preset(name: Any) -> Optional[dict[str, Any]]:
+    """Профиль модели по имени (``lds01``, ``lds-01``, ``turtlebot3``…) или None."""
+    key = str(name or "").strip().lower().replace(" ", "")
+    key = _PROTOCOL_ALIASES.get(key, key)
+    preset = LIDAR_PRESETS.get(key)
+    return dict(preset) if preset else None
+
+
+def protocol_profile(protocol: Any) -> dict[str, Any]:
+    """Значения по умолчанию, которые следуют из модели лидара (иначе пусто).
+
+    Используется там, где ключа в ``.env`` нет: ``RC_LIDAR_PROTOCOL=lds01``
+    одного достаточно, чтобы робот читал скан из ROS 2, не занимал порт и не
+    перебирал чужие модели.
+    """
+    preset = lidar_preset(protocol)
+    if not preset:
+        return {}
+    return {field: preset[field] for field in _PRESET_FIELDS}
+
+
+def presets_for_panel() -> list[dict[str, Any]]:
+    """Профили для панели «Лидар»: подпись, пояснение и готовые настройки."""
+    return [{
+        "id": name,
+        "title": preset["title"],
+        "note": preset.get("note", ""),
+        "settings": {field: preset[field] for field in _PRESET_FIELDS},
+    } for name, preset in LIDAR_PRESETS.items()]
 
 
 #: Откуда берётся скан: ``ros`` — топик ROS 2 (так лидар отдаёт драйвер
@@ -348,15 +410,43 @@ def read_env_file(path: Optional[Path] = None) -> dict[str, str]:
     return values
 
 
+def _expand_preset(raw: dict[str, Any]) -> dict[str, Any]:
+    """Разворачивает ``{"preset": "lds01"}`` в полный набор настроек лидара.
+
+    Профиль задаёт базу, а явно переданные непустые поля главнее: панель может
+    прислать профиль и свой порт, скрипт — профиль и другую скорость.
+    """
+    name = raw.get("preset")
+    if not name:
+        return raw
+    preset = lidar_preset(name)
+    if preset is None:
+        raise ValueError(
+            "Профиль лидара: ожидается %s (например lds01 — LDS-01/LDS-02 от "
+            "TurtleBot3 Burger)." % ", ".join(preset_names()))
+    merged = {field: preset[field] for field in _PRESET_FIELDS}
+    for key, value in raw.items():
+        if key == "preset" or value is None or value == "":
+            continue
+        merged[key] = value
+    return merged
+
+
 def normalize_lidar_settings(raw: Any) -> dict[str, Any]:
     """Проверяет настройки лидара из веб-формы и приводит их к одному виду.
 
     Возвращает ``{"source": str, "port": str, "protocol": str, "baud": str,
     "motor": str, "autoprobe": bool}`` — ровно то, что пишется в ``.env``. Плохое
     значение — ``ValueError`` с понятной оператору причиной (её показывает панель).
+
+    Вместо полей можно передать профиль модели — ``{"preset": "lds01"}``: тогда
+    настройки берутся из :data:`LIDAR_PRESETS` (LDS-01 → ROS 2, 230400, мотор не
+    трогаем, автопоиск выключен).
     """
     if not isinstance(raw, dict):
         raise ValueError("Настройки лидара должны быть объектом.")
+    raw = _expand_preset(raw)
+
     source_raw = str(raw.get("source") or "auto").strip().lower().replace(" ", "")
     if source_raw not in LIDAR_SOURCES and source_raw not in _SOURCE_ALIASES:
         raise ValueError(
@@ -411,15 +501,27 @@ def normalize_lidar_settings(raw: Any) -> dict[str, Any]:
 
 
 def lidar_settings_from_env(env: Optional[dict[str, str]] = None) -> dict[str, Any]:
-    """Действующие настройки лидара из окружения (или переданного словаря)."""
+    """Действующие настройки лидара из окружения (или переданного словаря).
+
+    Незаданные ключи добираются из профиля модели (:func:`protocol_profile`):
+    ``RC_LIDAR_PROTOCOL=lds01`` одного достаточно, чтобы робот с LDS-01 от
+    TurtleBot3 Burger читал скан из ROS 2 на 230400 бод, не трогал линию мотора
+    и не занимал порт лидара перебором. Явные ``RC_LIDAR_SOURCE``/``RC_LIDAR_BAUD``
+    и остальные ключи по-прежнему главнее профиля.
+    """
     values = env if env is not None else os.environ
+    protocol = values.get("RC_LIDAR_PROTOCOL") or "auto"
+    profile = protocol_profile(protocol)
+    autoprobe = values.get("RC_LIDAR_AUTOPROBE")
+    if autoprobe is None or str(autoprobe).strip() == "":
+        autoprobe = "1" if profile.get("autoprobe") else "0"
     return normalize_lidar_settings({
-        "source": values.get("RC_LIDAR_SOURCE") or "auto",
+        "source": values.get("RC_LIDAR_SOURCE") or profile.get("source") or "auto",
         "port": values.get("RC_LIDAR_PORT") or "",
-        "protocol": values.get("RC_LIDAR_PROTOCOL") or "auto",
-        "baud": values.get("RC_LIDAR_BAUD") or "",
-        "motor": values.get("RC_LIDAR_MOTOR") or "auto",
-        "autoprobe": values.get("RC_LIDAR_AUTOPROBE") or "0",
+        "protocol": protocol,
+        "baud": values.get("RC_LIDAR_BAUD") or profile.get("baud") or "",
+        "motor": values.get("RC_LIDAR_MOTOR") or profile.get("motor") or "auto",
+        "autoprobe": autoprobe,
     })
 
 
@@ -1946,6 +2048,19 @@ def startup_summary() -> list[str]:
             os.environ.get("RC_LIDAR_AUTOPROBE") or "0",
         ),
     ]
+    profile = lidar_preset(os.environ.get("RC_LIDAR_PROTOCOL"))
+    if profile:
+        # Модель известна: печатаем, что из этого следует на самом деле (явные
+        # RC_LIDAR_* могли переопределить профиль), иначе по журналу не понять,
+        # почему скан идёт из ROS 2 и порт никто не перебирает.
+        effective = lidar_settings_from_env()
+        lines.append(
+            "профиль %s: скан %s · %s бод · мотор %s · автопоиск %s"
+            % (profile["title"],
+               "из ROS 2 (/scan)" if effective["source"] == "ros"
+               else "из USB-порта (%s)" % effective["source"],
+               effective["baud"] or "(автоподбор)", effective["motor"],
+               "вкл" if effective["autoprobe"] else "выкл"))
     blocked = sorted(p for p in excluded_ports() if p)
     lines.append("исключены (мастер/шасси): %s" % (", ".join(blocked) if blocked else "нет"))
     ports = discover_ports(configured=os.environ.get("RC_LIDAR_PORT"))
@@ -2516,14 +2631,10 @@ class LidarManager:
         if not any(key in values for key in LIDAR_ENV_KEYS):
             return False
         try:
-            settings = normalize_lidar_settings({
-                "source": values.get("RC_LIDAR_SOURCE", "auto"),
-                "port": values.get("RC_LIDAR_PORT", ""),
-                "protocol": values.get("RC_LIDAR_PROTOCOL", "auto"),
-                "baud": values.get("RC_LIDAR_BAUD", ""),
-                "motor": values.get("RC_LIDAR_MOTOR", "auto"),
-                "autoprobe": values.get("RC_LIDAR_AUTOPROBE", "0"),
-            })
+            # Тот же разбор, что и при старте: незаданные ключи добирает профиль
+            # модели, поэтому RC_LIDAR_PROTOCOL=lds01 и здесь означает ROS 2.
+            settings = lidar_settings_from_env(
+                {key: values[key] for key in LIDAR_ENV_KEYS if key in values})
         except ValueError as exc:
             log.warning("Лидар: настройки в .env не применены: %s", exc)
             return False

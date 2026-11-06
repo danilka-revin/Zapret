@@ -98,6 +98,7 @@
         <div class="rc-lidar-status" id="rc-lidar-status" role="status" aria-live="polite">Загружаю статус…</div>
         ${VIEW_MARKUP}
         <form id="rc-lidar-form" class="rc-lidar-form">
+          <div class="rc-lidar-presets" id="rc-lidar-presets" hidden></div>
           <label>Откуда берётся скан
             <select id="rc-lidar-source">
               <option value="auto">auto — ROS 2, если он есть, иначе USB-порт</option>
@@ -254,6 +255,39 @@
     $('rc-lidar-autoprobe').checked = value.autoprobe !== false;
   }
 
+  // Готовые профили моделей: один щелчок заполняет источник, протокол, скорость,
+  // линию мотора и автопоиск. Сохраняет оператор — кнопка «Сохранить и применить».
+  // Для LDS-01 (TurtleBot3 Burger) профиль ставит ros/230400/none/автопоиск выкл:
+  // скан читает драйвер ROS 2, и приложение не открывает порт лидара.
+  function renderPresets(presets) {
+    const box = $('rc-lidar-presets');
+    if (!box) return;
+    if (!Array.isArray(presets) || !presets.length) {
+      box.hidden = true;
+      return;
+    }
+    box.innerHTML = '<span class="rc-lidar-hint">Модель лидара:</span>' + presets.map((preset) =>
+      `<button type="button" class="rc-lidar-btn" data-preset="${esc(preset.id)}"`
+      + ` title="${esc(preset.note || '')}">${esc(preset.title)}</button>`).join('');
+    box.hidden = false;
+    box.querySelectorAll('[data-preset]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const preset = presets.find((item) => item.id === button.dataset.preset);
+        if (preset) applyPreset(preset);
+      });
+    });
+  }
+
+  function applyPreset(preset) {
+    const settings = preset.settings || {};
+    $('rc-lidar-source').value = settings.source || 'auto';
+    $('rc-lidar-protocol').value = settings.protocol || 'auto';
+    $('rc-lidar-baud').value = String(settings.baud || '');
+    $('rc-lidar-motor').value = settings.motor || 'auto';
+    $('rc-lidar-autoprobe').checked = settings.autoprobe === true;
+    msg('Профиль «' + preset.title + '»: ' + (preset.note || 'проверьте поля и сохраните'), false);
+  }
+
   // Блок отображения: значения берём из lidar_view.js и отправляем туда же.
   function viewPopulate() {
     if (!window.RCLidarView || !$('rc-lv-size')) return;
@@ -340,6 +374,7 @@
       }
       csrfToken = body.csrfToken || csrfToken;
       populateSettings(body.settings);
+      renderPresets(body.presets);
       const ports = (body.options && body.options.ports) || [];
       $('rc-lidar-ports').innerHTML = ports.map((port) => `<option value="${esc(port)}">`).join('');
       renderStatus(body.status);

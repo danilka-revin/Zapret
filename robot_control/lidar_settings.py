@@ -35,6 +35,7 @@ from .lidar import (
     env_file_path,
     lidar_settings_from_env,
     normalize_lidar_settings,
+    presets_for_panel,
     usb_diagnostics,
 )
 
@@ -46,13 +47,19 @@ ENV_KEYS = (
 
 
 def settings_payload(manager: LidarManager | None = None) -> dict[str, Any]:
-    """Всё, что нужно панели: текущие настройки, варианты и живой статус."""
+    """Всё, что нужно панели: текущие настройки, варианты и живой статус.
+
+    ``presets`` — готовые профили моделей (LDS-01 от TurtleBot3 Burger и т. п.):
+    панель рисует по ним кнопки «модель лидара», чтобы не выбирать порт,
+    протокол, скорость и линию мотора по одному полю.
+    """
     manager = manager or LidarManager.get_instance()
     discovered = discover_ports(configured=manager.port, autoprobe=True,
                                 excluded=manager.excluded)
     return {
         "ok": True,
         "settings": manager.current_settings(),
+        "presets": presets_for_panel(),
         "options": {
             "sources": list(LIDAR_SOURCES),
             "protocols": list(LIDAR_PROTOCOLS),

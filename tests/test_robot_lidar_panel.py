@@ -48,3 +48,17 @@ def test_view_emits_radius_and_persists_zoom():
     js = _read("lidar_view.js")
     assert "new CustomEvent('rc-lidar-view'" in js
     assert "rc_lidar_pos_v1" in js
+
+
+def test_lidar_panel_offers_model_presets():
+    """В панели «Лидар» есть готовые профили моделей (LDS-01 от TurtleBot3).
+
+    Кнопка профиля заполняет источник, протокол, скорость, линию мотора и
+    автопоиск — оператору не нужно выбирать их по одному, а лидар читает
+    драйвер ROS 2 вместо перебора портов.
+    """
+    js = _read("lidar_settings.js")
+    assert 'id="rc-lidar-presets"' in js
+    assert "renderPresets(body.presets)" in js
+    assert "applyPreset" in js
+    assert ".rc-lidar-presets" in _read("lidar_settings.css")

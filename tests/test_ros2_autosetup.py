@@ -221,8 +221,11 @@ class FakeSystem:
         self.tmp = tmp_path
         self.project = tmp_path / "robot"
         (self.project / "scripts").mkdir(parents=True)
-        for name in ("ros2_setup.sh", "ros2_lidar.sh"):
+        for name in ("ros2_setup.sh", "ros2_lidar.sh", "lidar_lds01.sh"):
             shutil.copy2(SCRIPTS / name, self.project / "scripts" / name)
+        # lidar_lds01.sh пишет профиль тем же кодом, что и панель «Лидар».
+        (self.project / "robot_control").symlink_to(ROOT / "robot_control",
+                                                    target_is_directory=True)
         shutil.copytree(WS / "src" / "zapret_lidar", self.project / "ros2_ws" / "src" / "zapret_lidar",
                         ignore=shutil.ignore_patterns("__pycache__"))
         (self.project / ".env").write_text("RC_SECRET_KEY=x\nRC_LIDAR_SOURCE=auto\n", encoding="utf-8")
@@ -483,6 +486,22 @@ def test_operator_choice_serial_is_never_overwritten(system):
     assert "RC_LIDAR_SOURCE=ros" not in system.env_file()
 
 
+def test_lds01_profile_makes_the_driver_the_only_owner(system):
+    """LDS-01 (TurtleBot3 Burger) читается драйвером: setup пишет строгий ros.
+
+    В профиле лидара `ros`, а не `auto`: иначе через RC_LIDAR_ROS_GRACE_S
+    приложение отбирало бы у драйвера тот же USB-адаптер, и оба оставались без
+    скана. Всё остальное (USB-путь) включается осознанно — RC_LIDAR_SOURCE=serial.
+    """
+    (system.project / ".env").write_text("RC_SECRET_KEY=x\nRC_LIDAR_PROTOCOL=lds01\n",
+                                        encoding="utf-8")
+    assert system.run().returncode == 0
+    text = system.env_file()
+    assert "RC_LIDAR_SOURCE=ros" in text
+    assert "RC_LIDAR_SOURCE=auto" not in text
+    assert "RC_LIDAR_ROS_TOPIC=/scan" in text
+
+
 def test_partial_driver_build_failure_is_reported_but_not_fatal(system):
     result = system.run(FAKE_COLCON_FAIL="ldlidar_stl_ros2")
     assert result.returncode == 0, result.stdout + result.stderr
@@ -641,6 +660,35 @@ def test_lidar_script_survives_colcon_setup_scripts_under_set_u(system):
     assert "COLCON_TRACE" not in output
     # Дошли до проверки топиков: команды ros2 в тесте нет — так и говорится.
     assert "ros2 не найдена" in output
+
+
+def test_lds01_script_prints_the_profile_without_touching_env(system):
+    """--print только показывает настройки: .env и систему он не меняет."""
+    env_path = system.project / ".env"
+    before = env_path.read_text(encoding="utf-8") if env_path.is_file() else None
+    result = system.run("--print", script="lidar_lds01.sh")
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout + result.stderr
+    assert '"source": "ros"' in out and '"protocol": "lds01"' in out
+    assert '"baud": "230400"' in out and '"autoprobe": false' in out
+    after = env_path.read_text(encoding="utf-8") if env_path.is_file() else None
+    assert after == before, "--print не должен писать .env"
+    assert not [line for line in system.calls() if line.startswith(("apt-get", "colcon build"))]
+
+
+def test_lds01_script_writes_the_profile_and_keeps_other_env_lines(system):
+    """Профиль LDS-01 пишется в .env, остальные строки остаются как были."""
+    env_path = system.project / ".env"
+    env_path.write_text("RC_SECRET_KEY=secret\nRC_SLAM_PORT=/dev/ttyACM0\n",
+                        encoding="utf-8")
+    result = system.run(script="lidar_lds01.sh")
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = env_path.read_text(encoding="utf-8")
+    for line in ("RC_LIDAR_SOURCE=ros", "RC_LIDAR_PROTOCOL=lds01",
+                 "RC_LIDAR_BAUD=230400", "RC_LIDAR_MOTOR=none",
+                 "RC_LIDAR_AUTOPROBE=0", "RC_SECRET_KEY=secret",
+                 "RC_SLAM_PORT=/dev/ttyACM0"):
+        assert line in text, line
 
 
 def test_lidar_script_builds_a_missing_workspace_by_itself(system):
