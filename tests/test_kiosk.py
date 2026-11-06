@@ -124,6 +124,8 @@ def test_telemetry_api_returns_only_public_values(kiosk_client):
             "masterPort",
             # Статусы камер отдаёт единственный бортовой владелец для веб-пульта.
             "cameras",
+            # Свет, замок, карты и компас отдельной платы модуля датчиков.
+            "sensorModule",
         }
         cameras = body["data"]["cameras"]
         assert isinstance(cameras, list)

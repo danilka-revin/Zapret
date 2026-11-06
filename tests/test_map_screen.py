@@ -112,6 +112,24 @@ def test_map_page_shows_stats_and_file(tmp_path):
     assert report["renderErrors"] == [], report["renderErrors"]
 
 
+def test_compass_from_sensor_module_is_shown_next_to_the_pose(tmp_path):
+    """Курс магнитометра рядом с позой; нет платы или данные устарели — прочерк."""
+    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS})
+    # Платы нет: пустой compass не должен выглядеть как «0°» (это север).
+    assert report["stats"]["compass"] == "—"
+
+    payload = snapshot()
+    payload["compass"] = {"ok": True, "heading": 123.4, "stale": False,
+                          "doorOpen": False, "lockOpen": False, "errors": []}
+    report = run(tmp_path, {"snapshot": payload, "paths": PATHS})
+    assert report["stats"]["compass"] == "123° · дверь закрыта"
+
+    payload["compass"] = {"ok": True, "heading": 123.4, "stale": True,
+                          "doorOpen": True, "lockOpen": True, "errors": ["RC522"]}
+    report = run(tmp_path, {"snapshot": payload, "paths": PATHS})
+    assert report["stats"]["compass"] == "—"
+
+
 def test_map_badge_switches_to_mapping(tmp_path):
     report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS})
     assert report["badge"] == "MAPPING"

@@ -224,6 +224,7 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
     coverage: byId('map-cov').textContent,
     occupied: byId('map-occ').textContent,
     pose: byId('map-pose').textContent,
+    compass: byId('map-compass').textContent,
     scans: byId('map-scans').textContent,
     file: byId('map-file').textContent,
     quality: byId('map-quality').textContent,

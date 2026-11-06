@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <string>
 #include <strings.h>
 #include <vector>
@@ -81,6 +82,9 @@ namespace sim {
 
 inline int64_t now_us = 0;
 inline int64_t next_tick_us = 50;
+// Watchdog (заглушка avr/wdt.h): прошивка его включает и кормит в loop().
+inline int wdt_enabled = 0;
+inline unsigned long wdt_kicks = 0;
 void advance(int64_t us);
 
 struct Board;
@@ -115,6 +119,26 @@ struct Board {
   uint8_t mode[80] = {0};
   int analog[80] = {0};
   SimSerial serial;
+  // --- Модуль датчиков: I²C, SPI и адресная лента ---------------------------
+  // Хуки пустые, пока их не назначит сценарий: колесу они не нужны. Заглушки
+  // Wire.h/SPI.h/Adafruit_NeoPixel.h только передают байты сюда, поэтому модели
+  // микросхем (GY-87, RC522) живут в сценарии, а не в прошивке.
+  std::function<bool(uint8_t address, const uint8_t* tx, uint8_t tx_length,
+                     uint8_t* rx, uint8_t rx_length)> i2c_fn;
+  std::function<uint8_t(uint8_t out)> spi_fn;
+  bool i2c_transfer(uint8_t address, const uint8_t* tx, uint8_t tx_length,
+                    uint8_t* rx, uint8_t rx_length) {
+    if (!i2c_fn) return false;
+    return i2c_fn(address, tx, tx_length, rx, rx_length);
+  }
+  uint8_t spi_transfer(uint8_t out) { return spi_fn ? spi_fn(out) : (uint8_t)0; }
+  // Наблюдатель за выводами: моделям SPI нужно видеть фронты SS (D53), иначе
+  // нельзя отличить адресный байт от байта данных.
+  std::function<void(uint8_t pin, uint8_t level)> write_fn;
+  // Что реально ушло в ленту: по пикселю на светодиод, уже с яркостью.
+  std::vector<uint32_t> pixels;
+  uint8_t strip_brightness = 255;
+  long strip_shows = 0;
   // EEPROM платы (ATmega2560 — 4 КиБ, здесь хватает 1 КиБ): ноль, наклон
   // потенциометра и т.п.
   uint8_t eeprom[1024] = {0};
@@ -250,6 +274,7 @@ struct Board {
     value = value ? HIGH : LOW;
     const uint8_t before = level[pin];
     level[pin] = value;
+    if (write_fn && before != value) write_fn(pin, value);
     if (pin == 5 && before == HIGH && value == LOW) ++brake_releases;
     if (pin == 7 && before != value) last_dir_change_us = now_us;
     if (pin != 6 || before == value) return;
