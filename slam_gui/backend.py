@@ -2386,15 +2386,64 @@ class MasterSource:
             else:
                 self.serial_ready.clear()
 
+    def _operator_assigned_bms(self, real):
+        """Порт, который оператор назначил BMS в ``.env`` (страница «Устройства»).
+
+        В master-режиме порты колёс задаются вручную (``RC_WHEEL_PORTS``), и
+        владелец колёс перечисляет только их. Порт BMS в этот список не входит,
+        поэтому в пассивную проверку USB он не попадал никогда — а опрос BMS
+        требовал именно её: назначение сохранялось, а данных не было.
+
+        Явное назначение в ``.env`` — подтверждение оператора. Тип устройства
+        по-прежнему доказывают сами ответы JBD (два верных кадра), а не VID/PID:
+        чужие порты — колесо, лидар, принтер — здесь запрещены.
+        """
+        try:
+            from robot_control.device_ports import role_port, wheel_ports
+            from robot_control.printer import printer_reserved_ports
+        except Exception:                     # noqa: BLE001 — без настроек отказ
+            return False
+        if not real:
+            return False
+        assigned = role_port("bms")
+        if not assigned or os.path.realpath(assigned) != real:
+            return False
+        if real in {os.path.realpath(p) for p in wheel_ports() if p}:
+            return False
+        lidar = role_port("lidar")
+        if lidar and os.path.realpath(lidar) == real:
+            return False
+        if real in {os.path.realpath(p) for p in printer_reserved_ports()}:
+            return False
+        try:
+            from robot_control.device_ports import SENSOR_ENV_KEY, env_value
+            sensors = env_value(SENSOR_ENV_KEY)
+        except Exception:                     # noqa: BLE001 — без настроек модуля датчиков
+            sensors = ""
+        if sensors and os.path.realpath(sensors) == real:
+            return False
+        if real in getattr(self, "_manual_lidar_probes", set()):
+            return False
+        links = getattr(self, "links", None) or {}
+        if any(link.device == real for link in links.values()):
+            return False
+        return real not in {os.path.realpath(p) for p in (getattr(self, "_spawning", None) or ())}
+
     def manual_bms_port_allowed(self, path):
-        """Only the selected, passively wheel-checked non-lidar can receive JBD."""
+        """Only the selected, non-lidar port may receive JBD.
+
+        Порт уже проверен владельцем колёс пассивно (в нём не колесо и не
+        лидар) либо оператор назначил его BMS в ``.env`` — тогда устройство
+        подтверждают ответы JBD, а не молчание или VID/PID.
+        """
         real = os.path.realpath(path)
         fingerprint = self._device_fingerprint(path)
         with self.lock:
             result = self._bms_results.get(real)
-            return bool(fingerprint is not None and
+            checked = self._unknown_devices.get(real) == fingerprint
+            allowed = bool(checked) or self._operator_assigned_bms(real)
+            return bool(fingerprint is not None and allowed and
                         real not in getattr(self, "_manual_lidar_probes", set()) and
-                        self._unknown_devices.get(real) == fingerprint and
                         (result is None or result == (fingerprint, True)))
 
     def manual_printer_port_allowed(self, path):
@@ -2552,10 +2601,13 @@ class MasterSource:
         """Record both validated JBD replies, without overriding a lidar."""
         real = os.path.realpath(path)
         with self.lock:
-            if (fingerprint is None or self._unknown_devices.get(real) != fingerprint or
+            checked = self._unknown_devices.get(real) == fingerprint
+            if (fingerprint is None or
+                    not (checked or self._operator_assigned_bms(real)) or
                     self._device_fingerprint(path) != fingerprint or
                     self._bms_results.get(real) == (fingerprint, False)):
                 return False
+            self._unknown_devices[real] = fingerprint
             self._bms_results[real] = (fingerprint, True)
         self._publish_auto_discovery()
         self._refresh_auto_readiness()

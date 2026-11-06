@@ -785,3 +785,141 @@ def test_operator_console_points_to_kiosk_for_bms_setup(client, monkeypatch):
     assert client.get("/api/battery").get_json()["battery"]["setupAvailable"] is False
     setup = client.get("/api/battery/setup").get_json()
     assert setup["available"] is False and "8090" in setup["reason"]
+
+
+def test_bms_connects_on_the_operator_assigned_port_with_manual_wheel_ports(tmp_path, monkeypatch):
+    """Порт BMS, назначенный оператором, не должен ждать «проверки USB».
+
+    В master-режиме порты колёс задаются вручную (``RC_WHEEL_PORTS``), поэтому
+    владелец колёс перечисляет только их. Порт BMS в этот список не входит и в
+    пассивную проверку не попадал никогда, а опрос BMS требовал именно её —
+    назначение сохранялось, данные не появлялись. Здесь порт BMS назначен,
+    JBD отвечает по PTY, и опрос обязан подключиться.
+    """
+    import pty
+    import select
+
+    from robot_control.battery import BatteryManager
+    from slam_gui.backend import MasterSource
+
+    master, slave = pty.openpty()
+    port = os.ttyname(slave)
+    wheel = tmp_path / "ttyUSB1"
+    wheel.touch()
+    monkeypatch.setenv("RC_BMS_PORT", port)
+    monkeypatch.setenv("RC_WHEEL_PORTS", str(wheel))
+    monkeypatch.delenv("RC_LIDAR_PORT", raising=False)
+
+    class Owner:
+        """Владелец колёс без единой пассивной проверки этого порта."""
+
+        _device_fingerprint = staticmethod(MasterSource._device_fingerprint)
+        _operator_assigned_bms = MasterSource._operator_assigned_bms
+        manual_bms_port_allowed = MasterSource.manual_bms_port_allowed
+        confirm_manual_bms = MasterSource.confirm_manual_bms
+
+        def __init__(self):
+            self.lock = threading.Lock()
+            self.links = {}
+            self._spawning = set()
+            self._manual_lidar_probes = set()
+            self._unknown_devices = {}
+            self._bms_results = {}
+
+        def _publish_auto_discovery(self):
+            pass
+
+        def _refresh_auto_readiness(self):
+            pass
+
+    owner = Owner()
+    manager = BatteryManager(port)
+    manager.use_manual_discovery(owner)
+    stop = threading.Event()
+
+    def emulate():
+        buffer = b""
+        while not stop.is_set():
+            ready, _, _ = select.select([master], [], [], .05)
+            if not ready:
+                continue
+            buffer += os.read(master, 1024)
+            while len(buffer) >= 7:
+                frame, buffer = buffer[:7], buffer[7:]
+                os.write(master, response(frame[2], payloads()[0 if frame[2] == 3 else 1]))
+
+    thread = threading.Thread(target=emulate, daemon=True)
+    thread.start()
+    manager.start()
+    try:
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline and not manager.snapshot()["connected"]:
+            time.sleep(.02)
+        snap = manager.snapshot()
+        assert snap["connected"], snap["reason"]
+        assert len(snap["data"]["cells"]) == 32
+    finally:
+        manager.stop()
+        stop.set()
+        thread.join(timeout=1)
+        os.close(slave)
+        os.close(master)
+
+
+def test_wheel_owner_accepts_the_assigned_bms_port_without_a_passive_probe(tmp_path, monkeypatch):
+    """Гейт владельца колёс: назначение оператора вместо «проверки USB»."""
+    from slam_gui.backend import MasterSource
+
+    port = tmp_path / "ttyUSB6"
+    port.touch()
+    wheel = tmp_path / "ttyUSB2"
+    wheel.touch()
+    lidar = tmp_path / "ttyUSB3"
+    lidar.touch()
+    monkeypatch.setenv("RC_WHEEL_PORTS", str(wheel))
+    monkeypatch.delenv("RC_LIDAR_PORT", raising=False)
+    monkeypatch.setenv("RC_BMS_PORT", str(port))
+
+    class Owner:
+        _device_fingerprint = staticmethod(MasterSource._device_fingerprint)
+        _operator_assigned_bms = MasterSource._operator_assigned_bms
+        manual_bms_port_allowed = MasterSource.manual_bms_port_allowed
+        confirm_manual_bms = MasterSource.confirm_manual_bms
+
+        def __init__(self):
+            self.lock = threading.Lock()
+            self.links = {}
+            self._spawning = set()
+            self._manual_lidar_probes = set()
+            self._unknown_devices = {}
+            self._bms_results = {}
+
+        def _publish_auto_discovery(self):
+            pass
+
+        def _refresh_auto_readiness(self):
+            pass
+
+    owner = Owner()
+    fingerprint = os.stat(port)
+    fingerprint = (fingerprint.st_dev, fingerprint.st_ino,
+                   fingerprint.st_rdev, fingerprint.st_ctime_ns)
+    assert MasterSource.manual_bms_port_allowed(owner, str(port)) is True
+    assert MasterSource.confirm_manual_bms(owner, str(port), fingerprint) is True
+
+    # Порт колеса BMS не отдаёт, даже если он записан в RC_BMS_PORT.
+    monkeypatch.setenv("RC_BMS_PORT", str(wheel))
+    assert MasterSource.manual_bms_port_allowed(owner, str(wheel)) is False
+
+    # Порт лидара — тоже нет.
+    monkeypatch.setenv("RC_LIDAR_PORT", str(lidar))
+    monkeypatch.setenv("RC_BMS_PORT", str(lidar))
+    assert MasterSource.manual_bms_port_allowed(owner, str(lidar)) is False
+
+    # Порт, который никто не назначал BMS, по-прежнему не открывается:
+    # «проверка USB» остаётся обязательной для остальных портов.
+    monkeypatch.delenv("RC_BMS_PORT", raising=False)
+    assert MasterSource.manual_bms_port_allowed(Owner(), str(port)) is False
+    # Но после двух верных ответов JBD порт уже доказан и переживает снятие
+    # назначения до следующего пересканирования USB.
+    assert MasterSource.manual_bms_port_allowed(owner, str(port)) is True
