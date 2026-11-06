@@ -498,15 +498,24 @@ acquire_lock() {
 release_lock() { exec 8<&- 2>/dev/null || true; }
 
 # --- права администратора ----------------------------------------------------- #
-ROOT_MODE=""            # root | sudo | ask | none
+ROOT_MODE=""            # root | sudo | ask | ask-gui | none
 KEEPALIVE_PID=""
 NEED_ROOT_FOR=()
 has_tty() { [[ -t 0 ]] || { : </dev/tty; } 2>/dev/null; }
+# Окно ввода пароля вместо терминала: приложение ставит ROS 2 само (ярлык,
+# автозапуск, панель «Лидар»), и печатать что-то в консоли оператор не должен.
+gui_askpass() {
+  local helper="$ROOT/scripts/askpass_gui.sh"
+  [[ -x "$helper" ]] || return 1
+  [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] || return 1
+  printf '%s' "$helper"
+}
 detect_root() {
   if [[ $EUID -eq 0 ]]; then ROOT_MODE="root"
   elif ! have sudo; then ROOT_MODE="none"
   elif sudo -n true 2>/dev/null; then ROOT_MODE="sudo"
   elif has_tty; then ROOT_MODE="ask"
+  elif gui_askpass >/dev/null; then ROOT_MODE="ask-gui"
   else ROOT_MODE="none"
   fi
 }
@@ -527,6 +536,20 @@ need_root() {  # need_root <зачем> — 0, если права есть (с�
     ask)
       log "нужны права администратора ($why) — sudo спросит пароль один раз"
       if sudo -v; then ROOT_MODE="sudo"; start_keepalive; return 0; fi
+      ROOT_MODE="none" ;;
+    ask-gui)
+      # Терминала рядом нет (робот запущен ярлыком или автозапуском): пароль
+      # спрашивает окно системы. Дальше sudo помнит пароль (start_keepalive),
+      # поэтому вопрос задаётся один раз на всю установку.
+      local helper
+      helper="$(gui_askpass || true)"
+      if [[ -n "$helper" ]]; then
+        log "нужны права администратора ($why) — пароль спросит окно системы"
+        if SUDO_ASKPASS="$helper" RC_ASKPASS_TEXT="Для установки ROS 2 и драйверов лидара нужен пароль администратора робота ($why)." \
+             sudo -A -v; then
+          ROOT_MODE="sudo"; start_keepalive; return 0
+        fi
+      fi
       ROOT_MODE="none" ;;
   esac
   [[ " ${NEED_ROOT_FOR[*]-} " == *" $why "* ]] || NEED_ROOT_FOR+=("$why")

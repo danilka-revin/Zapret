@@ -200,6 +200,12 @@
     if (!ros) return '';
     const parts = [];
     const supervisor = ros.supervisor;
+    // Драйвер поднимает само приложение (robot_control/lidar_boot.py): оператор
+    // должен видеть, что идёт установка/запуск, и не искать команду в терминале.
+    const boot = ros.boot || {};
+    if (boot.note) parts.push(String(boot.note));
+    else if (boot.state === 'spawn') parts.push('запускаю драйвер ROS 2 сам');
+    else if (boot.state === 'install') parts.push('ставлю ROS 2 и драйверы сама');
     if (supervisor && supervisor.driver) {
       const driver = supervisor.driver_title || supervisor.driver;
       const port = supervisor.port ? ' · ' + String(supervisor.port).split('/').pop() : '';

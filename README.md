@@ -1254,6 +1254,16 @@ ROS 2, пакеты драйверов и сборка `ros2_ws` делаютс�
 нажать «Сохранить и применить». Одного ключа `RC_LIDAR_PROTOCOL=lds01` в `.env`
 тоже достаточно: остальные значения добираются из профиля модели.
 
+Драйвер ROS 2 поднимается **сам**, чем бы приложение ни запустили (ярлык,
+автозапуск, `systemd`, `kiosk.sh`, второй экран): в каждом процессе работает
+сторож `robot_control/lidar_boot.py`. Он проверяет `/scan`, при необходимости
+запускает `scripts/ros2_lidar.sh --keep-alive --no-setup`, а если ROS 2 или
+драйвера нет — сам запускает `scripts/ros2_setup.sh` (пароль администратора
+спрашивает окно системы, `scripts/askpass_gui.sh`, а не терминал). Видно в
+`GET /api/lidar` → `ros.boot`, журналы — `var/lidar.log` и `var/lidar-boot.log`.
+Выключить: `RC_LIDAR_AUTOSTART=0` (весь лидар) или `RC_ROS_AUTO=0` (только
+автоустановку).
+
 Полный разбор пути ROS 2 (модели, установка, служба, диагностика) —
 `docs/ROS2_LIDAR.md`. Чтение USB-порта самим приложением осталось запасным
 вариантом: `RC_LIDAR_SOURCE=serial` (или `auto` на стенде без ROS 2) — тогда
@@ -1733,7 +1743,8 @@ slam_gui/                     веб-интерфейс робота (из danil
 scripts/
   start_robot.sh              единый запуск веб-пульта и киоска, с защитой от дублей
   make_shortcut.sh            один ярлык «Запустить робот» на рабочем столе
-  sync_firmware_desktop.sh    актуальные прошивки Arduino (мастер и нода) на рабочем столе
+  sync_firmware_desktop.sh    актуальные прошивки Arduino на рабочем столе:
+                              motor_wheel_FL/FR/RL/RR.ino и sensor_module.ino
   flash_firmware.sh           ручная прошивка плат колёс в USB-порты из терминала
                               (кнопки в программе нет; --check, --force)
   firmware_probe.py           какие версии прошивки (fw=) реально на платах
@@ -1748,6 +1759,8 @@ scripts/
   explore_sim.py              сухой прогон автоцикла на синтетической карте без железа
   master_check.py             проверка только вручную выбранного порта по @TLM
                               (--save-env — записать постоянное имя by-id в .env)
+  askpass_gui.sh              пароль администратора окном системы (SUDO_ASKPASS): установка
+                              ROS 2 без терминала
   ros2_setup.sh               ROS 2 для лидара сам: установка (apt или исходники), драйверы,
                               rosdep, colcon build ros2_ws, служба (--check, --status)
   ros2_lidar.sh               запуск лидара через ROS 2 (--status, --print, --model, --keep-alive)

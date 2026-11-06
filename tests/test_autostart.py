@@ -388,6 +388,41 @@ def test_sync_firmware_desktop_writes_firmware_per_wheel(fake_host):
     assert "колесо FR" in result.stdout and "колесо RR" in result.stdout
 
 
+def test_sync_firmware_desktop_copies_sensor_module(fake_host):
+    """Прошивка модуля датчиков лежит на рабочем столе рядом с прошивками колёс.
+
+    У модуля датчиков (свет, замок, карты, компас) своя плата и своя прошивка.
+    Раньше на рабочий стол попадали только колёса, и прошить модуль с робота
+    было нечем: файл приходилось искать в репозитории. Ответ «прошивка не
+    появляется вместе с остальными» — ровно про это.
+    """
+    result = run("sync_firmware_desktop.sh")
+    assert result.returncode == 0, result.stderr
+    desktop = fake_host.root / "Desktop"
+    module = desktop / "sensor_module.ino"
+    assert module.is_file(), "нет прошивки модуля датчиков на рабочем столе"
+    assert module.read_bytes() == (FIRMWARE / "sensor_module" / "sensor_module.ino").read_bytes()
+    assert "модуль датчиков" in result.stdout
+    # Колёса при этом на месте — ничего не потеряли.
+    for module_id in ("FL", "FR", "RL", "RR"):
+        assert (desktop / ("motor_wheel_%s.ino" % module_id)).is_file()
+
+
+def test_sync_firmware_desktop_refreshes_sensor_module_only_when_changed(fake_host):
+    """Старая копия прошивки модуля заменяется, актуальная — не трогается."""
+    assert run("sync_firmware_desktop.sh").returncode == 0
+    desktop = fake_host.root / "Desktop"
+    module = desktop / "sensor_module.ino"
+    fresh_mtime = module.stat().st_mtime_ns
+
+    assert run("sync_firmware_desktop.sh").returncode == 0
+    assert module.stat().st_mtime_ns == fresh_mtime, "актуальный файл переписывать незачем"
+
+    module.write_text("// старая версия прошивки модуля датчиков\n", encoding="utf-8")
+    assert run("sync_firmware_desktop.sh").returncode == 0
+    assert module.read_bytes() == (FIRMWARE / "sensor_module" / "sensor_module.ino").read_bytes()
+
+
 def test_sync_firmware_desktop_refreshes_after_update_and_keeps_fresh(fake_host):
     """Новая версия прошивки заменяет копию; актуальная копия не переписывается."""
     assert run("sync_firmware_desktop.sh").returncode == 0
@@ -538,3 +573,36 @@ def test_kinect_publisher_autostart_is_wired_and_never_fakes_depth():
 
 if __name__ == "__main__":  # pragma: no cover — ручной запуск
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ---------------------------------------- пароль администратора без терминала --- #
+
+
+def test_askpass_gui_is_silent_without_a_graphical_session(fake_host):
+    """Без окна скрипт не выдумывает пароль: код 1, вывод пустой."""
+    result = run("askpass_gui.sh")
+    assert result.returncode == 1
+    assert result.stdout.strip() == ""
+
+
+def test_askpass_gui_prints_the_password_from_the_window(fake_host, tmp_path, monkeypatch):
+    """Пароль спрашивает окно системы — оператор ничего не печатает в терминале."""
+    shims = tmp_path / "gui-bin"
+    shims.mkdir()
+    zenity = shims / "zenity"
+    zenity.write_text("#!/usr/bin/env bash\necho robot-pass\n", encoding="utf-8")
+    zenity.chmod(0o755)
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("PATH", "%s%s%s" % (shims, os.pathsep, os.environ.get("PATH", "")))
+
+    result = run("askpass_gui.sh")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "robot-pass"
+
+
+def test_ros2_setup_asks_the_password_in_a_window_when_there_is_no_terminal():
+    """Установка ROS 2 идёт из приложения: sudo спрашивает пароль окном, не консолью."""
+    script = (SCRIPTS / "ros2_setup.sh").read_text(encoding="utf-8")
+    assert "scripts/askpass_gui.sh" in script
+    assert "SUDO_ASKPASS" in script
+    assert "ask-gui" in script

@@ -54,6 +54,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence, Tuple
 
+from . import lidar_boot
 from . import ros_env
 from .ros_lidar import RosLidar
 
@@ -3619,6 +3620,10 @@ class LidarManager:
         block["quiet_s"] = round(self._ros_quiet_s(), 1)
         block["grace_s"] = round(ros_grace_s(), 1)
         block["usb_fallback"] = self.ros_fallback_note()
+        # Сторож драйвера (:mod:`robot_control.lidar_boot`): поднимает ли
+        # приложение драйвер само и что именно оно делает сейчас. Раньше без
+        # этого поля «скана нет» не отличить от «драйвер никто не запускал».
+        block["boot"] = lidar_boot.status()
         # Подсказка ROS 2 не должна затирать причину уровня менеджера: если скан
         # идёт из ROS 2, пользователю показывать нечего.
         if self.ros.fresh():
