@@ -1087,8 +1087,47 @@ def test_installer_installs_ros_by_default():
     text = (SCRIPTS / "install_ubuntu.sh").read_text(encoding="utf-8")
     assert 'ROS2="auto"' in text
     assert "bash scripts/ros2_setup.sh" in text
+    assert "robot-ros2-setup" in text
     # Старое поведение «ROS 2 только если уже стоит» убрано.
     assert 'compgen -G "/opt/ros/*"' not in text
+
+
+def test_systemd_servers_wait_for_privileged_ros2_preflight():
+    setup = (SCRIPTS / "robot-ros2-setup.service").read_text(encoding="utf-8")
+    assert "User=root" in setup
+    assert "ros2_bootstrap.sh" in setup
+    assert "TimeoutStartSec=0" in setup
+    for unit_name in ("robot-control.service", "robot-kiosk.service", "robot-lidar.service"):
+        unit = (SCRIPTS / unit_name).read_text(encoding="utf-8")
+        assert "After=network-online.target robot-ros2-setup.service" in unit
+        assert "Wants=network-online.target robot-ros2-setup.service" in unit
+
+
+def test_ros2_bootstrap_honors_disabled_and_serial_modes(tmp_path):
+    project = tmp_path / "robot"
+    scripts = project / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(SCRIPTS / "ros2_bootstrap.sh", scripts / "ros2_bootstrap.sh")
+    setup = scripts / "ros2_setup.sh"
+    setup.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" > "$BOOT_ARGS"\n', encoding="utf-8")
+    (project / ".env").write_text("RC_ROS_AUTO=1\nRC_LIDAR_SOURCE=ros\n", encoding="utf-8")
+    args_file = tmp_path / "args"
+    env = dict(os.environ, BOOT_ARGS=str(args_file))
+
+    disabled = subprocess.run(["bash", str(scripts / "ros2_bootstrap.sh")], env=dict(env, RC_ROS_AUTO="0"),
+                              capture_output=True, text=True, timeout=10)
+    assert disabled.returncode == 0
+    assert not args_file.exists(), "disabled ROS auto-install must not invoke the installer"
+
+    serial = subprocess.run(["bash", str(scripts / "ros2_bootstrap.sh")], env=dict(env, RC_LIDAR_SOURCE="serial"),
+                            capture_output=True, text=True, timeout=10)
+    assert serial.returncode == 0
+    assert not args_file.exists(), "direct USB mode must not install ROS"
+
+    enabled = subprocess.run(["bash", str(scripts / "ros2_bootstrap.sh")], env=env,
+                             capture_output=True, text=True, timeout=10)
+    assert enabled.returncode == 0, enabled.stdout + enabled.stderr
+    assert args_file.read_text(encoding="utf-8").strip() == "--quiet"
 
 
 def test_ros_scripts_are_executable_in_git():
@@ -1102,3 +1141,4 @@ def test_ros_scripts_are_executable_in_git():
     assert modes, result.stderr
     for name in ("scripts/ros2_setup.sh", "scripts/ros2_lidar.sh", "scripts/start_robot.sh"):
         assert modes.get(name) == "100755", "%s: режим %s" % (name, modes.get(name))
+    assert (SCRIPTS / "ros2_bootstrap.sh").stat().st_mode & 0o111

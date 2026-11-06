@@ -6,17 +6,19 @@
 #   sudo useradd --system --home /opt/robot-control --shell /usr/sbin/nologin robotctl || true
 #   sudo mkdir -p /opt/robot-control && sudo cp -r . /opt/robot-control
 #   sudo chown -R robotctl:robotctl /opt/robot-control
-#   sudo cp scripts/robot-control.service /etc/systemd/system/
+#   sudo cp scripts/robot-ros2-setup.service scripts/robot-control.service /etc/systemd/system/
+#   sudo sed -i "s|/opt/robot-control|$PWD|g" /etc/systemd/system/robot-ros2-setup.service
+#   sudo sed -i "s|/opt/robot-control|$PWD|g" /etc/systemd/system/robot-control.service
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now robot-control
+#   sudo systemctl enable --now robot-ros2-setup robot-control
 #   journalctl -u robot-control -f
 #
 # Выключить автозапуск:  ./scripts/autostart.sh off  (или sudo systemctl disable --now robot-control)
 #
 [Unit]
 Description=Robot control web console (operator login)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target robot-ros2-setup.service
+Wants=network-online.target robot-ros2-setup.service
 
 [Service]
 Type=simple

@@ -18,8 +18,8 @@ Description=Robot lidar over ROS 2 (zapret_lidar supervisor)
 # Лидар поднимается ДО приложений: тогда пульт и бортовой экран сразу читают
 # /scan, а USB-порт занимает драйвер, а не подбор портов внутри приложения.
 Before=robot-control.service robot-kiosk.service
-After=network-online.target
-Wants=network-online.target
+After=network-online.target robot-ros2-setup.service
+Wants=network-online.target robot-ros2-setup.service
 
 [Service]
 Type=simple

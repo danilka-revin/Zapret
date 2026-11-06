@@ -74,6 +74,13 @@ have_systemd() {
   $SUDO systemctl list-unit-files --no-pager >/dev/null 2>&1
 }
 
+# Проверка/установка ROS 2 запускается root-службой до приложений: показываем
+# её в статусе и управляем ею вместе с остальным автозапуском, если установлена.
+if have_systemd && $SUDO systemctl cat robot-ros2-setup.service >/dev/null 2>&1; then
+  UNITS=(robot-ros2-setup "${UNITS[@]}")
+  UNIT_TITLES=("проверка/установка ROS 2 перед запуском серверов" "${UNIT_TITLES[@]}")
+fi
+
 # Лидар через ROS 2 (robot-lidar) — отдельная служба: драйвер лидара занимает
 # USB-порт и должен подниматься раньше приложений (см. ros2_setup.sh --service).
 # Добавляем её в общий список только если она установлена: иначе в status у

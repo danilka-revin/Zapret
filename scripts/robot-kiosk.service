@@ -8,9 +8,11 @@
 #   sudo useradd --system --home /opt/robot-control --shell /usr/sbin/nologin robotctl || true
 #   sudo mkdir -p /opt/robot-control && sudo cp -r . /opt/robot-control
 #   sudo chown -R robotctl:robotctl /opt/robot-control
-#   sudo cp scripts/robot-kiosk.service /etc/systemd/system/
+#   sudo cp scripts/robot-ros2-setup.service scripts/robot-kiosk.service /etc/systemd/system/
+#   sudo sed -i "s|/opt/robot-control|$PWD|g" /etc/systemd/system/robot-ros2-setup.service
+#   sudo sed -i "s|/opt/robot-control|$PWD|g" /etc/systemd/system/robot-kiosk.service
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now robot-kiosk
+#   sudo systemctl enable --now robot-ros2-setup robot-kiosk
 #   journalctl -u robot-kiosk -f
 #
 # Автозапуск — по желанию: `enable` включает его, `disable` выключает.
@@ -21,8 +23,8 @@
 #
 [Unit]
 Description=Robot onboard kiosk screen (telemetry, port 8090)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target robot-ros2-setup.service
+Wants=network-online.target robot-ros2-setup.service
 
 [Service]
 Type=simple
