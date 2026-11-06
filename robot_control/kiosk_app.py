@@ -99,6 +99,7 @@ from robot_control.navigation import NavigationError, NavigationService
 from robot_control.kinect import DepthError, KinectDepthService
 from robot_control.exploration import ExplorationError, ExplorationService
 from robot_control.sensor_layout import layout_payload, kinect_spec, rear_kinect_enabled
+from robot_control import sensor_module as sensor_module_client
 from robot_control import calibration as geometry_calibration
 
 log = logging.getLogger("robot_control.kiosk")
@@ -709,6 +710,21 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     nav_lidar = None if config.testing else (app.extensions.get("rc_lidar") or LidarManager.get_instance())
     navigation = NavigationService(map_service, getattr(state, "source", None), nav_lidar)
     app.extensions["rc_navigation"] = navigation
+    # Модуль датчиков (свет, замок двери, карты доступа, компас) — отдельная
+    # плата на своём USB. Порт задаётся вручную (RC_SENSOR_PORT), автопоиска нет:
+    # без порта экран показывает «не подключён», а не чужое устройство.
+    sensor_module = None
+    if not config.testing:
+        sensor_module = sensor_module_client.open_sensor_module(
+            log=lambda message: eventlog.record("warn", message, source="sensor"))
+        if sensor_module is not None:
+            sensor_module.start()
+            eventlog.record("ok", "модуль датчиков: %s" % sensor_module.port, source="sensor")
+    app.extensions["rc_sensor_module"] = sensor_module
+    # PIN-хранилище кейса нужно и замку двери модуля датчиков: открытие двери
+    # так же требует PIN, иначе плата стала бы обходным путём.
+    app.extensions["rc_vault"] = getattr(state, "vault", None)
+
     # Kinect 360 и автообследование живут только здесь, на владельце железа:
     # пульт 8080 получает статус и команды через proxy, а не второго исполнителя.
     kinect_service = KinectDepthService()
@@ -1400,6 +1416,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "masterPort": snap.get("masterPort"),
             # Последние сообщения прошивки мастера («# FR: Калибровка ЗАВЕРШЕНА!»).
             "masterMessages": snap.get("masterMessages") or [],
+            # Свет, замок, карты и компас отдельной платы (может не быть).
+            "sensorModule": sensor_state_payload(),
         }})
 
     @app.get("/api/kiosk_wheel_state")
@@ -1787,14 +1805,116 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                         "ros_rescan": result.get("ros_rescan") if isinstance(result, dict) else None,
                         "status": manager.get_status()})
 
+    # --------------------------- Модуль датчиков ------------------------- #
+    # Свет, замок двери, карты доступа и компас живут на отдельной плате
+    # (firmware/sensor_module). Сервер только показывает состояние и передаёт
+    # команды; безопасное состояние держит прошивка. Порт может отсутствовать
+    # или отвалиться — тогда экран показывает «не подключён», а не ошибку.
+    def current_sensor_module():
+        return app.extensions.get("rc_sensor_module")
+
+    def sensor_state_payload():
+        module = current_sensor_module()
+        if module is None:
+            return {"configured": False, "ok": False, "error": "не настроен (RC_SENSOR_PORT)"}
+        try:
+            return module.state()
+        except Exception as exc:  # noqa: BLE001 — экран не должен падать из-за платы
+            return {"configured": True, "ok": False, "error": str(exc) or type(exc).__name__}
+
+    def sensor_command(call, *, needs_pin=False):
+        """Общий путь: проверка PIN (если нужен), команда, журнал."""
+        module = current_sensor_module()
+        if module is None:
+            return jsonify(ok=False, error="модуль датчиков не подключён"), 503
+        body = request.get_json(silent=True) or {}
+        if needs_pin:
+            vault = app.extensions.get("rc_vault")
+            pin = str(body.get("pin", ""))
+            verdict = vault.verify(pin) if vault is not None else {"ok": False, "reason": "format"}
+            note_case_pin_result(verdict, where="замок двери")
+            if not verdict.get("ok"):
+                return jsonify(ok=False, error="PIN не принят", lock=verdict.get("lock")), 403
+        try:
+            call(module, body)
+        except (ValueError, RuntimeError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        except Exception as exc:  # noqa: BLE001 — обрыв USB не повод ронять экран
+            return jsonify(ok=False, error=str(exc) or type(exc).__name__), 503
+        return jsonify(ok=True, data=sensor_state_payload()), 200
+
+    @app.get("/api/sensor_module")
+    def api_sensor_module():
+        """Снимок модуля датчиков: курс, свет, дверь, карты, ошибки платы."""
+        return jsonify(ok=True, data=sensor_state_payload()), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/sensor_module/lights")
+    def api_sensor_module_lights():
+        """Свет: {"light": "head"|"stop"|"left"|"right"|"dim", "on": bool}.
+
+        Дополнительно принимается {"all": true, "on": false} и {"dim": 0…255}.
+        """
+        def act(module, body):
+            if "dim" in body:
+                module.set_dim(int(body["dim"]))
+            if body.get("all"):
+                module.lights_all(bool(body.get("on", True)))
+            if body.get("light") is not None:
+                module.light(str(body["light"]), bool(body.get("on", True)))
+        return sensor_command(act)
+
+    @app.post("/api/sensor_module/lock")
+    def api_sensor_module_lock():
+        """Замок двери: открытие только по PIN кейса, закрытие — свободно."""
+        def act(module, body):
+            if body.get("open"):
+                seconds = body.get("seconds")
+                module.lock(True, None if seconds is None else float(seconds))
+            else:
+                module.lock(False)
+            eventlog.record("ok", "замок двери: %s" % ("открыт" if body.get("open") else "закрыт"),
+                            source="sensor")
+        return sensor_command(act, needs_pin=bool((request.get_json(silent=True) or {}).get("open")))
+
+    @app.post("/api/sensor_module/cards")
+    def api_sensor_module_cards():
+        """Карты доступа к хранилищу: list, learn, add, del, clear (с PIN)."""
+        body = request.get_json(silent=True) or {}
+        action = str(body.get("action", "list")).strip().lower()
+
+        def act(module, payload):
+            module.card(action, payload.get("uid"))
+            eventlog.record("ok", "карты доступа: %s" % action, source="sensor")
+        return sensor_command(act, needs_pin=action not in ("list",))
+
+    @app.post("/api/sensor_module/mag")
+    def api_sensor_module_mag():
+        """Калибровка компаса: start (оборот), stop (сохранить), reset."""
+        def act(module, body):
+            module.mag_calibration(str(body.get("action", "")))
+        return sensor_command(act)
+
     # --------------------------- Карта лидара ---------------------------- #
     # Страница «Карта лидара» на бортовом экране: живая карта (как в ROS),
     # сброс, настройки и файл карты на рабочем столе. Всё это — чтение и
     # запись файла, команд движения карта не даёт, поэтому PIN не нужен.
     @app.get("/api/kiosk_map")
     def api_kiosk_map():
-        """Снимок карты: настройки, статистика, поза и сама картинка (PNG)."""
-        return jsonify(map_service.snapshot()), 200, {"Cache-Control": "no-store"}
+        """Снимок карты: настройки, статистика, поза и сама картинка (PNG).
+
+        Рядом с позой отдаётся курс с магнитометра модуля датчиков: карта
+        строит лидар, но «куда смотрит робот» знает GY-87. Платы может не быть —
+        тогда ``compass`` = ``None``, и экран показывает только лидар.
+        """
+        payload = map_service.snapshot()
+        module = app.extensions.get("rc_sensor_module")
+        payload["compass"] = None
+        if module is not None:
+            try:
+                payload["compass"] = module.compass()
+            except Exception as exc:  # noqa: BLE001 — карта важнее компаса
+                payload["compass"] = {"ok": False, "error": str(exc) or type(exc).__name__}
+        return jsonify(payload), 200, {"Cache-Control": "no-store"}
 
     @app.get("/api/kiosk_map/settings")
     def api_kiosk_map_settings():

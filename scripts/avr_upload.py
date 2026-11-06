@@ -59,8 +59,12 @@ CORE_REPO = "arduino/ArduinoCore-avr"
 CORE_TAG = "1.8.6"
 SERVO_REPO = "arduino-libraries/Servo"
 SERVO_TAG = "1.2.1"
-#: Библиотеки, которые нужны прошивке колеса (scan `#include <…>` в скетче).
-KNOWN_LIBS = {"Servo": (SERVO_REPO, SERVO_TAG)}
+NEOPIXEL_REPO = "adafruit/Adafruit_NeoPixel"
+NEOPIXEL_TAG = "1.12.3"
+#: Библиотеки, которые нужны прошивкам (scan `#include <…>` в скетче):
+#: Servo — колёса и замок двери, Adafruit_NeoPixel — адресная лента модуля датчиков.
+KNOWN_LIBS = {"Servo": (SERVO_REPO, SERVO_TAG),
+              "Adafruit_NeoPixel": (NEOPIXEL_REPO, NEOPIXEL_TAG)}
 
 EXIT_NO_TOOLS = 2
 EXIT_NO_CORE = 3

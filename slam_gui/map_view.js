@@ -1147,6 +1147,19 @@
   }
 
   /* ------------------------------------------------------------- статистика */
+  // Курс с модуля датчиков (GY-87). Нет платы или данные устарели — прочерк,
+  // а не ноль: ноль градусов это север, и путать его с «нет данных» нельзя.
+  function compassText(compass) {
+    if (!compass || compass.ok === false || compass.stale) return '—';
+    const heading = Number(compass.heading);
+    if (!Number.isFinite(heading)) return '—';
+    const parts = [fmt(heading, 0) + '°'];
+    if (typeof compass.doorOpen === 'boolean') parts.push(compass.doorOpen ? 'дверь открыта' : 'дверь закрыта');
+    if (compass.lockOpen) parts.push('замок открыт');
+    if (Array.isArray(compass.errors) && compass.errors.length) parts.push('нет: ' + compass.errors.join(', '));
+    return parts.join(' · ');
+  }
+
   function renderStats(snap) {
     const stats = snap.stats || {};
     const pose = snap.pose || { x: 0, y: 0, yaw: 0 };
@@ -1155,6 +1168,7 @@
     setText($('map-cov'), fmt((stats.coverage || 0) * 100, 1) + ' %');
     setText($('map-occ'), String(stats.occupied === undefined ? '—' : stats.occupied));
     setText($('map-pose'), fmt(pose.x, 2) + ' / ' + fmt(pose.y, 2) + ' м · ' + fmt(pose.yaw * 180 / Math.PI, 0) + '°');
+    setText($('map-compass'), compassText(snap.compass));
     setText($('map-scans'), String(snap.scans || 0) + ' · точек ' + (snap.points || 0));
     const paths = snap.paths || {};
     setText($('map-file'), 'файл: ' + (paths.pgm || '—'));

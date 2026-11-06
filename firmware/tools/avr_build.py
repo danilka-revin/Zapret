@@ -2,12 +2,14 @@
 """Сборка скетча под Arduino Mega 2560 без Arduino IDE — проверка, что прошивка
 вообще компилируется тем же avr-gcc, что и в IDE.
 
-Нужны avr-gcc (с avr-libc), ядро ArduinoCore-avr и штатная библиотека Servo:
+Нужны avr-gcc (с avr-libc), ядро ArduinoCore-avr и внешние библиотеки скетча:
 
     AVR_ROOT=/путь/к/avr     # каталог, где лежит bin/avr-gcc (у IDE: .../tools/avr-gcc/7.3.0-…)
     CORE_ROOT=/путь/к/ArduinoCore-avr
     SERVO_ROOT=/путь/к/Servo # https://github.com/arduino-libraries/Servo
+    NEOPIXEL_ROOT=/путь/к/Adafruit_NeoPixel  # https://github.com/adafruit/Adafruit_NeoPixel
     python3 firmware/tools/avr_build.py firmware/motor_wheel/motor_wheel.ino
+    python3 firmware/tools/avr_build.py firmware/sensor_module/sensor_module.ino
 
 Делает то же, что arduino-cli: дописывает #include <Arduino.h> и прототипы
 функций, собирает ядро, компонует и печатает avr-size. Предупреждения
@@ -49,17 +51,39 @@ def toolchain() -> tuple[Path, Path]:
     return avr, core
 
 
-def servo_library(core: Path) -> Path:
-    """Найти исходники штатной Servo, не подменяя её тестовой заглушкой."""
-    candidates = []
-    if os.environ.get("SERVO_ROOT"):
-        candidates.append(Path(os.environ["SERVO_ROOT"]).expanduser())
-    candidates.extend([core / "libraries" / "Servo", core.parent / "libraries" / "Servo"])
+#: Внешние библиотеки, которые в Arduino IDE ставит менеджер: заголовок → (переменная, каталог).
+EXTERNAL_LIBRARIES: dict[str, tuple[str, str]] = {
+    "Servo.h": ("SERVO_ROOT", "Servo"),
+    "Adafruit_NeoPixel.h": ("NEOPIXEL_ROOT", "Adafruit_NeoPixel"),
+}
+
+INCLUDE_RE = re.compile(r'^\s*#include\s*[<"]([\w./+-]+)[>"]', re.M)
+
+
+def sketch_includes(text: str) -> set[str]:
+    return set(INCLUDE_RE.findall(text))
+
+
+def library_root(core: Path, folder: str, env_key: str) -> Path | None:
+    """Каталог библиотеки: переменная окружения или libraries рядом с ядром."""
+    candidates: list[Path] = []
+    if os.environ.get(env_key):
+        candidates.append(Path(os.environ[env_key]).expanduser())
+    candidates.extend([core / "libraries" / folder, core.parent / "libraries" / folder])
     for candidate in candidates:
         for source in (candidate / "src", candidate):
-            if (source / "Servo.h").is_file() and (source / "avr" / "Servo.cpp").is_file():
+            if (source / (folder + ".h")).is_file():
                 return source
-    raise SystemExit("библиотека Servo не найдена: задайте SERVO_ROOT")
+    return None
+
+
+def library_sources(header: str, root: Path) -> list[Path]:
+    """Исходники библиотеки: только .cpp своей платформы, без чужих портов."""
+    base = root / "src" if (root / "src").is_dir() else root
+    if header == "Servo.h":
+        # У Servo исходник под каждую платформу свой; для Mega нужен avr/Servo.cpp.
+        return [base / "avr" / "Servo.cpp"] if (base / "avr" / "Servo.cpp").is_file() else []
+    return sorted(base.glob("*.cpp"))
 
 
 def run(command: list[str]) -> str:
@@ -89,12 +113,20 @@ def sketch_source(ino: Path) -> str:
 
 def build(ino: Path, out_dir: Path) -> str:
     avr, core = toolchain()
-    needs_servo = re.search(r'^\s*#include\s*[<"]Servo\.h[>"]', ino.read_text(encoding="utf-8"), re.M)
-    servo = servo_library(core) if needs_servo else None
+    text = ino.read_text(encoding="utf-8")
+    includes = sketch_includes(text)
+    libraries: list[tuple[str, Path]] = []
+    for header, (env_key, folder) in EXTERNAL_LIBRARIES.items():
+        if header not in includes:
+            continue
+        root = library_root(core, folder, env_key)
+        if root is None:
+            raise SystemExit(f"библиотека {folder} не найдена: задайте {env_key}")
+        libraries.append((header, root))
     gcc, gxx = str(avr / "bin" / "avr-gcc"), str(avr / "bin" / "avr-g++")
     include = ["-I", str(core / "cores" / "arduino"), "-I", str(core / "variants" / "mega")]
-    if servo is not None:
-        include += ["-I", str(servo)]
+    for _, root in libraries:
+        include += ["-I", str(root)]
     common = ["-c", "-g", "-Os", "-ffunction-sections", "-fdata-sections", "-flto",
               "-mmcu=" + MCU, *DEFINES, *include]
     cflags = [*common, "-std=gnu11", "-fno-fat-lto-objects"]
@@ -103,8 +135,8 @@ def build(ino: Path, out_dir: Path) -> str:
     sources = sorted((core / "cores" / "arduino").glob("*.c")) \
         + sorted((core / "cores" / "arduino").glob("*.cpp")) \
         + sorted((core / "cores" / "arduino").glob("*.S"))
-    if servo is not None:
-        sources.append(servo / "avr" / "Servo.cpp")
+    for header, root in libraries:
+        sources.extend(library_sources(header, root))
     objects = []
     for source in sources:
         target = out_dir / (source.name + ".o")
