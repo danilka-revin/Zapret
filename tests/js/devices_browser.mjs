@@ -84,22 +84,23 @@ try {
   }
   // Exercise the same controls on a narrow touchscreen layout as well.
   await page.setViewportSize({width: 390, height: 900});
-  assert(await page.locator('#options-camera_FL option[value="/dev/video0"]').count());
-  // Любой список показывает все подключённые порты, а не только свой тип:
-  // у камеры видно последовательные, у лидара — видеопорты.
+  assert(await page.locator('#pick-camera_FL option[value="/dev/video0"]').count());
+  // Списки показывают физические порты, а не псевдонимы by-id/by-path: один
+  // порт — одна строка, подходящий тип первым.
   const cameraPorts = await page.evaluate(() =>
-    [...document.querySelectorAll('#options-camera_FL option')].map(o => o.value));
+    [...document.querySelectorAll('#pick-camera_FL option')].map(o => o.value).filter(Boolean));
   const lidarPorts = await page.evaluate(() =>
-    [...document.querySelectorAll('#options-lidar option')].map(o => o.value));
+    [...document.querySelectorAll('#pick-lidar option')].map(o => o.value).filter(Boolean));
   const wheelPorts = await page.evaluate(() =>
-    [...document.querySelectorAll('#wheel-slots-options option')].map(o => o.value));
-  assert(cameraPorts.includes('/dev/video0') && cameraPorts.includes('/dev/ttyUSB0'),
-         'камера: свой видеопорт и последовательные в одном списке: ' + cameraPorts);
-  assert(lidarPorts.includes('/dev/video0'), 'лидар: видеопорты тоже видны: ' + lidarPorts);
-  assert(wheelPorts.includes('/dev/ttyUSB0') && wheelPorts.includes('/dev/video0'),
-         'колёса: все порты, подходящие первыми: ' + wheelPorts);
+    [...document.querySelectorAll('#wheel-pick-1 option')].map(o => o.value).filter(Boolean));
+  assert(cameraPorts.includes('/dev/video0'), 'камера: свой видеопорт в списке: ' + cameraPorts);
+  assert(new Set(cameraPorts).size === cameraPorts.length, 'камера: без повторов: ' + cameraPorts);
+  assert(lidarPorts.includes('/dev/ttyUSB0'), 'лидар: последовательные порты: ' + lidarPorts);
+  assert(wheelPorts.includes('/dev/ttyUSB0'), 'колёса: последовательные порты: ' + wheelPorts);
+  assert(new Set(wheelPorts).size === wheelPorts.length, 'колёса: без повторов: ' + wheelPorts);
   const found = (await page.locator('#ports-found').textContent()).trim();
-  assert(found.startsWith('Подключено портов:'), 'строка о найденных портах: ' + found);
+  assert(found.startsWith('Найдено физических портов:'), 'строка о найденных портах: ' + found);
+  assert(await page.locator('#ports-found-list li').count(), 'список реальных USB-портов');
   const input = page.locator('#hint-camera_FL');
   await input.fill('/dev/video');
   await page.waitForTimeout(3000);

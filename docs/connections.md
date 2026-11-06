@@ -91,6 +91,7 @@ USB-UART принтера показывается только как непо�
 | **Камера RR** | USB | `/dev/v4l/by-id/…` | `RC_CAMERA_REAR_RIGHT`; по умолчанию пусто | то же |
 | **Kinect 360** (глубина) | USB + отдельное питание | libfreenect / OpenNI2 / ROS 2 | `RC_KINECT_*`, `scripts/kinect_depth_publisher.py` | `GET /api/kinect/status`, [AUTONOMY.md](AUTONOMY.md) |
 | **Чековый принтер** | отдельный USB-UART, питание и уровни по модели | `/dev/ttyUSB*` или `/dev/serial/by-id/…` | `RC_PRINTER_PORT` (назначается на `/devices`) | физически подтвердить кабель, затем пробная страница; см. [battery.md](battery.md) |
+| **Список портов на `/devices`** | один пункт на физический USB-порт (sysfs), `/dev/ttyUSB0` и его `by-id`/`by-path` — не отдельные строки | `usb:1-2` (гнездо), `/dev/ttyUSB*`, `/dev/v4l/by-id/…` | в `.env` пишется выбранный путь (обычно `by-id`), в списке видно гнездо и узел | `/api/devices/ports` → `options.serial/video/usb`; `usbPort`, `device`, `byId`, `byPath` |
 | **Модуль датчиков** (свет, замок отсека, карты с ролями, компас) | отдельная Arduino Mega на своём USB, 115200 | `/dev/serial/by-id/…` (рекомендуется) | `RC_SENSOR_PORT` (задаётся вручную; автопоиска нет) | `/api/sensor_module`, отдельный экран `/sensors` и панель «курс» на карте лидара; прошивка `firmware/sensor_module`, протокол fw3 (лента светодиодов пока не подключена: `strip=0`) |
 | **Монитор бортового экрана** | HDMI (или встроенный дисплей) | графическая сессия Ubuntu | — (браузер-киоск сам) | открывается `http://127.0.0.1:8090/` |
 | Клавиатура / мышь (по желанию) | USB | — | — | — |

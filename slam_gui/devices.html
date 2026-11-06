@@ -53,6 +53,9 @@
       <header class="section-heading"><div><p class="section-index">00 / НАСТРОЙКА</p><h2 id="ports-title">Порты устройств · вручную</h2></div><span class="section-count">12 УСТРОЙСТВ</span></header>
       <p class="section-description">Автопоиск портов отключён. Порты назначает оператор: программа не перебирает USB-порты и не решает за вас, где какое устройство. Колесо считается найденным только после свежей телеметрии с CRC, камера — после свежего кадра.</p>
       <p class="ports-found" id="ports-found" role="status">Ищу подключённые порты…</p>
+      <!-- Реальные USB-порты: одна строка на физическое устройство, без
+           псевдонимов /dev/serial/by-id и /dev/serial/by-path. -->
+      <ul class="ports-found-list" id="ports-found-list" aria-label="Найденные USB-порты"></ul>
 
       <div class="ports-block" aria-labelledby="wheel-ports-title">
         <header class="ports-head">
@@ -69,7 +72,6 @@
         </div>
         <p class="ports-map" id="wheel-slots-map">Опознание колёс: ожидание телеметрии.</p>
         <p class="ports-msg" id="wheel-slots-message" role="status"></p>
-        <datalist id="wheel-slots-options"></datalist>
       </div>
 
       <ul class="ports-index" id="ports-index" aria-label="Назначения остальных устройств"></ul>
