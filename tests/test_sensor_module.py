@@ -9,7 +9,10 @@
   отдельных процессах, как после сброса платы;
 * разбор кадров ``@S``/``@CARD``/``@EVT``/``@ACK`` сервером: те же числа, что
   печатает прошивка, включая CRC-16/Modbus;
-* маршруты ``/api/sensor_module*`` и курс на карте лидара.
+* роли карт (администратор/пользователь), окно погрузки и переключение отсека
+  картой — в прошивке, симуляции и на сервере;
+* маршруты ``/api/sensor_module*``, курс на карте лидара и запрет движения при
+  открытом отсеке.
 
 Сборка настоящим avr-gcc проверяется отдельно и пропускается, если нет
 ``AVR_ROOT``/``CORE_ROOT`` и библиотеки Adafruit NeoPixel (см.
@@ -54,8 +57,8 @@ def telemetry(**overrides) -> str:
     fields = {
         "fw": sm.SENSOR_PROTOCOL, "hdg": 0, "pitch": 0, "roll": 0, "gz": 0,
         "press": 69964, "temp": 150, "alt": 301674, "door": 0, "lock": 0,
-        "light": 0, "dim": 80, "strip": 0, "rfid": 0, "cards": 0, "link": 1, "err": 0,
-        "t": 1234,
+        "light": 0, "dim": 80, "strip": 0, "cargo": 0, "rfid": 0, "cards": 0, "link": 1,
+        "err": 0, "t": 1234,
     }
     fields.update(overrides)
     body = " ".join("%s=%s" % (key, value) for key, value in fields.items())
@@ -111,8 +114,9 @@ def test_sketch_avoids_heap_and_blocking_prints():
 
 
 def test_sketch_version_matches_server_protocol():
-    # 2 — в кадр добавлено поле strip: разбор на сервере обязан идти в ногу.
-    assert int(_const("SENSOR_PROTOCOL")) == sm.SENSOR_PROTOCOL == 2
+    # 3 — роли карт, окно погрузки и кадры @CARDINFO: разбор на сервере идёт
+    # в ногу с прошивкой, иначе экран не поймёт, кто и почему открыл отсек.
+    assert int(_const("SENSOR_PROTOCOL")) == sm.SENSOR_PROTOCOL == 3
 
 
 def test_led_strip_is_off_until_it_is_actually_wired():
@@ -249,6 +253,7 @@ def test_telemetry_parses_into_degrees_and_flags():
     assert parsed["lights"] == {"head": True, "stop": False, "left": True,
                                 "right": False, "dim": False}
     assert parsed["stripEnabled"] is False        # лента пока не подключена
+    assert parsed["windowKind"] == "none" and parsed["windowActive"] is False
     assert parsed["rfid"] == "granted" and parsed["cards"] == 2
     assert parsed["errors"] == ["RC522"]
     assert parsed["uptimeMs"] == 98765
@@ -291,13 +296,41 @@ def test_out_of_range_values_are_rejected():
         sm.parse_telemetry(telemetry(rfid=9))
     with pytest.raises(sm.SensorFrameError):
         sm.parse_telemetry(telemetry(light=64))
+    with pytest.raises(sm.SensorFrameError):
+        sm.parse_telemetry(telemetry(cargo=7))
 
 
 def test_card_event_and_uid_validation():
-    parsed = sm.parse_card(frame("@CARD uid=a1b2c3d4 ok=1 cards=2 t=1000"))
-    assert parsed == {"uid": "A1B2C3D4", "granted": True, "cards": 2, "atMs": 1000}
+    parsed = sm.parse_card(frame("@CARD uid=a1b2c3d4 ok=1 act=open role=admin why=none "
+                                "cards=2 t=1000"))
+    assert parsed["uid"] == "A1B2C3D4" and parsed["granted"] is True
+    assert parsed["role"] == "admin" and parsed["roleTitle"] == "администратор"
+    assert parsed["action"] == "open" and parsed["reason"] == "none"
+    assert parsed["cards"] == 2 and parsed["atMs"] == 1000
+    # Отказ по роли: пользователь без окна погрузки.
+    denied = sm.parse_card(frame("@CARD uid=A1B2C3D4 ok=0 act=deny role=user why=cargo "
+                                 "cards=1 t=2000"))
+    assert denied["granted"] is False and denied["action"] == "deny"
+    assert denied["reason"] == "cargo" and denied["reasonTitle"] == "нет окна погрузки или выгрузки"
+    # Старый кадр без новых полей тоже читается: роль неизвестна, действий нет.
+    legacy = sm.parse_card(frame("@CARD uid=A1B2C3D4 ok=1 cards=2 t=1000"))
+    assert legacy["role"] == "none" and legacy["action"] == "none"
     with pytest.raises(sm.SensorFrameError):
         sm.parse_card(frame("@CARD uid=XYZ ok=1 cards=0 t=1"))
+    with pytest.raises(sm.SensorFrameError):
+        sm.parse_card(frame("@CARD uid=A1B2C3D4 ok=1 role=root cards=1 t=1"))
+    with pytest.raises(sm.SensorFrameError):
+        sm.parse_card(frame("@CARD uid=A1B2C3D4 ok=1 act=steal cards=1 t=1"))
+
+
+def test_card_list_frames_carry_roles():
+    info = sm.parse_line(frame("@CARDINFO idx=1 uid=A1B2C3D4 role=admin total=2 t=10"))
+    assert info == {"kind": "cardinfo", "end": False, "idx": 1, "uid": "A1B2C3D4",
+                    "role": "admin", "roleTitle": "администратор", "total": 2, "atMs": 10}
+    end = sm.parse_line(frame("@CARDINFO end=1 total=2 t=11"))
+    assert end == {"kind": "cardinfo", "end": True, "total": 2, "atMs": 11}
+    with pytest.raises(sm.SensorFrameError):
+        sm.parse_cardinfo(frame("@CARDINFO idx=1 uid=A1B2C3D4 role=root total=2 t=10"))
 
 
 def test_event_and_ack_frames():
@@ -320,14 +353,27 @@ def test_commands_are_validated_before_they_reach_the_board():
     assert sm.command_lock(True) == "lock open"
     assert sm.command_lock(True, 3) == "lock open 3"
     assert sm.command_lock(False) == "lock close"
-    assert sm.command_card("add", "a1b2c3d4") == "card add A1B2C3D4"
+    assert sm.command_card("add", "a1b2c3d4", "admin") == "card add A1B2C3D4 admin"
+    assert sm.command_card("add", "a1b2c3d4") == "card add A1B2C3D4 user"
+    assert sm.command_card("role", "a1b2c3d4", "USER") == "card role A1B2C3D4 user"
+    assert sm.command_card("learn", role="admin") == "card learn admin"
+    assert sm.command_card("del", "a1b2c3d4") == "card del A1B2C3D4"
     assert sm.command_card("list") == "card list"
+    assert sm.command_lock(True, hold=True) == "lock hold"
+    assert sm.command_cargo("load") == "cargo load"
+    assert sm.command_cargo("unload", 30) == "cargo unload 30"
+    assert sm.command_cargo("end") == "cargo end"
     assert sm.command_mag("start") == "mag cal start"
     for bad in (lambda: sm.command_light("brake", True),
                 lambda: sm.command_dim(256),
                 lambda: sm.command_lock(True, 30),
                 lambda: sm.command_card("add", "zz"),
                 lambda: sm.command_card("steal"),
+                lambda: sm.command_card("add", "A1B2C3D4", "root"),
+                lambda: sm.command_card("learn", role="root"),
+                lambda: sm.command_cargo("drive"),
+                lambda: sm.command_cargo("load", 0),
+                lambda: sm.command_cargo("load", 1000),
                 lambda: sm.command_mag("go")):
         with pytest.raises(ValueError):
             bad()
@@ -392,6 +438,8 @@ def test_state_without_any_frame_is_not_an_error_but_not_ok():
     state = module.state()
     assert state["ok"] is False and state["heading"] is None
     assert state["configured"] is True and state["errors"] == []
+    assert state["windowKind"] == "none" and state["windowActive"] is False
+    assert state["cardList"] == [] and state["cardListKnown"] is False
 
 
 def test_bad_frames_are_counted_and_do_not_change_state():
@@ -402,6 +450,54 @@ def test_bad_frames_are_counted_and_do_not_change_state():
     state = module.state()
     assert state["heading"] == before
     assert state["badFrames"] == 1
+
+
+def test_card_list_is_collected_from_cardinfo_frames():
+    module, _, clock = make_module()
+    clock.now = 3.0
+    module.feed(telemetry())
+    module.card("list")
+    module.feed(frame("@CARDINFO idx=1 uid=A1B2C3D4 role=admin total=2 t=10"))
+    module.feed(frame("@CARDINFO idx=2 uid=11223344 role=user total=2 t=10"))
+    state = module.state()
+    assert [item["uid"] for item in state["cardList"]] == ["A1B2C3D4", "11223344"]
+    assert [item["role"] for item in state["cardList"]] == ["admin", "user"]
+    assert state["cardListKnown"] is False              # терминатора ещё не было
+    module.feed(frame("@CARDINFO end=1 total=2 t=11"))
+    state = module.state()
+    assert state["cardListKnown"] is True
+    # Новая команда list начинает список заново, а не дописывает старый.
+    module.card("list")
+    assert module.state()["cardList"] == []
+    module.feed(frame("@CARDINFO idx=1 uid=A1B2C3D4 role=admin total=1 t=12"))
+    module.feed(frame("@CARDINFO end=1 total=1 t=12"))
+    assert [item["uid"] for item in module.state()["cardList"]] == ["A1B2C3D4"]
+
+
+def test_cargo_window_comes_from_telemetry():
+    module, _, clock = make_module()
+    clock.now = 1.0
+    module.feed(telemetry(cargo=1))
+    state = module.state()
+    assert state["windowKind"] == "load" and state["windowActive"] is True
+    module.feed(telemetry(cargo=2))
+    assert module.state()["windowKind"] == "unload"
+    module.feed(telemetry(cargo=0))
+    assert module.state()["windowActive"] is False
+
+
+def test_compartment_open_blocks_motion_only_on_a_fresh_frame():
+    module, _, clock = make_module()
+    assert module.compartment_open() is False    # кадра нет — не запираем молча
+    clock.now = 2.0
+    module.feed(telemetry(door=1))
+    assert module.compartment_open() is True
+    module.feed(telemetry(door=0))
+    assert module.compartment_open() is False
+    module.feed(telemetry(door=1))
+    clock.now = 60.0                             # кадр устарел
+    assert module.state()["ok"] is False
+    assert module.compartment_open() is False
 
 
 def test_cards_acks_and_events_are_kept_for_the_screen():
@@ -422,9 +518,13 @@ def test_commands_go_out_as_crlf_lines():
     module.card("list")
     module.set_dim(200)
     module.mag_calibration("stop")
+    module.card("add", "a1b2c3d4", "admin")
+    module.cargo("load", 15)
+    module.lock(True, hold=True)
     assert serial_port.written == [
         b"light head on\r\n", b"lock open 2\r\n", b"card list\r\n",
         b"dim 200\r\n", b"mag cal stop\r\n",
+        b"card add A1B2C3D4 admin\r\n", b"cargo load 15\r\n", b"lock hold\r\n",
     ]
 
 
@@ -518,13 +618,20 @@ class FakeModule:
         sm.command_dim(level)
         self.calls.append(("dim", level))
 
-    def lock(self, open_, seconds=None):
-        sm.command_lock(open_, seconds)
-        self.calls.append(("lock", open_, seconds))
+    def lock(self, open_, seconds=None, *, hold=False):
+        sm.command_lock(open_, seconds, hold=hold)
+        self.calls.append(("lock", open_, seconds, hold))
 
-    def card(self, action, uid=None):
-        sm.command_card(action, uid)
-        self.calls.append(("card", action, uid))
+    def cargo(self, kind, minutes=None):
+        sm.command_cargo(kind, minutes)
+        self.calls.append(("cargo", kind, minutes))
+
+    def card(self, action, uid=None, role=None):
+        sm.command_card(action, uid, role)
+        self.calls.append(("card", action, uid, role))
+
+    def compartment_open(self):
+        return bool(self.frame.get("doorOpen"))
 
     def mag_calibration(self, action):
         sm.command_mag(action)
@@ -582,10 +689,15 @@ def test_door_lock_needs_the_case_pin(kiosk_app):
                        json={"open": True, "pin": "0000"}).status_code == 403
     ok = client.post("/api/sensor_module/lock", json={"open": True, "pin": "1234", "seconds": 3})
     assert ok.status_code == 200
-    assert module.calls[-1] == ("lock", True, 3.0)
+    assert module.calls[-1] == ("lock", True, 3.0, False)
+    # Открыть и держать — тоже по PIN: это то же открытие, только без таймера.
+    assert client.post("/api/sensor_module/lock", json={"hold": True}).status_code == 403
+    held = client.post("/api/sensor_module/lock", json={"hold": True, "pin": "1234"})
+    assert held.status_code == 200
+    assert module.calls[-1] == ("lock", True, None, True)
     # Закрытие свободно: замок должен уметь закрыть любой, это безопасное действие.
     assert client.post("/api/sensor_module/lock", json={"open": False}).status_code == 200
-    assert module.calls[-1] == ("lock", False, None)
+    assert module.calls[-1] == ("lock", False, None, False)
 
 
 def test_cards_change_only_with_pin(kiosk_app):
@@ -593,7 +705,7 @@ def test_cards_change_only_with_pin(kiosk_app):
     kiosk_app.extensions["rc_sensor_module"] = module
     client = kiosk_app.test_client()
     assert client.post("/api/sensor_module/cards", json={"action": "list"}).status_code == 200
-    assert module.calls[-1] == ("card", "list", None)
+    assert module.calls[-1] == ("card", "list", None, None)
 
     denied = client.post("/api/sensor_module/cards",
                          json={"action": "add", "uid": "A1B2C3D4"})
@@ -603,9 +715,43 @@ def test_cards_change_only_with_pin(kiosk_app):
     granted = client.post("/api/sensor_module/cards",
                           json={"action": "add", "uid": "a1b2c3d4", "pin": "1234"})
     assert granted.status_code == 200
-    assert module.calls[-1] == ("card", "add", "a1b2c3d4")
+    # Без роли — пользователь: прав по умолчанию ровно столько, сколько нужно.
+    assert module.calls[-1] == ("card", "add", "a1b2c3d4", None)
+
+    admin = client.post("/api/sensor_module/cards",
+                        json={"action": "add", "uid": "11223344", "role": "admin",
+                              "pin": "1234"})
+    assert admin.status_code == 200
+    assert module.calls[-1] == ("card", "add", "11223344", "admin")
+    assert client.post("/api/sensor_module/cards",
+                       json={"action": "role", "uid": "11223344", "role": "root",
+                             "pin": "1234"}).status_code == 400
     assert client.post("/api/sensor_module/cards",
                        json={"action": "add", "uid": "zz", "pin": "1234"}).status_code == 400
+
+
+def test_cargo_window_needs_the_case_pin(kiosk_app):
+    module = FakeModule()
+    kiosk_app.extensions["rc_sensor_module"] = module
+    client = kiosk_app.test_client()
+    # Открыть окно погрузки — это понижение защиты: без PIN нельзя.
+    refused = client.post("/api/sensor_module/cargo", json={"kind": "load"})
+    assert refused.status_code == 403
+    assert not [call for call in module.calls if call[0] == "cargo"]
+
+    kiosk_app.extensions["rc_vault"] = FakeVault("1234")
+    granted = client.post("/api/sensor_module/cargo",
+                          json={"kind": "load", "minutes": 20, "pin": "1234"})
+    assert granted.status_code == 200
+    assert module.calls[-1] == ("cargo", "load", 20)
+    assert client.post("/api/sensor_module/cargo",
+                       json={"kind": "unload", "pin": "1234"}).status_code == 200
+    assert module.calls[-1] == ("cargo", "unload", None)
+    # Закрыть окно можно без PIN: это возврат к более безопасному состоянию.
+    assert client.post("/api/sensor_module/cargo", json={"kind": "end"}).status_code == 200
+    assert module.calls[-1] == ("cargo", "end", None)
+    assert client.post("/api/sensor_module/cargo",
+                       json={"kind": "drive", "pin": "1234"}).status_code == 400
 
 
 def test_mag_calibration_endpoint(kiosk_app):
@@ -635,6 +781,64 @@ def test_map_gets_the_compass_next_to_the_lidar_pose(kiosk_app):
 def test_map_without_module_still_works(kiosk_app):
     payload = kiosk_app.test_client().get("/api/kiosk_map").get_json()
     assert "compass" in payload and payload["compass"] is None
+
+
+def test_open_compartment_blocks_motion(kiosk_app):
+    """Отсек открыт — робот не едет; STOP и тормоз по-прежнему проходят."""
+    class FakeDriveSource:
+        name = "master"
+        supports_drive = True
+
+        def __init__(self):
+            self.commands = []
+
+        def drive(self, percent):
+            self.commands.append(percent)
+            return {"ok": True, "percent": round(percent)}
+
+    source = FakeDriveSource()
+    kiosk_app.extensions["rc_slam"].source = source
+    module = FakeModule()
+    kiosk_app.extensions["rc_sensor_module"] = module
+    client = kiosk_app.test_client()
+    header = {"X-Robot-Control": "drive"}
+
+    # Отсек закрыт — движение разрешено как раньше.
+    assert client.post("/api/kiosk_drive", json={"percent": 10}, headers=header).status_code == 200
+    assert source.commands == [10]
+
+    module.frame["doorOpen"] = True
+    blocked = client.post("/api/kiosk_drive", json={"percent": 10}, headers=header)
+    assert blocked.status_code == 409
+    assert blocked.get_json()["reason"] == "compartment_open"
+    assert "Отсек открыт" in blocked.get_json()["error"]
+    assert source.commands == [10]                      # команда не дошла до колёс
+
+    # STOP проходит: робота нельзя запереть с открытым отсеком.
+    assert client.post("/api/kiosk_drive", json={"percent": 0}, headers=header).status_code == 200
+    assert source.commands == [10, 0]
+
+    module.frame["doorOpen"] = False
+    assert client.post("/api/kiosk_drive", json={"percent": 15}, headers=header).status_code == 200
+    assert source.commands == [10, 0, 15]
+
+
+def test_motion_is_not_locked_silently_without_the_sensor_board(kiosk_app):
+    """Нет платы — нет данных о концевике: движение не запираем молча."""
+    class FakeDriveSource:
+        name = "master"
+        supports_drive = True
+
+        def drive(self, percent):
+            return {"ok": True, "percent": round(percent)}
+
+    client = kiosk_app.test_client()
+    gate = client.get("/api/kiosk_state").get_json()["data"]["compartment"]
+    assert gate["known"] is False and gate["motionBlocked"] is False
+    assert "модуль датчиков не подключён" in gate["error"]
+    kiosk_app.extensions["rc_slam"].source = FakeDriveSource()
+    assert client.post("/api/kiosk_drive", json={"percent": 5},
+                       headers={"X-Robot-Control": "drive"}).status_code == 200
 
 
 def test_kiosk_state_carries_the_sensor_block():

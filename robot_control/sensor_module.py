@@ -8,10 +8,16 @@
 Протокол — ASCII-строки 115200 с CRC-16/Modbus в конце, как у колёс:
 
 * ``@S``    — телеметрия, 5 Гц;
-* ``@CARD`` — приложили карту (пускать или нет);
+* ``@CARD`` — приложили карту (пускать или нет, роль и что сделано);
+* ``@CARDINFO`` — список запомненных карт с ролями (ответ на ``card list``);
 * ``@EVT``  — дверь/замок;
 * ``@ACK``  — ответ на команду;
 * ``#``     — сообщение для человека, в журнал.
+
+Карты доступа хранятся в EEPROM платы вместе с ролью: администратор открывает
+отсек в любой момент, пользователь — только пока сервер открыл окно погрузки
+или выгрузки (``cargo=``). Прикладывание карты переключает отсек: открыт →
+закрыт, закрыт → открыт и держится до следующей карты.
 
 Строка без верного CRC отбрасывается: порча линии не должна превращаться в
 «дверь открыта» или «свет включён». CRC не является защитой от подмены —
@@ -27,10 +33,32 @@ from typing import Any, Callable, Iterable
 
 #: Версия протокола платы; сервер понимает ровно её (см. поле ``fw=``).
 #: 2 — в телеметрии появилось поле ``strip`` (лента светодиодов подключена).
-SENSOR_PROTOCOL = 2
+#: 3 — роли карт, переключение отсека картой, окно погрузки (``cargo=``) и
+#:     машинный список карт ``@CARDINFO``.
+SENSOR_PROTOCOL = 3
 
 TELEMETRY_PREFIX = "@S "
 CARD_PREFIX = "@CARD "
+CARDINFO_PREFIX = "@CARDINFO "
+#: Роли карт: администратор открывает отсек всегда, пользователь — только в
+#: окно погрузки/выгрузки.
+CARD_ROLES = ("admin", "user")
+ROLE_TITLES = {"admin": "администратор", "user": "пользователь", "none": "нет"}
+#: Что сделала плата по карте (поле ``act=``).
+CARD_ACTIONS = ("open", "close", "enroll", "deny", "none")
+#: Почему отказано (поле ``why=``).
+CARD_REASONS = {
+    "none": "нет",
+    "unknown": "карта не записана",
+    "cargo": "нет окна погрузки или выгрузки",
+    "full": "список карт заполнен",
+}
+#: Окно погрузки/выгрузки (поле кадра ``cargo=``). В публичном снимке оно
+#: называется ``windowKind``: «cargo» на экране — про грузовой отсек кейса,
+#: и смешивать эти понятия нельзя.
+WINDOW_STATES = {0: "none", 1: "load", 2: "unload"}
+WINDOW_TITLES = {"none": "нет", "load": "погрузка", "unload": "выгрузка"}
+CARGO_MAX_MINUTES = 240
 EVENT_PREFIX = "@EVT "
 ACK_PREFIX = "@ACK "
 NOTE_PREFIX = "#"
@@ -68,7 +96,8 @@ UID_RE = re.compile(r"^[0-9A-Fa-f]{8}$")
 KEY_RE = re.compile(r"([a-z]+)=(\S+)")
 TELEMETRY_FIELDS = (
     "fw", "hdg", "pitch", "roll", "gz", "press", "temp", "alt",
-    "door", "lock", "light", "dim", "strip", "rfid", "cards", "link", "err", "t",
+    "door", "lock", "light", "dim", "strip", "cargo", "rfid", "cards", "link", "err",
+    "t",
 )
 
 #: Пределы, за которыми кадр считается испорченным, а не просто странным.
@@ -151,6 +180,9 @@ def parse_telemetry(line: str) -> dict[str, Any]:
     cards = _int(fields, "cards")
     if not 0 <= cards <= 12:
         raise SensorFrameError("cards вне пределов: %d" % cards)
+    cargo_code = _int(fields, "cargo")
+    if cargo_code not in WINDOW_STATES:
+        raise SensorFrameError("cargo=%d неизвестен" % cargo_code)
     rfid_code = _int(fields, "rfid")
     if rfid_code not in RFID_STATES:
         raise SensorFrameError("rfid=%d неизвестен" % rfid_code)
@@ -173,6 +205,9 @@ def parse_telemetry(line: str) -> dict[str, Any]:
         # Лента пока не подключена: прошивка сама сообщает strip=0, и экран
         # не должен обещать габаритов, которых физически нет.
         "stripEnabled": _int(fields, "strip") == 1,
+        # Окно погрузки/выгрузки: в нём карта пользователя тоже открывает отсек.
+        "windowKind": WINDOW_STATES[cargo_code],
+        "windowActive": cargo_code != 0,
         "rfid": RFID_STATES[rfid_code],
         "cards": cards,
         "linkOk": _int(fields, "link") == 1,
@@ -194,21 +229,70 @@ def parse_card(line: str) -> dict[str, Any]:
     verdict = _int(fields, "ok")
     if verdict not in (0, 1):
         raise SensorFrameError("ok=%d вне пределов" % verdict)
+    role = fields.get("role", "none")
+    if role not in ROLE_TITLES:
+        raise SensorFrameError("role=%r неизвестна" % role)
+    action = fields.get("act", "none")
+    if action not in CARD_ACTIONS:
+        raise SensorFrameError("act=%r неизвестно" % action)
+    why = fields.get("why", "none")
+    if why not in CARD_REASONS:
+        raise SensorFrameError("why=%r неизвестна" % why)
     return {
         "uid": uid.upper(),
         "granted": verdict == 1,
+        "role": role,
+        "roleTitle": ROLE_TITLES[role],
+        "action": action,
+        "reason": why,
+        "reasonTitle": CARD_REASONS[why],
         "cards": _int(fields, "cards"),
         "atMs": _int(fields, "t"),
     }
 
 
+def parse_cardinfo(line: str) -> dict[str, Any]:
+    """Разобрать кадр ``@CARDINFO``: карта с ролью или терминатор списка."""
+    head = split_checked(line)
+    if not head.startswith(CARDINFO_PREFIX):
+        raise SensorFrameError("это не список карт")
+    fields = _fields(head[len(CARDINFO_PREFIX):])
+    total = _int(fields, "total")
+    if not 0 <= total <= 12:
+        raise SensorFrameError("всего карт вне пределов: %d" % total)
+    if "end" in fields:
+        return {"kind": "cardinfo", "end": True, "total": total,
+                "atMs": _int(fields, "t")}
+    uid = fields.get("uid", "")
+    if not UID_RE.match(uid):
+        raise SensorFrameError("uid не 8 hex-знаков: %r" % uid)
+    role = fields.get("role", "none")
+    if role not in ROLE_TITLES:
+        raise SensorFrameError("role=%r неизвестна" % role)
+    index = _int(fields, "idx")
+    if not 1 <= index <= 12:
+        raise SensorFrameError("idx вне пределов: %d" % index)
+    return {
+        "kind": "cardinfo", "end": False, "idx": index, "uid": uid.upper(),
+        "role": role, "roleTitle": ROLE_TITLES[role], "total": total,
+        "atMs": _int(fields, "t"),
+    }
+
+
 def parse_event(line: str) -> dict[str, Any]:
-    """Разобрать кадр ``@EVT`` (дверь или замок)."""
+    """Разобрать кадр ``@EVT``: дверь, замок или окно погрузки."""
     head = split_checked(line)
     if not head.startswith(EVENT_PREFIX):
         raise SensorFrameError("это не событие платы")
     fields = _fields(head[len(EVENT_PREFIX):])
     kind = fields.get("kind", "")
+    if kind == "cargo":
+        state = fields.get("state", "")
+        if state not in ("load", "unload", "end"):
+            raise SensorFrameError("состояние окна погрузки: %r" % state)
+        return {"event": "cargo", "state": state,
+                "windowKind": "none" if state == "end" else state,
+                "atMs": _int(fields, "t")}
     if kind not in ("door", "lock"):
         raise SensorFrameError("неизвестное событие: %r" % kind)
     opened = _int(fields, "open")
@@ -246,6 +330,8 @@ def parse_line(line: str) -> dict[str, Any] | None:
         return {"kind": "note", "text": text[len(NOTE_PREFIX):].strip()}
     if text.startswith(TELEMETRY_PREFIX):
         return {"kind": "telemetry", **parse_telemetry(text)}
+    if text.startswith(CARDINFO_PREFIX):
+        return parse_cardinfo(text)
     if text.startswith(CARD_PREFIX):
         return {"kind": "card", **parse_card(text)}
     if text.startswith(EVENT_PREFIX):
@@ -275,7 +361,13 @@ def command_dim(level: int) -> str:
     return "dim %d" % value
 
 
-def command_lock(open_: bool, seconds: float | None = None) -> str:
+def command_lock(open_: bool, seconds: float | None = None, *, hold: bool = False) -> str:
+    """``lock close`` | ``lock hold`` | ``lock open [1…10]``.
+
+    ``hold`` — открыть и держать, пока не закроют картой или командой close.
+    """
+    if hold:
+        return "lock hold"
     if not open_:
         return "lock close"
     if seconds is None:
@@ -286,20 +378,44 @@ def command_lock(open_: bool, seconds: float | None = None) -> str:
     return "lock open %d" % value
 
 
-def command_card(action: str, uid: str | None = None) -> str:
+def _role(value: str | None) -> str:
+    role = str(value or "user").strip().lower()
+    if role not in CARD_ROLES:
+        raise ValueError("роль карты — admin или user, а не %r" % value)
+    return role
+
+
+def command_card(action: str, uid: str | None = None, role: str | None = None) -> str:
     key = str(action).strip().lower()
     if key == "list":
         return "card list"
     if key == "learn":
-        return "card learn"
+        return "card learn %s" % _role(role)
     if key == "clear":
         return "card clear"
-    if key not in ("add", "del"):
+    if key not in ("add", "del", "role"):
         raise ValueError("неизвестное действие с картами: %r" % action)
     text = str(uid or "").strip()
     if not UID_RE.match(text):
         raise ValueError("UID карты — 8 hex-знаков: %r" % uid)
-    return "card %s %s" % (key, text.upper())
+    if key == "del":
+        return "card del %s" % text.upper()
+    return "card %s %s %s" % (key, text.upper(), _role(role))
+
+
+def command_cargo(kind: str, minutes: int | None = None) -> str:
+    """Окно погрузки/выгрузки: ``cargo load|unload [минуты]`` или ``cargo end``."""
+    key = str(kind or "").strip().lower()
+    if key in ("end", "stop", "none"):
+        return "cargo end"
+    if key not in ("load", "unload"):
+        raise ValueError("окно погрузки — load, unload или end, а не %r" % kind)
+    if minutes is None:
+        return "cargo %s" % key
+    value = int(minutes)
+    if not 1 <= value <= CARGO_MAX_MINUTES:
+        raise ValueError("окно погрузки — 1…%d минут, а не %r" % (CARGO_MAX_MINUTES, minutes))
+    return "cargo %s %d" % (key, value)
 
 
 def command_mag(action: str) -> str:
@@ -334,6 +450,9 @@ class SensorModule:
         self._error: str | None = None
         self._last_ack: dict[str, Any] | None = None
         self._last_card: dict[str, Any] | None = None
+        #: Список карт с ролями: собирается из кадров @CARDINFO на команду list.
+        self._card_list: list[dict[str, Any]] = []
+        self._card_list_open = False
 
     # --- жизненный цикл ---
     def open(self) -> None:
@@ -418,6 +537,16 @@ class SensorModule:
                 self._push_event(frame)
             elif frame["kind"] == "event":
                 self._push_event(frame)
+            elif frame["kind"] == "cardinfo":
+                if frame.get("end"):
+                    self._card_list_open = False
+                elif self._card_list_open:
+                    self._card_list = [item for item in self._card_list
+                                       if item["uid"] != frame["uid"]]
+                    self._card_list.append({"uid": frame["uid"], "role": frame["role"],
+                                            "roleTitle": frame["roleTitle"],
+                                            "idx": frame["idx"]})
+                self._card_list.sort(key=lambda item: item["idx"])
             elif frame["kind"] == "ack":
                 self._last_ack = frame
                 self._push_event(frame)
@@ -451,14 +580,23 @@ class SensorModule:
     def set_dim(self, level: int) -> None:
         self.send(command_dim(level))
 
-    def lock(self, open_: bool, seconds: float | None = None) -> None:
-        self.send(command_lock(open_, seconds))
+    def lock(self, open_: bool, seconds: float | None = None, *, hold: bool = False) -> None:
+        self.send(command_lock(open_, seconds, hold=hold))
+
+    def cargo(self, kind: str, minutes: int | None = None) -> None:
+        self.send(command_cargo(kind, minutes))
 
     def cards(self) -> None:
-        self.send(command_card("list"))
+        self.card("list")
 
-    def card(self, action: str, uid: str | None = None) -> None:
-        self.send(command_card(action, uid))
+    def card(self, action: str, uid: str | None = None, role: str | None = None) -> None:
+        command = command_card(action, uid, role)
+        if command == "card list":
+            # Список собирается из кадров: старый не должен смешиваться с новым.
+            with self._lock:
+                self._card_list = []
+                self._card_list_open = True
+        self.send(command)
 
     def mag_calibration(self, action: str) -> None:
         self.send(command_mag(action))
@@ -481,6 +619,8 @@ class SensorModule:
                 "stale": age is not None and age > STALE_AFTER_S,
                 "lastAck": dict(self._last_ack) if self._last_ack else None,
                 "lastCard": dict(self._last_card) if self._last_card else None,
+                "cardList": [dict(item) for item in self._card_list],
+                "cardListKnown": bool(self._card_list) and not self._card_list_open,
                 "events": [dict(item) for item in self._events[-10:]],
             }
             if frame is None:
@@ -489,13 +629,23 @@ class SensorModule:
                     "gyroZ": None, "pressurePa": None, "pressureHpa": None,
                     "temperatureC": None, "altitudeM": None, "doorOpen": None,
                     "lockOpen": None, "lightMask": 0, "lights": {}, "dim": None,
-                    "stripEnabled": False,
+                    "stripEnabled": False, "windowKind": "none", "windowActive": False,
                     "rfid": "none", "cards": 0, "linkOk": False, "errors": [],
                     "errorsMask": 0, "uptimeMs": None,
                 })
             else:
                 snapshot.update({key: value for key, value in frame.items() if key != "kind"})
             return snapshot
+
+    def compartment_open(self) -> bool:
+        """Отсек открыт по концевику? Нет свежего кадра — считаем, что неизвестно.
+
+        Нужен движению: пока отсек открыт, робот ехать не должен.
+        """
+        state = self.state()
+        if not state["ok"] or state["doorOpen"] is None:
+            return False
+        return bool(state["doorOpen"])
 
     def compass(self) -> dict[str, Any]:
         """Короткий снимок для карты лидара: курс и то, что видно на двери."""
@@ -511,6 +661,7 @@ class SensorModule:
             "doorOpen": state["doorOpen"],
             "lockOpen": state["lockOpen"],
             "stripEnabled": state["stripEnabled"],
+            "windowKind": state["windowKind"],
             "errors": state["errors"],
         }
 

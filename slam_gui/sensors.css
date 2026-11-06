@@ -211,7 +211,27 @@ h1 { margin: 0; font-size: clamp(22px, 2.2vw, 30px); line-height: 1.15; letter-s
 .compass-value small { display: block; margin-top: 2px; color: var(--accent-text); font-size: 15px; font-weight: 800; }
 .compass-value p { margin: 10px 0 0; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 
-/* Числовые показания барометра и двери. */
+/* Запрет движения из-за открытого отсека: самая заметная строка экрана. */
+.blocked {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 14px 18px;
+  border: 1px solid #7b4448;
+  border-radius: 14px;
+  background: linear-gradient(120deg, #3a2226, #25171a);
+  color: #f7d5d7;
+  font-size: 14px;
+  font-weight: 700;
+}
+.blocked::before {
+  content: "⛔";
+  flex: none;
+  font-size: 18px;
+}
+
+/* Числовые показания барометра, отсека и окна погрузки. */
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 4px; margin-bottom: 14px; }
 .metrics > div { padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); }
 .metrics dt { color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
@@ -219,6 +239,9 @@ h1 { margin: 0; font-size: clamp(22px, 2.2vw, 30px); line-height: 1.15; letter-s
 .metrics dd b { font-size: 21px; font-weight: 800; }
 .metrics dd small { color: var(--muted); font-size: 12px; }
 .metrics dd[data-state="open"] { color: var(--amber); }
+.metrics dd[data-state="blocked"] { color: var(--red); font-weight: 800; }
+.metrics dd[data-state="free"] { color: var(--good); }
+.metrics dd[data-state="unknown"] { color: var(--faint); }
 
 /* Свет: четыре реле как физические клавиши. */
 .lights { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 4px; }
@@ -278,6 +301,41 @@ h1 { margin: 0; font-size: clamp(22px, 2.2vw, 30px); line-height: 1.15; letter-s
 .warn { margin: 8px 0 0; padding: 9px 12px; border: 1px solid #664c36; border-radius: 10px; background: #2b211a; color: #f4d1a2; font-size: 12px; }
 
 .pin-field { display: block; margin-top: 6px; color: var(--faint); font-size: 12px; }
+.row select {
+  min-height: 44px;
+  padding: 9px 12px;
+  border: 1px solid #2e2e30;
+  border-radius: 10px;
+  background: #0d0d0f;
+  color: var(--text);
+  font-weight: 700;
+}
+.cards-legend { display: block; margin-top: 4px; color: var(--faint); font-size: 11px; line-height: 1.4; }
+.card-list {
+  margin: 12px 18px 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.card-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.card-row:last-child { border-bottom: 0; }
+.card-row[data-role="admin"] { box-shadow: inset 3px 0 0 var(--accent); }
+.card-uid { font-family: var(--mono); font-size: 13px; letter-spacing: .04em; }
+.card-role { color: var(--muted); font-size: 12px; }
+.card-row .btn { margin-left: auto; }
+.card-row .btn + .btn { margin-left: 0; }
+.card-empty { padding: 12px; color: var(--faint); font-size: 12px; }
+.btn--tiny { min-height: 34px; padding: 5px 11px; font-size: 11px; }
 .cards-count { margin-top: 4px; color: var(--muted); font-size: 13px; }
 .cards-count b { color: var(--text); font-size: 17px; font-variant-numeric: tabular-nums; }
 

@@ -9,15 +9,19 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
 import socket
 import stat
+import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
 
 import pytest
 from werkzeug.serving import make_server
@@ -126,6 +130,8 @@ def test_telemetry_api_returns_only_public_values(kiosk_client):
             "cameras",
             # Свет, замок, карты и компас отдельной платы модуля датчиков.
             "sensorModule",
+            # Отсек: пока концевик разомкнут, движение запрещено.
+            "compartment",
         }
         cameras = body["data"]["cameras"]
         assert isinstance(cameras, list)
@@ -499,6 +505,40 @@ def test_screen_has_no_demo_log_stream(kiosk_client):
     html = kiosk_client.get("/kiosk").get_data(as_text=True)
     assert "/api/kiosk_logs" in html
     assert "/api/audit" not in html
+
+
+def test_open_compartment_shows_the_motion_lock_on_the_board_screen(tmp_path):
+    """Отсек открыт — водитель видит запрет движения, не заходя в «Датчики»."""
+    js = (ROOT / "slam_gui" / "robot.js").read_text(encoding="utf-8")
+    assert "function renderCompartment(" in js
+    assert "compartment-chip" in js
+    html = (ROOT / "slam_gui" / "robot.html").read_text(encoding="utf-8")
+    assert 'id="compartment-chip"' in html and "ДВИЖЕНИЕ ЗАПРЕЩЕНО" in html
+    css = (ROOT / "slam_gui" / "robot.css").read_text(encoding="utf-8")
+    assert ".chip-alert" in css
+
+    if not shutil.which("node"):
+        pytest.skip("нет node: отрисовку бортового экрана проверяет только он")
+
+    def screen(**extra) -> dict:
+        data = {"ok": True, "data": {"live": True, "linkOk": True}}
+        data["data"].update(extra)
+        path = tmp_path / "payload.json"
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        proc = subprocess.run(
+            [shutil.which("node"), str(Path(__file__).parent / "js" / "lidar_screen.js"),
+             "robot", str(path)],
+            capture_output=True, text=True, timeout=120)
+        assert proc.returncode == 0, proc.stderr
+        return json.loads(proc.stdout)
+
+    closed = screen(compartment={"known": True, "open": False, "motionBlocked": False})
+    assert closed["compartment"]["hidden"] is True
+
+    opened = screen(compartment={"known": True, "open": True, "motionBlocked": True},
+                    sensorModule={"windowKind": "load"})
+    assert opened["compartment"]["hidden"] is False
+    assert opened["compartment"]["text"] == "ОТСЕК ОТКРЫТ · ДВИЖЕНИЕ ЗАПРЕЩЕНО · погрузка"
 
 
 def test_screen_can_be_embedded_in_preview(kiosk_client):

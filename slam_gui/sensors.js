@@ -1,8 +1,9 @@
-/* Экран «Модуль датчиков» бортового экрана: свет, замок двери, карты, компас.
+/* Экран «Модуль датчиков» бортового экрана: отсек, карты с ролями, окно погрузки.
  *
  * Плата живёт своей жизнью: сервер только показывает её состояние и передаёт
  * команды. Поэтому экран никогда не рисует «всё хорошо» из воздуха — нет кадра,
- * значит нет данных; нет ленты — значит габариты честно помечены как отключённые.
+ * значит нет данных; нет ленты — значит габариты честно помечены как отключённые;
+ * отсек открыт — значит движение запрещено и это видно первой строкой.
  */
 (function () {
   'use strict';
@@ -13,12 +14,10 @@
     head: 'передний свет', stop: 'стопы', left: 'левый поворотник',
     right: 'правый поворотник', dim: 'габариты',
   };
+  const ROLE_TITLES = {admin: 'администратор', user: 'пользователь'};
+  const WINDOW_TITLES = {none: 'нет окна', load: 'погрузка', unload: 'выгрузка'};
 
-  const state = {
-    data: null,
-    busy: false,
-    timer: 0,
-  };
+  const state = {data: null, busy: false, timer: 0, lastCardSignature: ''};
 
   function $(id) { return document.getElementById(id); }
 
@@ -37,6 +36,8 @@
     return CARDINALS[index];
   }
 
+  function roleTitle(role) { return ROLE_TITLES[role] || 'нет'; }
+
   function message(text, tone) {
     const el = $('sm-msg');
     if (!el) return;
@@ -47,6 +48,12 @@
   function pin() {
     const field = $('sm-pin');
     return field && typeof field.value === 'string' ? field.value.trim() : '';
+  }
+
+  function roleField() {
+    const field = $('sm-card-role');
+    const value = field && typeof field.value === 'string' ? field.value.trim() : '';
+    return value === 'admin' ? 'admin' : 'user';
   }
 
   /* ------------------------------------------------------------ отрисовка */
@@ -81,6 +88,32 @@
     setText($('sm-age'), Number.isFinite(age) ? (age / 1000).toFixed(1) + ' с назад' : '—');
     const errors = Array.isArray(data.errors) ? data.errors : [];
     setText($('sm-errors'), errors.length ? errors.join(', ') : (ok ? 'нет' : '—'));
+    const door = data.doorOpen === true ? 'открыт' : data.doorOpen === false ? 'закрыт' : '—';
+    setText($('sm-compartment'), door);
+  }
+
+  function renderCompartment(data) {
+    const opened = data.doorOpen === true;
+    const known = data.doorOpen === true || data.doorOpen === false;
+    setText($('sm-door'), !known ? '—' : opened ? 'открыт' : 'закрыт');
+    setText($('sm-lock'), data.lockOpen === true ? 'открыт'
+      : data.lockOpen === false ? 'закрыт' : '—');
+    const lockEl = $('sm-lock');
+    if (lockEl) lockEl.dataset.state = data.lockOpen ? 'open' : 'closed';
+    // Движение запрещено, пока концевик разомкнут; без кадра — «неизвестно».
+    setText($('sm-motion'), !known ? 'неизвестно' : opened ? 'запрещено' : 'разрешено');
+    const motionEl = $('sm-motion');
+    if (motionEl) motionEl.dataset.state = !known ? 'unknown' : opened ? 'blocked' : 'free';
+    const banner = $('sm-blocked');
+    if (banner) banner.hidden = !opened;
+  }
+
+  function renderWindow(data) {
+    const kind = data.windowKind || 'none';
+    setText($('sm-window'), 'окно: ' + (kind === 'none' ? 'нет' : WINDOW_TITLES[kind] || kind));
+    setText($('sm-window-state'), WINDOW_TITLES[kind] || 'нет окна');
+    const box = $('sm-window');
+    if (box) box.dataset.tone = kind === 'none' ? '' : 'ok';
   }
 
   function renderCompass(data) {
@@ -134,23 +167,74 @@
     }
   }
 
-  function renderDoor(data) {
-    setText($('sm-door'), data.doorOpen === true ? 'открыта' : data.doorOpen === false ? 'закрыта' : '—');
-    setText($('sm-lock'), data.lockOpen === true ? 'открыт' : data.lockOpen === false ? 'закрыт' : '—');
-    const lockEl = $('sm-lock');
-    if (lockEl) lockEl.dataset.state = data.lockOpen ? 'open' : 'closed';
+  /* Карточки карт: список приходит от платы (кадры @CARDINFO). */
+  function cardSignature(list) {
+    return list.map((item) => item.uid + ':' + item.role).join(',');
   }
 
   function renderCards(data) {
+    const list = Array.isArray(data.cardList) ? data.cardList : [];
     setText($('sm-cards-count'), Number.isFinite(Number(data.cards)) ? data.cards : '—');
     const rfid = $('sm-rfid');
     const last = data.lastCard;
     if (rfid) {
-      rfid.textContent = last
-        ? 'карта ' + last.uid + (last.granted ? ' — пущена' : ' — отказ')
-        : 'карта: —';
+      let text = 'карта: —';
+      if (last) {
+        const done = last.action === 'open' ? 'отсек открыт'
+          : last.action === 'close' ? 'отсек закрыт'
+            : last.action === 'enroll' ? 'карта записана'
+              : 'отказ' + (last.reason && last.reason !== 'none'
+                ? ': ' + (last.reasonTitle || last.reason) : '');
+        text = 'карта ' + last.uid + ' (' + roleTitle(last.role) + ') — ' + done;
+      }
+      rfid.textContent = text;
       rfid.dataset.tone = last ? (last.granted ? 'ok' : 'err') : '';
     }
+
+    const box = $('sm-card-list-box');
+    if (!box) return;
+    const signature = cardSignature(list);
+    if (signature === state.lastCardSignature) return;
+    state.lastCardSignature = signature;
+
+    const rows = list.map((item) => {
+      const row = document.createElement('li');
+      row.className = 'card-row';
+      row.setAttribute('data-uid', item.uid);
+      row.setAttribute('data-role', item.role);
+      const uid = document.createElement('span');
+      uid.className = 'card-uid';
+      uid.textContent = item.uid;
+      const role = document.createElement('span');
+      role.className = 'card-role';
+      role.textContent = roleTitle(item.role);
+      const flip = document.createElement('button');
+      flip.type = 'button';
+      flip.className = 'btn btn--tiny';
+      flip.setAttribute('data-card-action', 'role');
+      flip.setAttribute('data-uid', item.uid);
+      flip.setAttribute('data-role', item.role === 'admin' ? 'user' : 'admin');
+      flip.textContent = item.role === 'admin' ? 'сделать пользователем' : 'сделать администратором';
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'btn btn--tiny btn--danger';
+      del.setAttribute('data-card-action', 'del');
+      del.setAttribute('data-uid', item.uid);
+      del.textContent = 'удалить';
+      row.appendChild(uid);
+      row.appendChild(role);
+      row.appendChild(flip);
+      row.appendChild(del);
+      return row;
+    });
+    if (!rows.length) {
+      const empty = document.createElement('li');
+      empty.className = 'card-empty';
+      empty.textContent = data.cardListKnown ? 'карт нет' : 'список не загружен';
+      box.replaceChildren(empty);
+      return;
+    }
+    box.replaceChildren.apply(box, rows);
   }
 
   function renderLog(data) {
@@ -177,11 +261,12 @@
     state.data = data || {};
     const safe = state.data;
     renderStatus(safe);
+    renderCompartment(safe);
+    renderWindow(safe);
+    renderCards(safe);
     renderCompass(safe);
     renderBarometer(safe);
     renderLights(safe);
-    renderDoor(safe);
-    renderCards(safe);
     renderLog(safe);
   }
 
@@ -221,8 +306,7 @@
       payload = {};
     }
     if (!response.ok || payload.ok === false) {
-      const reason = payload.error || ('HTTP ' + response.status);
-      throw new Error(reason);
+      throw new Error(payload.error || ('HTTP ' + response.status));
     }
     if (payload.data) render(payload.data);
     return payload;
@@ -246,10 +330,23 @@
         { light: name, on });
   }
 
+  function requirePin(what) {
+    if (pin()) return true;
+    // Без PIN сервер всё равно откажет: не тратим запрос впустую.
+    message(what + ' требует PIN кейса', 'err');
+    return false;
+  }
+
+  function cardCommand(label, body) {
+    if (!requirePin('Изменение списка карт')) return;
+    body.pin = pin();
+    act('карты: ' + label, 'api/sensor_module/cards', body);
+  }
+
   /* ------------------------------------------------------------ обработчики */
   function bind() {
-    const buttons = document.querySelectorAll ? document.querySelectorAll('[data-light]') : [];
-    Array.prototype.forEach.call(buttons, (button) => {
+    const lights = document.querySelectorAll ? document.querySelectorAll('[data-light]') : [];
+    Array.prototype.forEach.call(lights, (button) => {
       button.addEventListener('click', () => toggleLight(button));
     });
 
@@ -266,59 +363,84 @@
       });
     }
 
+    // Отсек: открытие (держится до карты или «Закрыть») и закрытие.
     const open = $('sm-lock-open');
     if (open) {
       open.addEventListener('click', () => {
-        if (!pin()) {
-          // Без PIN замок не дёргаем даже запросом: сервер его всё равно отклонит.
-          message('Открытие двери требует PIN кейса', 'err');
-          return;
-        }
-        act('замок', 'api/sensor_module/lock', { open: true, seconds: 3, pin: pin() });
+        if (!requirePin('Открытие отсека')) return;
+        act('отсек', 'api/sensor_module/lock', { hold: true, pin: pin() });
       });
     }
     const close = $('sm-lock-close');
-    if (close) close.addEventListener('click', () => act('замок', 'api/sensor_module/lock',
+    if (close) close.addEventListener('click', () => act('отсек', 'api/sensor_module/lock',
                                                          { open: false }));
 
-    const cards = {
-      'sm-card-add': { action: 'add', uid: true },
-      'sm-card-del': { action: 'del', uid: true },
-      'sm-card-learn': { action: 'learn' },
-      'sm-card-list': { action: 'list' },
-      'sm-card-clear': { action: 'clear' },
-    };
-    Object.keys(cards).forEach((id) => {
-      const button = $(id);
-      if (!button) return;
-      const spec = cards[id];
-      button.addEventListener('click', () => {
-        const body = { action: spec.action };
-        if (spec.uid) {
-          const field = $('sm-card-uid');
-          const uid = field && field.value ? field.value.trim().toUpperCase() : '';
-          if (uid.length !== 8) {
-            message('UID карты — 8 hex-знаков, например A1B2C3D4', 'err');
-            return;
-          }
-          body.uid = uid;
+    // Карты: добавить с ролью, записать с платы с ролью, обновить, очистить.
+    const add = $('sm-card-add');
+    if (add) {
+      add.addEventListener('click', () => {
+        const field = $('sm-card-uid');
+        const uid = field && field.value ? field.value.trim().toUpperCase() : '';
+        if (uid.length !== 8) {
+          message('UID карты — 8 hex-знаков, например A1B2C3D4', 'err');
+          return;
         }
-        if (spec.action !== 'list') {
-          if (!pin()) {
-            message('Изменение списка карт требует PIN кейса', 'err');
-            return;
-          }
-          body.pin = pin();
-        }
-        act('карты: ' + spec.action, 'api/sensor_module/cards', body);
+        cardCommand('добавить ' + uid, { action: 'add', uid: uid, role: roleField() });
       });
-    });
+    }
+    const learn = $('sm-card-learn');
+    if (learn) {
+      learn.addEventListener('click', () => cardCommand('записать с платы',
+                                                        { action: 'learn', role: roleField() }));
+    }
+    const list = $('sm-card-list');
+    if (list) {
+      list.addEventListener('click', () => act('карты: список', 'api/sensor_module/cards',
+                                               { action: 'list' }));
+    }
+    const clear = $('sm-card-clear');
+    if (clear) {
+      clear.addEventListener('click', () => cardCommand('очистить', { action: 'clear' }));
+    }
 
-    const mag = {
-      'sm-cal-start': 'start',
-      'sm-cal-stop': 'stop',
-      'sm-cal-reset': 'reset',
-    };
+    // Кнопки в строках списка: сменить роль или удалить карту.
+    const box = $('sm-card-list-box');
+    if (box && box.addEventListener) {
+      box.addEventListener('click', (event) => {
+        const target = event && event.target;
+        if (!target || !target.getAttribute) return;
+        const action = target.getAttribute('data-card-action');
+        const uid = target.getAttribute('data-uid');
+        if (!action || !uid) return;
+        if (action === 'role') {
+          cardCommand('роль ' + uid, { action: 'role', uid: uid,
+                                       role: target.getAttribute('data-role') || 'user' });
+        } else if (action === 'del') {
+          cardCommand('удалить ' + uid, { action: 'del', uid: uid });
+        }
+      });
+    }
+
+    // Окно погрузки: открытие требует PIN, закрытие — нет.
+    const load = $('sm-cargo-load');
+    if (load) {
+      load.addEventListener('click', () => {
+        if (!requirePin('Окно погрузки')) return;
+        act('окно погрузки', 'api/sensor_module/cargo', { kind: 'load', pin: pin() });
+      });
+    }
+    const unload = $('sm-cargo-unload');
+    if (unload) {
+      unload.addEventListener('click', () => {
+        if (!requirePin('Окно выгрузки')) return;
+        act('окно выгрузки', 'api/sensor_module/cargo', { kind: 'unload', pin: pin() });
+      });
+    }
+    const end = $('sm-cargo-end');
+    if (end) end.addEventListener('click', () => act('окно погрузки', 'api/sensor_module/cargo',
+                                                     { kind: 'end' }));
+
+    const mag = {'sm-cal-start': 'start', 'sm-cal-stop': 'stop', 'sm-cal-reset': 'reset'};
     Object.keys(mag).forEach((id) => {
       const button = $(id);
       if (!button) return;
@@ -333,7 +455,7 @@
     if (typeof setInterval === 'function') state.timer = setInterval(load, POLL_MS);
   }
 
-  const api = { init, load, render };
+  const api = {init, load, render};
   if (typeof window !== 'undefined') window.RCSensors = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 
