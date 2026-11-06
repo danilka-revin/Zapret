@@ -24,7 +24,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
+from .camera_settings import ENV_KEYS_BY_ROLE as CAMERA_ENV_KEYS
+from .camera_settings import ENV_PRIMARY_KEYS as CAMERA_ENV_PRIMARY
+from .camera_settings import ROLE_TO_LAYOUT
 from .config import PROJECT_ROOT
+from .sensor_layout import CAMERA_ENV_KEYS as LAYOUT_CAMERA_ENV_KEYS
 
 WHEELS = ("FL", "FR", "RL", "RR")
 WHEEL_TITLES = {"FL": "Переднее левое", "FR": "Переднее правое",
@@ -36,21 +40,44 @@ WHEEL_ENV_KEY = "RC_WHEEL_PORTS"
 SENSOR_ENV_KEY = "RC_SENSOR_PORT"
 WHEEL_SLOTS = 4
 
-#: Роль страницы → ключ .env (первый ключ — тот, что пишется).
-ROLE_ENV: dict[str, tuple[str, ...]] = {
-    "camera_FL": ("RC_CAMERA_FRONT",),
-    "camera_FR": ("RC_CAMERA_FRONT_RIGHT",),
-    "camera_RL": ("RC_CAMERA_REAR",),
-    "camera_RR": ("RC_CAMERA_REAR_RIGHT",),
-    "lidar": ("RC_LIDAR_PORT",),
-    "kinect": ("RC_KINECT_PORT",),
-    "bms": ("RC_BMS_PORT",),
-    "printer": ("RC_PRINTER_PORT",),
-}
 #: Роль страницы → ключ настроек камер (camera_settings).
 CAMERA_SETTING: dict[str, str] = {
     "camera_FL": "front", "camera_FR": "front_right",
     "camera_RL": "rear", "camera_RR": "rear_right",
+}
+
+
+def _camera_role_keys(role: str) -> tuple[str, ...]:
+    """Ключи ``.env`` одной камеры: пишем первый, читаем и алиасы.
+
+    Камеры настраивают два модуля: страница «Устройства» пишет ключи
+    ``camera_settings`` (``RC_CAMERA_FRONT``, ``RC_CAMERA_REAR``,
+    ``RC_CAMERA_FRONT_RIGHT``, ``RC_CAMERA_REAR_RIGHT``), а открывает их
+    ``sensor_layout`` — по ``RC_CAMERA_FL_PORT``/``RC_CAMERA_RL_PORT`` и
+    алиасам. Раньше на роль приходился ровно один ключ, поэтому ``.env``,
+    собранный по документации (``RC_CAMERA_FL_PORT=/dev/video0``), страница
+    считала пустым: камера работала, а подтвердить её было нельзя.
+    """
+    setting = CAMERA_SETTING[role]
+    names = [CAMERA_ENV_PRIMARY[setting], *CAMERA_ENV_KEYS[setting],
+             *LAYOUT_CAMERA_ENV_KEYS[ROLE_TO_LAYOUT[setting]]]
+    keys: list[str] = []
+    for name in names:
+        if name not in keys:
+            keys.append(name)
+    return tuple(keys)
+
+
+#: Роль страницы → ключи .env (первый ключ — тот, что пишется).
+ROLE_ENV: dict[str, tuple[str, ...]] = {
+    "camera_FL": _camera_role_keys("camera_FL"),
+    "camera_FR": _camera_role_keys("camera_FR"),
+    "camera_RL": _camera_role_keys("camera_RL"),
+    "camera_RR": _camera_role_keys("camera_RR"),
+    "lidar": ("RC_LIDAR_PORT",),
+    "kinect": ("RC_KINECT_PORT",),
+    "bms": ("RC_BMS_PORT",),
+    "printer": ("RC_PRINTER_PORT",),
 }
 ROLE_TITLES: dict[str, str] = {
     "camera_FL": "Камера · передняя левая",

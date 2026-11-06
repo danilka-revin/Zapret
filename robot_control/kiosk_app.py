@@ -1075,17 +1075,18 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         settings[role_key] = port
         normalized = normalize_camera_settings(settings)
         # Подсказка реестра фиксирует USB-идентичность открытого устройства.
-        # Очистка оставляет отключённую подсказку: камера выключена до нового
-        # назначения, а не открывается по старому пути.
+        # «Сброс» (пустой порт) оставляет отключённую подсказку: камера
+        # выключена до нового назначения, а не открывается по старому пути.
         try:
             if not port:
                 device_registry.set_hint(role, "")
             else:
-                hint = (device_registry.set_hint(role, port) or {}).get("hint") or {}
-                if not hint.get("identity"):
-                    # Устройства сейчас нет в топологии: назначение хранит .env,
-                    # камера откроется, когда путь появится и совпадёт с ним.
-                    device_registry.clear_hint(role)
+                # Подсказку не выбрасываем, даже если устройства сейчас нет в
+                # топологии: иначе подтвердить камеру по изображению нельзя
+                # никогда (раньше это был тупик «Сначала укажите порт камеры»).
+                # Порт остаётся назначением оператора, камера открывается по
+                # .env, а подтверждение требует свежего кадра с этого порта.
+                device_registry.set_hint(role, port)
         except ValueError as exc:
             raise device_ports.PortError(str(exc)) from exc
         result = apply_camera_settings(normalized)

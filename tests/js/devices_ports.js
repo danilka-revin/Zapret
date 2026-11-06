@@ -114,7 +114,8 @@ global.window = global;
 global.self = global;
 global.addEventListener = () => {};
 global.removeEventListener = () => {};
-global.confirm = () => true;
+const confirmed = [];
+global.confirm = (text) => { confirmed.push(String(text || '')); return true; };
 global.AbortController = class {
   constructor() { this.signal = {}; }
   abort() {}
@@ -135,7 +136,7 @@ function reply(body, status) {
 global.fetch = async (url, options) => {
   const text = String(url);
   const method = (options && options.method) || 'GET';
-  calls.push({url: text, method});
+  calls.push({url: text, method, body: (options && options.body) || ''});
   if (/\/api\/control\/session$/.test(text)) {
     return {ok: false, status: 404, json: async () => ({ok: false})};
   }
@@ -173,6 +174,22 @@ function picker(id) {
       .map((option) => option.value),
     hint: options.length ? options[0].title || '' : '',
   };
+}
+
+// Кнопки карточек создаются без id: ищем их по классу внутри карточки роли.
+function cardButton(role, cssClass) {
+  const roots = byId('camera-cards').children || [];
+  const root = roots.find((node) => node.dataset && node.dataset.role === role);
+  if (!root) return null;
+  const walk = (node) => {
+    for (const child of node.children || []) {
+      if (String(child.className || '').split(' ').includes(cssClass)) return child;
+      const found = walk(child);
+      if (found) return found;
+    }
+    return null;
+  };
+  return walk(root);
 }
 
 function foundRows() {
@@ -217,6 +234,30 @@ function foundRows() {
   (pick.events.change || []).forEach((listener) => listener({target: pick}));
   await sleep(10);
   result.afterPick = {value: wanted, input: byId('hint-lidar').value};
+
+  /* Действия оператора с камерой: подтверждение расположения и «Сброс».
+     Ни одно из них не должно зависеть от системного window.confirm. */
+  const actions = {confirm: null, reset: []};
+  if (payload.cameraConfirm) {
+    const button = cardButton(payload.cameraConfirm, 'confirm');
+    actions.confirm = {found: !!button, hidden: button ? !!button.hidden : null};
+    if (button) { button.click(); await sleep(10); }
+    actions.confirm.message = (cardButton(payload.cameraConfirm, 'hint-message') || {}).textContent || '';
+  }
+  if (payload.cameraReset) {
+    const button = cardButton(payload.cameraReset, 'clear');
+    const clicks = payload.cameraResetClicks || 2;
+    for (let index = 0; index < clicks; index += 1) {
+      if (!button) break;
+      button.click();
+      actions.reset.push(button.textContent);
+      await sleep(10);
+    }
+    actions.resetMessage = (cardButton(payload.cameraReset, 'hint-message') || {}).textContent || '';
+  }
+  result.actions = actions;
+  result.posts = calls.filter((call) => call.method === 'POST');
+  result.confirms = confirmed.slice();
 
   console.log(JSON.stringify(result));
   process.exit(0);

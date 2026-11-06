@@ -267,12 +267,18 @@
       body.appendChild(card.preview);
       card.confirm = element('button', 'confirm', 'Подтвердить расположение по изображению');
       card.confirm.type = 'button'; card.confirm.hidden = true;
+      // Никакого window.confirm: в киоске и на тач-экране системный диалог
+      // может не открыться, и тогда кнопка выглядит «мёртвой». Само нажатие
+      // на «Подтвердить расположение по изображению» и есть заявление
+      // оператора — рядом с картинкой этой же камеры.
       card.confirm.addEventListener('click', async () => {
-        if (!window.confirm('Вы видите именно эту камеру? Проверьте расположение объектива на роботе.')) return;
         card.confirm.disabled = true;
         try {
-          await post('/api/devices/camera/confirm', {role});
-          card.message.textContent = 'Расположение подтверждено оператором.';
+          const result = await post('/api/devices/camera/confirm', {role});
+          card.message.textContent = 'Расположение подтверждено оператором.' +
+            (result.usbMatched === false
+              ? ' USB-путь ещё не сверен: подтверждение опирается на назначенный порт и свежий кадр.'
+              : '');
           await refresh(true);
         } catch (err) { card.message.textContent = err.message || 'Не удалось подтвердить камеру.'; }
         finally { card.confirm.disabled = false; }
@@ -332,7 +338,7 @@
           if (role.startsWith('camera_')) {
             card.message.textContent += port
               ? ' Дождитесь изображения и подтвердите расположение.'
-              : ' Камера выключена до выбора нового порта.';
+              : ' Камера выключена до выбора нового порта; подтверждение расположения снято.';
           }
           if (result.ports) renderPorts(result.ports);
           await refresh(true);
@@ -340,8 +346,23 @@
         finally { card.save.disabled = card.clear.disabled = false; }
       }
       form.addEventListener('submit', event => { event.preventDefault(); void save(card.input.value.trim()); });
+      // «Сброс» без системного диалога: первое нажатие взводит кнопку,
+      // второе — сбрасывает. Так действие работает и там, где window.confirm
+      // не показывается, но случайный клик камеру не выключает.
+      let resetArmed = false, resetTimer = 0;
       card.clear.addEventListener('click', () => {
-        if (role.startsWith('camera_') && !window.confirm('Очистить назначение? Камера остановится до выбора нового порта.')) return;
+        if (role.startsWith('camera_') && !resetArmed) {
+          resetArmed = true;
+          card.clear.textContent = 'Точно сбросить?';
+          card.message.textContent = 'Камера остановится до выбора нового порта. ' +
+            'Нажмите «Точно сбросить?», чтобы подтвердить.';
+          clearTimeout(resetTimer);
+          resetTimer = setTimeout(() => {
+            resetArmed = false; card.clear.textContent = 'Сброс';
+          }, 6000);
+          return;
+        }
+        clearTimeout(resetTimer); resetArmed = false; card.clear.textContent = 'Сброс';
         void save('');
       });
       body.appendChild(form);

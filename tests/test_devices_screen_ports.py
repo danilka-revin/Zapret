@@ -202,3 +202,62 @@ def test_page_has_a_real_picker_and_no_datalist_flood(kiosk_client):
     assert "port-pick" in js and "wheel-pick-" in js
     # Список строится по физическому порту, а не по каталогу /dev.
     assert "usbPort" in js and "byPath" in js
+
+
+# ------------------------------------------------- камера: подтверждение и сброс
+def camera_snapshot(can_confirm=True):
+    """Снимок, где камера FL уже даёт кадры с назначенного порта."""
+    snapshot = snapshot_payload()
+    for item in snapshot["devices"]:
+        if item["id"] != "camera_FL":
+            continue
+        item.update(status="warning", label="Кадры идут · роль проверить",
+                    port="/dev/video0", assignedPort="/dev/v4l/by-id/usb-Cam-video-index0",
+                    canConfirm=can_confirm,
+                    detail="Проверьте изображение и подтвердите расположение камеры.")
+    return snapshot
+
+
+def run_actions(tmp_path: Path, **payload_extra) -> dict:
+    payload = {"ports": ports_payload(), "snapshot": camera_snapshot()}
+    payload.update(payload_extra)
+    path = tmp_path / "devices.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    proc = subprocess.run([NODE, str(HARNESS), str(path)], capture_output=True, text=True,
+                          timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_camera_confirm_button_posts_without_a_browser_dialog(tmp_path):
+    """Кнопка подтверждения не зависит от window.confirm (в киоске он молчит)."""
+    out = run_actions(tmp_path, cameraConfirm="camera_FL")
+    assert out["actions"]["confirm"]["found"] is True
+    assert out["actions"]["confirm"]["hidden"] is False
+    posts = [call for call in out["posts"] if "camera/confirm" in call["url"]]
+    assert len(posts) == 1
+    assert json.loads(posts[0]["body"]) == {"role": "camera_FL"}
+    assert out["confirms"] == [], "системный диалог не должен требоваться"
+    assert "Расположение подтверждено оператором" in out["actions"]["confirm"]["message"]
+
+
+def test_camera_reset_needs_two_clicks_and_posts_an_empty_port(tmp_path):
+    """«Сброс» сначала взводится, вторым нажатием выключает камеру."""
+    first = run_actions(tmp_path, cameraReset="camera_FL", cameraResetClicks=1)
+    assert first["actions"]["reset"] == ["Точно сбросить?"]
+    assert not [call for call in first["posts"] if call["url"].endswith("/api/devices/ports")]
+    assert "Камера остановится" in first["actions"]["resetMessage"]
+    assert first["confirms"] == []
+
+    second = run_actions(tmp_path, cameraReset="camera_FL", cameraResetClicks=2)
+    assert second["actions"]["reset"] == ["Точно сбросить?", "Сброс"]
+    posts = [call for call in second["posts"] if call["url"].endswith("/api/devices/ports")]
+    assert len(posts) == 1
+    assert json.loads(posts[0]["body"]) == {"role": "camera_FL", "port": ""}
+    assert second["confirms"] == []
+
+
+def test_confirm_button_is_hidden_until_a_frame_arrives(tmp_path):
+    out = run_actions(tmp_path, cameraConfirm="camera_FL", snapshot=camera_snapshot(False))
+    assert out["actions"]["confirm"]["found"] is True
+    assert out["actions"]["confirm"]["hidden"] is True

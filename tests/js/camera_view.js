@@ -65,6 +65,13 @@ for (let i=0;i<30;i++) get('cam2-in').fire('click');
 assert.equal(get('cam2-zoom').textContent,'8.0×');
 get('cam2-reset').fire('click');
 assert.equal(get('cam2-zoom').textContent,'1.0×');
+// «Сброс» заново запрашивает кадр: зависший поток оживает без перезагрузки.
+const pollsBeforeReset = images.length;
+get('cam2-reset').fire('click');
+assert.equal(images.length, pollsBeforeReset + 1, 'reset re-requests the frame');
+assert.equal(get('cam2-chip').textContent, 'нет сигнала', 'reset drops the stale frame');
+images.at(-1).onload();
+assert.match(get('cam2-chip').textContent, /LIVE/, 'a fresh frame after reset goes live again');
 get('cam2-view').fire('wheel',{deltaY:-300,clientX:400,clientY:225});
 assert.notEqual(get('cam2-zoom').textContent,'1.0×');
 get('cam2-expand').fire('click');

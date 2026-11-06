@@ -234,6 +234,15 @@ def _resolve_identity(topology: dict, identity: Any) -> tuple[dict | None, dict 
     return device, matches[0], confidence
 
 
+def _camera_assigned_port(role: str) -> str:
+    """Порт камеры, который оператор назначил в настройках (``.env``)."""
+    try:
+        from .device_ports import role_port
+        return str(role_port(role) or "")
+    except Exception:  # noqa: BLE001 — страница устройств работает и без настроек
+        return ""
+
+
 def _valid_hint(role: str, value: Any) -> str:
     if role not in ROLES or not isinstance(value, str):
         raise ValueError("Неизвестное устройство или неверный тип порта")
@@ -374,32 +383,67 @@ class DeviceRegistry:
         return {"ok": True, "role": role, "hint": None}
 
     def confirm_camera(self, role: str, cameras: list) -> dict:
-        """Record the operator's visual confirmation, never an inferred role."""
+        """Record the operator's visual confirmation, never an inferred role.
+
+        Оператор смотрит на изображение и говорит, что камера стоит именно
+        здесь. Раньше это работало только при живой подсказке реестра: если
+        камеру назначали до её появления в sysfs, подсказка терялась и
+        подтверждение становилось невозможным навсегда. Теперь достаточно
+        свежего кадра с того порта, который оператор назначил в настройках;
+        USB-идентичность, если она видна, при подтверждении обновляется.
+        """
         if role not in {"camera_" + key for key in WHEELS}:
             raise ValueError("Неизвестная камера")
         key = role.removeprefix("camera_")
         cam = next((c for c in cameras if isinstance(c, dict) and c.get("id") == CAMERA_IDS[key]), {})
         frame_age = cam.get("frameAgeS")
+        opened = cam.get("openedPath")
+        if (cam.get("frameSource") != "capture" or not isinstance(opened, str) or not opened or
+                not _finite_number(frame_age) or not 0 <= frame_age < 2):
+            raise ValueError("Нет свежего кадра с указанной камеры; дождитесь изображения на карточке")
         topology = self.usb(refresh=True)
+        assigned = _camera_assigned_port(role)
         with self._lock:
-            hint = self._data["hints"].get(role)
-            if not isinstance(hint, dict):
+            stored = self._data["hints"].get(role)
+            hint = dict(stored) if isinstance(stored, dict) else {}
+            if hint.get("disabled"):
+                hint = {}  # «Сброс»: назначения больше нет
+            known = str(hint.get("port") or assigned or "")
+            if not known:
                 raise ValueError("Сначала укажите порт камеры")
-            device, node, _ = _resolve_identity(topology, hint.get("identity"))
-            if (not device or not node or node.get("kind") != "video" or
-                    not cam.get("openedPath") or _real(cam["openedPath"]) != _real(node["path"]) or
-                    cam.get("frameSource") != "capture" or not _finite_number(frame_age) or
-                    not 0 <= frame_age < 2):
-                raise ValueError("Нет свежего кадра с указанной камеры; дождитесь изображения")
+            device, node, confidence = _resolve_identity(topology, hint.get("identity"))
+            if node is not None and node.get("kind") == "video":
+                # Прежнее устройство живо, но стоит на другом узле: кадры идут
+                # не с него. Подтверждать чужое изображение нельзя.
+                if _real(node["path"]) != _real(opened):
+                    raise ValueError("Кадры идут не с назначенного порта; сверьте порт и кабель")
+            else:
+                known_paths = {_real(path) for path in (hint.get("port"), assigned) if path}
+                if _real(opened) not in known_paths:
+                    raise ValueError("Кадры идут не с назначенного порта; сверьте порт и кабель")
+                # Устройство заменили или оно ещё не было сверено: смотрим,
+                # что сейчас стоит на этом порту, и фиксируем новую личность.
+                device, node = _find_port(topology, opened)
+                if node is not None and node.get("kind") != "video":
+                    device, node = None, None
+            now = self.clock()
+            if device and node and node.get("kind") == "video":
+                hint["identity"] = _identity(device, node)
+                # Отвечаем силой той личности, которую только что записали.
+                confidence = _resolve_identity(topology, hint["identity"])[2]
+            hint["port"] = known
+            hint["confirmedAt"] = now
+            hint.pop("disabled", None)
             previous = copy.deepcopy(self._data)
-            hint["confirmedAt"] = self.clock()
+            self._data["hints"][role] = hint
             try:
                 self._save_locked()
             except OSError:
                 self._data = previous
                 raise
             self._fast_hints = copy.deepcopy(self._data["hints"])
-            return {"ok": True, "role": role, "confirmedAt": hint["confirmedAt"]}
+            return {"ok": True, "role": role, "confirmedAt": now,
+                    "usbMatched": hint.get("identity") is not None, "confidence": confidence}
 
     def camera_role_confirmed(self, role: str) -> bool:
         """Conservative identity for recording orientation-dependent landmarks."""
@@ -483,8 +527,21 @@ class DeviceRegistry:
         hints = self._fast_hints
         own = hints.get("camera_" + short)
         if isinstance(own, dict):
-            device, node, _ = _resolve_identity(topology, own.get("identity"))
-            return node["path"] if device and node and node.get("kind") == "video" else ""
+            device, node, confidence = _resolve_identity(topology, own.get("identity"))
+            if device and node and node.get("kind") == "video":
+                return node["path"]
+            # «Сброс» выключает камеру до нового назначения.
+            if own.get("disabled"):
+                return ""
+            # Камеру назначили раньше, чем она появилась в sysfs (или by-id ещё
+            # не создан): сверять нечего, но если подсказка совпадает с портом
+            # из настроек, это решение оператора, а не догадка. Такой путь
+            # открываем; подтверждение всё равно потребует свежего кадра.
+            if confidence == "unverified" and own.get("port"):
+                assigned = _camera_assigned_port("camera_" + short)
+                if assigned and _real(assigned) == _real(str(own["port"])):
+                    return default
+            return ""
         # A legacy/default path must not steal a hinted camera via its second
         # V4L2 interface. Otherwise retain existing behaviour for compatibility.
         default_device, _ = _find_port(topology, default)
@@ -583,19 +640,31 @@ class DeviceRegistry:
             hint = hints.get(role)
             _, _, confidence = _resolve_identity(topology, (hint or {}).get("identity"))
             if frame_ok and port:
+                # Порт из .env — назначение оператора. Кадр с него можно
+                # подтвердить даже когда sysfs ещё не показал USB-путь.
+                assigned_port = str((hint or {}).get("port") or _camera_assigned_port(role) or "")
+                port_matches = bool(assigned_port and _real(assigned_port) == _real(str(port)))
                 confirmed_at = hint.get("confirmedAt") if isinstance(hint, dict) else None
                 confirmed = _finite_number(confirmed_at) and 0 < confirmed_at <= now + 2
                 verified_role = confirmed and confidence == "serial"
-                item.update(status="verified" if verified_role else "warning",
-                            label="Кадры · роль подтверждена" if verified_role else "Кадры идут · роль проверить",
+                if verified_role:
+                    label = "Кадры · роль подтверждена"
+                elif confirmed:
+                    label = "Кадры · подтверждено оператором"
+                else:
+                    label = "Кадры идут · роль проверить"
+                item.update(status="verified" if verified_role else "warning", label=label,
                             ageS=frame_age, check="Свежий кадр V4L2; направление подтверждает оператор",
-                            canConfirm=bool(hint and confidence in {"serial", "socket"}))
-                if not hint:
-                    item["detail"] = "Порт по настройкам/умолчанию; физическая роль камеры не подтверждена."
-                elif not confirmed:
-                    item["detail"] = "Проверьте изображение и подтвердите расположение камеры."
+                            canConfirm=bool(port_matches or confidence in {"serial", "socket"}))
+                if not confirmed:
+                    item["detail"] = ("Проверьте изображение и подтвердите расположение камеры."
+                                      if port_matches else
+                                      "Кадры идут, но не с назначенного порта: укажите порт этой камеры.")
                 elif confidence == "socket":
                     item["detail"] = "Совпало гнездо и модель, но одинаковые камеры могли поменять местами."
+                elif confirmed_at and not (hint or {}).get("identity"):
+                    item["detail"] = ("Оператор подтвердил расположение; USB-путь ещё не сверен — "
+                                      "проверьте кабель и подтвердите после переподключения.")
                 else:
                     item["detail"] = "Совпал уникальный USB-серийный номер; расположение ранее подтвердил оператор."
                 if verified_role:

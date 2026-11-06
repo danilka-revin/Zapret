@@ -23,7 +23,16 @@
       const bind = (suffix, fn) => { const button = $('cam' + n + '-' + suffix); if (button) button.addEventListener('click', fn); };
       bind('in', () => camera.viewport.zoomTo(camera.viewport.state.zoom * 1.25));
       bind('out', () => camera.viewport.zoomTo(camera.viewport.state.zoom / 1.25));
-      bind('reset', () => camera.viewport.reset());
+      // «Сброс» возвращает масштаб и заново запрашивает кадр: зависший поток
+      // (USB, сеть, уснувший сервер) оживает без перезагрузки экрана.
+      bind('reset', () => {
+        camera.viewport.reset();
+        stop(camera);
+        camera.frame = null;
+        status(camera, false);
+        draw(camera);
+        poll(camera);
+      });
       bind('expand', () => {
         const panel = $('swipe-cameras-view');
         const card = view.closest('.cam-card');
