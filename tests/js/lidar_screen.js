@@ -378,6 +378,11 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
     dots: canvas.dots.length,
     logLines,
     logStatus: byId('log-status').textContent,
+    /* Плашка «отсек открыт — движение запрещено» с бортового экрана. */
+    compartment: {
+      hidden: byId('compartment-chip').hidden,
+      text: byId('compartment-chip').textContent,
+    },
     renderErrors,
     otherWarnings,
   }, null, 2));

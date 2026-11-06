@@ -55,6 +55,10 @@ class El {
   click() { (this.events.click || []).forEach((listener) => listener({ target: this, preventDefault() {} })); }
 }
 
+/* createElement кладёт элементы в общий список: по нему тест находит кнопки
+ * внутри строк списка карт (иначе до них не добраться без всплытия событий). */
+const created = [];
+
 const elements = new Map();
 function byId(id) {
   if (!elements.has(id)) elements.set(id, new El(id, 'div'));
@@ -75,7 +79,11 @@ global.document = {
   body: new El('body'),
   documentElement: new El('html'),
   getElementById: byId,
-  createElement: (tag) => new El('', tag),
+  createElement: (tag) => {
+    const el = new El('', tag);
+    created.push(el);
+    return el;
+  },
   querySelector: () => null,
   querySelectorAll: (selector) => (selector === '[data-light]' ? lightButtons : []),
   addEventListener: () => {},
@@ -126,6 +134,7 @@ global.fetch = async (url, options) => {
   if (method === 'POST') {
     if (/mag$/.test(text)) return reply(payload.magReply || { ok: true, data: current });
     if (/cards$/.test(text)) return reply(payload.cardsReply || { ok: true, data: current });
+    if (/cargo$/.test(text)) return reply(payload.cargoReply || { ok: true, data: current });
     if (/lock$/.test(text)) return reply(payload.lockReply || { ok: true, data: current });
     if (/lights$/.test(text)) return reply(payload.lightsReply || { ok: true, data: current });
   }
@@ -169,6 +178,18 @@ function status() {
   };
 }
 
+function byAttr(name, value) {
+  return created.filter((el) => el.getAttribute(name) === String(value));
+}
+
+function cardRows() {
+  return (byId('sm-card-list-box').children || []).map((row) => ({
+    uid: row.getAttribute('data-uid') || '',
+    role: row.getAttribute('data-role') || '',
+    text: row.children.map((child) => child.textContent).join(' | '),
+  }));
+}
+
 function logItems() {
   return (byId('sm-log').children || []).map((item) => item.textContent);
 }
@@ -196,8 +217,22 @@ function logItems() {
       dimLabel: byId('sm-dim-value').textContent,
     },
     door: { door: byId('sm-door').textContent, lock: byId('sm-lock').textContent },
+    compartment: {
+      door: byId('sm-door').textContent,
+      motion: byId('sm-motion').textContent,
+      motionState: byId('sm-motion').dataset.state || '',
+      blockedHidden: byId('sm-blocked').hidden,
+      header: byId('sm-compartment').textContent,
+    },
+    window: {
+      label: byId('sm-window').textContent,
+      state: byId('sm-window-state').textContent,
+      tone: byId('sm-window').dataset.tone || '',
+    },
     cards: { count: byId('sm-cards-count').textContent, rfid: byId('sm-rfid').textContent,
-             rfidTone: byId('sm-rfid').dataset.tone || '' },
+             rfidTone: byId('sm-rfid').dataset.tone || '',
+             rows: cardRows(), role: byId('sm-card-role').value,
+             empty: (byId('sm-card-list-box').children || []).map((c) => c.textContent) },
     log: logItems(),
     msg: { text: byId('sm-msg').textContent, tone: byId('sm-msg').dataset.tone || '' },
     calls: calls.slice(),
@@ -234,6 +269,7 @@ function logItems() {
       await sleep(20);
     }
     if (acts.uid !== undefined) byId('sm-card-uid').value = String(acts.uid);
+    if (acts.cardRole !== undefined) byId('sm-card-role').value = String(acts.cardRole);
     if (acts.cardAdd) {
       byId('sm-card-add').click();
       await sleep(20);
@@ -250,6 +286,29 @@ function logItems() {
     if (acts.cardClear) {
       byId('sm-card-clear').click();
       await sleep(20);
+    }
+    if (acts.roleChange) {
+      const button = byAttr('data-card-action', 'role')
+        .find((el) => el.getAttribute('data-uid') === String(acts.roleChange));
+      (byId('sm-card-list-box').events.click || [])
+        .forEach((listener) => listener({ target: button }));
+      await sleep(20);
+      result.afterRoleChange = { text: byId('sm-msg').textContent,
+                                 tone: byId('sm-msg').dataset.tone || '' };
+    }
+    if (acts.cardDel) {
+      const button = byAttr('data-card-action', 'del')
+        .find((el) => el.getAttribute('data-uid') === String(acts.cardDel));
+      (byId('sm-card-list-box').events.click || [])
+        .forEach((listener) => listener({ target: button }));
+      await sleep(20);
+    }
+    if (acts.cargo) {
+      const id = acts.cargo === 'end' ? 'sm-cargo-end' : 'sm-cargo-' + acts.cargo;
+      byId(id).click();
+      await sleep(20);
+      result.afterCargo = { text: byId('sm-msg').textContent,
+                            tone: byId('sm-msg').dataset.tone || '' };
     }
     if (acts.mag) {
       byId('sm-cal-' + acts.mag).click();

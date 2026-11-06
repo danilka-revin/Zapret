@@ -813,6 +813,15 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         else:
             is_stop = request.path in {"/api/estop", "/api/navigation/cancel", "/api/navigation/estop",
                                        "/api/exploration/stop", "/api/system/stop"}
+        # Открытый отсек запирает движение: сначала STOP, потом объяснение.
+        # Сами STOP-ы и выход из тормоза проходят, иначе робота не остановить.
+        if not (is_stop or request.path == "/api/kiosk_neutral"):
+            gate = compartment_gate()
+            if gate["motionBlocked"]:
+                return jsonify(ok=False, reason="compartment_open",
+                               error="Отсек открыт: движение запрещено — закройте отсек "
+                                     "картой или командой «Закрыть»"), 409
+
         # STOP gets an immediate best-effort brake even if an earlier HTTP
         # motion request is still finishing. The normal STOP runs again under
         # the gate so that this in-flight request cannot overtake the final b.
@@ -922,6 +931,39 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             except Exception as exc:  # noqa: BLE001 — карта не должна ронять сервер
                 log.debug("карта лидара: %s", exc)
             stop_event.wait(MAP_POLL_S)
+
+    def _compartment_watch(stop_event: threading.Event):
+        """Отсек открыли на ходу: движение останавливаем сразу, не ждём команды."""
+        was_open = False
+        while not stop_event.wait(0.25):
+            try:
+                gate = compartment_gate()
+            except Exception:  # noqa: BLE001 — сторож не должен падать от платы
+                continue
+            opened = gate["motionBlocked"]
+            if opened and not was_open:
+                try:
+                    navigation.cancel("Отсек открыт — движение остановлено.")
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    keyboard.interrupt()
+                except Exception:  # noqa: BLE001
+                    pass
+                brake = getattr(getattr(state, "source", None), "_brake_all", None)
+                if callable(brake):
+                    try:
+                        brake()
+                    except Exception:  # noqa: BLE001 — прошивка колёс — последний рубеж
+                        pass
+                eventlog.record("warn", "отсек открыт: движение запрещено", source="sensor")
+            was_open = opened
+
+    if not config.testing:
+        compartment_stop = threading.Event()
+        app.extensions["rc_compartment_stop"] = compartment_stop
+        threading.Thread(target=_compartment_watch, args=(compartment_stop,),
+                         name="kiosk-compartment", daemon=True).start()
 
     if not config.testing:
         map_stop = threading.Event()
@@ -1424,6 +1466,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "masterMessages": snap.get("masterMessages") or [],
             # Свет, замок, карты и компас отдельной платы (может не быть).
             "sensorModule": sensor_state_payload(),
+            # Отсек и запрет движения: экран показывает, почему робот не едет.
+            "compartment": compartment_gate(),
         }})
 
     @app.get("/api/kiosk_wheel_state")
@@ -1829,6 +1873,31 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         except Exception as exc:  # noqa: BLE001 — экран не должен падать из-за платы
             return {"configured": True, "ok": False, "error": str(exc) or type(exc).__name__}
 
+    def compartment_gate() -> dict:
+        """Отсек по концевику и запрет движения: одна правда для страниц и API.
+
+        Модуль датчиков может быть не подключён, а кадр — устареть: тогда
+        ничего не выдумываем, но и движение не запираем молча — экран видит
+        ``known: false`` и честно показывает, что концевика нет.
+        """
+        module = current_sensor_module()
+        if module is None:
+            return {"known": False, "open": False, "motionBlocked": False,
+                    "windowKind": "none", "lastCard": None,
+                    "error": "модуль датчиков не подключён"}
+        payload = sensor_state_payload()
+        fresh = bool(payload.get("ok"))
+        known = fresh and payload.get("doorOpen") is not None
+        opened = bool(payload.get("doorOpen")) if known else False
+        return {
+            "known": known,
+            "open": opened,
+            # Движение запрещено, только когда концевик действительно разомкнут.
+            "motionBlocked": opened,
+            "windowKind": payload.get("windowKind") or "none",
+            "lastCard": payload.get("lastCard"),
+        }
+
     def sensor_command(call, *, needs_pin=False):
         """Общий путь: проверка PIN (если нужен), команда, журнал."""
         module = current_sensor_module()
@@ -1872,27 +1941,59 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     @app.post("/api/sensor_module/lock")
     def api_sensor_module_lock():
-        """Замок двери: открытие только по PIN кейса, закрытие — свободно."""
-        def act(module, body):
-            if body.get("open"):
-                seconds = body.get("seconds")
+        """Замок отсека: {"open": true, "seconds": 3} | {"hold": true} | {"open": false}.
+
+        Открытие только по PIN кейса, закрытие — свободно.
+        """
+        body = request.get_json(silent=True) or {}
+        hold = bool(body.get("hold"))
+
+        def act(module, payload):
+            if hold:
+                # Открыть и держать: так же, как это делает карта администратора.
+                module.lock(True, hold=True)
+            elif payload.get("open"):
+                seconds = payload.get("seconds")
                 module.lock(True, None if seconds is None else float(seconds))
             else:
                 module.lock(False)
-            eventlog.record("ok", "замок двери: %s" % ("открыт" if body.get("open") else "закрыт"),
-                            source="sensor")
-        return sensor_command(act, needs_pin=bool((request.get_json(silent=True) or {}).get("open")))
+            eventlog.record("ok", "замок отсека: %s" % (
+                "открыт и держится" if hold else "открыт" if payload.get("open") else "закрыт"),
+                source="sensor")
+        return sensor_command(act, needs_pin=bool(body.get("open") or hold))
 
     @app.post("/api/sensor_module/cards")
     def api_sensor_module_cards():
-        """Карты доступа к хранилищу: list, learn, add, del, clear (с PIN)."""
+        """Карты доступа: list, learn, add, del, role, clear (кроме list — с PIN).
+
+        Роль карты (`role`): admin открывает отсек всегда, user — только в окно
+        погрузки или выгрузки. По умолчанию user: меньше прав по умолчанию.
+        """
         body = request.get_json(silent=True) or {}
         action = str(body.get("action", "list")).strip().lower()
+        role = body.get("role")
 
         def act(module, payload):
-            module.card(action, payload.get("uid"))
-            eventlog.record("ok", "карты доступа: %s" % action, source="sensor")
+            module.card(action, payload.get("uid"), role)
+            eventlog.record("ok", "карты доступа: %s (%s)" % (action, role or "user"),
+                            source="sensor")
         return sensor_command(act, needs_pin=action not in ("list",))
+
+    @app.post("/api/sensor_module/cargo")
+    def api_sensor_module_cargo():
+        """Окно погрузки/выгрузки: {"kind": "load"|"unload"|"end", "minutes": 15}.
+
+        Пока окно открыто, карты пользователей тоже открывают отсек. Открытие
+        окна требует PIN кейса: это понижение защиты, а не чтение состояния.
+        """
+        body = request.get_json(silent=True) or {}
+        kind = str(body.get("kind", "")).strip().lower()
+        minutes = body.get("minutes")
+
+        def act(module, payload):
+            module.cargo(kind, None if minutes is None else int(minutes))
+            eventlog.record("ok", "окно погрузки: %s" % (kind or "end"), source="sensor")
+        return sensor_command(act, needs_pin=kind not in ("end", "stop", "none", ""))
 
     @app.post("/api/sensor_module/mag")
     def api_sensor_module_mag():

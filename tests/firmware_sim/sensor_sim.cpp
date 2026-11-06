@@ -406,6 +406,30 @@ static long field(const std::string& frame, const char* key) {
   return std::strtol(frame.c_str() + at + pattern.size(), nullptr, 10);
 }
 
+//: Значение строкового поля key=… в кадре (пустая строка, если поля нет).
+static std::string fieldText(const std::string& frame, const char* key) {
+  const std::string pattern = std::string(key) + "=";
+  const size_t at = frame.find(pattern);
+  if (at == std::string::npos) return std::string();
+  const size_t start = at + pattern.size();
+  const size_t end = frame.find(' ', start);
+  return frame.substr(start, end == std::string::npos ? std::string::npos : end - start);
+}
+
+//: Приложить карту заново: между чтениями карта должна выйти из поля (HALT) и
+//: пройти паузу CARD_COOLDOWN_MS, иначе прошивка намеренно молчит.
+static void presentCard(const uint8_t* uid) {
+  rc522.remove();
+  run(150);            // прошивка видит пустое поле и ждёт карту заново
+  rc522.insert(uid);
+}
+
+//: Дождаться кадра @CARD после отметки mark.
+static std::string readCard(size_t& mark, double timeout_ms = 600) {
+  wait_until([&]() { return contains(board.serial.output.substr(mark), "@CARD "); }, timeout_ms);
+  return lastFrame(board.serial.output.substr(mark), "@CARD ");
+}
+
 //: Кадр телеметрии, свежий после отметки mark.
 static std::string telemetry(size_t& mark, double timeout_ms = 400.0) {
   std::string frame;
@@ -696,38 +720,194 @@ static void scenario_card_denied() {
 static void scenario_card_granted() {
   boot();
   size_t mark = board.serial.output.size();
-  send("card add A1B2C3D4");
+  send("card add A1B2C3D4 admin");
   CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "@ACK "); }, 200),
-        "карта добавлена командой");
+        "карта добавлена администратором");
   const uint8_t own_card[4] = {0xA1, 0xB2, 0xC3, 0xD4};
   rc522.insert(own_card);
   mark = board.serial.output.size();
-  CHECK(wait_until([&]() {
-          return contains(board.serial.output.substr(mark), "@CARD ");
-        }, 400), "своя карта даёт событие");
-  const std::string card = lastFrame(board.serial.output.substr(mark), "@CARD ");
+  std::string card = readCard(mark);
   CHECK(card.find("uid=A1B2C3D4") != std::string::npos, "UID своей карты: %s", card.c_str());
   CHECK(field(card, "ok") == 1, "своя карта принята: %s", card.c_str());
+  CHECK(fieldText(card, "role") == "admin", "роль в событии: %s", card.c_str());
+  CHECK(fieldText(card, "act") == "open", "первое прикладывание открывает: %s", card.c_str());
   CHECK(field(card, "cards") == 1, "счётчик карт: %s", card.c_str());
   CHECK(wait_until([]() { return board.servo_value == sensors::LOCK_OPEN_ANGLE; }, 200),
-        "своя карта открывает замок");
+        "своя карта открывает отсек");
 
-  // Повторное прикладывание не спамит: та же карта в поле — пауза 2 с.
+  // Отсек держится открытым: это не трёхсекундное открытие по таймеру.
+  run(5000);
+  CHECK(board.servo_value == sensors::LOCK_OPEN_ANGLE,
+        "администратор держит отсек открытым, angle=%d", board.servo_value);
+
+  // Та же карта в поле не спамит: пауза 2 с между чтениями.
   mark = board.serial.output.size();
-  run(1200);
+  run(3000);
   CHECK(!contains(board.serial.output.substr(mark), "@CARD "),
-        "повторное чтение той же карты не дублируется сразу");
+        "карта, забытая на считывателе, не переключает отсек повторно");
 
-  // Список карт виден в журнале платы.
+  // Второе прикладывание закрывает отсек.
+  presentCard(own_card);
+  mark = board.serial.output.size();
+  card = readCard(mark);
+  CHECK(field(card, "ok") == 1, "второе прикладывание принято: %s", card.c_str());
+  CHECK(fieldText(card, "act") == "close", "второе прикладывание закрывает: %s", card.c_str());
+  CHECK(board.servo_value == sensors::LOCK_CLOSED_ANGLE, "отсек закрыт, angle=%d",
+        board.servo_value);
+
+  // Третье — снова открывает: переключение, а не одноразовое открытие.
+  presentCard(own_card);
+  mark = board.serial.output.size();
+  card = readCard(mark);
+  CHECK(fieldText(card, "act") == "open", "третье прикладывание открывает: %s", card.c_str());
+  CHECK(board.servo_value == sensors::LOCK_OPEN_ANGLE, "отсек снова открыт");
+
+  // Список карт с ролями: по кадру на карту и терминатор.
   mark = board.serial.output.size();
   send("card list");
-  CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "A1B2C3D4"); }, 200),
-        "card list показывает карту");
+  CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "@CARDINFO end=1"); },
+                   300), "card list отвечает машинным списком");
+  const std::string info = lastFrame(board.serial.output.substr(mark), "@CARDINFO idx=1");
+  CHECK(info.find("uid=A1B2C3D4") != std::string::npos, "список показывает UID: %s", info.c_str());
+  CHECK(fieldText(info, "role") == "admin", "список показывает роль: %s", info.c_str());
+}
+
+static void scenario_card_user_needs_cargo() {
+  boot();
+  send("card add A1B2C3D4 user");
+  run(60);
+  const uint8_t card_uid[4] = {0xA1, 0xB2, 0xC3, 0xD4};
+
+  // Вне окна погрузки карта пользователя отсек не открывает.
+  rc522.insert(card_uid);
+  size_t mark = board.serial.output.size();
+  std::string card = readCard(mark);
+  CHECK(field(card, "ok") == 0, "пользователь без окна погрузки отклонён: %s", card.c_str());
+  CHECK(fieldText(card, "why") == "cargo", "причина отказа — cargo: %s", card.c_str());
+  CHECK(fieldText(card, "role") == "user", "роль пользователя видна: %s", card.c_str());
+  CHECK(board.servo_value == sensors::LOCK_CLOSED_ANGLE, "отсек закрыт");
+
+  // Окно погрузки открывает карте пользователя доступ.
+  mark = board.serial.output.size();
+  send("cargo load");
+  CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "kind=cargo state=load"); },
+                   300), "окно погрузки объявлено событием");
+  run(300);
+  const std::string frame = telemetry(mark);
+  CHECK(field(frame, "cargo") == sensors::CARGO_LOAD, "в телеметрии cargo=1: %s", frame.c_str());
+
+  presentCard(card_uid);
+  mark = board.serial.output.size();
+  card = readCard(mark, 800);
+  CHECK(field(card, "ok") == 1, "на погрузке пользователь пущен: %s", card.c_str());
+  CHECK(fieldText(card, "act") == "open", "отсек открыт на погрузке: %s", card.c_str());
+  CHECK(board.servo_value == sensors::LOCK_OPEN_ANGLE, "замок открыт");
+
+  // Второе прикладывание закрывает отсек и на погрузке.
+  presentCard(card_uid);
+  mark = board.serial.output.size();
+  card = readCard(mark, 800);
+  CHECK(fieldText(card, "act") == "close", "второе прикладывание закрывает: %s", card.c_str());
+  CHECK(board.servo_value == sensors::LOCK_CLOSED_ANGLE, "замок закрыт");
+
+  // Выгрузка — тоже разрешённое окно.
+  send("cargo unload");
+  run(300);
+  presentCard(card_uid);
+  mark = board.serial.output.size();
+  card = readCard(mark, 800);
+  CHECK(field(card, "ok") == 1, "на выгрузке пользователь пущен: %s", card.c_str());
+  CHECK(board.servo_value == sensors::LOCK_OPEN_ANGLE, "замок открыт на выгрузке");
+
+  // Конец окна: карта пользователя снова не действует.
+  mark = board.serial.output.size();
+  send("cargo end");
+  CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "kind=cargo state=end"); },
+                   300), "окно закрыто событием");
+  send("lock close");
+  presentCard(card_uid);
+  mark = board.serial.output.size();
+  card = readCard(mark, 800);
+  CHECK(field(card, "ok") == 0, "после окна пользователь снова отклонён: %s", card.c_str());
+  CHECK(board.servo_value == sensors::LOCK_CLOSED_ANGLE, "отсек закрыт");
+}
+
+static void scenario_card_roles() {
+  boot();
+  size_t mark = board.serial.output.size();
+  send("card add A1B2C3D4 user");
+  send("card add 11223344 admin");
+  run(80);
+  CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "@CARDINFO end=1"); },
+                   300), "список карт после добавления");
+  const std::string admin = lastFrame(board.serial.output.substr(mark), "@CARDINFO idx=2");
+  CHECK(admin.find("uid=11223344") != std::string::npos, "вторая карта в списке: %s", admin.c_str());
+  CHECK(fieldText(admin, "role") == "admin", "роль второй карты: %s", admin.c_str());
+
+  // Смена роли: пользователь становится администратором и действует без окна.
+  mark = board.serial.output.size();
+  send("card role A1B2C3D4 admin");
+  CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "@ACK "); }, 300),
+        "роль меняется командой");
+  const std::string info = lastFrame(board.serial.output.substr(mark), "@CARDINFO idx=1");
+  CHECK(fieldText(info, "role") == "admin", "роль в списке обновилась: %s", info.c_str());
+
+  const uint8_t card_uid[4] = {0xA1, 0xB2, 0xC3, 0xD4};
+  rc522.insert(card_uid);
+  mark = board.serial.output.size();
+  const std::string card = readCard(mark);
+  CHECK(field(card, "ok") == 1, "бывший пользователь теперь открывает: %s", card.c_str());
+  CHECK(fieldText(card, "role") == "admin", "роль в событии: %s", card.c_str());
+
+  // Роли переживают сброс платы.
+  boot();
+  mark = board.serial.output.size();
+  send("card list");
+  CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "@CARDINFO end=1"); },
+                   300), "список после сброса");
+  const std::string restored = lastFrame(board.serial.output.substr(mark), "@CARDINFO idx=1");
+  CHECK(fieldText(restored, "role") == "admin", "роль поднялась из EEPROM: %s", restored.c_str());
+}
+
+static void scenario_card_legacy_migration() {
+  // Старая прошивка хранила UID без ролей: блок 56 байт, версия 1.
+  uint8_t block[sensors::CARD_BLOCK_BYTES_LEGACY];
+  std::memset(block, 0xFF, sizeof(block));
+  block[0] = 'S';
+  block[1] = 'N';
+  block[2] = 'S';
+  block[3] = 1;
+  block[4] = 1;
+  block[5] = 0;
+  const uint8_t uid[4] = {0x11, 0x22, 0x33, 0x44};
+  std::memcpy(block + 6, uid, 4);
+  const uint16_t crc = sensors::frameCrc16((const char*)block,
+                                           sensors::CARD_BLOCK_BYTES_LEGACY - 2);
+  block[sensors::CARD_BLOCK_BYTES_LEGACY - 2] = (uint8_t)crc;
+  block[sensors::CARD_BLOCK_BYTES_LEGACY - 1] = (uint8_t)(crc >> 8);
+  for (uint16_t i = 0; i < sensors::CARD_BLOCK_BYTES_LEGACY; ++i) {
+    board.eeprom[sensors::CARD_EEPROM_ADDR + i] = block[i];
+  }
+
+  boot();
+  size_t mark = board.serial.output.size();
+  send("card list");
+  CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "@CARDINFO end=1"); },
+                   300), "старый блок читается");
+  const std::string info = lastFrame(board.serial.output.substr(mark), "@CARDINFO idx=1");
+  CHECK(fieldText(info, "role") == "admin",
+        "перенесённая карта становится администратором: %s", info.c_str());
+
+  // И она действительно открывает отсек без окна погрузки.
+  rc522.insert(uid);
+  mark = board.serial.output.size();
+  const std::string card = readCard(mark);
+  CHECK(field(card, "ok") == 1, "перенесённая карта открывает отсек: %s", card.c_str());
 }
 
 static void scenario_card_learn_persists() {
   boot();
-  send("card learn");
+  send("card learn admin");
   run(20);
   const uint8_t fresh[4] = {0xDE, 0xAD, 0xBE, 0xEF};
   rc522.insert(fresh);
@@ -737,14 +917,20 @@ static void scenario_card_learn_persists() {
         }, 400), "режим обучения ловит карту");
   const std::string card = lastFrame(board.serial.output.substr(mark), "@CARD ");
   CHECK(field(card, "ok") == 1, "карта записана: %s", card.c_str());
+  CHECK(fieldText(card, "role") == "admin", "карта записана администратором: %s", card.c_str());
   CHECK(field(card, "cards") == 1, "в памяти одна карта: %s", card.c_str());
 
-  // Сброс платы: список должен подняться из EEPROM.
+  // Сброс платы: список должен подняться из EEPROM вместе с ролью.
   boot();
   mark = board.serial.output.size();
   const std::string frame = telemetry(mark);
   CHECK(field(frame, "cards") == 1, "после сброса карта на месте: cards=%ld",
         field(frame, "cards"));
+  send("card list");
+  CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "@CARDINFO end=1"); },
+                   300), "список после сброса");
+  const std::string info = lastFrame(board.serial.output.substr(mark), "@CARDINFO idx=1");
+  CHECK(fieldText(info, "role") == "admin", "роль запомнена: %s", info.c_str());
   CHECK(field(frame, "err") == 0, "EEPROM читается без ошибок: err=%ld", field(frame, "err"));
 }
 
@@ -872,7 +1058,11 @@ static void scenario_dump() {
   run(60);
   send("lock open 1");
   run(60);
-  send("card add A1B2C3D4");
+  send("card add A1B2C3D4 admin");
+  run(60);
+  send("card add 55667788 user");
+  run(60);
+  send("cargo load");
   run(60);
   const uint8_t stranger[4] = {0x11, 0x22, 0x33, 0x44};
   rc522.insert(stranger);
@@ -880,6 +1070,8 @@ static void scenario_dump() {
   const uint8_t own_card[4] = {0xA1, 0xB2, 0xC3, 0xD4};
   rc522.insert(own_card);
   run(300);
+  send("card list");
+  run(100);
   std::printf("%s", board.serial.output.c_str());
 }
 
@@ -901,6 +1093,9 @@ static const Scenario SCENARIOS[] = {
     {"card_denied", scenario_card_denied},
     {"card_granted", scenario_card_granted},
     {"card_learn_persists", scenario_card_learn_persists},
+    {"card_user_needs_cargo", scenario_card_user_needs_cargo},
+    {"card_roles", scenario_card_roles},
+    {"card_legacy_migration", scenario_card_legacy_migration},
     {"eeprom_corrupt", scenario_eeprom_corrupt},
     {"link_timeout", scenario_link_timeout},
     {"garbage_safe", scenario_garbage_safe},

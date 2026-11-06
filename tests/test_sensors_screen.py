@@ -37,7 +37,7 @@ def snapshot(**kwargs) -> dict:
         "ok": True,
         "configured": True,
         "port": "/dev/ttyUSB0",
-        "protocol": 2,
+        "protocol": 3,
         "ageMs": 420,
         "stale": False,
         "error": None,
@@ -57,6 +57,12 @@ def snapshot(**kwargs) -> dict:
         "stripEnabled": False,
         "rfid": "ready",
         "cards": 3,
+        "cardList": [{"idx": 1, "uid": "A1B2C3D4", "role": "admin"},
+                     {"idx": 2, "uid": "01020304", "role": "user"}],
+        "cardListKnown": True,
+        "windowKind": "none",
+        "windowActive": False,
+        "lastCard": None,
         "linkOk": True,
         "errors": [],
         "events": [{"kind": "note", "text": "SENSORS: карта записана"}],
@@ -131,7 +137,7 @@ def test_telemetry_frame_fills_the_whole_screen(tmp_path):
     assert out["lights"]["head"]["pressed"] == "true"
     assert out["lights"]["right"]["pressed"] == "true"
     assert out["lights"]["stop"]["pressed"] == "false"
-    assert out["door"] == {"door": "закрыта", "lock": "открыт"}
+    assert out["door"] == {"door": "закрыт", "lock": "открыт"}
     assert out["cards"]["count"] == "3"
     assert out["log"] == ["SENSORS: карта записана"]
     assert out["calls"] == [{"url": "api/sensor_module", "method": "GET", "body": None}]
@@ -215,13 +221,93 @@ def test_lock_and_cards_require_the_case_pin(tmp_path):
                                              "uid": "a1b2c3d4", "cardAdd": True,
                                              "cardLearn": True, "mag": "start"}), tmp_path)
     posts = [call for call in out["callsAfter"] if call["method"] == "POST"]
+    # Замок теперь «держится» открытым до повторной карты или кнопки «Закрыть».
     assert posts[0] == {"url": "api/sensor_module/lock", "method": "POST",
-                        "body": {"open": True, "seconds": 3, "pin": "1234"}}
+                        "body": {"hold": True, "pin": "1234"}}
     assert posts[1] == {"url": "api/sensor_module/cards", "method": "POST",
-                        "body": {"action": "add", "uid": "A1B2C3D4", "pin": "1234"}}
-    assert posts[2]["body"] == {"action": "learn", "pin": "1234"}
+                        "body": {"action": "add", "uid": "A1B2C3D4", "role": "user",
+                                 "pin": "1234"}}
+    assert posts[2]["body"] == {"action": "learn", "role": "user", "pin": "1234"}
     assert posts[3] == {"url": "api/sensor_module/mag", "method": "POST",
                         "body": {"action": "start"}}
+
+
+def test_open_compartment_is_the_loudest_thing_on_the_screen(tmp_path):
+    """Концевик разомкнут — экран обязан сказать, что движение запрещено."""
+    closed = run_screen(screen(doorOpen=False, lockOpen=False), tmp_path)
+    assert closed["compartment"]["motion"] == "разрешено"
+    assert closed["compartment"]["motionState"] == "free"
+    assert closed["compartment"]["blockedHidden"] is True
+
+    opened = run_screen(screen(doorOpen=True, lockOpen=True, windowKind="load"), tmp_path)
+    assert opened["compartment"]["door"] == "открыт"
+    assert opened["compartment"]["header"] == "открыт"
+    assert opened["compartment"]["motion"] == "запрещено"
+    assert opened["compartment"]["motionState"] == "blocked"
+    assert opened["compartment"]["blockedHidden"] is False
+
+
+def test_unknown_compartment_does_not_claim_the_robot_can_move(tmp_path):
+    """Нет кадра — нет и обещания, что движение разрешено."""
+    out = run_screen({"snapshot": {"ok": True, "data": {
+        "configured": True, "ok": False, "stale": True, "doorOpen": None}}}, tmp_path)
+    assert out["compartment"]["motion"] == "неизвестно"
+    assert out["compartment"]["motionState"] == "unknown"
+    assert out["compartment"]["blockedHidden"] is True
+
+
+def test_cargo_window_is_shown_and_started_with_the_case_pin(tmp_path):
+    payload = screen(windowKind="load", windowActive=True)
+    payload["actions"] = {"pin": "1234", "cargo": "unload"}
+    out = run_screen(payload, tmp_path)
+    assert out["window"]["label"] == "окно: погрузка"
+    assert out["window"]["state"] == "погрузка"
+    assert out["window"]["tone"] == "ok"
+    posts = [call for call in out["callsAfter"] if call["method"] == "POST"]
+    assert posts == [{"url": "api/sensor_module/cargo", "method": "POST",
+                      "body": {"kind": "unload", "pin": "1234"}}]
+    assert "окно выгрузки" in out["afterCargo"]["text"]
+
+    # Без PIN окно не открывается, но закрывается: закрывать нечего охранять.
+    closed = run_screen(dict(screen(windowKind="load"), actions={"cargo": "end"}), tmp_path)
+    posts = [call for call in closed["callsAfter"] if call["method"] == "POST"]
+    assert posts == [{"url": "api/sensor_module/cargo", "method": "POST",
+                      "body": {"kind": "end"}}]
+    blocked = [call for call in closed["callsAfter"] if call["method"] == "POST"
+               and call["body"].get("kind") != "end"]
+    assert blocked == []
+
+
+def test_card_list_shows_roles_and_lets_the_operator_change_them(tmp_path):
+    out = run_screen(screen(), tmp_path)
+    rows = out["cards"]["rows"]
+    assert [row["uid"] for row in rows] == ["A1B2C3D4", "01020304"]
+    assert [row["role"] for row in rows] == ["admin", "user"]
+    assert "администратор" in rows[0]["text"]
+    assert "сделать пользователем" in rows[0]["text"]
+    assert "пользователь" in rows[1]["text"]
+    assert out["cards"]["role"] == ""
+
+    payload = screen()
+    payload["actions"] = {"pin": "1234", "roleChange": "A1B2C3D4",
+                          "cardDel": "01020304", "cardRole": "admin"}
+    changed = run_screen(payload, tmp_path)
+    posts = [call for call in changed["callsAfter"] if call["method"] == "POST"]
+    assert {"url": "api/sensor_module/cards", "method": "POST",
+            "body": {"action": "role", "uid": "A1B2C3D4", "role": "user",
+                     "pin": "1234"}} in posts
+    assert {"url": "api/sensor_module/cards", "method": "POST",
+            "body": {"action": "del", "uid": "01020304", "pin": "1234"}} in posts
+    assert "роль A1B2C3D4: команда отправлена" in changed["afterRoleChange"]["text"]
+    assert changed["afterRoleChange"]["tone"] == "ok"
+
+
+def test_role_change_without_the_pin_never_reaches_the_server(tmp_path):
+    payload = screen()
+    payload["actions"] = {"roleChange": "A1B2C3D4", "cardDel": "01020304"}
+    out = run_screen(payload, tmp_path)
+    assert [call for call in out["callsAfter"] if call["method"] == "POST"] == []
+    assert "PIN" in out["afterRoleChange"]["text"]
 
 
 def test_short_uid_is_reported_before_the_request(tmp_path):

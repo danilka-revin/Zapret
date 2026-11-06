@@ -41,11 +41,86 @@
       <dl class="status-meta">
         <div><dt>порт</dt><dd id="sm-port">—</dd></div>
         <div><dt>кадр</dt><dd id="sm-age">—</dd></div>
+        <div><dt>отсек</dt><dd id="sm-compartment">—</dd></div>
         <div><dt>ошибки</dt><dd id="sm-errors">—</dd></div>
       </dl>
     </section>
 
+    <!-- Запрет движения: пока концевик отсека разомкнут, робот не едет. -->
+    <p class="blocked" id="sm-blocked" hidden role="alert">Отсек открыт: движение робота
+      запрещено. Закройте отсек картой, кнопкой «Закрыть» или физическим ключом.</p>
+
     <div class="grid">
+      <!-- Отсек: карта переключает, кнопки дублируют. -->
+      <article class="card" aria-labelledby="sm-door-title">
+        <header class="card-head">
+          <h2 id="sm-door-title">Отсек и замок</h2>
+          <span class="hint">концевик D8 · серво D7</span>
+        </header>
+        <dl class="metrics">
+          <div><dt>отсек</dt><dd id="sm-door">—</dd></div>
+          <div><dt>замок</dt><dd id="sm-lock">—</dd></div>
+          <div><dt>движение</dt><dd id="sm-motion">—</dd></div>
+        </dl>
+        <label class="pin-field" for="sm-pin">PIN кейса — нужен для открытия, карт и окна погрузки</label>
+        <div class="row">
+          <input type="password" id="sm-pin" inputmode="numeric" autocomplete="off"
+                 placeholder="PIN" maxlength="8">
+          <button type="button" class="btn btn--danger" id="sm-lock-open">Открыть отсек</button>
+          <button type="button" class="btn btn--ghost" id="sm-lock-close">Закрыть</button>
+        </div>
+        <p class="note">Карта открывает отсек, повторное прикладывание — закрывает.
+          Замок закрывается сам через 10 с без связи с сервером. Физический ключ
+          остаётся основным: это вспомогательный замок.</p>
+      </article>
+
+      <!-- Карты доступа: роль решает, когда карта открывает отсек. -->
+      <article class="card" aria-labelledby="sm-cards-title">
+        <header class="card-head">
+          <h2 id="sm-cards-title">Карты доступа</h2>
+          <span class="hint">EEPROM платы · до 12</span>
+        </header>
+        <p class="cards-count">в памяти: <b id="sm-cards-count">—</b>
+          <span class="cards-legend">администратор открывает всегда, пользователь — только
+            на погрузке и выгрузке</span></p>
+        <div class="row">
+          <input type="text" id="sm-card-uid" placeholder="UID, 8 hex" maxlength="8"
+                 spellcheck="false" autocomplete="off">
+          <select id="sm-card-role" aria-label="Роль карты">
+            <option value="user" selected>пользователь</option>
+            <option value="admin">администратор</option>
+          </select>
+          <button type="button" class="btn" id="sm-card-add">Добавить</button>
+        </div>
+        <div class="row">
+          <button type="button" class="btn" id="sm-card-learn">Записать карту с платы</button>
+          <button type="button" class="btn btn--ghost" id="sm-card-list">Обновить список</button>
+          <button type="button" class="btn btn--danger" id="sm-card-clear">Очистить</button>
+        </div>
+        <ul class="card-list" id="sm-card-list-box" aria-label="Запомненные карты">
+          <li class="card-empty">список не загружен</li>
+        </ul>
+        <p class="note">Изменения списка требуют PIN кейса. UID карты Mifare Classic
+          клонируется: замок вспомогательный, физический ключ остаётся основным.</p>
+      </article>
+
+      <!-- Окно погрузки: в нём карты пользователей тоже открывают отсек. -->
+      <article class="card" aria-labelledby="sm-window-title">
+        <header class="card-head">
+          <h2 id="sm-window-title">Погрузка и выгрузка</h2>
+          <span class="hint" id="sm-window">окно: нет</span>
+        </header>
+        <p class="cards-count">сейчас: <b id="sm-window-state">нет окна</b></p>
+        <div class="row">
+          <button type="button" class="btn" id="sm-cargo-load">Начать погрузку</button>
+          <button type="button" class="btn" id="sm-cargo-unload">Начать выгрузку</button>
+          <button type="button" class="btn btn--ghost" id="sm-cargo-end">Закончить</button>
+        </div>
+        <p class="note">Окно открывается на 15 минут и закрывается само. Пока оно открыто,
+          отсек открывают и карты пользователей; после — снова только администраторы.
+          Открытие окна требует PIN кейса, закрытие — нет.</p>
+      </article>
+
       <!-- Компас: GY-87 (MPU6050 + HMC5883L с наклонной компенсацией). -->
       <article class="card compass" aria-labelledby="sm-compass-title">
         <header class="card-head">
@@ -113,50 +188,7 @@
         </div>
       </article>
 
-      <!-- Дверь и замок: открытие только по PIN кейса. -->
-      <article class="card" aria-labelledby="sm-door-title">
-        <header class="card-head">
-          <h2 id="sm-door-title">Дверь и замок</h2>
-          <span class="hint">концевик D8 · серво D7</span>
-        </header>
-        <dl class="metrics">
-          <div><dt>дверь</dt><dd id="sm-door">—</dd></div>
-          <div><dt>замок</dt><dd id="sm-lock">—</dd></div>
-        </dl>
-        <label class="pin-field" for="sm-pin">PIN кейса — нужен для открытия и для карт</label>
-        <div class="row">
-          <input type="password" id="sm-pin" inputmode="numeric" autocomplete="off"
-                 placeholder="PIN" maxlength="8">
-          <button type="button" class="btn btn--danger" id="sm-lock-open">Открыть на 3 с</button>
-          <button type="button" class="btn btn--ghost" id="sm-lock-close">Закрыть</button>
-        </div>
-        <p class="note">Замок закрывается сам через 3 с и через 10 с без связи с сервером.
-          Закрыть его можно без PIN — это безопасное действие.</p>
-      </article>
-
-      <!-- Карты доступа к хранилищу: до 12 UID в EEPROM платы. -->
-      <article class="card" aria-labelledby="sm-cards-title">
-        <header class="card-head">
-          <h2 id="sm-cards-title">Карты доступа</h2>
-          <span class="hint">EEPROM платы · до 12</span>
-        </header>
-        <p class="cards-count">в памяти: <b id="sm-cards-count">—</b></p>
-        <div class="row">
-          <input type="text" id="sm-card-uid" placeholder="UID, 8 hex" maxlength="8"
-                 spellcheck="false" autocomplete="off">
-          <button type="button" class="btn" id="sm-card-add">Добавить</button>
-          <button type="button" class="btn btn--ghost" id="sm-card-del">Удалить</button>
-        </div>
-        <div class="row">
-          <button type="button" class="btn" id="sm-card-learn">Записать карту с платы</button>
-          <button type="button" class="btn" id="sm-card-list">Показать список</button>
-          <button type="button" class="btn btn--danger" id="sm-card-clear">Очистить</button>
-        </div>
-        <p class="note">Изменения списка требуют PIN кейса. UID карты Mifare Classic
-          клонируется: замок вспомогательный, физический ключ остаётся основным.</p>
-      </article>
-
-      <!-- Журнал платы: строки «# SENSORS: …», включая ответ на «показать список». -->
+      <!-- Журнал платы: строки «# SENSORS: …», включая ответы на команды. -->
       <article class="card log" aria-labelledby="sm-log-title">
         <header class="card-head">
           <h2 id="sm-log-title">Журнал платы</h2>
