@@ -5,7 +5,15 @@
   'use strict';
   const $ = (id) => document.getElementById(id);
   const cameras = [];
+  const frameListeners = new Set();
   let active = false;
+
+  function notifyFrame(camera) {
+    const id = camera.n - 1;
+    for (const listener of frameListeners) {
+      try { listener(id, camera.frame); } catch (error) { console.warn('camera frame listener failed', error); }
+    }
+  }
   let initialized = false;
 
   function init() {
@@ -29,6 +37,7 @@
         camera.viewport.reset();
         stop(camera);
         camera.frame = null;
+        notifyFrame(camera);
         status(camera, false);
         draw(camera);
         poll(camera);
@@ -109,6 +118,7 @@
       camera.pending = null;
       const live = ok && image.naturalWidth > 0;
       camera.frame = live ? image : null;
+      notifyFrame(camera);
       status(camera, live); draw(camera);
       camera.timer = setTimeout(() => poll(camera), live ? 80 : 1000);
     }
@@ -137,8 +147,17 @@
       active = !!value;
       for (const camera of cameras) {
         stop(camera);
-        if (active) { camera.frame = null; status(camera, false); draw(camera); poll(camera); }
+        if (active) { camera.frame = null; notifyFrame(camera); status(camera, false); draw(camera); poll(camera); }
       }
+    },
+    getFrame(id) {
+      const camera = cameras.find((candidate) => candidate.n - 1 === Number(id));
+      return camera ? camera.frame : null;
+    },
+    subscribe(listener) {
+      if (typeof listener !== 'function') return () => {};
+      frameListeners.add(listener);
+      return () => frameListeners.delete(listener);
     },
   };
 })();

@@ -13,9 +13,10 @@ def test_camera_lifecycle_and_viewport_gestures():
     node = shutil.which('node')
     if not node:
         pytest.skip('node is needed for browser-script tests')
-    result = subprocess.run([node, str(ROOT / 'tests/js/camera_view.js')],
-                            capture_output=True, text=True, cwd=ROOT, timeout=30)
-    assert result.returncode == 0, result.stdout + result.stderr
+    for test_file in ('camera_view.js', 'camera_stitch.js'):
+        result = subprocess.run([node, str(ROOT / 'tests/js' / test_file)],
+                                capture_output=True, text=True, cwd=ROOT, timeout=30)
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_main_camera_frame_poller_is_served(client):
@@ -28,7 +29,13 @@ def test_main_camera_frame_poller_is_served(client):
 def test_camera_button_and_controls_are_served(kiosk_client):
     page = kiosk_client.get('/kiosk').text
     assert 'id="k-cameras-open"' in page
-    assert 'camera_view.js' in page and 'viewport.js' in page
+    assert 'camera_view.js' in page and 'camera_stitch.js' in page and 'viewport.js' in page
+    assert 'id="cam-stitch-toggle"' in page and 'id="cam-stitch-canvas"' in page
+    assert 'id="cam-stitch-left-mirror"' in page and 'id="cam-stitch-right-crop"' in page
+    assert 'cam-stitch-panel' in page and 'cam-stitch-reset' in page
+    stitch_script = kiosk_client.get('/camera_stitch.js')
+    assert stitch_script.status_code == 200
+    assert 'robot-camera-stitch-v1' in stitch_script.text
     for n in (1, 2):
         for control in ('in', 'out', 'reset', 'expand', 'zoom'):
             assert f'id="cam{n}-{control}"' in page

@@ -1318,6 +1318,7 @@
       }
       if (!showBattery) setText($('swipe-live'), '● LIVE');
       if (window.RCCameraView && activeSwipeView !== 'cameras') window.RCCameraView.setActive(false);
+      if (window.RCCameraStitch) window.RCCameraStitch.setActive(activeSwipeView === 'cameras');
       if (isOpen && activeSwipeView === 'cameras') { startCamLoops(); fetchLogs(); }
       if (showMap && isOpen && !page.hidden) refreshMapPage();
     }
@@ -1366,6 +1367,7 @@
       if (!isOpen) return;
       isOpen = false;
       if (window.RCCameraView) window.RCCameraView.setActive(false);
+      if (window.RCCameraStitch) window.RCCameraStitch.setActive(false);
       if (activeSwipeView === 'motors') {
         if (keyboardControl && keyboardControl.isActive()) keyboardControl.disable('Уход с экрана · WASD выключено.');
         void stopDrive();

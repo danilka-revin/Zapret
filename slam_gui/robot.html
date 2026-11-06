@@ -315,16 +315,83 @@
         </section>
       </section>
       <div id="swipe-cameras-view" class="swipe-view swipe-camera-view">
-      <!-- Только камеры и логи. Порты всех камер настраиваются на странице
-           «Устройства» (/devices) — там же, где порты колёс, лидара, BMS,
-           Kinect и принтера. -->
-      <!-- левая часть — круговой обзор: 4 × Logitech C930e. Порядок в DOM
-           совпадает с экраном: передние камеры сверху, задние снизу, слева
-           левые, справа правые. -->
+      <!-- Камерный обзор: обычная сетка либо настраиваемая склейка двух потоков. -->
       <div class="cam-column">
-      <p class="cam-ports-hint">Порты камер назначаются на странице
-        <a href="/devices">«Устройства» →</a></p>
-      <div class="cam-stack">
+      <div class="camera-overview-actions">
+        <p class="cam-ports-hint">Порты камер назначаются на странице
+          <a href="/devices">«Устройства» →</a></p>
+        <button id="cam-stitch-toggle" class="cam-stitch-toggle" type="button"
+                aria-pressed="false" aria-controls="cam-stitch-panel">Сшить 2 камеры</button>
+      </div>
+      <section id="cam-stitch-panel" class="cam-stitch-panel" aria-label="Склейка двух камер" hidden>
+        <header class="cam-stitch-head">
+          <div><b>Панорамный вид</b><small>Выберите два ракурса, отразите и подгоните каждый прямо на живом изображении.</small></div>
+          <button id="cam-stitch-reset" type="button" class="cam-stitch-reset">Сбросить подгонку</button>
+        </header>
+        <div class="cam-stitch-stage">
+          <canvas id="cam-stitch-canvas" aria-label="Склеенное изображение двух камер"></canvas>
+          <div class="cam-stitch-seam" aria-hidden="true"></div>
+        </div>
+        <div class="cam-stitch-grid-toggle">
+          <label><input id="cam-stitch-grid" type="checkbox" checked> Сетка и линия стыка</label>
+          <span id="cam-stitch-status" role="status">жду кадры двух камер</span>
+        </div>
+        <div class="cam-stitch-controls">
+          <fieldset class="cam-stitch-side" data-side="left">
+            <legend>Левая половина</legend>
+            <label>Источник
+              <select id="cam-stitch-left-camera">
+                <option value="0">Передняя левая · FL</option><option value="2">Передняя правая · FR</option>
+                <option value="1">Задняя левая · RL</option><option value="3">Задняя правая · RR</option>
+              </select>
+            </label>
+            <label class="cam-stitch-check"><input id="cam-stitch-left-mirror" type="checkbox"> Отразить по горизонтали</label>
+            <label>Обрезка у стыка <output id="cam-stitch-left-crop-value">0%</output>
+              <input id="cam-stitch-left-crop" type="range" min="0" max="45" step="1" value="0">
+            </label>
+            <label>Масштаб <output id="cam-stitch-left-zoom-value">100%</output>
+              <input id="cam-stitch-left-zoom" type="range" min="80" max="220" step="1" value="100">
+            </label>
+            <label>Сдвиг по горизонтали <output id="cam-stitch-left-x-value">0%</output>
+              <input id="cam-stitch-left-x" type="range" min="-50" max="50" step="1" value="0">
+            </label>
+            <label>Сдвиг по вертикали <output id="cam-stitch-left-y-value">0%</output>
+              <input id="cam-stitch-left-y" type="range" min="-40" max="40" step="1" value="0">
+            </label>
+            <label>Поворот / выравнивание <output id="cam-stitch-left-roll-value">0°</output>
+              <input id="cam-stitch-left-roll" type="range" min="-15" max="15" step="0.5" value="0">
+            </label>
+          </fieldset>
+          <fieldset class="cam-stitch-side" data-side="right">
+            <legend>Правая половина</legend>
+            <label>Источник
+              <select id="cam-stitch-right-camera">
+                <option value="0">Передняя левая · FL</option><option value="2" selected>Передняя правая · FR</option>
+                <option value="1">Задняя левая · RL</option><option value="3">Задняя правая · RR</option>
+              </select>
+            </label>
+            <label class="cam-stitch-check"><input id="cam-stitch-right-mirror" type="checkbox"> Отразить по горизонтали</label>
+            <label>Обрезка у стыка <output id="cam-stitch-right-crop-value">0%</output>
+              <input id="cam-stitch-right-crop" type="range" min="0" max="45" step="1" value="0">
+            </label>
+            <label>Масштаб <output id="cam-stitch-right-zoom-value">100%</output>
+              <input id="cam-stitch-right-zoom" type="range" min="80" max="220" step="1" value="100">
+            </label>
+            <label>Сдвиг по горизонтали <output id="cam-stitch-right-x-value">0%</output>
+              <input id="cam-stitch-right-x" type="range" min="-50" max="50" step="1" value="0">
+            </label>
+            <label>Сдвиг по вертикали <output id="cam-stitch-right-y-value">0%</output>
+              <input id="cam-stitch-right-y" type="range" min="-40" max="40" step="1" value="0">
+            </label>
+            <label>Поворот / выравнивание <output id="cam-stitch-right-roll-value">0°</output>
+              <input id="cam-stitch-right-roll" type="range" min="-15" max="15" step="0.5" value="0">
+            </label>
+          </fieldset>
+        </div>
+        <p class="cam-stitch-note">Настройка сохраняется в этом браузере. Это простая визуальная склейка: близкие предметы у шва могут двоиться из-за разного положения объективов.</p>
+      </section>
+      <!-- Обычный круговой обзор: передние камеры сверху, задние снизу. -->
+      <div class="cam-stack" id="cam-stack">
         <section class="cam-card" data-camera="FL" aria-label="Камера · передняя левая">
           <header class="cam-head">
             <h3>Передняя левая</h3>
@@ -1242,6 +1309,7 @@
   <script src="steer_presets.js"></script>
   <script src="viewport.js"></script>
   <script src="camera_view.js"></script>
+  <script src="camera_stitch.js"></script>
   <script src="map_view.js"></script>
   <script src="pot_mode.js"></script>
   <script src="pot_hold.js"></script>
