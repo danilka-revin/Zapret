@@ -1,0 +1,314 @@
+/* Экран «Модуль датчиков» — та же чёрно-серая палитра и приглушённый красный
+   акцент, что у бортового экрана и страницы устройств (robot.css, devices.css). */
+:root {
+  color-scheme: dark;
+  --bg: #000000;
+  --bg-2: #0a0a0b;
+  --panel: #101012;
+  --panel-2: #17171a;
+  --line: #232327;
+  --line-2: #2e2e34;
+  --text: #f4f4f6;
+  --muted: #b3aeb1;
+  --faint: #8b8b93;
+  --accent: #c0505a;
+  --accent-text: #dfa4ab;
+  --good: #bfddcf;
+  --amber: #ffc46b;
+  --red: #ffc0bd;
+  --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+button, input { font: inherit; }
+button, a { touch-action: manipulation; }
+button:focus-visible, input:focus-visible, a:focus-visible {
+  outline: 3px solid #e6adb2;
+  outline-offset: 2px;
+}
+a { color: inherit; text-decoration: none; }
+[hidden] { display: none !important; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Шапка повторяет значок, кнопки и отступы остальных экранов. */
+.topbar {
+  min-height: 80px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding: 14px max(24px, calc((100vw - 1468px) / 2));
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  font-size: 19px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.brand small { color: var(--faint); font-size: 12px; font-weight: 700; letter-spacing: .04em; }
+.brand-mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+}
+.brand-mark svg { width: 32px; height: 32px; }
+.topbar nav { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.topbar nav a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 9px 16px;
+  border: 1px solid #2e2e30;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #1c1c1e, #161616);
+  font-size: 13px;
+  font-weight: 800;
+}
+.topbar nav a:hover { border-color: #655056; background: #252022; }
+.topbar nav [aria-current] { border-color: #70474d; background: #2c1d21; color: #f3d7da; }
+
+main { max-width: 1468px; margin: 0 auto; padding: 30px 24px 72px; }
+
+/* Полоса состояния: связь с платой подтверждается только кадром телеметрии. */
+.status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 20px 22px;
+  border: 1px solid #373136;
+  border-radius: 18px;
+  background: linear-gradient(120deg, #1c181a, #141214 72%);
+}
+.status[data-tone="live"] { border-color: #3a4d44; background: linear-gradient(120deg, #17201c, #121514 72%); }
+.status[data-tone="warn"] { border-color: #664c36; background: linear-gradient(120deg, #241c15, #161312 72%); }
+.status[data-tone="err"] { border-color: #6b3b3d; background: linear-gradient(120deg, #241617, #161213 72%); }
+.status-main { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.status-dot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #77747a;
+  box-shadow: 0 0 0 5px rgba(119, 116, 122, .18);
+}
+.status[data-tone="live"] .status-dot { background: #9ec8b2; box-shadow: 0 0 0 5px rgba(158, 200, 178, .16); }
+.status[data-tone="warn"] .status-dot { background: var(--amber); box-shadow: 0 0 0 5px rgba(255, 196, 107, .16); }
+.status[data-tone="err"] .status-dot { background: #e79591; box-shadow: 0 0 0 5px rgba(231, 149, 145, .16); }
+.eyebrow { margin: 0 0 4px; color: var(--accent-text); font-size: 10px; font-weight: 800; letter-spacing: .1em; }
+h1 { margin: 0; font-size: clamp(22px, 2.2vw, 30px); line-height: 1.15; letter-spacing: -.02em; }
+.status-sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.status-meta { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; }
+.status-meta > div {
+  min-width: 118px;
+  padding: 10px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  background: #13131599;
+}
+.status-meta dt { color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.status-meta dd { margin: 3px 0 0; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* Сетка карточек: компас и барометр выше, служебные блоки ниже. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+.card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: 16px;
+  background: var(--panel);
+}
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 18px 10px;
+}
+.card-head h2 { margin: 0; font-size: 16px; line-height: 1.3; }
+.hint { color: var(--faint); font-size: 11px; font-weight: 700; letter-spacing: .03em; text-align: right; }
+.hint[data-tone="ok"] { color: var(--good); }
+.hint[data-tone="err"] { color: var(--red); }
+.card > .row, .card > .note, .card > .metrics, .card > .lights,
+.card > .dim-row, .card > .cards-count, .card > .pin-field { margin-left: 18px; margin-right: 18px; }
+.card > .note:last-child, .card > .row:last-child, .card > .dim-row:last-child { margin-bottom: 16px; }
+
+/* Компас: роза рисуется CSS, стрелка поворачивается скриптом. */
+.compass-body { display: flex; align-items: center; gap: 22px; padding: 6px 18px 14px; }
+.rose {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 132px;
+  height: 132px;
+  border: 1px solid var(--line-2);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, #1b1b1f33 0 46%, #0f0f11 100%),
+    repeating-conic-gradient(from 0deg, #2a2a3022 0deg 1deg, transparent 1deg 15deg);
+}
+.rose-letter {
+  position: absolute;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 800;
+}
+.rose-letter.n { top: 7px; color: var(--accent-text); }
+.rose-letter.s { bottom: 7px; }
+.rose-letter.e { right: 9px; }
+.rose-letter.w { left: 9px; }
+.needle {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 4px;
+  height: 48%;
+  margin-left: -2px;
+  transform-origin: 50% 100%;
+  transform: translateY(-100%) rotate(0deg);
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--accent), #6c2b31);
+  transition: transform .25s ease-out;
+}
+.needle[data-known="0"] { background: #3a3a41; }
+.compass-value { min-width: 0; }
+.compass-value b {
+  display: block;
+  font-size: clamp(34px, 4vw, 46px);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+}
+.compass-value small { display: block; margin-top: 2px; color: var(--accent-text); font-size: 15px; font-weight: 800; }
+.compass-value p { margin: 10px 0 0; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* Числовые показания барометра и двери. */
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 4px; margin-bottom: 14px; }
+.metrics > div { padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); }
+.metrics dt { color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.metrics dd { margin: 4px 0 0; font-size: 15px; font-variant-numeric: tabular-nums; }
+.metrics dd b { font-size: 21px; font-weight: 800; }
+.metrics dd small { color: var(--muted); font-size: 12px; }
+.metrics dd[data-state="open"] { color: var(--amber); }
+
+/* Свет: четыре реле как физические клавиши. */
+.lights { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 4px; }
+.light {
+  min-height: 56px;
+  padding: 10px 12px;
+  border: 1px solid #2e2e30;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #1a1a1c, #141416);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.light:hover:not(:disabled) { border-color: #4a3f44; color: var(--text); }
+.light[aria-pressed="true"] {
+  border-color: #875057;
+  background: linear-gradient(180deg, #33222a, #231a1e);
+  color: #f6dfe1;
+  box-shadow: inset 0 0 18px rgba(192, 80, 90, .18);
+}
+.light[aria-pressed="true"]::before { content: "● "; color: #e79aa1; }
+.light[aria-pressed="false"]::before { content: "○ "; color: #5a5a63; }
+
+.row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.row input {
+  flex: 1 1 130px;
+  min-height: 44px;
+  padding: 9px 13px;
+  border: 1px solid #2e2e30;
+  border-radius: 10px;
+  background: #0d0d0f;
+  color: var(--text);
+  font-family: var(--mono);
+}
+.btn {
+  min-height: 44px;
+  padding: 9px 16px;
+  border: 1px solid #4a3a3f;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #2a2023, #1d1618);
+  color: #f0d6d9;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.btn:hover { border-color: #70474d; background: #2c1d21; }
+.btn--ghost { border-color: #2e2e30; background: #17171a; color: var(--muted); }
+.btn--ghost:hover { border-color: #4a4a52; color: var(--text); }
+.btn--danger { border-color: #7b4448; background: linear-gradient(180deg, #3a2226, #25171a); color: #f7d5d7; }
+
+.dim-row { margin-top: 14px; }
+.dim-row label { display: block; color: var(--muted); font-size: 12px; font-weight: 700; }
+.dim-row output { font-family: var(--mono); color: var(--accent-text); }
+.dim-row input[type="range"] { width: 100%; margin-top: 6px; accent-color: var(--accent); }
+.warn { margin: 8px 0 0; padding: 9px 12px; border: 1px solid #664c36; border-radius: 10px; background: #2b211a; color: #f4d1a2; font-size: 12px; }
+
+.pin-field { display: block; margin-top: 6px; color: var(--faint); font-size: 12px; }
+.cards-count { margin-top: 4px; color: var(--muted); font-size: 13px; }
+.cards-count b { color: var(--text); font-size: 17px; font-variant-numeric: tabular-nums; }
+
+.note { margin-top: 12px; color: var(--faint); font-size: 12px; line-height: 1.5; }
+.note:last-child { margin-bottom: 16px; }
+
+/* Журнал: строки платы «# SENSORS: …». */
+.log { grid-column: 1 / -1; }
+.log-list { margin: 0; padding: 0 18px 4px; list-style: none; }
+.log-list li {
+  overflow-wrap: anywhere;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  color: #cfc9cc;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.log-list li:last-child { border-bottom: 0; color: var(--faint); }
+.msg { min-height: 20px; margin: 4px 18px 16px; color: var(--muted); font-size: 12px; }
+.msg[data-tone="ok"] { color: var(--good); }
+.msg[data-tone="err"] { color: var(--red); }
+
+@media (max-width: 1000px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .compass-body { gap: 16px; }
+  .rose { width: 112px; height: 112px; }
+}
+@media (max-width: 620px) {
+  .topbar { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .topbar nav { justify-content: flex-start; }
+  main { padding: 20px 14px 56px; }
+  .lights { grid-template-columns: minmax(0, 1fr); }
+  .status-meta > div { min-width: 0; flex: 1 1 100px; }
+}

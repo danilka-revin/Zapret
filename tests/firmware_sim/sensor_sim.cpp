@@ -436,8 +436,16 @@ static void scenario_boot_safe() {
   CHECK(board.servo_attached && board.servo_pin == 7, "серво замка на D7");
   CHECK(board.servo_value == sensors::LOCK_CLOSED_ANGLE,
         "после сброса замок закрыт, angle=%d", board.servo_value);
-  CHECK(board.pixels.size() == sensors::STRIP_LEDS, "лента инициализирована");
-  for (uint32_t pixel : board.pixels) CHECK(pixel == 0, "после сброса лента погашена");
+  if (sensors::STRIP_ENABLED) {
+    CHECK(board.pixels.size() == sensors::STRIP_LEDS, "лента инициализирована");
+    for (uint32_t pixel : board.pixels) CHECK(pixel == 0, "после сброса лента погашена");
+  } else {
+    // Ленты пока нет: прошивка не должна ни писать пиксели, ни оставлять D6
+    // в воздухе — линия данных прижата к земле.
+    CHECK(board.pixels.empty(), "без ленты пиксели не пишутся");
+    CHECK(board.strip_shows == 0, "без ленты show() не вызывается");
+    CHECK(board.level[6] == LOW, "без ленты D6 прижат к земле");
+  }
   CHECK(sim::wdt_enabled != 0, "watchdog включён");
   size_t mark = 0;
   const std::string fresh = take_output(mark);
@@ -448,6 +456,8 @@ static void scenario_boot_safe() {
   CHECK(field(frame, "door") == 0, "дверь закрыта");
   CHECK(field(frame, "lock") == 0, "замок закрыт");
   CHECK(field(frame, "fw") == sensors::SENSOR_PROTOCOL, "версия протокола в кадре");
+  CHECK(field(frame, "strip") == (sensors::STRIP_ENABLED ? 1 : 0),
+        "признак ленты в кадре: strip=%ld", field(frame, "strip"));
 }
 
 static void scenario_compass() {
@@ -534,26 +544,35 @@ static void scenario_turn_blink() {
   }
   CHECK(transitions >= 3, "поворотник мигает, переходов за 1.5 с: %d", transitions);
 
-  // Лента в фазе «горит»: янтарная половина слева, правая погашена.
-  bool saw_left_amber = false;
-  bool saw_right_dark = false;
-  for (int i = 0; i < 40; ++i) {
-    sim::run_for_ms(25);
-    const uint32_t left = board.pixels.empty() ? 0 : board.pixels.front();
-    const uint32_t right = board.pixels.empty() ? 0 : board.pixels.back();
-    if (left != 0 && ((left >> 16) & 0xFF) > ((left & 0xFF) + 8)) saw_left_amber = true;
-    if (right == 0) saw_right_dark = true;
-  }
-  CHECK(saw_left_amber, "левая половина ленты горит янтарным");
-  CHECK(saw_right_dark, "правая половина ленты не горит");
+  if (sensors::STRIP_ENABLED) {
+    // Лента в фазе «горит»: янтарная половина слева, правая погашена.
+    bool saw_left_amber = false;
+    bool saw_right_dark = false;
+    for (int i = 0; i < 40; ++i) {
+      sim::run_for_ms(25);
+      const uint32_t left = board.pixels.empty() ? 0 : board.pixels.front();
+      const uint32_t right = board.pixels.empty() ? 0 : board.pixels.back();
+      if (left != 0 && ((left >> 16) & 0xFF) > ((left & 0xFF) + 8)) saw_left_amber = true;
+      if (right == 0) saw_right_dark = true;
+    }
+    CHECK(saw_left_amber, "левая половина ленты горит янтарным");
+    CHECK(saw_right_dark, "правая половина ленты не горит");
 
-  send("light left off");
-  run(200);
-  bool all_dark = true;
-  for (uint32_t pixel : board.pixels) {
-    if (pixel != 0) all_dark = false;
+    send("light left off");
+    run(200);
+    bool all_dark = true;
+    for (uint32_t pixel : board.pixels) {
+      if (pixel != 0) all_dark = false;
+    }
+    CHECK(all_dark, "после выключения поворотника лента гаснет");
+  } else {
+    // Без ленты мигание видно только на реле, а лента не трогается вовсе.
+    CHECK(board.strip_shows == 0, "без ленты поворотник не пишет в пиксели");
+    CHECK(board.level[6] == LOW, "без ленты D6 остаётся прижатым к земле");
+    send("light left off");
+    run(200);
+    CHECK(countLows(RELAYS, 4) == 0, "поворотник выключен на реле");
   }
-  CHECK(all_dark, "после выключения поворотника лента гаснет");
 }
 
 static void scenario_dim_strip() {
@@ -564,6 +583,27 @@ static void scenario_dim_strip() {
         "команда dim принята");
   send("light dim on");
   run(300);
+  if (!sensors::STRIP_ENABLED) {
+    // Ленты пока нет: габариты остаются только битом в телеметрии, а в пиксели
+    // ничего не пишется. Команда strip off принимается молча.
+    mark = board.serial.output.size();
+    const std::string frame = telemetry(mark);
+    CHECK((field(frame, "light") & sensors::LIGHT_DIM) != 0,
+          "габариты отмечены в телеметрии: light=%ld", field(frame, "light"));
+    CHECK(field(frame, "dim") == 200, "яркость габаритов принята: dim=%ld", field(frame, "dim"));
+    CHECK(field(frame, "strip") == 0, "лента в кадре не заявлена");
+    CHECK(board.strip_shows == 0, "без ленты пиксели не пишутся");
+    CHECK(board.pixels.empty(), "буфера ленты нет");
+    send("strip off");
+    CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "@ACK "); }, 200),
+          "strip off принимается и без ленты");
+    run(100);
+    CHECK(board.strip_shows == 0, "strip off не трогает пиксели без ленты");
+    CHECK(board.level[6] == LOW, "D6 прижат к земле");
+    send("light dim off");
+    run(100);
+    return;
+  }
   bool white = !board.pixels.empty();
   for (uint32_t pixel : board.pixels) {
     const uint8_t red = (pixel >> 16) & 0xFF;
