@@ -158,6 +158,20 @@ def test_disconnected_assigned_port_is_marked_and_last(tmp_path):
     assert out["found"]["text"].startswith("Найдено физических портов: 4")
 
 
+def test_busy_port_is_marked_with_its_owner_before_saving(tmp_path):
+    """Оператор видит «занят: лидар» ещё в списке, а не после ошибки."""
+    serial = [dict(SERIAL[0], owner="lidar", ownerTitle="лидар", ownerEnv="RC_LIDAR_PORT"),
+              SERIAL[1]]
+    out = run_screen(tmp_path, ports=ports_payload(serial=serial),
+                     snapshot=snapshot_payload({"serial": serial, "video": VIDEO, "usb": USB}))
+    labels = out["lidar"]["labels"]
+    assert "занят: лидар" in labels[1]
+    assert "занят" not in labels[2]
+    # В общем списке найденных портов владелец тоже виден.
+    assert "назначен: лидар" in out["found"]["rows"][0]["owner"]
+    assert out["found"]["rows"][1]["owner"] == ""
+
+
 def test_choosing_a_port_fills_the_env_field(tmp_path):
     out = run_screen(tmp_path, pick="/dev/serial/by-id/usb-1a86_B-if00-port0")
     assert out["afterPick"]["value"] == "/dev/serial/by-id/usb-1a86_B-if00-port0"

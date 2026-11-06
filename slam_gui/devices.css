@@ -452,6 +452,7 @@ footer b { color: #c9bec1; }
 .ports-found-name { overflow-wrap: anywhere; color: #cdc2c6; }
 .ports-found-kind { color: var(--faint); font-size: 10.5px; letter-spacing: .04em;
   text-transform: uppercase; }
+.ports-found-owner { color: var(--amber); font-size: 11px; }
 .ports-found-missing { color: var(--amber); font-size: 11px; }
 @media (max-width: 900px) {
   .ports-found-row { grid-template-columns: minmax(0, 1fr) auto; }

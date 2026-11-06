@@ -313,18 +313,31 @@ def apply_port(manager, port: str, env_path: Path | None = None, *,
         if real in {_real(p) for p in printer_reserved_ports()}:
             raise ValueError("это выбранный порт принтера, его нельзя назначить BMS")
         if port in master_ports() or real in master_ports():
-            raise ValueError("это порт мастера руля (RC_SLAM_PORT)")
+            raise ValueError("это порт мастера руля или колеса (RC_SLAM_PORT / RC_WHEEL_PORTS) — "
+                             "BMS его не займёт")
         if port in _lidar_ports() or real in _lidar_ports():
             raise ValueError("это порт лидара")
         if port in _chassis_ports() or real in _chassis_ports():
             raise ValueError("это порт колеса")
+        from .device_ports import SENSOR_ENV_KEY, env_value
+        sensors = env_value(SENSOR_ENV_KEY)
+        if sensors and real == _real(sensors):
+            raise ValueError("это порт модуля датчиков (%s) — BMS его не займёт" % SENSOR_ENV_KEY)
         if getattr(manager, "_requires_wheel_check", False):
             source = getattr(manager, "_manual_source", None)
             allowed = bool(source is not None and source.manual_bms_port_allowed(port))
             if not allowed and operator_confirmed and source is not None:
-                allowed = bool(getattr(source, "operator_assigned_port_allowed", lambda *_: False)(port, "bms"))
+                # Оператор сам выбрал этот порт на странице «Устройства» — это
+                # и есть подтверждение. Проверять «порт уже сохранён в .env»
+                # здесь нельзя: запись в .env идёт после этой строки, и
+                # назначение упиралось в замкнутый круг «порт занят».
+                check = (getattr(source, "operator_assignment_allowed", None)
+                         or getattr(source, "operator_assigned_port_allowed", None))
+                allowed = bool(check and check(port, "bms"))
             if not allowed:
-                raise ValueError("порт ещё не проверен или занят колесом/лидаром")
+                raise ValueError(
+                    "порт свободен не для BMS: он читается как колесо или лидар либо ещё "
+                    "не прошёл проверку USB — выберите другой или дождитесь проверки")
         from .lidar import port_locked_by_other
         old = getattr(manager, "port", "") or ""
         if (not old or _real(old) != real) and port_locked_by_other(port):

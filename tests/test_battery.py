@@ -534,6 +534,127 @@ def test_port_roles_protect_master_and_lidar(tmp_path, monkeypatch):
         bms_setup.apply_port(BatteryManager(), str(free), env_path=tmp_path / ".env")
 
 
+def test_operator_assignment_on_devices_page_bypasses_the_wheel_check(tmp_path, monkeypatch):
+    """Страница «Устройства»: оператор назначил порт — круг «уже сохранено» разорван.
+
+    Проверка владельца колёс требует, чтобы порт уже лежал в .env
+    (``operator_assigned_port_allowed``), а запись в .env идёт только после
+    успешной проверки. Получался замкнутый круг: каждый раз «порт ещё не
+    проверен или занят колесом/лидаром», хотя оператор выбрал свободный порт.
+    """
+    from robot_control import bms_setup
+
+    port = tmp_path / "ttyUSB4"
+    port.touch()
+    env = tmp_path / ".env"
+    monkeypatch.setattr(bms_setup, "_lidar_ports", lambda: set())
+    monkeypatch.setattr(bms_setup, "_chassis_ports", lambda: set())
+    monkeypatch.delenv("RC_BMS_PORT", raising=False)
+
+    class Source:
+        """Владелец колёс: пассивная проверка порт ещё не видела."""
+
+        wheels = {"/dev/ttyUSB1", "/dev/ttyUSB2"}
+
+        def _device_fingerprint(self, path):
+            return (1, 2, 3, 4)
+
+        def manual_bms_port_allowed(self, path):
+            return False
+
+        def operator_assigned_port_allowed(self, path, role):
+            # Так было: требуется, чтобы RC_BMS_PORT уже указывал на порт.
+            import os
+            from robot_control.device_ports import role_port
+            assigned = role_port(role)
+            return bool(assigned and os.path.realpath(assigned) == os.path.realpath(path))
+
+        def operator_assignment_allowed(self, path, role):
+            # А так надо: явное назначение оператора — само по себе подтверждение.
+            import os
+            from robot_control.device_ports import wheel_ports, role_port
+            if not path or not role or not os.path.exists(path):
+                return False
+            real = os.path.realpath(path)
+            if self._device_fingerprint(path) is None:
+                return False
+            if os.path.realpath(role_port("lidar") or "") == real:
+                return False
+            return real not in {os.path.realpath(p) for p in wheel_ports() if p}
+
+    class Manager:
+        port = ""
+        _requires_wheel_check = True
+        _manual_source = Source()
+
+        def reconfigure(self, value):
+            self.port = value
+
+        def snapshot(self):
+            return {"configured": bool(self.port)}
+
+    wheel = tmp_path / "ttyUSB7"
+    wheel.touch()
+    monkeypatch.setenv("RC_WHEEL_PORTS", str(wheel))
+    result = bms_setup.apply_port(Manager(), str(port), env_path=env, operator_confirmed=True)
+    assert result["saved"] is True
+    assert f"RC_BMS_PORT={port}" in env.read_text(encoding="utf-8")
+
+    # Порт колеса по-прежнему нельзя: подтверждение оператора не отменяет
+    # защиту от перехвата порта, который читают как колесо.
+    with pytest.raises(ValueError, match="мастера"):
+        bms_setup.apply_port(Manager(), str(wheel), env_path=env, operator_confirmed=True)
+
+
+def test_wheel_owner_allows_a_new_assignment_without_an_env_record(tmp_path, monkeypatch):
+    """Метод владельца колёс: назначение оператора не требует уже записанного .env."""
+    import threading
+
+    from slam_gui.backend import MasterSource
+
+    class Owner:
+        lock = threading.Lock()
+        links = {}
+        _spawning = set()
+        operator_assignment_allowed = MasterSource.operator_assignment_allowed
+        operator_assigned_port_allowed = MasterSource.operator_assigned_port_allowed
+
+        def _device_fingerprint(self, path):
+            return (1, 2, 3, 4)
+
+    free = tmp_path / "ttyUSB3"
+    wheel = tmp_path / "ttyUSB9"
+    missing = tmp_path / "ttyUSB0"
+    free.touch()
+    wheel.touch()
+    monkeypatch.setenv("RC_WHEEL_PORTS", str(wheel))
+    monkeypatch.delenv("RC_BMS_PORT", raising=False)
+    monkeypatch.delenv("RC_LIDAR_PORT", raising=False)
+    owner = Owner()
+    assert MasterSource.operator_assignment_allowed(owner, str(free), "bms") is True
+    assert MasterSource.operator_assignment_allowed(owner, str(wheel), "bms") is False
+    assert MasterSource.operator_assignment_allowed(owner, str(missing), "bms") is False
+    # Сохранённое назначение по-прежнему проверяется отдельно: метод для
+    # «уже записанного» порта требует совпадения с .env.
+    monkeypatch.setenv("RC_BMS_PORT", str(free))
+    assert MasterSource.operator_assigned_port_allowed(owner, str(free), "bms") is True
+    assert MasterSource.operator_assigned_port_allowed(owner, str(wheel), "bms") is False
+    assert MasterSource.operator_assigned_port_allowed(owner, str(missing), "bms") is False
+
+
+def test_bms_refuses_the_sensor_module_port(tmp_path, monkeypatch):
+    from robot_control import bms_setup
+
+    port = tmp_path / "ttyUSB8"
+    port.touch()
+    monkeypatch.setattr(bms_setup, "_lidar_ports", lambda: set())
+    monkeypatch.setattr(bms_setup, "_chassis_ports", lambda: set())
+    monkeypatch.setenv("RC_SENSOR_PORT", str(port))
+    with pytest.raises(ValueError, match="модуля датчиков"):
+        bms_setup.apply_port(BatteryManager(), str(port), env_path=tmp_path / ".env",
+                             operator_confirmed=True)
+
+
 def test_save_port_rewrites_only_bms_line(tmp_path):
     from robot_control.bms_setup import save_port
     env = tmp_path / ".env"

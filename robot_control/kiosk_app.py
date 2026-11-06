@@ -548,7 +548,10 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         port = str(body.get("port") or "").strip()
         if (port and battery._requires_wheel_check and
                 (battery._manual_source is None or not battery._manual_source.manual_bms_port_allowed(port))):
-            return jsonify({"ok": False, "error": "Порт ещё не проверен или занят колесом/лидаром"}), 409
+            return jsonify({"ok": False, "error": "Порт ещё не прошёл проверку USB (или его читает "
+                                                   "колесо/лидар). Сначала назначьте его BMS на "
+                                                   "странице «Устройства» — там выбор подтверждает "
+                                                   "оператор"}), 409
         with usb_assignment_lock:
             result = bms_setup.probe_port(port)
         eventlog.record("info" if result.get("found") else "warn",
