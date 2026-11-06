@@ -1208,12 +1208,18 @@ body.swipe-open .kiosk {
 }
 .cam-stack {
   display: grid;
-  /* Круговой обзор: FL/RL/FR/RR — четыре C930e в сетке 2×2. */
+  /* Круговой обзор: четыре C930e в сетке 2×2. Передние камеры — сверху,
+     задние — снизу; слева левые, справа правые. Место задано явно, чтобы
+     раскладка не зависела от порядка блоков в разметке. */
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
   gap: 10px;
   min-height: 0;
 }
+.cam-stack > .cam-card[data-camera="FL"] { grid-area: 1 / 1; }
+.cam-stack > .cam-card[data-camera="FR"] { grid-area: 1 / 2; }
+.cam-stack > .cam-card[data-camera="RL"] { grid-area: 2 / 1; }
+.cam-stack > .cam-card[data-camera="RR"] { grid-area: 2 / 2; }
 .cam-card {
   display: flex;
   flex-direction: column;
@@ -2110,6 +2116,8 @@ body.swipe-open .kiosk {
 .swipe-camera-view.camera-expanded { grid-template-columns:1fr; }
 .camera-expanded .log-panel, .camera-expanded .cam-card:not(.is-expanded) { display:none; }
 .camera-expanded .cam-stack { grid-template-rows:minmax(0,1fr); grid-template-columns:1fr; }
+/* Развёрнутая камера занимает весь блок: явные места 2×2 здесь не действуют. */
+.camera-expanded .cam-stack > .cam-card[data-camera] { grid-area: auto; }
 .camera-expanded .cam-card.is-expanded { height:100%; }
 @media (max-width:1000px) {
   .camera-expanded .cam-viewport { min-height:60vh; }
