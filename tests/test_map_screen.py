@@ -120,12 +120,18 @@ def test_compass_from_sensor_module_is_shown_next_to_the_pose(tmp_path):
 
     payload = snapshot()
     payload["compass"] = {"ok": True, "heading": 123.4, "stale": False,
-                          "doorOpen": False, "lockOpen": False, "errors": []}
+                          "lockOpen": False, "errors": []}
     report = run(tmp_path, {"snapshot": payload, "paths": PATHS})
-    assert report["stats"]["compass"] == "123° · дверь закрыта"
+    # Концевика нет — про дверь рядом с позой ничего не пишем.
+    assert report["stats"]["compass"] == "123°"
+
+    payload["compass"] = {"ok": True, "heading": 123.4, "stale": False,
+                          "lockOpen": True, "errors": []}
+    report = run(tmp_path, {"snapshot": payload, "paths": PATHS})
+    assert report["stats"]["compass"] == "123° · замок открыт"
 
     payload["compass"] = {"ok": True, "heading": 123.4, "stale": True,
-                          "doorOpen": True, "lockOpen": True, "errors": ["RC522"]}
+                          "lockOpen": True, "errors": ["RC522"]}
     report = run(tmp_path, {"snapshot": payload, "paths": PATHS})
     assert report["stats"]["compass"] == "—"
 

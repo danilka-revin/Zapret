@@ -611,15 +611,6 @@ body.soc-crit .kpi-sub { color: var(--err); }
 /* Нет связи — приглушаем весь экран */
 body.is-stale .kiosk { opacity: .75; }
 body.is-stale #data-chip { color: var(--warn); border-color: #3a3a3e; }
-/* Запрет движения из-за открытого отсека: заметнее обычных чипов. */
-.chip-alert {
-  border-color: #7b4448;
-  background: #2c1d21;
-  color: #f7d5d7;
-  font-weight: 800;
-  letter-spacing: .03em;
-}
-
 /* ------------------------ Кнопка функций (без PIN) ------------------------ */
 .k-ctrl-btn {
   display: inline-flex;

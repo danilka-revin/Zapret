@@ -1,4 +1,4 @@
-/* Модуль датчиков робота: GY-87, RC522, адресная лента, 4 реле, замок, концевик.
+/* Модуль датчиков робота: GY-87, RC522, адресная лента, 4 реле, замок.
 
 Пины (Mega 2560), ровно как в разводке:
 
@@ -7,7 +7,6 @@
   Адресная лента:          DIN — 6, питание от внешнего 5 В, GND общий
   Реле 4 канала (5 В):     IN1 — 2, IN2 — 3, IN3 — 4, IN4 — 5
   Замок двери (серво):     сигнал — 7  (питание серво — отдельное, не с 5 В Mega)
-  Концевик двери:          8 → GND, INPUT_PULLUP (замкнут = дверь закрыта)
 
 Свет:
   реле 1 — передний свет (head)      реле 3 — левый поворотник (left)
@@ -24,12 +23,12 @@ strip=0; команда strip auto|off принимается молча. Пос
 Это не аутентификация и не аппаратный E-STOP: CRC ловит только порчу линии.
 
   @S fw=3 hdg=12345 pitch=-120 roll=35 gz=12 press=69964 temp=150 alt=301674
-     door=0 lock=0 light=5 dim=80 strip=0 cargo=0 rfid=0 cards=2 link=1
+     lock=0 light=5 dim=80 strip=0 cargo=0 rfid=0 cards=2 link=1
      err=0 t=123456 crc=ABCD                          (5 Гц)
   @CARD uid=A1B2C3D4 ok=1 act=open role=admin why=none cards=2 t=1234 crc=ABCD
   @CARDINFO idx=1 uid=A1B2C3D4 role=admin total=2 t=1234 crc=ABCD
   @CARDINFO end=1 total=2 t=1234 crc=ABCD
-  @EVT kind=door open=1 t=1234 crc=ABCD               (дверь/замок)
+  @EVT kind=lock open=1 t=1234 crc=ABCD               (замок)
   @EVT kind=cargo state=load t=1234 crc=ABCD          (окно погрузки)
   @ACK id=3 cmd=lock ok=1 t=1234 crc=ABCD             (ответ на команду)
 
@@ -52,9 +51,11 @@ strip=0; команда strip auto|off принимается молча. Пос
 таймеру (1…10 с), закрывается сам; открытый картой держится, но без команды от
 сервера дольше LINK_TIMEOUT_MS прошивка сообщает об этом в журнал — повторное
 прикладывание карты закрывает отсек. Окно погрузки закрывается само по
-таймауту. Пока концевик двери разомкнут (отсек открыт), движением управляет
-сервер: он обязан запретить движение. Прошивка не заменяет физический ключ и
-не является сертифицированной СКУД.
+таймауту. Прошивка не заменяет физический ключ и не является сертифицированной
+СКУД.
+
+Концевик отсека (D8) пока не подключён и из прошивки убран: состояние двери не
+передаётся, запрета движения по ней нет. Вернётся вместе с монтажом концевика.
 */
 
 #include <Arduino.h>
@@ -71,7 +72,9 @@ strip=0; команда strip auto|off принимается молча. Пос
 //: 2 — в телеметрию добавлено поле strip (признак подключённой ленты).
 //: 3 — роли карт, переключение отсека картой, окно погрузки (cargo=) и кадры
 //:     @CARDINFO со списком карт и их ролями.
-const uint8_t SENSOR_PROTOCOL = 3;
+//: 4 — убран концевик отсека (не подключён): нет поля door= и кадра kind=door,
+//:     запрета движения по двери тоже нет.
+const uint8_t SENSOR_PROTOCOL = 4;
 //: Своё π: strict ISO C++ не отдаёт M_PI, а avr-gcc считает float быстрее double.
 static const float PI_F = 3.14159265358979f;
 
@@ -83,9 +86,6 @@ static const uint8_t RELAY_PINS[4] = {2, 3, 4, 5};
 //: при HIGH на IN реле должно молчать. Если наоборот — поставьте false.
 static const bool RELAY_ACTIVE_LOW = true;
 static const uint8_t LOCK_SERVO_PIN = 7;
-static const uint8_t DOOR_SWITCH_PIN = 8;
-//: Замкнут на GND = дверь закрыта.
-static const uint8_t DOOR_CLOSED_LEVEL = LOW;
 
 //: Лента светодиодов пока не подключена. 0 — прошивка не трогает D6 и не
 //: обещает габаритов (телеметрия strip=0), 1 — лента на D6 смонтирована.
@@ -258,10 +258,6 @@ static bool lock_open = false;
 static bool lock_held = false;                // открыт картой, сам не закроется
 static uint32_t lock_deadline = 0;
 static uint8_t lock_angle = LOCK_CLOSED_ANGLE;
-
-static bool door_closed = true;
-static bool door_raw = true;
-static uint32_t door_changed_ms = 0;
 
 static float mag_offset_x = 0.0f;             // поправка жёсткого смещения
 static float mag_offset_y = 0.0f;
@@ -892,32 +888,16 @@ void lockTick(uint32_t now) {
   }
 }
 
-// ================================= концевик ==================================
-void doorTick(uint32_t now) {
-  const bool raw = digitalRead(DOOR_SWITCH_PIN) == DOOR_CLOSED_LEVEL;
-  if (raw != door_raw) {
-    door_raw = raw;
-    door_changed_ms = now;
-    return;
-  }
-  if ((now - door_changed_ms) < 40 || raw == door_closed) return;
-  door_closed = raw;
-  char line[48];
-  const int n = snprintf_P(line, sizeof(line), PSTR("@EVT kind=door open=%d t=%lu"),
-                           door_closed ? 0 : 1, (unsigned long)now);
-  appendCheckedFrame(line, sizeof(line), n);
-}
-
 // ================================ телеметрия =================================
 void emitTelemetry() {
   char line[192];
   const int n = snprintf_P(line, sizeof(line),
       PSTR("@S fw=%u hdg=%d pitch=%d roll=%d gz=%d press=%ld temp=%d alt=%ld "
-           "door=%d lock=%d light=%u dim=%u strip=%d cargo=%u rfid=%u cards=%u link=%d "
+           "lock=%d light=%u dim=%u strip=%d cargo=%u rfid=%u cards=%u link=%d "
            "err=%u t=%lu"),
       (unsigned)SENSOR_PROTOCOL, (int)heading_cd, (int)pitch_cd, (int)roll_cd,
       (int)gyro_z_dps10, (long)baro_pressure_pa, (int)baro_temp_c10, (long)baro_altitude_cm,
-      door_closed ? 0 : 1, lock_open ? 1 : 0,
+      lock_open ? 1 : 0,
       (unsigned)effectiveLights(), (unsigned)dim_level, STRIP_ENABLED ? 1 : 0,
       (unsigned)cargo_kind, (unsigned)rfid_state,
       (unsigned)card_count, link_ok ? 1 : 0, (unsigned)error_mask,
@@ -1511,7 +1491,6 @@ void setup() {
     pinMode(RELAY_PINS[i], OUTPUT);
     relayWrite(i, false);
   }
-  pinMode(DOOR_SWITCH_PIN, INPUT_PULLUP);
   pinMode(RC522_RST_PIN, OUTPUT);
   digitalWrite(RC522_RST_PIN, HIGH);
   pinMode(RC522_SS_PIN, OUTPUT);
@@ -1548,7 +1527,7 @@ void setup() {
   note(PSTR("модуль датчиков fw%u: карт %u, ошибки 0x%02X"), (unsigned)SENSOR_PROTOCOL,
        (unsigned)card_count, (unsigned)error_mask);
   emitCardList();
-  note(PSTR("I2C 20/21 · RC522 SS53 RST9 · лента D6 %s · реле D2-D5 · замок D7 · концевик D8"),
+  note(PSTR("I2C 20/21 · RC522 SS53 RST9 · лента D6 %s · реле D2-D5 · замок D7"),
        STRIP_ENABLED ? "(есть)" : "(не подключена)");
 
   last_sensor_ms = 0;
@@ -1563,7 +1542,6 @@ void loop() {
 
   readSerial();
   sensorsTick(now);
-  doorTick(now);
   lockTick(now);
   cargoTick(now);
 
@@ -1581,8 +1559,7 @@ void loop() {
     if (link_ok) {
       link_ok = false;
       if (lock_open && lock_held) {
-        // Отсек открыт картой: закрывать его без ведома человека нельзя, а
-        // движение сервер запрещает, пока концевик разомкнут.
+        // Отсек открыт картой: закрывать его без ведома человека нельзя.
         note(PSTR("нет команд дольше %u мс: отсек остаётся открытым до карты"),
              (unsigned)LINK_TIMEOUT_MS);
       } else {

@@ -1,7 +1,7 @@
 """Модуль датчиков робота: разбор кадров и USB-клиент бортового экрана.
 
-Плата (``firmware/sensor_module``) отвечает за свет, замок двери, концевик,
-карты доступа и компас. Сервер ничего из этого не вычисляет — он только
+Плата (``firmware/sensor_module``) отвечает за свет, замок двери, карты
+доступа и компас. Сервер ничего из этого не вычисляет — он только
 показывает состояние и отправляет команды, а безопасное состояние держит
 прошивка (после сброса реле выключены, замок закрыт).
 
@@ -10,7 +10,7 @@
 * ``@S``    — телеметрия, 5 Гц;
 * ``@CARD`` — приложили карту (пускать или нет, роль и что сделано);
 * ``@CARDINFO`` — список запомненных карт с ролями (ответ на ``card list``);
-* ``@EVT``  — дверь/замок;
+* ``@EVT``  — замок и окно погрузки;
 * ``@ACK``  — ответ на команду;
 * ``#``     — сообщение для человека, в журнал.
 
@@ -31,11 +31,17 @@ import threading
 import time
 from typing import Any, Callable, Iterable
 
-#: Версия протокола платы; сервер понимает ровно её (см. поле ``fw=``).
+#: Текущая версия протокола платы (поле ``fw=``).
 #: 2 — в телеметрии появилось поле ``strip`` (лента светодиодов подключена).
 #: 3 — роли карт, переключение отсека картой, окно погрузки (``cargo=``) и
 #:     машинный список карт ``@CARDINFO``.
-SENSOR_PROTOCOL = 3
+#: 4 — концевик отсека убран (D8 не подключён): нет поля ``door=`` и кадра
+#:     ``kind=door``, запрета движения по двери тоже нет.
+SENSOR_PROTOCOL = 4
+#: Какие версии сервер ещё понимает: плату прошивают вручную, и после
+#: обновления кода старая прошивка (fw3) должна продолжать работать —
+#: лишнее поле door= из её кадров просто игнорируется.
+SENSOR_PROTOCOLS = (3, 4)
 
 TELEMETRY_PREFIX = "@S "
 CARD_PREFIX = "@CARD "
@@ -96,7 +102,7 @@ UID_RE = re.compile(r"^[0-9A-Fa-f]{8}$")
 KEY_RE = re.compile(r"([a-z]+)=(\S+)")
 TELEMETRY_FIELDS = (
     "fw", "hdg", "pitch", "roll", "gz", "press", "temp", "alt",
-    "door", "lock", "light", "dim", "strip", "cargo", "rfid", "cards", "link", "err",
+    "lock", "light", "dim", "strip", "cargo", "rfid", "cards", "link", "err",
     "t",
 )
 
@@ -162,8 +168,9 @@ def parse_telemetry(line: str) -> dict[str, Any]:
     if missing:
         raise SensorFrameError("нет полей: %s" % ", ".join(missing))
     protocol = _int(fields, "fw")
-    if protocol != SENSOR_PROTOCOL:
-        raise SensorFrameError("версия протокола %d, сервер ждёт %d" % (protocol, SENSOR_PROTOCOL))
+    if protocol not in SENSOR_PROTOCOLS:
+        raise SensorFrameError("версия протокола %d, сервер ждёт %s"
+                               % (protocol, " или ".join(str(item) for item in SENSOR_PROTOCOLS)))
     heading = _int(fields, "hdg")
     pitch = _int(fields, "pitch")
     roll = _int(fields, "roll")
@@ -197,7 +204,6 @@ def parse_telemetry(line: str) -> dict[str, Any]:
         "pressureHpa": round(_int(fields, "press") / 100.0, 1),
         "temperatureC": round(_int(fields, "temp") / 10.0, 1),
         "altitudeM": round(_int(fields, "alt") / 100.0, 2),
-        "doorOpen": _int(fields, "door") == 1,
         "lockOpen": _int(fields, "lock") == 1,
         "lightMask": mask,
         "lights": {name: bool(mask & bit) for name, bit in LIGHT_BITS.items()},
@@ -293,7 +299,7 @@ def parse_event(line: str) -> dict[str, Any]:
         return {"event": "cargo", "state": state,
                 "windowKind": "none" if state == "end" else state,
                 "atMs": _int(fields, "t")}
-    if kind not in ("door", "lock"):
+    if kind != "lock":
         raise SensorFrameError("неизвестное событие: %r" % kind)
     opened = _int(fields, "open")
     if opened not in (0, 1):
@@ -627,7 +633,7 @@ class SensorModule:
                 snapshot.update({
                     "heading": None, "headingCd": None, "pitch": None, "roll": None,
                     "gyroZ": None, "pressurePa": None, "pressureHpa": None,
-                    "temperatureC": None, "altitudeM": None, "doorOpen": None,
+                    "temperatureC": None, "altitudeM": None,
                     "lockOpen": None, "lightMask": 0, "lights": {}, "dim": None,
                     "stripEnabled": False, "windowKind": "none", "windowActive": False,
                     "rfid": "none", "cards": 0, "linkOk": False, "errors": [],
@@ -637,18 +643,8 @@ class SensorModule:
                 snapshot.update({key: value for key, value in frame.items() if key != "kind"})
             return snapshot
 
-    def compartment_open(self) -> bool:
-        """Отсек открыт по концевику? Нет свежего кадра — считаем, что неизвестно.
-
-        Нужен движению: пока отсек открыт, робот ехать не должен.
-        """
-        state = self.state()
-        if not state["ok"] or state["doorOpen"] is None:
-            return False
-        return bool(state["doorOpen"])
-
     def compass(self) -> dict[str, Any]:
-        """Короткий снимок для карты лидара: курс и то, что видно на двери."""
+        """Короткий снимок для карты лидара: курс и замок отсека."""
         state = self.state()
         return {
             "ok": state["ok"],
@@ -658,7 +654,6 @@ class SensorModule:
             "port": state["port"],
             "ageMs": state["ageMs"],
             "stale": state["stale"],
-            "doorOpen": state["doorOpen"],
             "lockOpen": state["lockOpen"],
             "stripEnabled": state["stripEnabled"],
             "windowKind": state["windowKind"],

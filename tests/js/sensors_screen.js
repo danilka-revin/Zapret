@@ -4,11 +4,11 @@
  * поднимается минимальный DOM, скрипт выполняется как в странице, а `fetch`
  * отдаёт заготовленные ответы API модуля датчиков. Результат читается из тех
  * же элементов, которые видит оператор: полоса состояния, компас, барометр,
- * клавиши света, дверь и замок, карты, журнал платы.
+ * клавиши света, замок отсека, карты, журнал платы.
  *
  * Запуск:
  *   node tests/js/sensors_screen.js <файл-payload.json>
- * На stdout — JSON: { status, compass, baro, lights, strip, door, lock, cards,
+ * На stdout — JSON: { status, compass, baro, lights, strip, lock, cards,
  *                      log, msg, calls, errors }.
  */
 'use strict';
@@ -216,14 +216,9 @@ function logItems() {
       dim: byId('sm-dim').value,
       dimLabel: byId('sm-dim-value').textContent,
     },
-    door: { door: byId('sm-door').textContent, lock: byId('sm-lock').textContent },
-    compartment: {
-      door: byId('sm-door').textContent,
-      motion: byId('sm-motion').textContent,
-      motionState: byId('sm-motion').dataset.state || '',
-      blockedHidden: byId('sm-blocked').hidden,
-      header: byId('sm-compartment').textContent,
-    },
+    /* Концевика отсека нет: на экране только замок. */
+    lock: { text: byId('sm-lock').textContent,
+            state: byId('sm-lock').dataset.state || '' },
     window: {
       label: byId('sm-window').textContent,
       state: byId('sm-window-state').textContent,

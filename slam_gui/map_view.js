@@ -1154,7 +1154,6 @@
     const heading = Number(compass.heading);
     if (!Number.isFinite(heading)) return '—';
     const parts = [fmt(heading, 0) + '°'];
-    if (typeof compass.doorOpen === 'boolean') parts.push(compass.doorOpen ? 'дверь открыта' : 'дверь закрыта');
     if (compass.lockOpen) parts.push('замок открыт');
     if (Array.isArray(compass.errors) && compass.errors.length) parts.push('нет: ' + compass.errors.join(', '));
     return parts.join(' · ');
