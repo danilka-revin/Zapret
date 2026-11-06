@@ -1,4 +1,5 @@
 """Camera UI does not need hardware to test zoom, reconnects or teardown."""
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -34,3 +35,37 @@ def test_camera_button_and_controls_are_served(kiosk_client):
     script = kiosk_client.get('/camera_view.js').text
     assert 'getUserMedia' not in script
     assert "'/frame?t='" in script
+
+
+def test_camera_panel_is_laid_out_front_first(kiosk_client):
+    """Передние камеры сверху, задние снизу; слева левые, справа правые."""
+    page = kiosk_client.get("/kiosk").text
+    sides = re.findall(r'class="cam-card" data-camera="([A-Z]{2})"', page)
+    assert sides == ["FL", "FR", "RL", "RR"], "порядок блоков: передние сверху"
+
+    # Место в сетке 2×2 задано явно: раскладка не зависит от порядка разметки.
+    css = kiosk_client.get("/robot.css").text
+    places = (("FL", "1 / 1"), ("FR", "1 / 2"), ("RL", "2 / 1"), ("RR", "2 / 2"))
+    for side, area in places:
+        rule = '.cam-stack > .cam-card[data-camera="%s"] { grid-area: %s; }'
+        rule %= (side, area)
+        assert rule in css, rule
+    # Развёрнутая камера занимает весь блок, а не свой угол.
+    assert ".camera-expanded .cam-stack > .cam-card[data-camera] { grid-area: auto; }" in css
+
+    # Подписи говорят, где камера, а не какой у неё номер: номера в портах
+    # (0…3) не совпадают с порядком на экране и только путали.
+    labels = ("Передняя левая", "Передняя правая", "Задняя левая", "Задняя правая")
+    for label in labels:
+        assert "<h3>%s</h3>" % label in page, label
+    assert "кормовая" not in page
+
+
+def test_web_console_camera_feeds_are_ordered_the_same_way():
+    """Пульт 8080 показывает камеры в том же порядке: передние сверху."""
+    root = Path(__file__).resolve().parent.parent / "slam_gui"
+    page = (root / "index.html").read_text(encoding="utf-8")
+    assert re.findall(r"CAM-([A-Z]{2})", page) == ["FL", "FR", "RL", "RR"]
+    # .cams — две колонки, поэтому строка 1 = передние, строка 2 = задние.
+    styles = (root / "styles.css").read_text(encoding="utf-8")
+    assert ".cams{display:grid;grid-template-columns:1fr 1fr" in styles

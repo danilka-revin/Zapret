@@ -320,14 +320,16 @@
       <!-- Только камеры и логи. Порты всех камер настраиваются на странице
            «Устройства» (/devices) — там же, где порты колёс, лидара, BMS,
            Kinect и принтера. -->
-      <!-- левая часть — круговой обзор: 4 × Logitech C930e -->
+      <!-- левая часть — круговой обзор: 4 × Logitech C930e. Порядок в DOM
+           совпадает с экраном: передние камеры сверху, задние снизу, слева
+           левые, справа правые. -->
       <div class="cam-column">
       <p class="cam-ports-hint">Порты камер назначаются на странице
         <a href="/devices">«Устройства» →</a></p>
       <div class="cam-stack">
-        <section class="cam-card" aria-label="Камера 1 передняя">
+        <section class="cam-card" data-camera="FL" aria-label="Камера · передняя левая">
           <header class="cam-head">
-            <h3>Камера 1 · передняя</h3>
+            <h3>Передняя левая</h3>
             <span class="cam-chip" id="cam1-chip">нет сигнала</span>
           </header>
           <div class="cam-viewport" id="cam1-view">
@@ -343,27 +345,9 @@
           </div>
           <footer class="cam-foot"><span id="cam1-meta">ожидание кадра · зум: +/−, колесо или два пальца</span><span id="cam1-dot" class="cam-dot" aria-hidden="true"></span></footer>
         </section>
-        <section class="cam-card" aria-label="Камера 2 кормовая">
+        <section class="cam-card" data-camera="FR" aria-label="Камера · передняя правая">
           <header class="cam-head">
-            <h3>Камера 2 · кормовая</h3>
-            <span class="cam-chip" id="cam2-chip">нет сигнала</span>
-          </header>
-          <div class="cam-viewport" id="cam2-view">
-            <canvas id="cam2-canvas" tabindex="0" aria-label="Камера 2"></canvas>
-            <p class="cam-empty" id="cam2-empty">нет сигнала</p>
-            <div class="camera-tools" aria-label="Управление камерой 2">
-              <button type="button" id="cam2-out" aria-label="Отдалить камеру 2">−</button>
-              <output id="cam2-zoom" aria-live="polite">1×</output>
-              <button type="button" id="cam2-in" aria-label="Приблизить камеру 2">+</button>
-              <button type="button" id="cam2-reset">Сброс</button>
-              <button type="button" id="cam2-expand" aria-pressed="false">Развернуть</button>
-            </div>
-          </div>
-          <footer class="cam-foot"><span id="cam2-meta">ожидание кадра · зум: +/−, колесо или два пальца</span><span id="cam2-dot" class="cam-dot" aria-hidden="true"></span></footer>
-        </section>
-        <section class="cam-card" aria-label="Камера 3 передняя правая">
-          <header class="cam-head">
-            <h3>Камера 3 · передняя правая</h3>
+            <h3>Передняя правая</h3>
             <span class="cam-chip" id="cam3-chip">нет сигнала</span>
           </header>
           <div class="cam-viewport" id="cam3-view">
@@ -379,9 +363,27 @@
           </div>
           <footer class="cam-foot"><span id="cam3-meta">ожидание кадра · зум: +/−, колесо или два пальца</span><span id="cam3-dot" class="cam-dot" aria-hidden="true"></span></footer>
         </section>
-        <section class="cam-card" aria-label="Камера 4 задняя правая">
+        <section class="cam-card" data-camera="RL" aria-label="Камера · задняя левая">
           <header class="cam-head">
-            <h3>Камера 4 · задняя правая</h3>
+            <h3>Задняя левая</h3>
+            <span class="cam-chip" id="cam2-chip">нет сигнала</span>
+          </header>
+          <div class="cam-viewport" id="cam2-view">
+            <canvas id="cam2-canvas" tabindex="0" aria-label="Камера 2"></canvas>
+            <p class="cam-empty" id="cam2-empty">нет сигнала</p>
+            <div class="camera-tools" aria-label="Управление камерой 2">
+              <button type="button" id="cam2-out" aria-label="Отдалить камеру 2">−</button>
+              <output id="cam2-zoom" aria-live="polite">1×</output>
+              <button type="button" id="cam2-in" aria-label="Приблизить камеру 2">+</button>
+              <button type="button" id="cam2-reset">Сброс</button>
+              <button type="button" id="cam2-expand" aria-pressed="false">Развернуть</button>
+            </div>
+          </div>
+          <footer class="cam-foot"><span id="cam2-meta">ожидание кадра · зум: +/−, колесо или два пальца</span><span id="cam2-dot" class="cam-dot" aria-hidden="true"></span></footer>
+        </section>
+        <section class="cam-card" data-camera="RR" aria-label="Камера · задняя правая">
+          <header class="cam-head">
+            <h3>Задняя правая</h3>
             <span class="cam-chip" id="cam4-chip">нет сигнала</span>
           </header>
           <div class="cam-viewport" id="cam4-view">
