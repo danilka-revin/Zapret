@@ -274,8 +274,101 @@ def test_env_file_change_is_picked_up_by_other_process(manager, tmp_path):
     manager._env_mtime = 0.0
     manager._env_checked = 0.0
     assert manager._sync_settings_from_env_file() is True
+    # Профиль LDS-01 добирает незаданные ключи: без RC_LIDAR_SOURCE лидар
+    # читается драйвером ROS 2 (это и есть «всё через ROS-драйвер»).
     assert manager.current_settings() == {
-        "source": "auto", "port": "/dev/ttyUSB7", "protocol": "lds01",
+        "source": "ros", "port": "/dev/ttyUSB7", "protocol": "lds01",
         "baud": "230400", "motor": "none", "autoprobe": False,
     }
     assert manager._sync_settings_from_env_file() is False
+
+
+# --- Профиль LDS-01 (TurtleBot3 Burger) ------------------------------------ #
+#
+# Робот ездит с LDS-01, и скан отдаёт драйвер ROS 2 (hls_lfcd_lds_driver).
+# Профиль должен собирать это из одного ключа, чтобы порт лидара не открывало
+# само приложение: иначе драйвер и пульт отбирают друг у друга USB-адаптер.
+
+LDS01_EXPECTED = {"source": "ros", "port": "", "protocol": "lds01",
+                  "baud": "230400", "motor": "none", "autoprobe": False}
+
+
+def test_lds01_preset_fills_all_settings_at_once():
+    assert lidar.normalize_lidar_settings({"preset": "lds01"}) == LDS01_EXPECTED
+    # Название модели в любом написании — это тот же профиль.
+    for name in ("lds-01", "turtlebot3", "HLS-LFCD2", " LDS_02 "):
+        assert lidar.normalize_lidar_settings({"preset": name}) == LDS01_EXPECTED
+
+
+def test_lds01_preset_keeps_explicit_fields():
+    """Профиль — база, а явно переданные поля (порт, источник) главнее."""
+    saved = lidar.normalize_lidar_settings({
+        "preset": "lds01", "source": "serial",
+        "port": "/dev/serial/by-id/usb-lidar"})
+    assert saved["port"] == "/dev/serial/by-id/usb-lidar"
+    assert saved["source"] == "serial"
+    assert saved["protocol"] == "lds01" and saved["baud"] == "230400"
+
+
+def test_unknown_preset_is_refused_with_hint():
+    with pytest.raises(ValueError, match="Профиль"):
+        lidar.normalize_lidar_settings({"preset": "lds07"})
+
+
+def test_protocol_lds01_in_env_means_ros_driver(monkeypatch):
+    """Одного RC_LIDAR_PROTOCOL=lds01 достаточно: ROS 2, 230400, мотор не трогаем."""
+    assert lidar.lidar_settings_from_env({"RC_LIDAR_PROTOCOL": "lds01"}) == LDS01_EXPECTED
+    # Явный выбор оператора по-прежнему главнее профиля.
+    serial = lidar.lidar_settings_from_env({
+        "RC_LIDAR_PROTOCOL": "lds01", "RC_LIDAR_SOURCE": "serial",
+        "RC_LIDAR_PORT": "/dev/ttyUSB0"})
+    assert serial["source"] == "serial" and serial["port"] == "/dev/ttyUSB0"
+
+
+def test_other_protocols_do_not_get_lds01_defaults():
+    settings = lidar.lidar_settings_from_env({"RC_LIDAR_PROTOCOL": "rplidar"})
+    assert settings["source"] == "auto" and settings["motor"] == "auto"
+    assert settings["baud"] == ""
+
+
+def test_preset_is_saved_to_env_as_ros_driver(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("RC_SECRET_KEY=secret\n", encoding="utf-8")
+    saved = save_lidar_settings({"preset": "lds01"}, env_path=env)
+    assert saved == LDS01_EXPECTED
+    text = env.read_text(encoding="utf-8")
+    assert "RC_LIDAR_SOURCE=ros" in text
+    assert "RC_LIDAR_PROTOCOL=lds01" in text
+    assert "RC_LIDAR_BAUD=230400" in text
+    assert "RC_LIDAR_MOTOR=none" in text
+    assert "RC_LIDAR_AUTOPROBE=0" in text
+    assert "RC_SECRET_KEY=secret" in text
+
+
+def test_preset_applied_to_manager_hands_the_port_to_ros(manager):
+    """После профиля менеджер не имеет права открывать порт — им владеет драйвер."""
+    applied = manager.reconfigure({"preset": "lds01"})
+    assert applied == LDS01_EXPECTED
+    assert manager.ros_holds_lidar() is True
+    assert manager._ros_owns_lidar() is True
+
+
+def test_panel_receives_the_lds01_preset():
+    presets = lidar.presets_for_panel()
+    lds = [item for item in presets if item["id"] == "lds01"]
+    assert lds and "LDS-01" in lds[0]["title"]
+    assert lds[0]["settings"] == {key: value for key, value in LDS01_EXPECTED.items()
+                                  if key != "port"}
+    assert "ROS 2" in lds[0]["note"] or "hls_lfcd_lds_driver" in lds[0]["note"]
+
+
+def test_startup_summary_names_the_lds01_profile(monkeypatch):
+    monkeypatch.setenv("RC_LIDAR_PROTOCOL", "lds01")
+    monkeypatch.delenv("RC_LIDAR_SOURCE", raising=False)
+    monkeypatch.delenv("RC_LIDAR_BAUD", raising=False)
+    monkeypatch.delenv("RC_LIDAR_MOTOR", raising=False)
+    monkeypatch.delenv("RC_LIDAR_AUTOPROBE", raising=False)
+    lines = lidar.startup_summary()
+    profile = [line for line in lines if line.startswith("профиль")]
+    assert profile and "LDS-01" in profile[0]
+    assert "ROS 2" in profile[0] and "230400" in profile[0]

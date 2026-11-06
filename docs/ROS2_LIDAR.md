@@ -16,6 +16,70 @@
 ./scripts/stop.sh && ./scripts/start_robot.sh # перезапустить всё (и лидар)
 ```
 
+## Лидар робота: LDS-01/LDS-02 от TurtleBot3 Burger
+
+На роботе стоит **LDS-01** (он же LDS-02, HLS-LFCD2) от TurtleBot3 Burger:
+кадры `0xFA`, **230400 бод**, 360 точек за оборот, ~5 Гц; вращение включает сам
+драйвер, линию DTR/RTS трогать не нужно. Скан отдаёт пакет ROS 2
+`hls_lfcd_lds_driver` (узел `hlds_laser_publisher`), а пульт и борт читают
+`/scan`. Порт лидара открывает **только драйвер** — приложение его не занимает.
+
+Одна команда настраивает всё под этот лидар (пишет профиль в `.env`, остальные
+строки файла не трогает) и показывает статус драйвера:
+
+```bash
+./scripts/lidar_lds01.sh            # профиль LDS-01 в .env + статус /scan
+./scripts/lidar_lds01.sh --start    # то же и сразу запустить драйвер
+./scripts/lidar_lds01.sh --status   # только статус: топик, частота, супервизор
+./scripts/lidar_lds01.sh --print    # только показать, что будет записано
+```
+
+Что попадает в `.env`:
+
+| Ключ | Значение | Почему |
+| --- | --- | --- |
+| `RC_LIDAR_SOURCE` | `ros` | скан из топика `/scan`; USB-порт приложение не открывает |
+| `RC_LIDAR_PROTOCOL` | `lds01` | модель известна: супервизор запускает именно `hls_lfcd_lds_driver`, без перебора |
+| `RC_LIDAR_BAUD` | `230400` | заводская скорость LDS-01/LDS-02 |
+| `RC_LIDAR_MOTOR` | `none` | вращение включает драйвер, линии переходника не трогаем |
+| `RC_LIDAR_AUTOPROBE` | `0` | чужие порты (шасси, мастер, BMS) не перебираем |
+
+То же самое доступно из панели «Лидар» кнопкой **«LDS-01 / LDS-02 (TurtleBot3
+Burger)»** — она заполняет поля, сохраняет оператор. И в API: `POST
+/api/lidar/settings` с телом `{"preset": "lds01"}` (бортовой экран — без PIN,
+пульт — после входа и с CSRF-токеном).
+
+Одного ключа в `.env` тоже достаточно: при `RC_LIDAR_PROTOCOL=lds01`
+незаданные `RC_LIDAR_SOURCE`/`RC_LIDAR_BAUD`/`RC_LIDAR_MOTOR`/`RC_LIDAR_AUTOPROBE`
+берутся из профиля модели. Явно заданные значения главнее профиля — например,
+`RC_LIDAR_SOURCE=serial` остаётся USB-режимом для отладки на столе.
+
+Проверить, что скан действительно идёт:
+
+```bash
+ros2 topic hz /scan              # ожидаемо ~5 Гц (300 об/мин)
+ros2 topic echo --once /zapret/lidar/status   # драйвер, порт, состояние
+./scripts/lidar_lds01.sh --status
+```
+
+В `GET /api/lidar` при этом видно `ros.source_mode="ros"`,
+`ros.holds_lidar=true` и `ros.usb_fallback=""` — то есть приложение порт не
+держит и не собирается. Если лидар подключён через плату OpenCR (заводская
+сборка TurtleBot3 Burger, порт `/dev/ttyACM*`), драйвер другой —
+`turtlebot3_node`: поставьте `RC_LIDAR_PROTOCOL=opencr` и профиль LDS-01 не
+применяйте.
+
+Если `/scan` молчит:
+
+1. `./scripts/ros2_setup.sh --status` — поставлен ли `hls_lfcd_lds_driver`
+   (кнопка «Запустить робот» ставит его сама);
+2. `./scripts/lidar_lds01.sh --status` — что говорит супервизор
+   (`ros.supervisor.reason`/`hint` в `GET /api/lidar`);
+3. права на порт: пользователь должен быть в группе `dialout`
+   (`sudo usermod -aG dialout "$USER"`, затем перелогиниться);
+4. порт занят другой программой: закройте старый `ros2 run hlds_laser_publisher`
+   или чужой скрипт, читающий `/dev/ttyUSB*`.
+
 ## Зачем это вместо чтения USB-порта приложением
 
 Раньше приложение само открывало USB-порт лидара и подбирало протокол, скорость
@@ -200,10 +264,10 @@ python3 ros2_ws/src/zapret_lidar/zapret_lidar/supervisor.py --list-drivers
 
 | Переменная | Значение | Смысл |
 | --- | --- | --- |
-| `RC_LIDAR_SOURCE` | `auto` | `auto` — ROS 2, если он есть, иначе USB; `ros` — только ROS 2; `serial` — только USB (приложением) |
+| `RC_LIDAR_SOURCE` | `auto` | `auto` — ROS 2, если он есть, иначе USB; `ros` — только ROS 2 (порт держит драйвер, приложение его не открывает); `serial` — только USB (приложением). При `RC_LIDAR_PROTOCOL=lds01` незаданное значение считается `ros` — профиль LDS-01 |
 | `RC_LIDAR_ROS_TOPIC` | `/scan` | топик скана, который слушают оба экрана |
 | `RC_LIDAR_ROS_GRACE_S` | `20` | сколько секунд в `auto` ждать скан из ROS 2, прежде чем вернуться к USB-порту; `0` — читать USB сразу |
-| `RC_LIDAR_PROTOCOL` | `auto` | в ROS 2-режиме это модель лидара: `lds01`, `rplidar`, `ld06`, `turtlebot3`… — супервизор запускает соответствующий пакет |
+| `RC_LIDAR_PROTOCOL` | `auto` | в ROS 2-режиме это модель лидара: `lds01`, `rplidar`, `ld06`, `turtlebot3`… — супервизор запускает соответствующий пакет. `lds01` ещё и профиль: незаданные `RC_LIDAR_SOURCE`/`RC_LIDAR_BAUD`/`RC_LIDAR_MOTOR`/`RC_LIDAR_AUTOPROBE` → `ros`/`230400`/`none`/`0` (`./scripts/lidar_lds01.sh`) |
 | `RC_LIDAR_PORT` | пусто | порт для драйвера; задаётся вручную на странице «Устройства» (`/devices`), автопоиск выключен |
 | `RC_LIDAR_BAUD` | пусто | скорость порта; пусто — по умолчанию драйвера |
 | `RC_LIDAR_ROS_STATUS_TOPIC` | `/zapret/lidar/status` | топик состояния супервизора |
@@ -234,6 +298,7 @@ python3 ros2_ws/src/zapret_lidar/zapret_lidar/supervisor.py --list-drivers
 | `на портах … не видно ни одного известного лидара` | лидар подключён к плате робота (OpenCR): задайте `--model opencr` или `RC_LIDAR_PROTOCOL=turtlebot3` |
 | ROS 2 поставлен сам, а лидара на обоих экранах нет | в `auto` приложение ждёт драйвер `RC_LIDAR_ROS_GRACE_S` (20 с), затем читает USB само: смотрите `ros.usb_fallback` в `GET /api/lidar` и причину на экране; если `RC_LIDAR_SOURCE=ros` выставлен вручную — верните `auto` |
 | скан идёт, но хочется старый путь | `RC_LIDAR_SOURCE=serial` (только USB) — прежнее чтение порта приложением целиком сохранено |
+| лидар LDS-01 (TurtleBot3 Burger), а скан идёт по USB | профиль не записан: `./scripts/lidar_lds01.sh`, затем перезапуск (`RC_LIDAR_SOURCE=ros`, `RC_LIDAR_PROTOCOL=lds01`); то же кнопкой в панели «Лидар» |
 
 Проверка «глазами ROS 2»:
 

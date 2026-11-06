@@ -210,6 +210,11 @@ if [[ $DO_PRINT -eq 1 ]]; then
 fi
 
 if [[ -z "$PREFIX" ]]; then
+  if [[ $DO_STATUS -eq 1 ]]; then
+    # --status — только чтение: он не должен ждать минуту и выходить из службы.
+    warn "ROS 2 не найден (поставить: ./scripts/ros2_setup.sh)"
+    exit 1
+  fi
   warn "ROS 2 не найден и сам не поставился (подробности: ./scripts/ros2_setup.sh --status)"
   # Служба systemd перезапускает скрипт через 5 с — без паузы это был бы
   # бесконечный поток попыток установки.
