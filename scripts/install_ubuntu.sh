@@ -14,8 +14,8 @@
 #
 # Флаги:
 #   --no-run         установить, но не запускать приложение
-#   --autostart      включить systemd для обоих серверов и запуск ярлыка после входа;
-#                    точка доступа Wi-Fi — см. --ap-autostart
+#   --autostart      включить systemd для серверов и root-проверку ROS 2 перед
+#                    каждым запуском; ярлык после входа; Wi-Fi — см. --ap-autostart
 #   --systemd        то же, что --autostart (устаревшее имя флага)
 #   --ap             поднять на этой машине точку доступа Wi-Fi (робот сам раздаёт сеть)
 #   --ap-autostart   поднимать точку доступа и при каждой загрузке
@@ -165,6 +165,8 @@ fi
 if [[ $AUTOSTART -eq 1 ]]; then
   log "ставлю systemd-юнит и включаю автозапуск…"
   if command -v sudo >/dev/null 2>&1 && [[ $EUID -ne 0 ]]; then SUDO=sudo; else SUDO=; fi
+  $SUDO cp scripts/robot-ros2-setup.service /etc/systemd/system/
+  $SUDO sed -i "s|/opt/robot-control|$PWD|g" /etc/systemd/system/robot-ros2-setup.service
   for unit in robot-control robot-kiosk robot-kinect-depth; do
     $SUDO cp "scripts/$unit.service" /etc/systemd/system/
     $SUDO sed -i "s|/opt/robot-control|$PWD|g; s|User=robotctl|User=$LOGIN_USER|g; s|Group=robotctl|Group=$LOGIN_USER|g" \
@@ -181,7 +183,7 @@ if [[ $AUTOSTART -eq 1 ]]; then
     fi
   done
   $SUDO systemctl daemon-reload
-  $SUDO systemctl enable --now robot-control robot-kiosk robot-kinect-depth
+  $SUDO systemctl enable --now robot-ros2-setup robot-control robot-kiosk robot-kinect-depth
   log "службы robot-control и robot-kiosk запущены (автозапуск включён)"
   # Лидар ROS 2 при автозапуске службами: ярлыка нет — супервизор поднимает
   # служба robot-lidar (её поставил ros2_setup.sh --service выше).

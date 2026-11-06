@@ -587,6 +587,9 @@ on_exit() {
   local status=$?
   [[ -n "$KEEPALIVE_PID" ]] && kill "$KEEPALIVE_PID" 2>/dev/null
   if [[ $EUID -eq 0 && "$OWNER_UID" != "0" ]]; then
+    # Root bootstrap may update RC_LIDAR_SOURCE in .env; return it to the
+    # application owner so the operator UI can still save later settings.
+    chown "$OWNER_UID" "$ROOT/.env" 2>/dev/null
     chown "$OWNER_UID" "$VAR_DIR" "$VAR_DIR"/ros2_* "$LOG_FILE"* "$STATE_FILE" "$LOCK_FILE" 2>/dev/null
   fi
   if [[ -n "$TEE_PID" ]]; then
@@ -1285,8 +1288,10 @@ install_service() {
   user="${SUDO_USER:-$(id -un "$OWNER_UID" 2>/dev/null || id -un)}"
   log "ставлю службу robot-lidar (лидар поднимается до приложений)…"
   # systemd запускает скрипт напрямую: без бита исполнения — 203/EXEC.
-  chmod +x scripts/ros2_lidar.sh scripts/ros2_setup.sh 2>/dev/null || true
-  as_root cp scripts/robot-lidar.service /etc/systemd/system/ || { warn "служба не скопировалась"; return 0; }
+  chmod +x scripts/ros2_lidar.sh scripts/ros2_setup.sh scripts/ros2_bootstrap.sh 2>/dev/null || true
+  as_root cp scripts/robot-ros2-setup.service /etc/systemd/system/ || { warn "служба предпроверки ROS 2 не скопировалась"; return 0; }
+  as_root sed -i "s|/opt/robot-control|$ROOT|g" /etc/systemd/system/robot-ros2-setup.service
+  as_root cp scripts/robot-lidar.service /etc/systemd/system/ || { warn "служба лидара не скопировалась"; return 0; }
   as_root sed -i "s|/opt/robot-control|$ROOT|g; s|User=robotctl|User=$user|g; s|Group=robotctl|Group=$user|g" \
     /etc/systemd/system/robot-lidar.service
   as_root systemctl daemon-reload

@@ -1,0 +1,20 @@
+# Privileged one-shot preflight. App services only get pulled in after this
+# check/install has completed; a failed install does not prevent the web UI
+# from starting because the application units use Wants=, not Requires=.
+[Unit]
+Description=Check and install ROS 2 lidar support for the robot
+Wants=network-online.target
+After=network-online.target
+Before=robot-control.service robot-kiosk.service robot-lidar.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/robot-control
+EnvironmentFile=-/opt/robot-control/.env
+ExecStart=/bin/bash /opt/robot-control/scripts/ros2_bootstrap.sh
+# A first-time source build can take a long time on small robot hardware.
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
