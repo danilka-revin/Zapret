@@ -63,19 +63,32 @@
   function cardCode(role) {
     return role.includes('_') ? role.split('_')[1] : ({lidar: 'LID', kinect: '3D', printer: 'PRN', bms: 'BMS'}[role] || 'USB');
   }
+  // Один физический порт — одна строка. Сервер уже отдаёт список без
+  // псевдонимов by-id/by-path, но два источника (/api/devices и
+  // /api/devices/ports) могут назвать тот же порт по-разному: сверяем и путь
+  // узла, и стабильные псевдонимы, и номер USB-порта.
+  function optionKeys(option) {
+    const keys = [];
+    for (const key of ['device', 'port', 'byId', 'byPath']) {
+      const value = option && option[key];
+      if (value) keys.push(String(value).toLowerCase());
+    }
+    return keys;
+  }
   function combinedOptions(kind) {
     const out = [], seen = new Set();
     for (const source of [portsOptions, snapshotOptions]) {
       for (const option of (source && source[kind]) || []) {
-        if (!option || !option.port || seen.has(option.port)) continue;
-        seen.add(option.port); out.push(option);
+        if (!option || !option.port) continue;
+        const keys = optionKeys(option);
+        if (!keys.length || keys.some(key => seen.has(key))) continue;
+        keys.forEach(key => seen.add(key));
+        out.push(option);
       }
     }
     return out;
   }
-  // Списки портов показывают ВСЁ, что подключено, а не только подходящий тип:
-  // оператор видит полную картину USB, а подходящий тип идёт первым.
-  const KIND_TITLES = {serial: 'последовательный', video: 'видео', usb: 'USB',
+  const KIND_TITLES = {serial: 'последовательный', video: 'видео', usb: 'только USB',
     printer: 'принтер (USB)'};
   const KIND_ORDER = ['serial', 'video', 'usb', 'printer'];
   function kindFor(role) {
@@ -87,41 +100,125 @@
     const out = [], seen = new Set();
     for (const kind of KIND_ORDER) {
       for (const option of combinedOptions(kind)) {
-        const key = String(option.port).toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
+        const keys = optionKeys(option);
+        if (!keys.length || keys.some(key => seen.has(key))) continue;
+        keys.forEach(key => seen.add(key));
         out.push(Object.assign({}, option, {kind, kindTitle: KIND_TITLES[kind]}));
       }
     }
     return out;
   }
+  function kindRank(kind, preferred) {
+    if (kind === preferred) return -1;
+    const index = KIND_ORDER.indexOf(kind);
+    return index < 0 ? KIND_ORDER.length : index;
+  }
+  // Порядок: подходящий тип, затем остальные — и внутри типа по физическому
+  // порту. Так группы в списке идут подряд, а не перемешиваются.
   function optionsFor(role) {
     const preferred = kindFor(role);
     return allOptions().sort((a, b) => {
-      if ((a.kind === preferred) !== (b.kind === preferred)) return a.kind === preferred ? -1 : 1;
+      const rankA = kindRank(a.kind, preferred), rankB = kindRank(b.kind, preferred);
+      if (rankA !== rankB) return rankA - rankB;
       if ((a.exists !== false) !== (b.exists !== false)) return a.exists !== false ? -1 : 1;
-      return String(a.port).localeCompare(String(b.port));
+      return String(a.usbPort || '').localeCompare(String(b.usbPort || ''), 'ru', {numeric: true});
     });
   }
-  function optionLabel(option) {
-    return [option.name, option.kindTitle, option.kinect ? 'Kinect' : '',
-      option.exists === false ? 'не подключено' : 'подключено'].filter(Boolean).join(' · ');
+  // Подпись начинается с реального порта: «1-2.1 · ttyUSB0 · CH340». Длинный
+  // by-id остаётся значением для .env и подсказкой, а не текстом строки.
+  function optionLabel(option, preferred) {
+    const where = option.usbPort ? option.usbPort + ' · ' : '';
+    const node = option.device && option.device !== option.port ? option.device : '';
+    const parts = [where + (node || option.port), option.name,
+      option.kinect && !/kinect/i.test(String(option.name || '')) ? 'Kinect' : '',
+      option.kind !== preferred ? option.kindTitle : '',
+      option.exists === false ? 'не подключено' : ''];
+    return parts.filter(Boolean).join(' · ');
+  }
+  function optionHint(option) {
+    const parts = ['Сохранится: ' + option.port];
+    if (option.byId && option.byId !== option.port) parts.push('by-id ' + option.byId);
+    if (option.byPath && option.byPath !== option.port) parts.push('by-path ' + option.byPath);
+    if (option.connection) parts.push(option.connection);
+    return parts.join(' · ');
+  }
+  // Общий список выбора для карточки и для четырёх портов колёс.
+  function buildPicker(id, title, onPick) {
+    const pick = element('select', 'port-pick');
+    pick.id = id;
+    pick.setAttribute('aria-label', 'Найденный порт: ' + title);
+    pick.addEventListener('change', () => { if (pick.value) onPick(pick.value); });
+    return pick;
+  }
+  function fillPicker(pick, options, preferred) {
+    if (!pick) return;
+    const key = JSON.stringify([preferred, options.map(o => [o.port, o.exists])]);
+    if (pick.dataset.key === key) return;
+    pick.dataset.key = key;
+    const previous = pick.value;
+    pick.replaceChildren();
+    const idle = element('option', '', '— выберите порт —');
+    idle.value = '';
+    pick.appendChild(idle);
+    if (!options.length) {
+      const none = element('option', '', 'подключённых портов нет');
+      none.value = '';
+      none.disabled = true;
+      pick.appendChild(none);
+      return;
+    }
+    let group = null, groupKind = '';
+    for (const option of options) {
+      if (option.kind !== groupKind) {
+        groupKind = option.kind;
+        group = document.createElement('optgroup');
+        group.label = (option.kind === preferred ? 'Подходящие · ' : '') +
+          (KIND_TITLES[groupKind] || groupKind);
+        pick.appendChild(group);
+      }
+      const node = document.createElement('option');
+      node.value = option.port;
+      node.textContent = optionLabel(option, preferred);
+      node.title = optionHint(option);
+      if (option.exists === false) node.dataset.missing = '1';
+      group.appendChild(node);
+    }
+    pick.value = previous && [...pick.options].some(o => o.value === previous) ? previous : '';
   }
   function renderFound() {
     const node = $('ports-found');
     if (!node) return;
     const all = allOptions();
+    const list = $('ports-found-list');
+    if (list) {
+      list.replaceChildren();
+      for (const option of all) {
+        const row = element('li', 'ports-found-row');
+        row.dataset.kind = option.kind;
+        row.appendChild(element('span', 'ports-found-port',
+          (option.usbPort ? option.usbPort + ' · ' : '') + (option.device || option.port)));
+        row.appendChild(element('span', 'ports-found-name', option.name || option.kindTitle));
+        row.appendChild(element('span', 'ports-found-kind', option.kindTitle));
+        if (option.exists === false) {
+          row.appendChild(element('span', 'ports-found-missing', 'не подключено'));
+        }
+        row.title = optionHint(option);
+        list.appendChild(row);
+      }
+    }
     if (!all.length) {
       node.textContent = 'Подключённых портов не найдено. Проверьте USB-кабели, питание и права ' +
         'dialout; список обновляется каждые 2,5 с и при «Обновить».';
       node.dataset.tone = 'warn';
       return;
     }
+    const present = all.filter(option => option.exists !== false).length;
     const parts = KIND_ORDER.map(kind => [kind, all.filter(o => o.kind === kind).length])
       .filter(([, count]) => count > 0)
       .map(([kind, count]) => KIND_TITLES[kind] + ' ' + count);
-    node.textContent = 'Подключено портов: ' + all.length + ' · ' + parts.join(' · ') +
-      '. В каждом списке показаны все порты, подходящий тип — первым.';
+    node.textContent = 'Найдено физических портов: ' + present + ' (всего строк ' + all.length +
+      ' · ' + parts.join(' · ') + '). Один порт — одна строка: /dev/ttyUSB0 и его ' +
+      'псевдонимы by-id/by-path не повторяются.';
     node.dataset.tone = 'good';
   }
   function placeholderFor(role) {
@@ -130,21 +227,8 @@
     return '/dev/serial/by-id/…';
   }
   function updateOptions(card) {
-    if (!card.datalist) return; // у колёс общий блок портов, своего списка нет
-    const options = optionsFor(card.role);
-    const key = JSON.stringify(options);
-    if (card.optionsKey === key) return;
-    card.optionsKey = key;
-    card.datalist.replaceChildren();
-    const seen = new Set();
-    for (const option of options) {
-      if (!option || !option.port || seen.has(option.port)) continue;
-      seen.add(option.port);
-      const node = document.createElement('option');
-      node.value = option.port;
-      node.label = optionLabel(option);
-      card.datalist.appendChild(node);
-    }
+    if (!card.pick) return; // у колёс свои списки в блоке портов
+    fillPicker(card.pick, optionsFor(card.role), kindFor(card.role));
   }
 
   function buildCard(item) {
@@ -197,21 +281,34 @@
     card.remembered = element('p', 'remembered'); body.appendChild(card.remembered);
     if (!role.startsWith('wheel_')) {
       const form = card.form = element('form', 'hint-form');
-      const label = element('label', 'hint-label', 'Назначить порт');
       const inputId = 'hint-' + role;
+      // 1. Выбор из найденных портов: один пункт на физический порт.
+      const pickLabel = element('label', 'hint-label', 'Найденные порты');
+      const pickId = 'pick-' + role;
+      pickLabel.htmlFor = pickId;
+      form.appendChild(pickLabel);
+      card.pick = buildPicker(pickId, item.name, value => {
+        card.input.value = value;
+        card.dirty = true;
+        card.message.textContent = 'Порт выбран: проверьте путь и нажмите «Сохранить».';
+      });
+      form.appendChild(card.pick);
+      // 2. Точный путь для .env: by-id или узел, вписанный вручную.
+      const label = element('label', 'hint-label', 'Порт для .env');
       label.htmlFor = inputId; form.appendChild(label);
       const row = element('div', 'hint-row');
       card.input = element('input');
       card.input.id = inputId; card.input.type = 'text'; card.input.autocomplete = 'off';
       card.input.spellcheck = false; card.input.maxLength = 256;
       card.input.placeholder = placeholderFor(role);
-      const listId = 'options-' + role;
-      card.input.setAttribute('list', listId);
-      card.input.addEventListener('input', () => { card.dirty = true; });
-      card.datalist = element('datalist'); card.datalist.id = listId;
+      card.input.addEventListener('input', () => {
+        card.dirty = true;
+        // Ручная правка снимает выбор: список больше не утверждает, что порт тот же.
+        if (card.pick && card.pick.value !== card.input.value.trim()) card.pick.value = '';
+      });
       card.save = element('button', 'save', 'Сохранить'); card.save.type = 'submit';
       card.clear = element('button', 'clear', 'Сброс'); card.clear.type = 'button';
-      row.append(card.input, card.save, card.clear); form.append(row, card.datalist);
+      row.append(card.input, card.save, card.clear); form.append(row);
       card.message = element('p', 'hint-message'); card.message.setAttribute('role', 'status');
       form.appendChild(card.message);
       async function save(port) {
@@ -290,6 +387,13 @@
       const label = element('label', 'wheel-slot');
       label.htmlFor = 'wheel-slot-' + index;
       label.appendChild(element('span', 'wheel-slot-title', 'Порт ' + index));
+      const pick = buildPicker('wheel-pick-' + index, 'колесо ' + index, value => {
+        const input = $('wheel-slot-' + index);
+        if (!input) return;
+        input.value = value;
+        input.dataset.dirty = '1';
+      });
+      label.appendChild(pick);
       const input = element('input');
       input.id = 'wheel-slot-' + index;
       input.type = 'text';
@@ -297,8 +401,10 @@
       input.spellcheck = false;
       input.maxLength = 256;
       input.placeholder = '/dev/serial/by-id/…';
-      input.setAttribute('list', 'wheel-slots-options');
-      input.addEventListener('input', () => { input.dataset.dirty = '1'; });
+      input.addEventListener('input', () => {
+        input.dataset.dirty = '1';
+        if (pick.value !== input.value.trim()) pick.value = '';
+      });
       label.appendChild(input);
       holder.appendChild(label);
     }
@@ -316,16 +422,9 @@
   // Список портов для колёс не зависит от ответа /api/devices/ports: на пульте
   // 8080 он может быть недоступен, а порты из /api/devices уже известны.
   function renderWheelOptions() {
-    const list = $('wheel-slots-options');
-    if (list) {
-      list.replaceChildren();
-      for (const option of optionsFor('wheels')) {
-        if (!option || !option.port) continue;
-        const node = document.createElement('option');
-        node.value = option.port;
-        node.label = optionLabel(option);
-        list.appendChild(node);
-      }
+    const options = optionsFor('wheels');
+    for (let index = 1; index <= 4; index += 1) {
+      fillPicker($('wheel-pick-' + index), options, 'serial');
     }
     renderFound();
   }

@@ -275,81 +275,247 @@ def save_role(role: str, port: str, env_path: Path | None = None) -> str:
 
 
 # ------------------------------------------------------------- список портов #
-def _serial_options() -> list[dict[str, Any]]:
-    """Все последовательные порты машины. Список только для выбора, не для назначения."""
-    seen: dict[str, dict[str, Any]] = {}
-    descriptions: dict[str, Any] = {}
-    try:
-        from serial.tools import list_ports
-        for item in list_ports.comports():
-            descriptions[_real(item.device)] = item
-    except Exception:  # noqa: BLE001 — без pyserial список остаётся пустым/glob
-        descriptions = {}
-    paths: list[str] = []
-    for pattern in ("/dev/serial/by-id/*", "/dev/serial/by-path/*", "/dev/ttyUSB*", "/dev/ttyACM*"):
-        paths.extend(sorted(glob.glob(pattern)))
-    for role_port_value in list(wheel_ports()) + list(assignments().values()):
-        if role_port_value.startswith("/dev/") and role_port_value not in paths:
-            paths.append(role_port_value)
-    for path in paths:
-        real = _real(path)
-        if real in seen:
-            continue
-        item = descriptions.get(real)
-        name = " · ".join(part for part in (getattr(item, "manufacturer", None),
-                                            getattr(item, "product", None)) if part and part != "n/a")
-        seen[real] = {"port": path, "name": name or (item.description if item else "") or "",
-                      "exists": os.path.exists(path)}
-    return list(seen.values())
+#
+# Один физический USB-порт — одна строка списка. В /dev одно и то же устройство
+# видно трижды: /dev/ttyUSB0, /dev/serial/by-id/… и /dev/serial/by-path/…, а
+# ещё раз — как USB-устройство в топологии. Оператору нужен реальный порт,
+# поэтому:
+#
+# * источник списка — USB-топология (sysfs): узел tty/video и его физический
+#   порт (``usbPort`` = ``1-2.1``);
+# * ``port`` — стабильный путь для .env (by-id, если он есть), ``device`` —
+#   настоящий узел /dev/ttyUSB0;
+# * by-id/by-path никогда не попадают в список отдельными строками: это
+#   псевдонимы одного и того же порта;
+# * устройства, у которых есть tty/video-узел, не дублируются в списке
+#   «только USB» — там остаются те, что адресуются исключительно топологией
+#   (Kinect).
+
+SERIAL_NODE_RE = re.compile(r"^/dev/tty(?:USB|ACM)\d+$")
 
 
-def _video_options(registry=None) -> list[dict[str, Any]]:
+def _usb_port_key(value: str) -> tuple:
+    """Порядок физических портов: 1-1, 1-2.1, 2-1 — по числам, а не по строкам."""
+    text = re.sub(r"^usb", "", str(value or ""))
+    if not text:
+        return (1, 0, ())
+    bus, _, chain = text.partition("-")
     try:
-        from .camera_settings import candidate_video_paths, stable_camera_path
-        paths = list(candidate_video_paths())
-    except Exception:  # noqa: BLE001 — настройки не должны падать
-        stable_camera_path = lambda value: value  # noqa: E731
-        paths = sorted(glob.glob("/dev/video*"))
-    # Дополнительно показываем видеопорты из USB-топологии: на некоторых
-    # сборках by-id нет, и glob /dev/video* ничего не находит.
+        number = int(bus)
+    except ValueError:
+        return (1, 0, ())
     try:
-        topology = registry.usb() if registry is not None else None
-        for device in (topology or {}).get("devices", []):
-            for node in device.get("nodes", []):
-                if node.get("kind") == "video" and node.get("path") not in paths:
-                    paths.append(node["path"])
-    except Exception:  # noqa: BLE001 — список остаётся тем, что нашли
+        rest = tuple(int(piece) for piece in chain.split(".") if piece)
+    except ValueError:
+        rest = ()
+    return (0, number, rest)
+
+
+def _device_name(device: dict) -> str:
+    """Человеческое имя устройства: «CH340 · USB Serial», а не vid:pid."""
+    parts = [str(device.get(key) or "").strip() for key in ("manufacturer", "product")]
+    parts = [part for part in parts if part and part.lower() != "n/a"]
+    if parts:
+        return " · ".join(dict.fromkeys(parts))
+    return str(device.get("vidPid") or "USB-устройство")
+
+
+def _alias(node: dict, folder: str) -> str:
+    """Стабильный псевдоним узла (by-id/by-path), если udev его создал."""
+    for alias in node.get("aliases") or ():
+        if str(alias).startswith(folder):
+            return str(alias)
+    return ""
+
+
+def _topology(registry=None) -> dict:
+    """Снимок USB-топологии: из реестра устройства, иначе прямо из sysfs."""
+    try:
+        snapshot = registry.usb() if registry is not None else None
+        if isinstance(snapshot, dict) and snapshot:
+            return snapshot
+    except Exception:  # noqa: BLE001 — без sysfs список соберётся по /dev
         pass
-    unique: dict[str, dict[str, Any]] = {}
-    for path in paths:
-        real = _real(path)
-        if real in unique:
-            continue
-        stable = stable_camera_path(path) or path
-        unique[real] = {"port": stable, "name": "V4L2", "exists": os.path.exists(stable)}
-    return list(unique.values())
-
-
-def _usb_options(registry=None) -> list[dict[str, Any]]:
     try:
-        topology = registry.usb() if registry is not None else None
-        if not topology:
-            from .device_registry import KINECT_CAMERA_IDS, UsbTopology
-            topology = UsbTopology().collect()
-    except Exception:  # noqa: BLE001 — без sysfs список пуст
-        return []
-    from .device_registry import KINECT_CAMERA_IDS
-    out = []
-    for device in topology.get("devices", []):
+        from .device_registry import UsbTopology
+        return UsbTopology().collect()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _topology_nodes(topology: dict, kind: str):
+    """Живые узлы нужного типа: (устройство, узел). Хабы пропускаются."""
+    for device in (topology or {}).get("devices") or []:
         if device.get("isHub"):
             continue
+        for node in device.get("nodes") or []:
+            if node.get("kind") == kind:
+                yield device, node
+
+
+def _assigned_serial_ports() -> list[str]:
+    """Назначенные последовательные порты (только они, без видеопортов)."""
+    values: list[str] = []
+    for value in list(wheel_ports()) + list(assignments().values()):
+        if value and SERIAL_RE.fullmatch(value):
+            values.append(value)
+    return values
+
+
+def _serial_options(topology: dict | None = None) -> list[dict[str, Any]]:
+    """Последовательные порты: одна строка на физический USB-порт."""
+    if topology is None:
+        topology = _topology()
+    options: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(option: dict[str, Any]) -> None:
+        """Один порт — одна строка: сравниваем и путь узла, и его псевдонимы."""
+        names = [option.get(key) for key in ("port", "device", "byId", "byPath")]
+        names = [str(name) for name in names if name]
+        if not names:
+            return
+        keys = set(names) | {_real(name) for name in names}
+        if keys & seen:
+            return
+        seen.update(keys)
+        options.append(option)
+
+    for device, node in _topology_nodes(topology, "serial"):
+        real = str(node.get("path") or "")
+        by_id = _alias(node, "/dev/serial/by-id/")
+        by_path = _alias(node, "/dev/serial/by-path/")
+        add({"port": by_id or by_path or real, "device": real,
+             "name": _device_name(device), "usbPort": str(device.get("topology") or ""),
+             "vidPid": str(device.get("vidPid") or ""), "index": "",
+             "byId": by_id, "byPath": by_path,
+             "connection": str(device.get("connection") or ""),
+             "exists": os.path.exists(real)})
+
+    # Без sysfs (контейнер, старая сборка) — то, что сообщает pyserial. Путь
+    # узла может отличаться от ttyUSB0 только в экзотике, и это тоже порт.
+    try:
+        from serial.tools import list_ports
+        reported = list(list_ports.comports())
+    except Exception:  # noqa: BLE001 — нет pyserial, останется glob
+        reported = []
+    for item in reported:
+        real = str(getattr(item, "device", "") or "")
+        if not real or real in seen:
+            continue
+        hwid = str(getattr(item, "hwid", "") or "")
+        usb_port = str(getattr(item, "location", "") or "").split(":")[0]
+        # /dev/ttyS0…31 живут на самой плате и к USB не относятся: их место в
+        # списке — только если это настоящий USB-переходник.
+        if not SERIAL_NODE_RE.fullmatch(real) and "USB" not in hwid.upper():
+            continue
+        name = " · ".join(part for part in (getattr(item, "manufacturer", None),
+                                            getattr(item, "product", None))
+                          if part and part != "n/a")
+        vid_pid = ""
+        match = re.search(r"VID:PID=([0-9A-Fa-f]{4}:[0-9A-Fa-f]{4})", hwid)
+        if match:
+            vid_pid = match.group(1).lower()
+        add({"port": real, "device": real, "name": name or str(item.description or ""),
+             "usbPort": usb_port, "vidPid": vid_pid,
+             "index": "", "byId": "", "byPath": "", "connection": "",
+             "exists": os.path.exists(real)})
+
+    for real in sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")):
+        add({"port": real, "device": real, "name": "последовательный порт",
+             "usbPort": "", "vidPid": "", "index": "", "byId": "", "byPath": "",
+             "connection": "", "exists": True})
+
+    # Назначенное, но отключённое: видно как «не подключено», а не пропадает.
+    for value in _assigned_serial_ports():
+        by_id = value if value.startswith("/dev/serial/by-id/") else ""
+        by_path = value if value.startswith("/dev/serial/by-path/") else ""
+        add({"port": value, "device": value, "name": "назначено в настройках",
+             "usbPort": "", "vidPid": "", "index": "", "byId": by_id, "byPath": by_path,
+             "connection": "", "exists": os.path.exists(value)})
+
+    options.sort(key=lambda option: (_usb_port_key(option.get("usbPort")),
+                                     str(option.get("device") or "")))
+    return options
+
+
+def _video_options(topology: dict | None = None) -> list[dict[str, Any]]:
+    """Видеопорты: одна строка на узел камеры, by-id/by-path — псевдонимы."""
+    if topology is None:
+        topology = _topology()
+    options: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(option: dict[str, Any]) -> None:
+        names = [option.get(key) for key in ("port", "device", "byId", "byPath")]
+        names = [str(name) for name in names if name]
+        if not names:
+            return
+        keys = set(names) | {_real(name) for name in names}
+        if keys & seen:
+            return
+        seen.update(keys)
+        options.append(option)
+
+    for device, node in _topology_nodes(topology, "video"):
+        real = str(node.get("path") or "")
+        by_id = _alias(node, "/dev/v4l/by-id/")
+        by_path = _alias(node, "/dev/v4l/by-path/")
+        add({"port": by_id or by_path or real, "device": real,
+             "name": _device_name(device), "usbPort": str(device.get("topology") or ""),
+             "vidPid": str(device.get("vidPid") or ""),
+             "index": str(node.get("index") or ""), "byId": by_id, "byPath": by_path,
+             "connection": str(device.get("connection") or ""),
+             "exists": os.path.exists(real)})
+
+    # Запасной путь: нет /sys/class/video4linux — берём V4L2-узлы из /dev.
+    try:
+        from .camera_settings import candidate_video_paths, stable_camera_path
+        for path in candidate_video_paths():
+            real = _real(path)
+            if real in seen:
+                continue
+            add({"port": stable_camera_path(path) or real, "device": real, "name": "V4L2",
+                 "usbPort": "", "vidPid": "", "index": "", "byId": "",
+                 "byPath": "", "connection": "", "exists": os.path.exists(real)})
+    except Exception:  # noqa: BLE001 — список остаётся тем, что нашли
+        pass
+
+    options.sort(key=lambda option: (_usb_port_key(option.get("usbPort")),
+                                     str(option.get("device") or "")))
+    return options
+
+
+def _usb_options(topology: dict | None = None) -> list[dict[str, Any]]:
+    """Устройства без tty/video-узла: их можно задать только топологией (Kinect)."""
+    from .device_registry import KINECT_CAMERA_IDS
+    if topology is None:
+        topology = _topology()
+    out = []
+    for device in (topology or {}).get("devices") or []:
+        # Устройство с tty/video-узлом уже есть в своём списке: второй раз как
+        # usb:1-2 оно только путает — одно железо, две строки.
+        listed = [node for node in device.get("nodes") or ()
+                  if node.get("kind") in ("serial", "video")]
+        if device.get("isHub") or listed:
+            continue
         out.append({"port": "usb:" + str(device.get("topology")),
+                    "device": "usb:" + str(device.get("topology")),
                     "name": device.get("product") or "USB-устройство",
+                    "usbPort": str(device.get("topology") or ""),
+                    "vidPid": device.get("vidPid"), "index": "", "byId": "", "byPath": "",
                     "note": device.get("connection") or "",
-                    "vidPid": device.get("vidPid"),
                     "kinect": device.get("vidPid") in KINECT_CAMERA_IDS,
-                    "exists": True})
+                    "connection": device.get("connection") or "", "exists": True})
+    out.sort(key=lambda option: _usb_port_key(option.get("usbPort")))
     return out
+
+
+def options(registry=None) -> dict[str, list[dict[str, Any]]]:
+    """Списки портов для выбора; топология читается один раз на все три списка."""
+    topology = _topology(registry)
+    return {"serial": _serial_options(topology), "video": _video_options(topology),
+            "usb": _usb_options(topology)}
 
 
 def payload(registry=None, wheel_status: dict | None = None,
@@ -368,8 +534,7 @@ def payload(registry=None, wheel_status: dict | None = None,
             "assigned": bool(port),
             "note": ROLE_ENV_HINTS.get(role, "Отдельный порт этой камеры."),
         }
-    options = {"serial": _serial_options(), "video": _video_options(registry),
-               "usb": _usb_options(registry)}
+    ports_options = options(registry)
     return {
         "ok": True,
         "manual": True,
@@ -384,5 +549,5 @@ def payload(registry=None, wheel_status: dict | None = None,
             "error": status.get("error"),
         },
         "roles": roles,
-        "options": options,
+        "options": ports_options,
     }

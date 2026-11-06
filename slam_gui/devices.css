@@ -251,7 +251,23 @@ h1 { margin: 0; font-size: clamp(24px, 2.5vw, 32px); line-height: 1.15; letter-s
 .confirm { width: 100%; margin-top: 8px; padding: 9px; }
 .refresh:hover, .save:hover, .confirm:hover, .clear:hover { border-color: #d58c94; }
 .hint-form { margin-top: auto; padding-top: 13px; border-top: 1px solid var(--line-2); }
-.hint-label { color: #d0c3c7; font-size: 12px; font-weight: 700; }
+.hint-label { display: block; color: #d0c3c7; font-size: 12px; font-weight: 700; }
+.hint-form > .hint-label + .port-pick { margin: 7px 0 10px; }
+/* Выбор из найденных портов: один пункт на физический порт, без by-id-дублей. */
+.port-pick {
+  min-width: 0;
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 10px;
+  border: 1px solid #54494d;
+  border-radius: 9px;
+  background: #09090a;
+  color: var(--text);
+  font: 12px var(--mono);
+}
+.port-pick:focus-visible { outline: 2px solid #7a5a62; outline-offset: 1px; }
+.port-pick option[data-missing="1"] { color: #8d7f84; }
+.wheel-slot .port-pick { min-height: 36px; font-size: 11.5px; }
 .hint-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; margin-top: 7px; }
 .hint-row input {
   min-width: 0;
@@ -413,7 +429,36 @@ footer b { color: #c9bec1; }
   .ports-block { padding: 14px; }
 }
 
-/* Найдено портов: в каждом списке видны все подключённые порты. */
+/* Реальные USB-порты: одна строка на физическое устройство. */
+.ports-found-list {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+.ports-found-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.2fr) auto auto;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #121113;
+  font-size: 12px;
+}
+.ports-found-port { overflow-wrap: anywhere; font-family: var(--mono); color: #e6dbdf; }
+.ports-found-name { overflow-wrap: anywhere; color: #cdc2c6; }
+.ports-found-kind { color: var(--faint); font-size: 10.5px; letter-spacing: .04em;
+  text-transform: uppercase; }
+.ports-found-missing { color: var(--amber); font-size: 11px; }
+@media (max-width: 900px) {
+  .ports-found-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .ports-found-name, .ports-found-kind { display: none; }
+}
+
+/* Найдено портов: одна строка на физический порт, подходящий тип — первым. */
 .ports-found { margin: 0 0 14px; color: var(--faint); font-size: 12px; line-height: 1.5; }
 .ports-found[data-tone="good"] { color: #cfc3c7; }
 .ports-found[data-tone="warn"] { color: var(--amber); }

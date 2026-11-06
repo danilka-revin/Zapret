@@ -142,3 +142,135 @@ def test_device_page_offers_manual_ports_and_no_camera_modal(kiosk_client):
     screen = kiosk_client.get("/kiosk").get_data(as_text=True)
     assert "cam-settings-modal" not in screen
     assert "/devices" in screen  # ссылка на единственное место настройки
+
+
+# ------------------- список портов: реальные USB-порты, без дублей ------------------- #
+def node(path, kind, aliases=(), index=""):
+    return {"path": path, "kind": kind, "aliases": list(aliases), "interface": "1.0",
+            "index": index, "name": ""}
+
+
+def usb(topology, vidpid, nodes=(), product="USB device", manufacturer="Maker", hub=False):
+    return {"topology": topology, "vidPid": vidpid, "serial": "", "manufacturer": manufacturer,
+            "product": product, "class": "09" if hub else "00", "interfaces": [],
+            "busPath": "", "nodes": list(nodes), "connection": "через хаб · 1-2",
+            "parent": "1-2", "isHub": hub}
+
+
+class FakeRegistry:
+    """Реестр устройств, у которого есть только снимок USB-топологии."""
+
+    def __init__(self, devices):
+        self.devices = devices
+        self.calls = 0
+
+    def usb(self, refresh=False):
+        self.calls += 1
+        return {"available": True, "devices": self.devices, "collectedAt": 1000}
+
+
+def no_pyserial(monkeypatch):
+    """Убрать pyserial из списка: проверяем именно топологию, а не /dev машины."""
+    import serial.tools.list_ports as list_ports
+    monkeypatch.setattr(list_ports, "comports", lambda: [])
+
+
+def two_ports_topology():
+    return FakeRegistry([
+        usb("1-2.1", "1a86:7523", [node("/dev/ttyUSB0", "serial", [
+            "/dev/serial/by-id/usb-1a86_A-if00-port0",
+            "/dev/serial/by-path/pci-0:1.2-port0"])], product="CH340"),
+        usb("1-2.2", "1a86:7523", [node("/dev/ttyUSB1", "serial", [
+            "/dev/serial/by-id/usb-1a86_B-if00-port0"])], product="CH340"),
+        usb("1-4", "046d:0843", [node("/dev/video0", "video",
+                                     ["/dev/v4l/by-id/usb-Cam"], index="0")], product="Camera"),
+        usb("1-6", "045e:02ae", product="Kinect"),
+    ])
+
+
+def test_serial_list_has_one_row_per_physical_port(monkeypatch):
+    """by-id/by-path — псевдонимы одного порта, а не отдельные строки списка."""
+    no_pyserial(monkeypatch)
+    monkeypatch.setenv(ports.WHEEL_ENV_KEY, "/dev/ttyUSB0,/dev/serial/by-path/pci-0:1.2-port0")
+    options = ports._serial_options(ports._topology(two_ports_topology()))
+    assert [option["device"] for option in options] == ["/dev/ttyUSB0", "/dev/ttyUSB1"]
+    first = options[0]
+    assert first["port"] == "/dev/serial/by-id/usb-1a86_A-if00-port0"  # путь для .env
+    assert first["usbPort"] == "1-2.1"                                 # реальный USB-порт
+    assert first["byPath"] == "/dev/serial/by-path/pci-0:1.2-port0"
+    assert first["name"] == "Maker · CH340"
+    # Назначенный by-path не добавил вторую строку того же порта.
+    assert len({option["port"] for option in options}) == 2
+
+
+def test_offboard_uart_ports_are_not_offered(monkeypatch):
+    """/dev/ttyS0…31 живут на плате и к USB не относятся — их в списке нет."""
+    import types
+    import serial.tools.list_ports as list_ports
+
+    def port(device, hwid, description="n/a", manufacturer=None, product=None,
+             location=""):
+        return types.SimpleNamespace(device=device, hwid=hwid, description=description,
+                                     manufacturer=manufacturer, product=product,
+                                     location=location, interface=None)
+
+    def fake_comports():
+        return [
+            port("/dev/ttyS0", ""),                       # встроенный UART платы
+            port("/dev/ttyS4", "PNP0501"),
+            port("/dev/ttyUSB5", "USB VID:PID=1A86:7523", description="USB Serial",
+                 manufacturer="Maker", product="CH340", location="1-3:1.0"),
+        ]
+
+    monkeypatch.setattr(list_ports, "comports", fake_comports)
+    options = ports._serial_options({"available": True, "devices": []})
+    assert [option["device"] for option in options] == ["/dev/ttyUSB5"]
+    assert options[0]["usbPort"] == "1-3"
+    assert options[0]["vidPid"] == "1a86:7523"
+
+
+def test_usb_only_list_does_not_repeat_devices_with_a_node(monkeypatch):
+    """Колесо уже есть как tty-порт: второй раз как usb:1-2 оно только путает."""
+    no_pyserial(monkeypatch)
+    registry = two_ports_topology()
+    usb_options = ports._usb_options(ports._topology(registry))
+    assert [option["port"] for option in usb_options] == ["usb:1-6"]
+    assert usb_options[0]["kinect"] is True
+
+
+def test_camera_assignment_does_not_leak_into_the_serial_list(monkeypatch):
+    """Видеопорт камеры раньше попадал в список последовательных портов."""
+    no_pyserial(monkeypatch)
+    monkeypatch.setenv("RC_CAMERA_FRONT", "/dev/video0")
+    options = ports._serial_options(ports._topology(two_ports_topology()))
+    assert all(option["device"].startswith("/dev/tty") for option in options)
+    assert "/dev/video0" not in [option["port"] for option in options]
+
+
+def test_ports_are_sorted_by_physical_usb_port(monkeypatch):
+    no_pyserial(monkeypatch)
+    registry = FakeRegistry([
+        usb("1-10", "1a86:7523", [node("/dev/ttyUSB2", "serial")], product="CH340"),
+        usb("1-9", "1a86:7523", [node("/dev/ttyUSB1", "serial")], product="CH340"),
+        usb("2-1", "1a86:7523", [node("/dev/ttyUSB0", "serial")], product="CH340"),
+    ])
+    options = ports._serial_options(ports._topology(registry))
+    assert [option["usbPort"] for option in options] == ["1-9", "1-10", "2-1"]
+
+
+def test_disconnected_assignment_stays_visible_but_marked(monkeypatch):
+    no_pyserial(monkeypatch)
+    monkeypatch.setenv("RC_LIDAR_PORT", "/dev/ttyUSB7")
+    options = ports._serial_options({"available": True, "devices": []})
+    assert [option["port"] for option in options] == ["/dev/ttyUSB7"]
+    assert options[0]["exists"] is False
+
+
+def test_payload_reads_the_topology_once(monkeypatch):
+    """Три списка — один снимок sysfs: страница обновляется каждые 2,5 с."""
+    no_pyserial(monkeypatch)
+    registry = two_ports_topology()
+    payload = ports.payload(registry=registry)
+    assert registry.calls == 1
+    assert len(payload["options"]["serial"]) == 2
+    assert set(payload["options"]) == {"serial", "video", "usb"}  # ключи из devices.js
