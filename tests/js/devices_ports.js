@@ -180,7 +180,11 @@ function foundRows() {
     port: (row.children[0] || {}).textContent || '',
     name: (row.children[1] || {}).textContent || '',
     kind: (row.children[2] || {}).textContent || '',
-    missing: (row.children[3] || {}).textContent || '',
+    // Владелец и «не подключено» — отдельные ячейки, порядок зависит от порта.
+    owner: (row.children.find((cell) => /назначен:/.test(cell.textContent || '')) || {})
+      .textContent || '',
+    missing: (row.children.find((cell) => /не подключено/.test(cell.textContent || '')) || {})
+      .textContent || '',
   }));
 }
 

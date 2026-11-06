@@ -131,12 +131,18 @@
     const node = option.device && option.device !== option.port ? option.device : '';
     const parts = [where + (node || option.port), option.name,
       option.kinect && !/kinect/i.test(String(option.name || '')) ? 'Kinect' : '',
+      // Порт, уже занятый другим устройством, виден до нажатия «Сохранить».
+      option.ownerTitle ? 'занят: ' + option.ownerTitle : '',
       option.kind !== preferred ? option.kindTitle : '',
       option.exists === false ? 'не подключено' : ''];
     return parts.filter(Boolean).join(' · ');
   }
   function optionHint(option) {
     const parts = ['Сохранится: ' + option.port];
+    if (option.ownerEnv) {
+      parts.push('Уже назначен: ' + option.ownerTitle + ' (' + option.ownerEnv +
+        ') — сначала «Сброс» там');
+    }
     if (option.byId && option.byId !== option.port) parts.push('by-id ' + option.byId);
     if (option.byPath && option.byPath !== option.port) parts.push('by-path ' + option.byPath);
     if (option.connection) parts.push(option.connection);
@@ -199,6 +205,9 @@
           (option.usbPort ? option.usbPort + ' · ' : '') + (option.device || option.port)));
         row.appendChild(element('span', 'ports-found-name', option.name || option.kindTitle));
         row.appendChild(element('span', 'ports-found-kind', option.kindTitle));
+        if (option.ownerTitle) {
+          row.appendChild(element('span', 'ports-found-owner', 'назначен: ' + option.ownerTitle));
+        }
         if (option.exists === false) {
           row.appendChild(element('span', 'ports-found-missing', 'не подключено'));
         }

@@ -2416,37 +2416,58 @@ class MasterSource:
                         not (result and result[0] == fingerprint) and
                         not occupied and not spawning)
 
-    def operator_assigned_port_allowed(self, path, role):
-        """Explicit manual assignment is the operator's confirmation for one role.
+    def operator_assignment_allowed(self, path, role):
+        """Новое назначение порта оператором на странице «Устройства».
 
-        Used only where the operator personally assigned the port on the
-        Devices screen (BMS, printer, lidar). The port must still be present,
-        must not be one of the wheel ports and must not be opened as a wheel.
-        Silence/VID/PID are never treated as proof of the device type.
+        ``operator_assigned_port_allowed`` требует, чтобы порт уже лежал в .env
+        под этой ролью. Для назначения это замкнутый круг: запись в .env идёт
+        только после проверки, а проверка ждала запись. Поэтому здесь само
+        назначение и есть подтверждение оператора, а сверяется лишь то, что
+        известно до записи: порт существует, USB-отпечаток читается, это не
+        порт колеса и не порт лидара, и прямо сейчас его никто не читает.
+        Тип устройства по молчанию или VID/PID по-прежнему не угадывается.
         """
         if not path or not role:
             return False
         try:
             from robot_control.device_ports import role_port, wheel_ports
-        except Exception:                     # noqa: BLE001 — without config: deny
-            return False
-        assigned = role_port(role)
-        if not assigned:
+        except Exception:                     # noqa: BLE001 — без конфигурации: отказ
             return False
         real = os.path.realpath(path)
-        if os.path.realpath(assigned) != real:
-            return False
         if not os.path.exists(path) or self._device_fingerprint(path) is None:
             return False
         wheels = {os.path.realpath(p) for p in wheel_ports() if p}
         if real in wheels:
             return False
+        lidar = role_port("lidar")
+        if lidar and os.path.realpath(lidar) == real and role != "lidar":
+            return False
         with self.lock:
             occupied = any(link.device == real for link in self.links.values())
             spawning = any(os.path.realpath(p) == real for p in self._spawning)
-            if occupied or spawning:
-                return False
-        return True
+        return not (occupied or spawning)
+
+    def operator_assigned_port_allowed(self, path, role):
+        """Explicit manual assignment is the operator's confirmation for one role.
+
+        Used only where the operator personally assigned the port on the
+        Devices screen (BMS, printer, lidar) and the assignment is already
+        saved. The port must still be present, must not be one of the wheel
+        ports and must not be opened as a wheel. Silence/VID/PID are never
+        treated as proof of the device type.
+        """
+        if not path or not role:
+            return False
+        try:
+            from robot_control.device_ports import role_port
+        except Exception:                     # noqa: BLE001 — without config: deny
+            return False
+        assigned = role_port(role)
+        if not assigned:
+            return False
+        if os.path.realpath(assigned) != os.path.realpath(path):
+            return False
+        return self.operator_assignment_allowed(path, role)
 
     def reserve_manual_lidar_probe(self, path, fingerprint):
         """Prevent a passive rescan while the explicit, locked LDS test runs."""

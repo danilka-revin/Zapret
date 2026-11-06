@@ -32,6 +32,8 @@ WHEEL_TITLES = {"FL": "Переднее левое", "FR": "Переднее п�
 
 #: Один ключ на четыре порта: роли колёс определяет прошивка, а не порядок.
 WHEEL_ENV_KEY = "RC_WHEEL_PORTS"
+#: Порт модуля датчиков задаётся вручную (на /devices этой роли нет).
+SENSOR_ENV_KEY = "RC_SENSOR_PORT"
 WHEEL_SLOTS = 4
 
 #: Роль страницы → ключ .env (первый ключ — тот, что пишется).
@@ -70,6 +72,17 @@ ROLE_ENV_HINTS: dict[str, str] = {
     "kinect": "USB-топология Kinect (usb:1-2). Публикатор глубины читает её при запуске.",
     "bms": "Порт USB-UART BMS (JBD). Сохраняется в .env и применяется сразу.",
     "printer": "Порт USB-UART принтера. Подтверждается физически и сразу включается.",
+}
+
+#: Кому принадлежит порт — так и пишем в ошибке, а не «занят».
+OWNER_TITLES: dict[str, str] = {
+    "wheel_1": "колесо 1", "wheel_2": "колесо 2", "wheel_3": "колесо 3", "wheel_4": "колесо 4",
+    "camera_FL": "камера FL", "camera_FR": "камера FR", "camera_RL": "камера RL",
+    "camera_RR": "камера RR",
+    "lidar": "лидар", "kinect": "Kinect", "bms": "BMS", "printer": "принтер",
+    # Не роль страницы: порт модуля датчиков задаётся вручную в .env, но занят он
+    # так же, как остальные, — иначе BMS/принтер могли занять его молча.
+    "sensors": "модуль датчиков",
 }
 
 SERIAL_RE = re.compile(r"^/dev/(?:tty(?:USB|ACM|AMA)\d+|serial/by-(?:id|path)/[A-Za-z0-9_.:+-]+)$")
@@ -152,6 +165,36 @@ def assigned_ports(except_role: str | None = None) -> dict[str, str]:
         port = role_port(role)
         if port:
             out[role] = port
+    sensors = env_value(SENSOR_ENV_KEY)
+    if sensors and except_role != "sensors":
+        out["sensors"] = sensors
+    return out
+
+
+def owner_title(role: str) -> str:
+    """Название устройства для сообщений оператору."""
+    return OWNER_TITLES.get(role, role or "?")
+
+
+def owner_env(role: str) -> str:
+    """Ключ .env, где живёт это назначение (чтобы было понятно, что править)."""
+    if role.startswith("wheel_"):
+        return WHEEL_ENV_KEY
+    if role == "sensors":
+        return SENSOR_ENV_KEY
+    keys = ROLE_ENV.get(role) or ()
+    return keys[0] if keys else ""
+
+
+def owners() -> dict[str, str]:
+    """realpath порта → роль, которой он назначен прямо сейчас."""
+    out: dict[str, str] = {}
+    for index, value in enumerate(wheel_ports()):
+        if value:
+            out[_real(value)] = "wheel_%d" % (index + 1)
+    for role, value in assignments().items():
+        if value:
+            out.setdefault(_real(value), role)
     return out
 
 
@@ -186,7 +229,8 @@ def validate(role: str, port: str) -> str:
         raise PortError("Выберите USB-порт /dev/ttyUSB…, /dev/ttyACM… или /dev/serial/…")
     owner = assignment_owner(port, except_role="wheels" if role == "wheels" else role)
     if owner:
-        raise PortError("Этот порт уже назначен другому устройству: %s" % owner)
+        raise PortError("Порт уже занят: он назначен — %s (%s). Освободите его там кнопкой "
+                        "«Сброс» и назначьте заново." % (owner_title(owner), owner_env(owner)))
     return port
 
 
@@ -208,7 +252,9 @@ def validate_wheels(ports: Iterable[Any]) -> list[str]:
         seen.add(real)
         owner = assignment_owner(value, except_role="wheels")
         if owner:
-            raise PortError("Порт %d уже назначен другому устройству: %s" % (index + 1, owner))
+            raise PortError("Порт %d уже занят: он назначен — %s (%s). Освободите его там "
+                            "кнопкой «Сброс» и назначьте заново."
+                            % (index + 1, owner_title(owner), owner_env(owner)))
     return values
 
 
@@ -511,11 +557,25 @@ def _usb_options(topology: dict | None = None) -> list[dict[str, Any]]:
     return out
 
 
+def _mark_owners(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Пометить порты, уже занятые другим устройством: видно до нажатия «Сохранить»."""
+    known = owners()
+    for row in rows:
+        real = _real(str(row.get("device") or row.get("port") or ""))
+        role = known.get(real)
+        if role:
+            row["owner"] = role
+            row["ownerTitle"] = owner_title(role)
+            row["ownerEnv"] = owner_env(role)
+    return rows
+
+
 def options(registry=None) -> dict[str, list[dict[str, Any]]]:
     """Списки портов для выбора; топология читается один раз на все три списка."""
     topology = _topology(registry)
-    return {"serial": _serial_options(topology), "video": _video_options(topology),
-            "usb": _usb_options(topology)}
+    return {"serial": _mark_owners(_serial_options(topology)),
+            "video": _mark_owners(_video_options(topology)),
+            "usb": _mark_owners(_usb_options(topology))}
 
 
 def payload(registry=None, wheel_status: dict | None = None,

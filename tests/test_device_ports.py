@@ -266,6 +266,41 @@ def test_disconnected_assignment_stays_visible_but_marked(monkeypatch):
     assert options[0]["exists"] is False
 
 
+def test_conflict_names_the_owner_and_how_to_free_it(monkeypatch):
+    """«Порт занят» без имени владельца — бесполезно: оператор знает, что это BMS."""
+    monkeypatch.setenv("RC_LIDAR_PORT", SERIAL_A)
+    with pytest.raises(ports.PortError) as excinfo:
+        ports.validate("bms", SERIAL_A)
+    message = str(excinfo.value)
+    assert "уже занят" in message
+    assert "лидар" in message and "RC_LIDAR_PORT" in message
+    assert "Сброс" in message            # что именно нажать, чтобы освободить
+
+    monkeypatch.setenv(ports.WHEEL_ENV_KEY, SERIAL_B + ",,,")
+    with pytest.raises(ports.PortError, match="колесо 1"):
+        ports.validate("bms", SERIAL_B)
+
+
+def test_sensor_module_port_is_reserved_too(monkeypatch):
+    """Порт модуля датчиков задан в .env вручную — BMS/принтер не должны его занять."""
+    monkeypatch.setenv("RC_SENSOR_PORT", SERIAL_B)
+    with pytest.raises(ports.PortError, match="модуль датчиков"):
+        ports.validate("bms", SERIAL_B)
+    assert ports.assignment_owner(SERIAL_B) == "sensors"
+    assert ports.owner_env("sensors") == "RC_SENSOR_PORT"
+
+
+def test_options_mark_ports_owned_by_another_device(monkeypatch):
+    no_pyserial(monkeypatch)
+    monkeypatch.setenv("RC_LIDAR_PORT", "/dev/ttyUSB0")
+    rows = ports.options(registry=two_ports_topology())["serial"]
+    by_device = {row["device"]: row for row in rows}
+    assert by_device["/dev/ttyUSB0"]["owner"] == "lidar"
+    assert by_device["/dev/ttyUSB0"]["ownerTitle"] == "лидар"
+    assert by_device["/dev/ttyUSB0"]["ownerEnv"] == "RC_LIDAR_PORT"
+    assert "owner" not in by_device["/dev/ttyUSB1"]
+
+
 def test_payload_reads_the_topology_once(monkeypatch):
     """Три списка — один снимок sysfs: страница обновляется каждые 2,5 с."""
     no_pyserial(monkeypatch)
