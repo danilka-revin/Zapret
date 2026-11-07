@@ -22,6 +22,11 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 ROOT="$PWD"
+# Direct/manual invocations get the same persistent diagnostics as systemd and
+# the application watchdog. The logger sets this flag to prevent recursion.
+if [[ "${RC_LIDAR_LOG_ACTIVE:-0}" != "1" && -x "$ROOT/scripts/lidar_log.sh" ]]; then
+  exec bash "$ROOT/scripts/lidar_log.sh" bash "$ROOT/scripts/ros2_lidar.sh" "$@"
+fi
 
 MODEL=""
 PORT=""
@@ -234,6 +239,57 @@ if [[ -n "$WS_SETUP" ]]; then
   . "$WS_SETUP" >/dev/null || warn "не удалось выполнить source $WS_SETUP"
 fi
 set -u
+
+# Развёрнутый preflight пишется перед каждой попыткой старта. Особенно полезен
+# при запуске через systemd, когда нет терминала и причина ошибки иначе теряется.
+diagnostics() {
+  printf '\n[lidar-diag] ===== preflight %s =====\n' "$(date --iso-8601=seconds 2>/dev/null || date)"
+  printf '[lidar-diag] root=%s uid=%s groups=%s\n' "$ROOT" "$(id -u)" "$(id -Gn 2>/dev/null || true)"
+  printf '[lidar-diag] model=%s port=%s baud=%s scan_topic=%s status_topic=%s source=%s\n' \
+    "$MODEL" "${PORT:-автопоиск}" "${BAUD:-авто}" "$SCAN_TOPIC" "$STATUS_TOPIC" "${RC_LIDAR_SOURCE:-auto}"
+  printf '[lidar-diag] ROS_DISTRO=%s prefix=%s workspace=%s engine=%s\n' \
+    "${ROS_DISTRO:-не задан}" "$PREFIX" "${WS_SETUP:-исходники}" "$ENGINE"
+  printf '[lidar-diag] RC_USB_DISCOVERY_MODE=%s discovery_dir=%s lock_dir=%s\n' \
+    "${RC_USB_DISCOVERY_MODE:-не задан}" "${RC_USB_DISCOVERY_DIR:-не задан}" "${RC_USB_LOCK_DIR:-не задан}"
+  local py
+  py="$(python_bin)"
+  printf '[lidar-diag] python=%s version=%s\n' "$py" "$("$py" --version 2>&1 || echo unavailable)"
+  if "$py" -c 'import rclpy; print("rclpy=" + str(getattr(rclpy, "__file__", "ok")))' 2>&1; then :
+  else printf '[lidar-diag] ERROR: rclpy недоступен в выбранном Python\n'; fi
+  if "$py" -c 'import serial; print("pyserial=" + str(getattr(serial, "__version__", "ok")))' 2>&1; then :
+  else printf '[lidar-diag] WARNING: pyserial не импортируется в выбранном Python\n'; fi
+  local device found=0
+  if [[ -n "$PORT" ]]; then
+    if [[ -e "$PORT" ]]; then
+      found=1
+      printf '[lidar-diag] configured_port=%s access(read=%s write=%s) ' "$PORT" \
+        "$([[ -r "$PORT" ]] && echo yes || echo no)" "$([[ -w "$PORT" ]] && echo yes || echo no)"
+      stat -Lc 'device=%n mode=%A owner=%U:%G' "$PORT" 2>&1 || true
+    else
+      printf '[lidar-diag] ERROR: настроенный порт %s отсутствует\n' "$PORT"
+    fi
+  fi
+  local candidate
+  for candidate in /dev/serial/by-id/* /dev/ttyUSB* /dev/ttyACM*; do
+    [[ -e "$candidate" ]] || continue
+    found=1
+    printf '[lidar-diag] port_candidate=%s access(read=%s write=%s) ' "$candidate" \
+      "$([[ -r "$candidate" ]] && echo yes || echo no)" "$([[ -w "$candidate" ]] && echo yes || echo no)"
+    stat -Lc 'device=%n mode=%A owner=%U:%G' "$candidate" 2>&1 || true
+  done
+  [[ $found -eq 1 ]] || printf '[lidar-diag] WARNING: последовательные порты не обнаружены\n'
+  if have ros2; then
+    printf '[lidar-diag] installed lidar ROS packages:\n'
+    ros2 pkg list 2>&1 | grep -E '^(zapret_lidar|rplidar_ros|hls_lfcd_lds_driver|ldlidar_stl_ros2|turtlebot3_node)$' \
+      || printf '[lidar-diag] WARNING: ROS 2 CLI не видит пакеты драйверов лидара\n'
+  else
+    printf '[lidar-diag] ERROR: команда ros2 отсутствует в PATH после source\n'
+  fi
+  printf '[lidar-diag] command='
+  printf '%q ' "${CMD[@]}"
+  printf '\n[lidar-diag] ===== end preflight =====\n\n'
+}
+diagnostics
 
 # --- 5. режим проверки -------------------------------------------------------- #
 if [[ $DO_STATUS -eq 1 ]]; then

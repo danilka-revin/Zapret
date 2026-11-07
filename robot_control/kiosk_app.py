@@ -60,6 +60,7 @@ from werkzeug.serving import make_server
 
 from robot_control import estop as estop_latch
 from robot_control import eventlog
+from robot_control import lidar_boot
 from robot_control import shutdown
 from robot_control.camera import CameraManager
 from robot_control.config import PROJECT_ROOT, Config
@@ -1466,6 +1467,11 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             except Exception:  # noqa: BLE001 — источник может не уметь read()
                 scan = None
         return jsonify(lidar_status_payload(mgr, scan, demo))
+
+    @app.get("/api/lidar/logs")
+    def api_kiosk_lidar_logs():
+        """Журнал лидара на бортовом экране: только хвост фиксированных файлов."""
+        return jsonify(lidar_boot.read_logs(request.args.get("lines", 120)))
 
     @app.post("/api/lidar")
     @app.post("/api/scan")

@@ -153,10 +153,10 @@ def test_autostart_status_shows_what_starts_itself(fake_host, monkeypatch):
     result = run("autostart.sh", "status")
     assert result.returncode == 0, result.stderr
     out = result.stdout
-    # Пульт, бортовой экран, публикатор глубины Kinect и служба лидара ROS 2:
-    # последние попадают в список только если установлены на этой машине
-    # (фальшивый systemctl отвечает «установлена» на любой вызов `cat`).
-    assert out.count("автозапуск ВКЛЮЧЁН") == 4
+    # Предварительная подготовка ROS 2, пульт, бортовой экран, Kinect и лидар.
+    # Установленные systemd-службы попадают в список, если фиктивный systemctl
+    # отвечает «установлена» на запрос cat.
+    assert out.count("автозапуск ВКЛЮЧЁН") == 5
     assert "Kinect" in out and "лидар ROS 2" in out
     assert "ВКЛЮЧЁН" in out and str(entry) in out
     assert "автоподъём ВКЛЮЧЁН" in out

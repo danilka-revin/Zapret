@@ -42,3 +42,12 @@
 .rc-lidar-val{color:#c9b8be;font-variant-numeric:tabular-nums}
 .rc-lidar-view .rc-lidar-actions{justify-content:flex-start}
 @media(max-width:700px){.rc-lidar-grid2{grid-template-columns:1fr}}
+/* Журнал ROS 2 и автоподготовки лидара */
+.rc-lidar-logs{margin-top:14px;padding:10px 12px;border:1px solid #2a2428;border-radius:10px;background:#17171a}
+.rc-lidar-logs>summary{cursor:pointer;font-size:13px;font-weight:800;color:#f4f4f6}
+.rc-lidar-log-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0;color:#a2949a;font-size:11px}
+.rc-lidar-log-files{display:grid;gap:10px}
+.rc-lidar-log-file{min-width:0}
+.rc-lidar-log-file h3{margin:8px 0 4px;font-size:12px}
+.rc-lidar-log-file small{display:block;color:#a2949a;font-size:10px;overflow-wrap:anywhere}
+.rc-lidar-log-file pre{max-height:240px;overflow:auto;margin:5px 0 0;padding:9px;border:1px solid #2a2428;border-radius:7px;background:#0b0b0d;color:#ddd;font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}

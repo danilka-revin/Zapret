@@ -1793,6 +1793,12 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
                 scan = None
         return jsonify(lidar_status_payload(mgr, scan, demo))
 
+    @bp.get("/api/lidar/logs")
+    @guard
+    def api_lidar_logs():
+        """Ограниченные последние строки журналов лидара и ROS 2 setup."""
+        return jsonify(lidar_boot.read_logs(request.args.get("lines", 120)))
+
     @bp.post("/api/lidar")
     @bp.post("/api/scan")
     def api_lidar_post():

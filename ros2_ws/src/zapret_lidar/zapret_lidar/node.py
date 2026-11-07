@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -51,6 +52,13 @@ PROBE_PORT_LIMIT = 3
 
 def now() -> float:
     return time.time()
+
+
+def _has_module(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -210,6 +218,19 @@ class LidarSupervisor(Node):
             "супервизор лидара: топик %s, модель %s, порты: %s"
             % (self.scan_topic, self.model, ", ".join(self._ports()) or "автопоиск")
         )
+        self.get_logger().info(
+            "диагностика среды: ROS_PREFIX=%s AMENT_PREFIX_PATH=%s ROS_DISTRO=%s "
+            "ros2_cli=%s pyserial=%s autoprobe=%s baud_override=%s "
+            "probe_timeout=%.1fs scan_timeout=%.1fs"
+            % (self._ros_prefix() or "не найден", os.environ.get("AMENT_PREFIX_PATH", ""),
+               os.environ.get("ROS_DISTRO", "не задан"), self.ros2_cli() or "не найден",
+               _has_module("serial"), self.autoprobe, self.baud_override,
+               self.probe_timeout, self.scan_timeout)
+        )
+        self.get_logger().info(
+            "пакеты драйверов, видимые в ROS 2: %s"
+            % (", ".join(sorted(self.installed)) or "ни одного")
+        )
 
     # ------------------------------ утилиты -------------------------------- #
 
@@ -300,6 +321,14 @@ class LidarSupervisor(Node):
             scores=self._probe_scores, bauds=self._probe_bauds,
             baud_override=self.baud_override)
         self.plan_index = 0
+        self.get_logger().info(
+            "план лидара: ports=%s installed=%s probe=%s drivers=%s"
+            % (json.dumps(ports, ensure_ascii=False),
+               json.dumps(sorted(self.installed), ensure_ascii=False),
+               json.dumps(self.probes, ensure_ascii=False, sort_keys=True),
+               json.dumps([item.as_dict() for item in self.plan],
+                          ensure_ascii=False, sort_keys=True))
+        )
 
     def _should_probe(self, ports: list[str], *, force_probe: bool) -> bool:
         """Пора ли снова читать порты (не занимая порт работающего драйвера)."""
@@ -319,20 +348,30 @@ class LidarSupervisor(Node):
             item = self.plan[self.plan_index]
             self.plan_index += 1
             if not item.installed:
-                self._remember(item.driver.name, item.port,
-                               "пакет %s не установлен" % item.driver.package)
+                note = "пакет %s не установлен" % item.driver.package
+                self._remember(item.driver.name, item.port, note)
+                self.get_logger().warning("пропускаю %s: %s" % (item.driver.title, note))
                 continue
             if item.driver.needs_port and not item.port:
                 self._remember(item.driver.name, "", "порт не найден")
+                self.get_logger().warning("пропускаю %s: для драйвера не найден USB-порт"
+                                          % item.driver.title)
                 continue
             if self.launch(item):
                 return
             # Ошибка запуска (нет файла, порт исчез, нет прав) — не оставляем
             # узел в состоянии «starting» навсегда: сразу пробуем следующий
             # пункт плана, а затем уходим в failed и повторяем по таймеру.
+        previous_reason = self.reason
         self.state = "failed"
         self.reason = self._failure_reason()
         self.hint = self._failure_hint()
+        if previous_reason != self.reason:
+            self.get_logger().error(
+                "все попытки запуска исчерпаны: %s; рекомендация: %s; tried=%s; probes=%s"
+                % (self.reason, self.hint or "нет", json.dumps(self.tried[-8:], ensure_ascii=False),
+                   json.dumps(self.probes, ensure_ascii=False, sort_keys=True))
+            )
         # Пауза перед следующим пересмотром плана: без неё узел каждую секунду
         # заново перебирал бы пустой план (нет портов/пакетов) и грузил CPU.
         self._next_retry = now() + RETRY_PAUSE_S
@@ -370,8 +409,10 @@ class LidarSupervisor(Node):
                 if executable is not None:
                     break
         if executable is None and self.ros2_cli() is None:
-            self._remember(item.driver.name, item.port,
-                           "нет ни %s в lib/, ни команды ros2" % item.driver.executable)
+            note = "нет ни %s в lib/, ни команды ros2" % item.driver.executable
+            self._remember(item.driver.name, item.port, note)
+            self.get_logger().error("не могу запустить %s: %s; префиксы=%s"
+                                    % (item.driver.title, note, self._prefixes()))
             return False
         argv = drv.driver_command(item.driver, port=item.port, baud=item.baud,
                                   topic=self.scan_topic, frame_id=self.frame_id,
@@ -381,7 +422,12 @@ class LidarSupervisor(Node):
         token = usb_guard.claim(item.port) if item.driver.needs_port else -1
         if token is None or (item.driver.needs_port and not usb_guard.permitted(item.port)):
             usb_guard.release(token)
-            self._remember(item.driver.name, item.port, "порт занят или ещё не классифицирован")
+            note = "порт занят блокировкой или USB-discovery ещё не подтвердил лидар"
+            self._remember(item.driver.name, item.port, note)
+            self.get_logger().warning("пропускаю %s на %s: %s (discovery=%s, lock_dir=%s)"
+                                      % (item.driver.title, item.port, note,
+                                         usb_guard.enabled(),
+                                         os.environ.get("RC_USB_LOCK_DIR", "data")))
             return False
         self._port_lock = token
         try:
@@ -391,7 +437,10 @@ class LidarSupervisor(Node):
                 errors="replace",
             )
         except OSError as exc:
-            self._remember(item.driver.name, item.port, "не запустился: %s" % exc)
+            note = "не запустился: %s" % exc
+            self._remember(item.driver.name, item.port, note)
+            self.get_logger().error("не удалось создать процесс %s на %s: %s"
+                                    % (item.driver.title, item.port or "—", exc))
             self.process = None
             usb_guard.release(self._port_lock)
             self._port_lock = None

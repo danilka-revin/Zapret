@@ -31,6 +31,8 @@ WorkingDirectory=/opt/robot-control
 EnvironmentFile=-/opt/robot-control/.env
 # Скрипт сам выполняет source /opt/ros/<дистрибутив>/setup.bash и запускает
 # супервизор; модель и порт берутся из .env (RC_LIDAR_PROTOCOL/RC_LIDAR_PORT).
+# ros2_lidar.sh автоматически запускает lidar_log.sh: stdout/stderr попадают
+# в var/lidar.log и одновременно в journalctl.
 ExecStart=/opt/robot-control/scripts/ros2_lidar.sh
 Restart=on-failure
 RestartSec=5
