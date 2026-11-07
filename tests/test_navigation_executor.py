@@ -588,7 +588,10 @@ def test_measured_calibration_rejects_a_too_fast_setpoint(rig):
     assert fast.status()["diagnostics"]["checks"]["speedWithinLimit"] is False
 
 
-def test_calibration_is_not_assumed_when_value_is_missing(rig):
+def test_calibration_is_not_assumed_when_value_is_missing(rig, monkeypatch):
+    # .env на рабочем роботе содержит настоящий замер: для этой проверки
+    # «калибровки нет» её нужно действительно убрать.
+    monkeypatch.delenv("RC_NAV_MPS_PER_PERCENT", raising=False)
     service, _world, _source, _lidar, _robot = rig(mps_per_percent=None)
     checks = service.status()["diagnostics"]["checks"]
     assert checks["speedCalibrated"] is False

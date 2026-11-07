@@ -457,15 +457,50 @@ class BlindSpotMap(FakeMap):
 
 
 def test_blind_zone_moved_after_preview_requires_new_inspection_and_plan():
+    """Реальный сдвиг дальше осмотренного круга снова требует осмотра."""
     nav, mapping, source, _ = service(BlindSpotMap())
     body = {'goal': {'x': 2.5, 'y': 0}}
     first = nav.plan(body)['plan']
     assert first['manualBlindZone'] and first['blindInspectionRadiusM'] == 0.48
-    mapping.pose['x'] += 0.05
+    # 0,25 м — это уже не дрожание локализации: зона (0,30 м) выходит за
+    # осмотренный круг 0,48 м вокруг датчика, осмотр больше не покрывает её.
+    mapping.pose['x'] += 0.25
     with pytest.raises(NavigationError) as exc:
         nav.start({**body, 'blindZoneChecked': True})
     assert exc.value.code == 'plan_changed'
-    assert exc.value.details['plan']['blindZone']['x'] == pytest.approx(0.33)
+    assert exc.value.details['plan']['blindZone']['x'] == pytest.approx(0.53)
+    assert not source.moves and not nav.active
+
+
+def test_blind_zone_jitter_does_not_block_the_operators_start():
+    """Дрожание scan matching на виток не отменяет уже осмотренную зону.
+
+    Живой лидар уточняет позу на каждом витке: между «Построить маршрут» и
+    «Поехать» слепая зона честно смещается на сантиметры. Раньше это давало
+    бесконечный `plan_changed` и выехать было нельзя. Осмотр остаётся
+    действительным, пока зона целиком внутри осмотренного круга.
+    """
+    nav, mapping, source, _ = service(BlindSpotMap())
+    body = {'goal': {'x': 2.5, 'y': 0}}
+    first = nav.plan(body)['plan']
+    assert first['manualBlindZone']
+    mapping.pose['x'] += 0.05
+    payload, code = nav.start({**body, 'blindZoneChecked': True})
+    assert code == 202, payload
+    assert nav.active or source.moves
+    nav.cancel('тест завершён')
+    await_finished(nav)
+
+
+def test_blind_zone_still_needs_the_operators_check_without_confirmation():
+    """Сам по себе допуск не отменяет подтверждение осмотра оператором."""
+    nav, mapping, source, _ = service(BlindSpotMap())
+    body = {'goal': {'x': 2.5, 'y': 0}}
+    assert nav.plan(body)['plan']['manualBlindZone']
+    mapping.pose['x'] += 0.05
+    with pytest.raises(NavigationError) as exc:
+        nav.start(body)
+    assert exc.value.code == 'blind_zone_confirmation_required'
     assert not source.moves and not nav.active
 
 
@@ -480,7 +515,8 @@ def test_blind_zone_moved_during_stop_barrier_never_starts_driving():
         nonlocal moved
         result = original_brake()
         if not moved:
-            mapping.pose['x'] += 0.05
+            # Сдвиг за пределы осмотренного круга 0,48 м вокруг датчика.
+            mapping.pose['x'] += 0.25
             moved = True
         return result
 
@@ -488,7 +524,7 @@ def test_blind_zone_moved_during_stop_barrier_never_starts_driving():
     nav.start({**body, 'blindZoneChecked': True})
     state = await_finished(nav)
     assert state['phase'] == 'planned' and 'провер' in state['message'].lower()
-    assert state['plan']['blindZone']['x'] == pytest.approx(0.33)
+    assert state['plan']['blindZone']['x'] == pytest.approx(0.53)
     assert not source.moves and source.percent == 0
 
 

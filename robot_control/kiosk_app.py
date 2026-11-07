@@ -1380,6 +1380,16 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "error": "не удалось записать .env: %s" % exc}), 500
         eventlog.record("ok", "Геометрия сенсоров: сохранено полей %d" % len(result["savedKeys"]),
                         source="Калибровка")
+        # Тяговые ключи применяем сразу: иначе после сохранения замера и
+        # включения автотяги «Поехать» продолжало бы отказывать до перезапуска.
+        if any(key.startswith("RC_NAV_") for key in result["savedKeys"]):
+            try:
+                result["navigation"] = navigation.reload_drive_settings()
+                eventlog.record("ok", "Навигация: тяговые настройки перечитаны из .env",
+                                source="Калибровка")
+            except Exception as exc:  # noqa: BLE001 — сохранение .env уже состоялось
+                log.warning("калибровка: не удалось перечитать тяговые настройки: %s", exc)
+                result["navigation"] = {"ok": False, "reason": str(exc)[:160]}
         return jsonify(result)
 
     @app.get("/api/kiosk_logs")
