@@ -1065,8 +1065,11 @@ patch_sources() {
     cmake="$source_dir/CMakeLists.txt"
     [[ -f "$cmake" ]] || continue
     grep -q 'ament_target_dependencies[[:space:]]*(' "$cmake" || continue
-    grep -q 'function(ament_target_dependencies' "$cmake" && continue
-    log "$(basename "$source_dir"): добавляю совместимость с современным ROS 2 CMake API"
+    if grep -q 'function(ament_target_dependencies' "$cmake" \
+      && ! grep -q 'Compatibility for ROS 2 distributions that removed ament_target_dependencies' "$cmake"; then
+      continue
+    fi
+    log "$(basename "$source_dir"): добавляю/обновляю совместимость с современным ROS 2 CMake API"
     as_owner python3 - "$cmake" <<'PY'
 import pathlib
 import sys
@@ -1136,6 +1139,18 @@ if(NOT COMMAND ament_target_dependencies)
   endfunction()
 endif()
 '''
+marker = "# Compatibility for ROS 2 distributions that removed ament_target_dependencies."
+if marker in text:
+    # Upgrade the shim already injected by an earlier ros2_setup.sh release.
+    # Otherwise --rebuild would keep the stale package::package-only version.
+    if '_TARGETS${_suffix}' in text and '_imported_targets' in text:
+        raise SystemExit(0)
+    start = text.index(marker)
+    function_end = text.index("  endfunction()", start) + len("  endfunction()")
+    end = text.index("endif()", function_end) + len("endif()")
+    text = text[:start] + shim.lstrip("\n") + text[end:]
+    path.write_text(text, encoding="utf-8")
+    raise SystemExit(0)
 if anchor not in text:
     raise SystemExit("find_package(ament_cmake REQUIRED) not found in " + str(path))
 path.write_text(text.replace(anchor, anchor + shim, 1), encoding="utf-8")

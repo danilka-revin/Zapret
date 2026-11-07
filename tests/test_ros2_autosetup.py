@@ -384,6 +384,37 @@ def test_rplidar_source_build_has_rolling_cmake_compat_shim(system):
     assert "target_link_libraries" in cmake.read_text(encoding="utf-8")
 
 
+def test_existing_rolling_cmake_shim_is_upgraded(system):
+    """A rebuild must replace the stale shim already patched onto the robot."""
+    result = system.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    cmake = system.project / "ros2_ws/src/ldlidar_stl_ros2/CMakeLists.txt"
+    text = cmake.read_text(encoding="utf-8")
+    start = text.index("# Compatibility for ROS 2 distributions that removed ament_target_dependencies.")
+    function_end = text.index("  endfunction()", start) + len("  endfunction()")
+    end = text.index("endif()", function_end) + len("endif()")
+    old_shim = '''# Compatibility for ROS 2 distributions that removed ament_target_dependencies.
+if(NOT COMMAND ament_target_dependencies)
+  function(ament_target_dependencies target)
+    foreach(dependency IN LISTS ARGN)
+      if(TARGET "${dependency}::${dependency}")
+        target_link_libraries("${target}" PRIVATE "${dependency}::${dependency}")
+      else()
+        message(FATAL_ERROR
+          "No imported CMake target for dependency ${dependency} (${target})")
+      endif()
+    endforeach()
+  endfunction()
+endif()'''
+    cmake.write_text(text[:start] + old_shim + text[end:], encoding="utf-8")
+
+    upgraded = system.run()
+    assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
+    updated = cmake.read_text(encoding="utf-8")
+    assert "${dependency}_TARGETS${_suffix}" in updated
+    assert "IMPORTED_TARGETS" in updated
+
+
 @pytest.mark.skipif(shutil.which("cmake") is None, reason="CMake is not installed")
 def test_rolling_cmake_shim_links_rosidl_exported_targets(tmp_path):
     """Run the generated shim against old-style ROSIDL target export variables."""
