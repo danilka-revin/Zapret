@@ -104,9 +104,14 @@ def test_web_settings_api_requires_login_csrf_and_applies(client, app, operator,
         lambda payload: saved.update(payload) or {
             "ok": True, "settings": manager.reconfigure(payload),
             "status": manager.get_status()})
+    monkeypatch.setattr("robot_control.slam.lidar_boot.read_logs",
+                        lambda lines=120, root=None: {"ok": True, "files": [], "lines": 120})
     try:
         assert client.get("/api/lidar/settings").status_code == 302
+        assert client.get("/api/lidar/logs").status_code == 302
         assert login(client).status_code == 302
+        logs = client.get("/api/lidar/logs?lines=40")
+        assert logs.status_code == 200 and logs.get_json()["ok"] is True
         page = client.get("/api/lidar/settings")
         assert page.status_code == 200
         body = page.get_json()
@@ -133,8 +138,12 @@ def test_kiosk_lidar_settings_and_rescan_are_available_without_pin(config, monke
         "robot_control.kiosk_app.apply_lidar_settings",
         lambda payload: {"ok": True, "settings": manager.reconfigure(payload),
                          "status": manager.get_status()})
+    monkeypatch.setattr("robot_control.kiosk_app.lidar_boot.read_logs",
+                        lambda lines=120, root=None: {"ok": True, "files": [], "lines": 120})
     try:
         client = create_kiosk_app(config).test_client()
+        logs = client.get("/api/lidar/logs?lines=40")
+        assert logs.status_code == 200 and logs.get_json()["ok"] is True
         page = client.get("/api/lidar/settings")
         assert page.status_code == 200
         assert page.get_json()["requiresPin"] is False

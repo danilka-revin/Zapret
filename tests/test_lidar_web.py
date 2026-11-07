@@ -730,6 +730,7 @@ def test_lds01_scan_reaches_both_screens_over_http(monkeypatch, client, operator
     thread = threading.Thread(target=device, daemon=True)
     thread.start()
 
+    monkeypatch.setenv("RC_LIDAR_SOURCE", "serial")
     monkeypatch.setenv("RC_LIDAR_PORT", port)
     monkeypatch.setenv("RC_LIDAR_PROTOCOL", "lds01")
     monkeypatch.setenv("RC_LIDAR_BAUD", "230400")

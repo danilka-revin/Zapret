@@ -9,6 +9,7 @@
   let csrfToken = '';
   let opened = false;
   let statusTimer = null;
+  let logTimer = null;
 
   async function getJson(url, init) {
     const response = await fetch(url, { cache: 'no-store', ...(init || {}) });
@@ -143,6 +144,15 @@
             <button type="button" class="rc-lidar-btn" id="rc-lidar-dismiss">Закрыть</button>
           </footer>
         </form>
+        <details class="rc-lidar-logs" id="rc-lidar-logs">
+          <summary>Подробный журнал диагностики</summary>
+          <div class="rc-lidar-log-actions">
+            <span id="rc-lidar-log-state" role="status" aria-live="polite">Журнал обновляется при раскрытии.</span>
+            <button type="button" class="rc-lidar-btn" id="rc-lidar-log-refresh">Обновить</button>
+          </div>
+          <div id="rc-lidar-log-files" class="rc-lidar-log-files"></div>
+          <p class="rc-lidar-hint">Показываются последние строки системного журнала драйвера и установки ROS 2. В полном виде они доступны в var/lidar.log и var/ros2_setup.log.</p>
+        </details>
       </section>`;
 
     const header = document.querySelector('.top-status, .head-actions, .top-right');
@@ -160,6 +170,8 @@
     window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && opened) close(); });
     $('rc-lidar-form').addEventListener('submit', (event) => { event.preventDefault(); void save(); });
     $('rc-lidar-rescan').addEventListener('click', () => void rescan());
+    $('rc-lidar-log-refresh').addEventListener('click', () => void refreshLogs());
+    $('rc-lidar-logs').addEventListener('toggle', syncLogPolling);
     bindView();
   }
 
@@ -170,6 +182,7 @@
     if (overlay) overlay.hidden = false;
     const button = $('rc-lidar-launch');
     if (button) button.setAttribute('aria-expanded', 'true');
+    syncLogPolling();
     void load();
   }
 
@@ -182,6 +195,10 @@
     if (statusTimer) {
       clearInterval(statusTimer);
       statusTimer = null;
+    }
+    if (logTimer) {
+      clearInterval(logTimer);
+      logTimer = null;
     }
   }
 
@@ -351,6 +368,41 @@
       window.RCLidarView.setSettings(window.RCLidarView.DEFAULTS);
       viewPopulate();
     });
+  }
+
+  async function refreshLogs() {
+    if (!opened) return;
+    const status = $('rc-lidar-log-state');
+    const output = $('rc-lidar-log-files');
+    if (status) status.textContent = 'Читаю журнал…';
+    try {
+      const { response, body } = await getJson('api/lidar/logs?lines=120');
+      if (!response.ok || !body || !Array.isArray(body.files)) {
+        if (status) status.textContent = (body && body.error) || 'Журнал недоступен.';
+        return;
+      }
+      if (output) output.innerHTML = body.files.map((file) => {
+        const text = Array.isArray(file.lines) ? file.lines.join('\n') : '';
+        const note = file.error || (!file.exists ? 'Файл ещё не создан.'
+          : 'Обновлён: ' + (file.updated || 'время неизвестно') + ' · ' + file.path);
+        return `<section class="rc-lidar-log-file"><h3>${esc(file.title)}</h3>`
+          + `<small>${esc(note)}</small><pre>${esc(text || (file.error || 'Нет записей.'))}</pre></section>`;
+      }).join('');
+      if (status) status.textContent = 'Обновлено · хвост каждого файла ограничен 120 строками.';
+    } catch (error) {
+      if (status) status.textContent = 'Сервер не отвечает при чтении журнала.';
+    }
+  }
+
+  function syncLogPolling() {
+    if (logTimer) {
+      clearInterval(logTimer);
+      logTimer = null;
+    }
+    const details = $('rc-lidar-logs');
+    if (!opened || !details || !details.open) return;
+    void refreshLogs();
+    logTimer = setInterval(() => { void refreshLogs(); }, 10000);
   }
 
   async function refreshStatus() {

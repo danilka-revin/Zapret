@@ -118,6 +118,20 @@ def test_installation_is_not_started_when_autosetup_is_off(monkeypatch):
     assert "нет драйверов" in lidar_boot.status()["note"]
 
 
+def test_read_logs_returns_bounded_tails_from_fixed_paths(tmp_path):
+    log_path = tmp_path / lidar_boot.LIDAR_LOG
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text("".join("line %d\n" % index for index in range(15)),
+                         encoding="utf-8")
+
+    result = lidar_boot.read_logs(5, root=tmp_path)
+    lidar = next(item for item in result["files"] if item["path"] == "var/lidar.log")
+    assert result["lines"] == 10  # API never returns an unexpectedly tiny or huge tail.
+    assert lidar["exists"] is True
+    assert lidar["lines"] == ["line %d" % index for index in range(5, 15)]
+    assert all(not item["exists"] for item in result["files"] if item is not lidar)
+
+
 def test_readiness_reports_why_ros_is_not_ready(monkeypatch):
     monkeypatch.setattr(lidar_boot.ros_env, "prefix", lambda: None)
     assert lidar_boot.readiness("lds01") == (False, "ROS 2 не установлен")

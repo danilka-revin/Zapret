@@ -92,15 +92,14 @@ start_lidar() {
     log "лидар ROS 2: супервизор уже запущен (pid $(cat var/lidar.pid))."
     return 0
   fi
-  if [[ -f var/lidar.log ]] && (( $(stat -c %s var/lidar.log 2>/dev/null || echo 0) > 2000000 )); then
-    mv -f var/lidar.log var/lidar.log.1
-  fi
+  # Единый журнал для запуска из ярлыка, приложения и systemd: helper пишет
+  # одновременно в var/lidar.log и в stdout/journalctl.
   # Отдельная сессия (setsid): Ctrl+C в этом окне не рвёт драйвер на полуслове —
   # супервизор останавливается по TERM из cleanup и сам гасит драйвер.
   if command -v setsid >/dev/null 2>&1; then
-    setsid bash scripts/ros2_lidar.sh --keep-alive --no-setup >>var/lidar.log 2>&1 </dev/null &
+    setsid bash scripts/lidar_log.sh bash scripts/ros2_lidar.sh --keep-alive --no-setup >/dev/null 2>&1 </dev/null &
   else
-    bash scripts/ros2_lidar.sh --keep-alive --no-setup >>var/lidar.log 2>&1 </dev/null &
+    bash scripts/lidar_log.sh bash scripts/ros2_lidar.sh --keep-alive --no-setup >/dev/null 2>&1 </dev/null &
   fi
   LIDAR_PID=$!
   log "лидар ROS 2: супервизор запущен (журнал var/lidar.log, статус: ./scripts/ros2_lidar.sh --status)."
@@ -155,7 +154,23 @@ KIOSK_PID=""
 cleanup() {
   local status=$?
   trap - EXIT INT TERM HUP
+  # The log tee is the launcher PID; the keep-alive shell owns the driver's
+  # TERM cleanup and records its PID in var/lidar.pid. Stop that shell first so
+  # its trap shuts down the ROS driver before the tee wrapper exits.
+  local lidar_child_pid lidar_child_stopped=0
+  lidar_child_pid="$(cat var/lidar.pid 2>/dev/null || true)"
+  if [[ "$lidar_child_pid" =~ ^[0-9]+$ ]] && kill -0 "$lidar_child_pid" 2>/dev/null; then
+    kill -TERM "$lidar_child_pid" 2>/dev/null || true
+    lidar_child_stopped=1
+  fi
   if [[ -n "$LIDAR_PID" ]] && kill -0 "$LIDAR_PID" 2>/dev/null; then
+    if [[ $lidar_child_stopped -eq 1 ]]; then
+      # Allow ros2_lidar.sh's trap and tee to flush the driver shutdown details.
+      for _ in $(seq 1 50); do
+        kill -0 "$LIDAR_PID" 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
     kill -TERM "$LIDAR_PID" 2>/dev/null || true
   fi
   if [[ -n "$KIOSK_PID" ]] && kill -0 "$KIOSK_PID" 2>/dev/null; then

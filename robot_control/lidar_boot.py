@@ -58,7 +58,16 @@ SERVICE_CHECK_S = 60.0
 #: Журнал супервизора и установки — в ``var/``, как у ярлыка «Запустить робот».
 LIDAR_LOG = Path("var") / "lidar.log"
 BOOT_LOG = Path("var") / "lidar-boot.log"
+SETUP_LOG = Path("var") / "ros2_setup.log"
 PID_FILE = Path("var") / "lidar.pid"
+LOG_SOURCES = (
+    ("Журнал драйвера ROS 2", LIDAR_LOG),
+    ("Предыдущий журнал драйвера", LIDAR_LOG.with_suffix(".log.1")),
+    ("Автоподготовка ROS 2", BOOT_LOG),
+    ("Предыдущий журнал автоподготовки", BOOT_LOG.with_suffix(".log.1")),
+    ("Установка и сборка ROS 2", SETUP_LOG),
+    ("Предыдущий журнал установки ROS 2", SETUP_LOG.with_suffix(".log.1")),
+)
 LOCK_FILE = Path("var") / "lidar-boot.lock"
 #: Так узнаём «наше» приложение/цикл по командной строке процесса.
 _LIDAR_CMDLINE = "ros2_lidar.sh"
@@ -77,6 +86,7 @@ _state: dict[str, Any] = {
 }
 _thread: Optional[threading.Thread] = None
 _lock = threading.Lock()
+_last_logged_action: Optional[str] = None
 
 
 def in_tests() -> bool:
@@ -211,6 +221,39 @@ def _open_log(path: Path):
     return open(path, "ab")
 
 
+def read_logs(lines: Any = 120, root: Optional[Path] = None) -> dict[str, Any]:
+    """Return bounded tails of the lidar/setup logs (never accepts a file path)."""
+    try:
+        count = max(10, min(500, int(lines)))
+    except (TypeError, ValueError):
+        count = 120
+    base = Path(root or project_root()).resolve()
+    files = []
+    for title, relative in LOG_SOURCES:
+        path = (base / relative).resolve()
+        # All sources are fixed above; this assertion also guards future edits.
+        if not path.is_relative_to(base):
+            continue
+        entry: dict[str, Any] = {
+            "title": title, "path": str(relative), "exists": path.is_file(),
+            "lines": [], "updated": None,
+        }
+        if path.is_file():
+            try:
+                size = path.stat().st_size
+                with path.open("rb") as stream:
+                    stream.seek(max(0, size - 192 * 1024))
+                    text = stream.read().decode("utf-8", "replace")
+                tail = text.splitlines()[-count:]
+                entry["lines"] = [line[:2000] for line in tail]
+                entry["updated"] = time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(path.stat().st_mtime))
+            except OSError as exc:
+                entry["error"] = str(exc)
+        files.append(entry)
+    return {"ok": True, "files": files, "lines": count}
+
+
 def _flock(path: Path):
     """Межпроцессный замок: два приложения (8080 и 8090) не поднимут два цикла."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -240,11 +283,14 @@ def start_supervisor(root: Optional[Path] = None) -> Optional[int]:
     try:
         if supervisor_running(base) or service_active(fresh=True):
             return None
-        with _open_log(base / LIDAR_LOG) as out:
-            process = subprocess.Popen(
-                ["bash", str(script), "--keep-alive", "--no-setup"],
-                cwd=str(base), stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                start_new_session=True, close_fds=True)
+        logger = base / "scripts" / "lidar_log.sh"
+        command = ["bash", str(script), "--keep-alive", "--no-setup"]
+        if logger.is_file():
+            command = ["bash", str(logger), *command]
+        process = subprocess.Popen(
+            command, cwd=str(base), stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, close_fds=True)
     except OSError as exc:
         log.warning("Лидар: не удалось запустить драйвер ROS 2: %s", exc)
         return None
@@ -389,11 +435,17 @@ def step(manager: Any = None, root: Optional[Path] = None) -> str:
 
 
 def _loop(manager: Any, root: Optional[Path], tick: float) -> None:
+    global _last_logged_action
     while True:
         try:
-            step(manager, root)
-        except Exception as exc:  # noqa: BLE001 — сторож не должен ронять приложение
-            log.warning("Лидар: сторож драйвера ROS 2: %s", exc)
+            action = step(manager, root)
+            if action != _last_logged_action:
+                detail = str(_state.get("note") or _state.get("action") or "")
+                log.info("Лидар: автоподготовка action=%s state=%s%s",
+                         action, _state.get("state"), (" — " + detail) if detail else "")
+                _last_logged_action = action
+        except Exception:  # noqa: BLE001 — сторож не должен ронять приложение
+            log.exception("Лидар: исключение в стороже драйвера ROS 2")
         time.sleep(max(1.0, tick))
 
 
@@ -419,6 +471,8 @@ def start(manager: Any = None, *, root: Optional[Path] = None,
 
 def reset_state() -> None:
     """Сбрасывает состояние сторожа (тесты и повторный запуск после остановки)."""
+    global _last_logged_action
+    _last_logged_action = None
     _state.update({"state": "idle", "action": "", "note": "", "at": 0.0,
                    "spawned_pid": None, "installed_at": 0.0, "spawn_at": 0.0})
 
