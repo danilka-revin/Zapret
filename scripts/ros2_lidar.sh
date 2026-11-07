@@ -81,6 +81,7 @@ for _key in RC_LIDAR_PROTOCOL RC_LIDAR_PORT RC_LIDAR_BAUD RC_LIDAR_SOURCE \
             RC_LIDAR_ROS_TOPIC RC_LIDAR_ROS_STATUS_TOPIC RC_LIDAR_EXCLUDE \
             RC_ROS_PREFIX RC_ROS_WS_INSTALL \
             RC_SLAM_SOURCE RC_SLAM_PORT RC_SLAM_MASTER_PORT RC_SLAM_PORTS RC_BMS_PORT \
+            RC_WHEEL_PORTS RC_PRINTER_PORT RC_SENSOR_PORT \
             RC_WHEEL_FL_PORT RC_WHEEL_FR_PORT RC_WHEEL_RL_PORT RC_WHEEL_RR_PORT \
             TURTLEBOT3_MODEL; do
   if [[ -z "${!_key:-}" ]]; then
@@ -91,8 +92,8 @@ done
 unset _key _value
 
 # In the normal four-wheel configuration the onboard owner classifies USB
-# devices first. The ROS supervisor waits for its allowlist instead of opening
-# an unidentified wheel or BMS, even when this service starts first.
+# devices first. An explicitly assigned lidar port bypasses classification;
+# unassigned candidates still require the allowlist and shared port lock.
 if [[ "${RC_SLAM_SOURCE:-master}" == "master" ]]; then
   export RC_USB_DISCOVERY_MODE=1
   export RC_USB_DISCOVERY_DIR="$ROOT/data/ports"
@@ -328,11 +329,10 @@ fi
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 if [[ "$ENGINE" == "venv" || "$ENGINE" == "python" ]]; then
-  # PYTHONPATH: собранный пакет и python-пакеты ROS 2 (rclpy, sensor_msgs) уже
-  # добавил source; дублируем их на случай нестандартного префикса, а исходники
-  # zapret_lidar — последними (если ros2_ws не собран).
+  # The supervisor is pure Python. Prefer the checked-out source over a stale
+  # colcon installation; keep the overlay and ROS paths for driver dependencies.
   EXTRA="$(python_site "$INSTALL/zapret_lidar")$(python_site "$PREFIX")"
-  export PYTHONPATH="${EXTRA}${PYTHONPATH:+$PYTHONPATH:}$ROOT/ros2_ws/src/zapret_lidar"
+  export PYTHONPATH="$SRC_PKG:${EXTRA}${PYTHONPATH:-}"
   [[ -d "$SRC_PKG" ]] || warn "нет $SRC_PKG — супервизор найдётся, только если ros2_ws собран"
 fi
 

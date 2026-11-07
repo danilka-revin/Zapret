@@ -1177,23 +1177,23 @@ def test_manager_goes_through_every_usb_port(fake_serial, fake_usb, monkeypatch)
         worker.join(timeout=2.0)
 
 
-def test_manager_finds_lidar_on_other_port_when_port_is_pinned(fake_serial, fake_usb, monkeypatch):
-    """RC_LIDAR_PORT — только первый в очереди, а не единственный порт.
-
-    С RC_LIDAR_AUTOPROBE=0 поиск сначала идёт по закреплённому порту, но если
-    данных там нет, следующий круг всё равно перебирает все USB-порты.
-    """
-    pinned = fake_usb("ttyUSB0")                       # порт из .env — пустой
-    moved = fake_usb("ttyUSB1")                        # лидар переехал сюда
+def test_manager_does_not_probe_other_ports_when_port_is_pinned(fake_serial, fake_usb, monkeypatch):
+    """An explicit manual assignment remains exclusive after a failed scan."""
+    pinned = fake_usb("ttyUSB0")
+    moved = fake_usb("ttyUSB1")
     FakeSerial.devices[moved] = FakeRplidar()
     monkeypatch.setenv("RC_LIDAR_PORT", pinned)
     monkeypatch.setenv("RC_LIDAR_AUTOPROBE", "0")
+    monkeypatch.setattr(lidar, "LIDAR_RESCAN_S", 0.05)
     manager = LidarManager()
     worker = threading.Thread(target=manager._serial_worker, daemon=True)
     worker.start()
     try:
-        assert wait_for(lambda: bool(manager.get_scan()))
-        assert manager.detected["port"] == moved
+        assert wait_for(lambda: pinned in FakeSerial.opened)
+        time.sleep(0.3)
+        assert moved not in FakeSerial.opened
+        assert not manager.get_scan()
+        assert not manager._fallback_all
     finally:
         manager.stop()
         worker.join(timeout=2.0)
@@ -1485,3 +1485,45 @@ def test_usb_diagnostics_access_and_exclusion(monkeypatch, accessible, excluded,
     assert expected in result["summary"]
     assert result["ports"][0]["accessible"] is accessible
     assert result["ports"][0]["excluded"] is excluded
+
+
+def test_manual_port_in_discovery_mode_without_classification(monkeypatch, tmp_path):
+    port = tmp_path / 'lidar'
+    port.touch()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(port)
+    monkeypatch.setenv('RC_USB_DISCOVERY_MODE', '1')
+    monkeypatch.setenv('RC_USB_LOCK_DIR', str(tmp_path / 'locks'))
+    monkeypatch.setenv('RC_LIDAR_PORT', str(alias))
+    monkeypatch.setattr(lidar, 'checked_lidar_ports', lambda: [])
+    manager = LidarManager(port=str(alias))
+    assert str(alias) in manager.candidate_ports(wide=False)
+    assert manager._acquire_port_lock(str(port))
+    manager._release_port_lock()
+    monkeypatch.setenv('RC_WHEEL_PORTS', str(port))
+    assert not manager._acquire_port_lock(str(alias))
+    manager.excluded = lidar.excluded_ports()
+    assert not manager.candidate_ports(wide=False)
+
+
+def test_manual_rplidar_starts_without_discovery_confirmation(fake_serial, fake_usb, monkeypatch, tmp_path):
+    port = fake_usb('ttyUSB0')
+    device = FakeRplidar()
+    FakeSerial.devices[port] = device
+    monkeypatch.setenv('RC_USB_DISCOVERY_MODE', '1')
+    monkeypatch.setenv('RC_USB_LOCK_DIR', str(tmp_path / 'locks'))
+    monkeypatch.setenv('RC_LIDAR_SOURCE', 'serial')
+    monkeypatch.setenv('RC_LIDAR_PORT', port)
+    monkeypatch.setenv('RC_LIDAR_PROTOCOL', 'rplidar')
+    monkeypatch.setenv('RC_LIDAR_MOTOR', 'dtr-low')
+    monkeypatch.setattr(lidar, 'checked_lidar_ports', lambda: [])
+    manager = LidarManager()
+    worker = threading.Thread(target=manager._serial_worker, daemon=True)
+    worker.start()
+    try:
+        assert wait_for(lambda: bool(manager.get_scan())), manager.get_status()
+        assert device.scan_commands > 0
+        assert manager.detected['port'] == port
+    finally:
+        manager.stop()
+        worker.join(timeout=2)

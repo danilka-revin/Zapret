@@ -708,3 +708,28 @@ def test_registry_priority_cannot_expand_ros_usb_guard(monkeypatch, tmp_path):
     assert ros_drivers.candidate_ports() == allowed
     # Explicit caller selection does not consult the optional cache.
     assert ros_drivers.candidate_ports(allowed) == allowed
+
+
+def test_manual_lidar_port_bypasses_classification_but_not_reservations(monkeypatch, tmp_path):
+    from zapret_lidar import usb_guard
+    port = tmp_path / 'lidar'
+    port.touch()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(port)
+    other = tmp_path / 'other'
+    other.touch()
+    monkeypatch.setenv('RC_USB_DISCOVERY_MODE', '1')
+    monkeypatch.setenv('RC_USB_DISCOVERY_DIR', str(tmp_path / 'empty'))
+    monkeypatch.setenv('RC_LIDAR_PORT', str(alias))
+    assert usb_guard.permitted(str(port))
+    assert not usb_guard.permitted(str(other))
+    assert ros_drivers.candidate_ports(str(alias)) == [str(alias)]
+    monkeypatch.setenv('RC_WHEEL_PORTS', str(port))
+    assert not usb_guard.permitted(str(alias))
+    assert not ros_drivers.candidate_ports(str(alias))
+    monkeypatch.delenv('RC_WHEEL_PORTS')
+    monkeypatch.setenv('RC_BMS_PORT', str(port))
+    assert not usb_guard.permitted(str(alias))
+    monkeypatch.delenv('RC_BMS_PORT')
+    monkeypatch.setenv('RC_LIDAR_PORT', str(tmp_path / '*'))
+    assert not usb_guard.permitted(str(port))
