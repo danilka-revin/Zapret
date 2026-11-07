@@ -421,21 +421,23 @@ def test_rolling_cmake_shim_links_rosidl_exported_targets(tmp_path):
     setup_source = (SCRIPTS / "ros2_setup.sh").read_text(encoding="utf-8")
     match = re.search(r"shim = '''\n(.*?)\n'''", setup_source, flags=re.DOTALL)
     assert match, "CMake compatibility shim was not found in ros2_setup.sh"
-    shim = match.group(1).replace("PRIVATE", "INTERFACE")
+    shim = match.group(1)
     project = tmp_path / "cmake-shim"
     project.mkdir()
+    (project / "main.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
     (project / "CMakeLists.txt").write_text(textwrap.dedent(f'''\
         cmake_minimum_required(VERSION 3.16)
-        project(rolling_shim_test LANGUAGES NONE)
+        project(rolling_shim_test LANGUAGES CXX)
         add_library(rclcpp::rclcpp INTERFACE IMPORTED)
         add_library(sensor_msgs::sensor_msgs_library INTERFACE IMPORTED)
         add_library(std_srvs::custom__rosidl_typesupport_cpp INTERFACE IMPORTED)
         set(std_srvs_TARGETS__rosidl_typesupport_cpp
             std_srvs::custom__rosidl_typesupport_cpp)
         {shim}
-        add_library(node INTERFACE)
+        add_executable(node main.cpp)
+        target_link_libraries(node pthread)
         ament_target_dependencies(node rclcpp sensor_msgs std_srvs)
-        get_target_property(linked node INTERFACE_LINK_LIBRARIES)
+        get_target_property(linked node LINK_LIBRARIES)
         message(STATUS "shim linked: ${{linked}}")
     '''), encoding="utf-8")
     result = subprocess.run(["cmake", "-S", str(project), "-B", str(project / "build")],
