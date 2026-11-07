@@ -9,6 +9,7 @@ restarting motion after a release, timeout or manual override. Firmware's
 from __future__ import annotations
 
 import math
+import os
 import secrets
 import threading
 import time
@@ -16,6 +17,21 @@ import time
 from . import maneuvers
 
 MODULES = ("FL", "FR", "RL", "RR")
+
+#: Потолок тяги режима WASD, % шкалы Servo. Клавиатура не даёт оператору
+#: обратной связи по скорости (нет ни ползунка под рукой, ни плавного
+#: наращивания), поэтому предел ниже общего предела привода. Ограничение
+#: проверяется на борту: браузер присылает только процент из своего ползунка.
+DEFAULT_MAX_PERCENT = 30
+
+
+def env_max_percent() -> int:
+    """Потолок тяги WASD из ``RC_KEYBOARD_MAX_PERCENT`` (1…100)."""
+    try:
+        limit = int(os.environ.get("RC_KEYBOARD_MAX_PERCENT", DEFAULT_MAX_PERCENT))
+    except (TypeError, ValueError):
+        limit = DEFAULT_MAX_PERCENT
+    return max(1, min(100, limit))
 
 
 class KeyboardControl:
@@ -37,12 +53,14 @@ class KeyboardControl:
     LIVE_ACK_TTL = 0.45
     LIVE_STEER_TTL = 6.0
 
-    def __init__(self, source, drive, steer, estop, clock=time.monotonic):
+    def __init__(self, source, drive, steer, estop, clock=time.monotonic,
+                 max_percent: int | None = None):
         self._source = source
         self._drive = drive
         self._steer = steer
         self._estop = estop
         self._clock = clock
+        self.max_percent = env_max_percent() if max_percent is None else max(1, min(100, int(max_percent)))
         self._lock = threading.RLock()
         # STOP must be advertised without waiting for the motion gate or the
         # potentially blocked request holding _lock. The short fence lock is
@@ -350,6 +368,10 @@ class KeyboardControl:
                 not all(self._number(angles[m]) and abs(angles[m]) <= 100 for m in MODULES) or
                 sequence >= 0x7FFFFFFF):
             return self._fail("invalid_drive", 400, body=body)
+        if abs(percent) > self.max_percent:
+            # Браузер уже ограничивает ползунок, но предел обязан жить на
+            # борту: устаревшая вкладка или ручной запрос не должны дать больше.
+            return self._fail("speed_limit", 400, body=body)
         if pattern == "spin":
             error = self._spin_error(angles)
             if error:
@@ -448,8 +470,10 @@ class KeyboardControl:
                 spin = self._spin_geometry
                 if spin is not None:
                     spin = {**spin, "angles": dict(spin["angles"])}
+                # ``maxPercent`` — предел тяги WASD с борта: браузер ставит по
+                # нему максимум ползунка, а не угадывает его в разметке.
                 return {"ok": True, "session": self._token, "brakeId": self._brake_id,
-                        "spin": spin}, 200
+                        "spin": spin, "maxPercent": self.max_percent}, 200
 
             if action not in {"stop", "end", "ping", "steer", "steer_all", "arm", "drive", "live"}:
                 return {"ok": False, "reason": "invalid_action"}, 400
@@ -594,6 +618,8 @@ class KeyboardControl:
             percent, angles = body.get("percent"), body.get("angles")
             if type(percent) is not int or not 1 <= abs(percent) <= 100 or not isinstance(angles, dict) or set(angles) != set(MODULES):
                 return self._fail("invalid_drive", 400, body=body)
+            if abs(percent) > self.max_percent:
+                return self._fail("speed_limit", 400, body=body)
             if not all(self._number(angles[m]) and abs(angles[m]) <= 100 for m in MODULES):
                 return self._fail("invalid_angle", 400, body=body)
             direction = 1 if percent > 0 else -1
