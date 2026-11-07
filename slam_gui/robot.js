@@ -401,6 +401,7 @@
   // причина отсутствия скана и список USB-портов обновляются в панели настроек.
 
   function renderLidar(d) {
+    if (window.RCKinectView && window.RCKinectView.active()) return;
     const canvas = $('lidar-canvas');
     const pts = lidarPoints(d);
     const has = pts.length > 0;
@@ -1621,7 +1622,7 @@
       // Карта открывается и закрывается только кнопками: свайп на ней не
       // перелистывает страницы и не тянет панель.
       if (isOpen && activeSwipeView === 'map') return;
-      if (event.target.closest && event.target.closest('input, button, select, textarea, .steer-dial, .cam-viewport, .map-canvas-wrap')) return;
+      if (event.target.closest && event.target.closest('input, button, select, textarea, .steer-dial, .cam-viewport, .map-canvas-wrap, .kinect-view')) return;
       tStart(event.touches[0].clientX, event.touches[0].clientY);
     }, {passive: true});
     page.addEventListener('touchmove', (event) => {
@@ -1650,7 +1651,7 @@
       if (event.button !== 0) return;
       // На странице карты нет свайп-навигации — только кнопки.
       if (isOpen && activeSwipeView === 'map') return;
-      if (event.target.closest && event.target.closest('input, button, select, textarea, .steer-dial, .cam-viewport, .map-canvas-wrap')) return;
+      if (event.target.closest && event.target.closest('input, button, select, textarea, .steer-dial, .cam-viewport, .map-canvas-wrap, .kinect-view')) return;
       mStart(event.clientX, event.clientY, 'page');
     });
     window.addEventListener('mousemove', (event) => {
@@ -3448,12 +3449,12 @@
     // Не даём горизонтальному движению по слайдеру закрыть swipe-панель.
     ['pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mouseup'].forEach((name) => {
       panel.addEventListener(name, (event) => {
-        if (event.target.closest && event.target.closest('input, button, select, textarea, .steer-dial, .cam-viewport, .map-canvas-wrap')) event.stopPropagation();
+        if (event.target.closest && event.target.closest('input, button, select, textarea, .steer-dial, .cam-viewport, .map-canvas-wrap, .kinect-view')) event.stopPropagation();
       });
     });
     ['touchstart', 'touchmove', 'touchend'].forEach((name) => {
       panel.addEventListener(name, (event) => {
-        if (event.target.closest && event.target.closest('input, button, select, textarea, .steer-dial, .cam-viewport, .map-canvas-wrap')) event.stopPropagation();
+        if (event.target.closest && event.target.closest('input, button, select, textarea, .steer-dial, .cam-viewport, .map-canvas-wrap, .kinect-view')) event.stopPropagation();
       }, {passive: true});
     });
 

@@ -141,3 +141,26 @@ def test_demo_once_end_to_end(monkeypatch):
     assert code == 0
     assert len(calls) == 1
     assert calls[0]["width"] == publisher.DEFAULT_WIDTH
+    assert calls[0]["capture_source"] == "demo"
+
+
+def test_freenect_raw_disparity_is_converted_to_mm(monkeypatch):
+    import math
+    import sys
+    import types
+
+    class FakeDepth:
+        shape = (1, 4)
+        @property
+        def flat(self):
+            return [500, 800, 1000, 2047]
+
+    monkeypatch.setitem(sys.modules, 'freenect', types.SimpleNamespace(
+        sync_get_depth=lambda: (FakeDepth(), 123)))
+    samples, width, height = publisher.freenect_frame()
+    assert (width, height) == (4, 1)
+    for raw, actual in zip((500, 800, 1000), samples):
+        assert actual == int(1000 * 0.1236 * math.tan(raw / 2842.5 + 1.1863))
+    assert samples[3] == 0
+    assert publisher.freenect_raw_to_mm(2047) == 0
+    assert publisher.freenect_raw_to_mm(1093) == 0  # past tangent asymptote

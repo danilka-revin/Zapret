@@ -2258,3 +2258,22 @@ body[data-remote-view="motors"] .remote-drive-panel small { display: block; marg
 }
 .cam-stitch-panel { flex:1 1 auto; }
 .swipe-camera-view.camera-stitch-open { height:100%; grid-template-rows:minmax(0,1fr); }
+
+/* Live Kinect preview shares the home sensor panel, not the navigation map. */
+.sensor-switch { display: flex; gap: 8px; margin: 0 0 12px; }
+.sensor-switch-btn, .kinect-controls button {
+  border: 1px solid var(--line); border-radius: 10px; color: var(--text);
+  background: var(--bg-2); padding: 9px 16px; font: inherit; cursor: pointer;
+}
+.sensor-switch-btn[aria-pressed="true"] { border-color: #52bdf4; color: #69d5ff; background: rgba(47,150,199,.16); }
+.lidar-body[hidden], .kinect-view[hidden] { display: none; }
+.kinect-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.kinect-view-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
+.kinect-stage { position: relative; flex: 1 1 auto; min-height: 140px; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: #0a101a; }
+#kinect-3d-canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+#kinect-3d-canvas:active { cursor: grabbing; }
+.kinect-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; color: #aabac7; padding: 20px; margin: 0; pointer-events: none; }
+.kinect-empty[hidden] { display: none; }
+.kinect-controls { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 5px; }
+.kinect-controls button { min-width: 42px; min-height: 42px; padding: 4px; font-size: 22px; }
+.kinect-view-hint { margin: 0; color: var(--muted); font-size: 12px; }

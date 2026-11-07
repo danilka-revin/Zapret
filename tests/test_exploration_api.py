@@ -150,3 +150,24 @@ def test_web_proxy_forwards_exploration_with_csrf(client, operator, kiosk_client
     stop = client.post("/api/exploration/stop", json={},
                        headers={**headers, "X-CSRF-Token": token})
     assert stop.status_code == 200 and stop.json["ok"] is True
+
+
+def test_kinect_preview_api_is_live_depth_only_and_static_script_is_served(kiosk_client):
+    assert kiosk_client.get('/kinect_view.js').status_code == 200
+    assert not kiosk_client.get('/api/kinect/preview').json['available']
+    assert kiosk_client.get('/api/kinect/preview?unit=rear').status_code == 404
+    reply = kiosk_client.post('/api/kinect/depth', json=depth_payload(),
+                              headers={'X-Robot-Control': 'kinect'})
+    assert reply.status_code == 200
+    response = kiosk_client.get('/api/kinect/preview')
+    assert response.status_code == 200 and response.headers['Cache-Control'] == 'no-store'
+    assert response.json['available'] and response.json['notForNavigation']
+    assert len(base64.b64decode(response.json['data'])) == 40 * 30 * 2
+    assert response.json['captureSource'] == 'unknown'
+    demo = depth_payload()
+    demo['capture_source'] = 'demo'
+    kiosk_client.post('/api/kinect/depth', json=demo, headers={'X-Robot-Control': 'kinect'})
+    assert kiosk_client.get('/api/kinect/preview').json['captureSource'] == 'demo'
+    kiosk_client.post('/api/kinect/depth', json={'points': [{'a': 0, 'r': 2}]},
+                      headers={'X-Robot-Control': 'kinect'})
+    assert not kiosk_client.get('/api/kinect/preview').json['available']
