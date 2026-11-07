@@ -82,6 +82,16 @@ def main(argv=None) -> int:
             value = report["checks"].get(key)
             print("  %s %s%s" % ("✓" if value is True else "✗", label,
                                    " (нет проверки в ответе)" if key in report["missingChecks"] else ""))
+        details = report["navigation"].get("diagnostics") or {}
+        if details.get("scanMaxGapDeg") is not None:
+            print("Скан: точек %s, пропуск %s° (центр %s°, предел %s°; 0° вперёд, +90° влево)" %
+                  (details.get("scanPoints"), details.get("scanMaxGapDeg"),
+                   details.get("scanMaxGapCenterDeg", "—"), details.get("scanGapLimitDeg", "30")))
+        if details.get("speedMpsRequested") is not None:
+            print("Скорость: задано %s м/с, расчётная тяга %s%%, предел %s%%" %
+                  (details.get("speedMpsRequested"), details.get("speedPercentRequested")
+                   if details.get("speedPercentRequested") is not None else "нет калибровки",
+                   details.get("speedMaxPercent")))
         if report["navigation"].get("reason"):
             print("Причина: " + report["navigation"]["reason"])
         print("\n" + ("Все программные проверки пройдены." if report["ok"] else

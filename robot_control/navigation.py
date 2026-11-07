@@ -868,7 +868,7 @@ MIN_NAV_SCAN_POINTS = 60
 MAX_NAV_SCAN_GAP_RAD = math.radians(30.0)
 
 
-def _scan_coverage(points: Optional[list[dict]]) -> tuple[bool, int, Optional[float]]:
+def _scan_coverage_details(points: Optional[list[dict]]) -> tuple[bool, int, Optional[float], Optional[float]]:
     """Нельзя ехать с обрывком скана или отсутствующим сектором обзора.
 
     Плотный скан не подтверждает отсутствие низких, прозрачных или невидимых
@@ -883,12 +883,19 @@ def _scan_coverage(points: Optional[list[dict]]) -> tuple[bool, int, Optional[fl
         if math.isfinite(angle) and math.isfinite(distance) and distance > 0:
             angles.append(angle % math.tau)
     if not angles:
-        return False, 0, None
+        return False, 0, None, None
     angles.sort()
-    gaps = [b - a for a, b in zip(angles, angles[1:])]
-    gaps.append(angles[0] + math.tau - angles[-1])
-    gap = max(gaps)
-    return len(angles) >= MIN_NAV_SCAN_POINTS and gap <= MAX_NAV_SCAN_GAP_RAD, len(angles), math.degrees(gap)
+    pairs = zip(angles, angles[1:] + [angles[0] + math.tau])
+    start, end = max(pairs, key=lambda pair: pair[1] - pair[0])
+    gap = end - start
+    center = (math.degrees((start + end) / 2) + 180) % 360 - 180
+    return (len(angles) >= MIN_NAV_SCAN_POINTS and gap <= MAX_NAV_SCAN_GAP_RAD,
+            len(angles), math.degrees(gap), center)
+
+
+def _scan_coverage(points: Optional[list[dict]]) -> tuple[bool, int, Optional[float]]:
+    ready, count, gap, _center = _scan_coverage_details(points)
+    return ready, count, gap
 
 
 class NavigationService:
@@ -986,7 +993,7 @@ class NavigationService:
         age = now - float(snapshot.get("updatedAt") or 0.0)
         map_ready = snapshot.get("scans", 0) >= 2
         scan = self._scan()
-        scan_ready, scan_points, scan_gap = _scan_coverage(scan)
+        scan_ready, scan_points, scan_gap, scan_gap_center = _scan_coverage_details(scan)
         quality = float(snapshot.get("quality") or 0.0)
         map_settings = snapshot.get("settings") or {}
         matching_enabled = map_settings.get("matching") is True
@@ -1103,6 +1110,11 @@ class NavigationService:
             "poseQuality": round(quality, 3),
             "scanPoints": scan_points,
             "scanMaxGapDeg": round(scan_gap, 1) if scan_gap is not None else None,
+            "scanMaxGapCenterDeg": round(scan_gap_center, 1) if scan_gap_center is not None else None,
+            "scanGapLimitDeg": math.degrees(MAX_NAV_SCAN_GAP_RAD),
+            "speedMpsRequested": self.speed_mps,
+            "speedPercentRequested": speed_percent if checks["speedCalibrated"] else None,
+            "speedMaxPercent": self.max_drive_percent,
             "minimumFootprintM": round(minimum_footprint, 3),
         }
 

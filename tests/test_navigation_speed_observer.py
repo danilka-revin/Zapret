@@ -9,12 +9,12 @@ spec.loader.exec_module(observer)
 
 
 def sample(t, x, scans):
-    return {'ok': True, 'matched': True, 'quality': 0.9, 'settings': {'matching': True},
+    return {'ok': True, 'matched': 45, 'quality': 0.9, 'settings': {'matching': True},
             'updatedAt': t, 'scans': scans, 'pose': {'x': x, 'y': 0.0}}
 
 
 def wheels():
-    return {'ok': True, 'data': {'linkOk': True, 'wheelSpeedMps': 0.3,
+    return {'ok': True, 'data': {'linkOk': True, 'wheelSpeedMps': 0.3, 'ts': 11.0,
             'motors': [{'id': i, 'online': True, 'telemetryAgeS': 0.1, 'scRpm': 20, 'scPpr': 90}
                        for i in ('FL', 'FR', 'RL', 'RR')]}}
 
@@ -26,22 +26,22 @@ def test_map_estimate_and_invalid_updates():
     assert observer.map_speed(b, b, 11.5) is None
     b['matched'] = False
     assert observer.map_speed(a, b, 11.5) is None
-    b['matched'] = True
+    b['matched'] = 45
     b['pose']['x'] = float('nan')
     assert observer.map_speed(a, b, 11.5) is None
 
 
 def test_wheel_estimate_requires_all_fresh_wheels():
     state = wheels()
-    assert observer.wheel_speed(state) == 0.3
+    assert observer.wheel_speed(state, 11.1) == 0.3
     state['data']['motors'][0]['telemetryAgeS'] = 1
-    assert observer.wheel_speed(state) is None
+    assert observer.wheel_speed(state, 11.1) is None
     state = wheels()
     state['data']['motors'][0]['scPpr'] = 0
-    assert observer.wheel_speed(state) is None
+    assert observer.wheel_speed(state, 11.1) is None
     state = wheels()
     state['data']['motors'][0]['id'] = 'FR'
-    assert observer.wheel_speed(state) is None
+    assert observer.wheel_speed(state, 11.1) is None
 
 
 def test_observer_only_reads_api(monkeypatch, capsys):
@@ -59,3 +59,11 @@ def test_observer_only_reads_api(monkeypatch, capsys):
     assert observer.main(['--url', 'http://robot', '--seconds', '1']) == 0
     assert set(calls) == {'http://robot/api/kiosk_map', 'http://robot/api/kiosk_state'}
     assert 'не калибровка' in capsys.readouterr().out
+
+
+def test_reject_stale_wheel_snapshot_and_unmatched_map():
+    state = wheels()
+    assert observer.wheel_speed(state, 13.0) is None
+    a, b = sample(10, 0, 1), sample(11, 0.5, 2)
+    b['matched'] = 0
+    assert observer.map_speed(a, b, 11.2) is None

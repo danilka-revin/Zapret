@@ -22,7 +22,7 @@ def map_speed(previous, current, now):
     """Return displacement/dt only for consecutive fresh, matched map updates."""
     for sample in (previous, current):
         if (not isinstance(sample, dict) or sample.get('ok') is not True or
-                sample.get('matched') is not True or
+                not number(sample.get('matched')) or sample['matched'] <= 0 or
                 (sample.get('settings') or {}).get('matching') is not True or
                 not number(sample.get('quality')) or sample['quality'] < 0.55 or
                 not number(sample.get('updatedAt')) or type(sample.get('scans')) is not int):
@@ -39,12 +39,13 @@ def map_speed(previous, current, now):
     return math.hypot(dx, dy) / dt
 
 
-def wheel_speed(response):
+def wheel_speed(response, now):
     """Read the backend's configured-diameter SC estimate only if telemetry is fresh."""
     if not isinstance(response, dict) or response.get('ok') is not True:
         return None
     data = response.get('data')
-    if not isinstance(data, dict) or data.get('linkOk') is not True:
+    if (not isinstance(data, dict) or data.get('linkOk') is not True or
+            not number(data.get('ts')) or not 0 <= now - data['ts'] <= 1):
         return None
     motors = data.get('motors')
     if not isinstance(motors, list) or len(motors) != 4:
@@ -78,7 +79,7 @@ def main(argv=None):
         current = fetch(origin + '/api/kiosk_map')
         wheels = fetch(origin + '/api/kiosk_state')
         estimate = map_speed(previous, current, time.time()) if previous is not None else None
-        wheel = wheel_speed(wheels)
+        wheel = wheel_speed(wheels, time.time())
         any_valid |= estimate is not None or wheel is not None
         fmt = lambda v: 'нет данных' if v is None else f'{v:.3f} м/с'
         print(f'Лидар/карта: {fmt(estimate)}; окружность колёс SC: {fmt(wheel)}', flush=True)

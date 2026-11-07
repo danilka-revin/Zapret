@@ -646,3 +646,28 @@ def test_partial_navigation_in_real_browser_with_simulated_map_and_wheels(kiosk_
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_scan_gap_diagnostics_never_relax_coverage():
+    from robot_control.navigation import _scan_coverage_details
+
+    # Missing arc crosses the 0-degree wrap and remains unknown, not free.
+    points = [{'a': math.radians(d), 'r': 2.0} for d in range(21, 340)]
+    ready, count, gap, center = _scan_coverage_details(points)
+    assert not ready and count == len(points)
+    assert gap == pytest.approx(42.0)
+    assert center == pytest.approx(0.0)
+    assert _scan_coverage_details([]) == (False, 0, None, None)
+    assert _scan_coverage_details([{'a': 0, 'r': float('inf')}]) == (False, 0, None, None)
+    assert _scan_coverage(points) == (ready, count, gap)
+
+
+def test_preflight_reports_speed_and_gap_diagnostics():
+    nav, _mapping, _source, lidar = service()
+    lidar.points = [p for p in lidar.points if not (-2.55 < p['a'] < -1.85)]
+    _ready, _reason, diagnostics = nav._preflight()
+    assert diagnostics['scanMaxGapDeg'] > 30
+    assert diagnostics['scanMaxGapCenterDeg'] == pytest.approx(-126.0, abs=1)
+    assert diagnostics['scanGapLimitDeg'] == pytest.approx(30)
+    assert diagnostics['speedMpsRequested'] == nav.speed_mps
+    assert diagnostics['speedMaxPercent'] == nav.max_drive_percent

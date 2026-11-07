@@ -41,3 +41,17 @@ def test_failure_or_missing_check_never_reports_ready(monkeypatch):
     assert check.main(["--url", "http://robot", "--json"]) == 1
     responses["/api/lidar"] = {"error": "offline"}
     assert check.main(["--url", "http://robot", "--json"]) == 2
+
+
+def test_report_prints_gap_and_speed_when_present(monkeypatch, capsys):
+    responses = payloads()
+    details = responses['/api/navigation/status']['diagnostics']
+    details.update(scanPoints=287, scanMaxGapDeg=33.0, scanMaxGapCenterDeg=-128.5,
+                   scanGapLimitDeg=30.0, speedMpsRequested=0.05,
+                   speedPercentRequested=None, speedMaxPercent=4)
+    details['checks']['scanReady'] = False
+    monkeypatch.setattr(check, 'fetch', lambda url: responses[url.removeprefix('http://robot')])
+    assert check.main(['--url', 'http://robot']) == 1
+    output = capsys.readouterr().out
+    assert '33.0°' in output and '-128.5°' in output
+    assert 'нет калибровки' in output and 'предел 4%' in output
