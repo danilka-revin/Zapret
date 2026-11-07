@@ -239,6 +239,12 @@ if [[ -n "$WS_SETUP" ]]; then
   . "$WS_SETUP" >/dev/null || warn "не удалось выполнить source $WS_SETUP"
 fi
 set -u
+# The venv is intentionally isolated, while ROS apt dependencies (for example
+# lark) are installed into the system interpreter's dist-packages directory.
+if [[ "$ENGINE" == "venv" || "$ENGINE" == "python" ]]; then
+  [[ -d /usr/lib/python3/dist-packages ]] \
+    && export PYTHONPATH="/usr/lib/python3/dist-packages${PYTHONPATH:+:$PYTHONPATH}"
+fi
 
 # Развёрнутый preflight пишется перед каждой попыткой старта. Особенно полезен
 # при запуске через systemd, когда нет терминала и причина ошибки иначе теряется.

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -347,10 +348,15 @@ def test_fresh_ubuntu_gets_ros_drivers_and_a_built_workspace_without_flags(syste
     assert "if(NOT COMMAND ament_target_dependencies)" in patched
     assert '"${dependency}::${dependency}_library"' in patched
     assert '"${dependency}::${dependency}__rosidl_typesupport_cpp"' in patched
+    assert '"__rosidl_typesupport_cpp"' in patched
+    assert "IMPORTED_TARGETS" in patched
     assert "${dependency}_TARGETS" in patched
     setup_script = (system.project / "scripts/ros2_setup.sh").read_text(encoding="utf-8")
     assert 'as_owner bash "$ROOT/scripts/ensure_deps.sh"' in setup_script
     assert "ensure_venv_empy || warn" in setup_script
+    lidar_script = (system.project / "scripts/ros2_lidar.sh").read_text(encoding="utf-8")
+    assert "/usr/lib/python3/dist-packages" in lidar_script
+    assert lidar_script.index("/usr/lib/python3/dist-packages") < lidar_script.index("diagnostics()")
     # 4. rosdep для исходников и colcon по ВСЕМУ ros2_ws (не только zapret_lidar).
     assert any(line.startswith("rosdep install") and "--from-paths" in line for line in calls)
     builds = [line for line in calls if line.startswith("colcon build")]
@@ -376,6 +382,36 @@ def test_rplidar_source_build_has_rolling_cmake_compat_shim(system):
     cmake = system.project / "ros2_ws/src/rplidar_ros/CMakeLists.txt"
     assert cmake.is_file()
     assert "target_link_libraries" in cmake.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(shutil.which("cmake") is None, reason="CMake is not installed")
+def test_rolling_cmake_shim_links_rosidl_exported_targets(tmp_path):
+    """Run the generated shim against old-style ROSIDL target export variables."""
+    setup_source = (SCRIPTS / "ros2_setup.sh").read_text(encoding="utf-8")
+    match = re.search(r"shim = '''\n(.*?)\n'''", setup_source, flags=re.DOTALL)
+    assert match, "CMake compatibility shim was not found in ros2_setup.sh"
+    shim = match.group(1).replace("PRIVATE", "INTERFACE")
+    project = tmp_path / "cmake-shim"
+    project.mkdir()
+    (project / "CMakeLists.txt").write_text(textwrap.dedent(f'''\
+        cmake_minimum_required(VERSION 3.16)
+        project(rolling_shim_test LANGUAGES NONE)
+        add_library(rclcpp::rclcpp INTERFACE IMPORTED)
+        add_library(sensor_msgs::sensor_msgs_library INTERFACE IMPORTED)
+        add_library(std_srvs::custom__rosidl_typesupport_cpp INTERFACE IMPORTED)
+        set(std_srvs_TARGETS__rosidl_typesupport_cpp
+            std_srvs::custom__rosidl_typesupport_cpp)
+        {shim}
+        add_library(node INTERFACE)
+        ament_target_dependencies(node rclcpp sensor_msgs std_srvs)
+        get_target_property(linked node INTERFACE_LINK_LIBRARIES)
+        message(STATUS "shim linked: ${{linked}}")
+    '''), encoding="utf-8")
+    result = subprocess.run(["cmake", "-S", str(project), "-B", str(project / "build")],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "sensor_msgs::sensor_msgs_library" in result.stdout
+    assert "std_srvs::custom__rosidl_typesupport_cpp" in result.stdout
 
 
 def test_second_run_is_quick_and_installs_nothing(system):
