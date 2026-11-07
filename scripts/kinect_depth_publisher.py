@@ -27,6 +27,7 @@ import argparse
 import array
 import base64
 import json
+import math
 import struct
 import sys
 import time
@@ -65,6 +66,26 @@ def demo_frame(width: int = DEFAULT_WIDTH, height: int = DEFAULT_HEIGHT,
     return data, width, height
 
 
+def freenect_raw_to_mm(raw: int) -> int:
+    """Approximate Kinect v1 11-bit disparity to millimetres, 0 = invalid.
+
+    libfreenect's default stream is not millimetres. This empirical formula
+    is uncalibrated; no depth or obstacle detection is guaranteed.
+    """
+    if not 0 <= raw < 2047:
+        return 0
+    angle = raw / 2842.5 + 1.1863
+    if angle >= math.pi / 2:
+        return 0
+    depth = 0.1236 * math.tan(angle)
+    if not math.isfinite(depth) or depth <= 0 or depth * 1000 > 65535:
+        return 0
+    return max(1, int(depth * 1000))
+
+
+_FREENECT_MM = tuple(freenect_raw_to_mm(i) for i in range(2048))
+
+
 def freenect_frame() -> tuple[array.array, int, int]:
     import freenect  # type: ignore
 
@@ -78,6 +99,8 @@ def freenect_frame() -> tuple[array.array, int, int]:
     samples.frombytes(raw)
     if sys.byteorder != "little":
         samples.byteswap()
+    samples = array.array("H", (_FREENECT_MM[value] if value < 2048 else 0
+                                for value in samples))
     return samples, width, height
 
 
@@ -159,7 +182,8 @@ def grab(source: str, topic: str) -> tuple[array.array, int, int]:
 
 
 def post(url: str, samples: array.array, width: int, height: int,
-         stamp: float, timeout_s: float = 3.0, unit: str = "front") -> dict[str, Any]:
+         stamp: float, timeout_s: float = 3.0, unit: str = "front",
+         capture_source: str = "") -> dict[str, Any]:
     if sys.byteorder != "little":
         samples = array.array("H", samples)
         samples.byteswap()
@@ -168,6 +192,8 @@ def post(url: str, samples: array.array, width: int, height: int,
         "depth": base64.b64encode(samples.tobytes()).decode("ascii"),
         "units": "mm", "stamp": stamp,
     }
+    if capture_source:
+        payload["capture_source"] = capture_source
     if unit != "front":
         payload["unit"] = unit
         url = url + ("&" if "?" in url else "?") + "unit=" + unit
@@ -259,7 +285,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             samples, raw_w, raw_h = grab(source, args.topic)
             small = resample_u16(samples, raw_w, raw_h, args.width, args.height)
             reply = post(args.url, small, args.width, args.height, time.time(),
-                         unit=args.unit)
+                         unit=args.unit, capture_source=source)
             frames += 1
             if args.once:
                 print(json.dumps({"source": source, "reply": reply}, ensure_ascii=False))

@@ -36,6 +36,9 @@ from .sensor_layout import kinect_spec
 MAX_PIXELS = 640 * 480
 MAX_DEPTH_BYTES = 2 * 1024 * 1024
 MAX_POINTS = 2000
+# Ограничение нагрузки бортового экрана: не более 160×120 отсчётов.
+PREVIEW_WIDTH = 160
+PREVIEW_HEIGHT = 120
 
 
 class DepthError(ValueError):
@@ -134,8 +137,8 @@ def decode_depth_payload(payload: Any, *, clock=time.time) -> DepthFrame:
         stamp_value = float(stamp) if stamp is not None else float(clock())
     except (TypeError, ValueError):
         stamp_value = float(clock())
-    fx = float(payload.get("fx") or 0.0)
-    fy = float(payload.get("fy") or 0.0)
+    fx = _number(payload.get("fx") or 0.0, "fx", 0, 100000)
+    fy = _number(payload.get("fy") or 0.0, "fy", 0, 100000)
     return DepthFrame(width=width, height=height, values=values,
                       stamp=stamp_value, fx=max(0.0, fx), fy=max(0.0, fy))
 
@@ -247,6 +250,30 @@ def points_from_payload(payload: dict[str, Any], *, clock=time.time,
     return depth_to_scan(frame, spec), frame.stamp, "depth"
 
 
+def depth_preview(frame: DepthFrame, spec: dict[str, Any]) -> dict[str, Any]:
+    """Один уменьшенный кадр в координатах камеры, не накопленная 3D-карта."""
+    stride = max(1, math.ceil(frame.width / PREVIEW_WIDTH),
+                 math.ceil(frame.height / PREVIEW_HEIGHT))
+    fx, fy, cx, cy = _intrinsics(frame, spec)
+    values = array.array("H")
+    count = 0
+    minimum, maximum = float(spec["min_range_m"]), float(spec["max_range_m"])
+    for row in range(0, frame.height, stride):
+        for col in range(0, frame.width, stride):
+            z = frame.values[row * frame.width + col]
+            mm = round(z * 1000) if math.isfinite(z) and minimum <= z <= maximum else 0
+            values.append(min(65535, max(0, mm)))
+            count += bool(mm)
+    if sys.byteorder != "little":
+        values.byteswap()
+    return {
+        "width": math.ceil(frame.width / stride), "height": math.ceil(frame.height / stride),
+        "stride": stride, "data": base64.b64encode(values.tobytes()).decode("ascii"),
+        "fx": fx, "fy": fy, "cx": cx, "cy": cy, "points": count,
+        "sourceWidth": frame.width, "sourceHeight": frame.height,
+    }
+
+
 class KinectDepthService:
     """Последний кадр Kinect и его псевдоскан, потокобезопасно."""
 
@@ -260,11 +287,13 @@ class KinectDepthService:
         # у ROS 2 / freenect часы могут отличаться от часов приложения.
         self._received_at = 0.0
         self._source = ""
+        self._capture_source = "unknown"
         self._frames = 0
         self._last_width = 0
         self._last_height = 0
         self._error = ""
         self._consumed_stamp = 0.0
+        self._preview: Optional[dict[str, Any]] = None
 
     @property
     def spec(self) -> dict[str, Any]:
@@ -272,13 +301,23 @@ class KinectDepthService:
 
     def feed(self, payload: Any) -> dict[str, Any]:
         """Принять кадр; исключение DepthError пробрасывается в HTTP как 400."""
-        points, stamp, source = points_from_payload(
-            payload, clock=self._clock, spec=self._spec)
+        preview = None
+        if isinstance(payload, dict) and not isinstance(payload.get("ranges"), list) and not isinstance(payload.get("points"), list):
+            frame = decode_depth_payload(payload, clock=self._clock)
+            points, stamp, source = depth_to_scan(frame, self._spec), frame.stamp, "depth"
+            preview = depth_preview(frame, self._spec)
+        else:
+            points, stamp, source = points_from_payload(payload, clock=self._clock, spec=self._spec)
         with self._lock:
             self._points = points
+            self._preview = preview
             self._stamp = stamp
             self._received_at = self._clock()
             self._source = source
+            capture_source = payload.get("capture_source")
+            self._capture_source = (capture_source if isinstance(capture_source, str) and
+                                    capture_source in {"demo", "freenect", "openni", "ros2"}
+                                    else "unknown")
             self._frames += 1
             self._error = ""
             self._last_width = int(payload.get("width") or 0)
@@ -318,9 +357,26 @@ class KinectDepthService:
                 "drivers": available_backends(),
             }
 
+    def preview(self) -> dict[str, Any]:
+        """Отдать только свежий кадр глубины; 2D-скан не превращается в 3D."""
+        with self._lock:
+            age = self._clock() - self._received_at if self._received_at else None
+            fresh = age is not None and 0 <= age <= float(self._spec["max_age_s"])
+            available = bool(fresh and self._preview and self._preview["points"])
+            result = {"ok": True, "available": available, "oneFrameOnly": True,
+                      "notForNavigation": True, "frameId": self._frames,
+                      "ageS": round(age, 3) if age is not None else None,
+                      "maxAgeS": float(self._spec["max_age_s"]), "source": self._source,
+                      "captureSource": self._capture_source}
+            if available:
+                result.update(self._preview)
+            return result
+
     def reset(self) -> None:
         with self._lock:
             self._points = []
+            self._preview = None
+            self._capture_source = "unknown"
             self._stamp = 0.0
             self._received_at = 0.0
             self._frames = 0

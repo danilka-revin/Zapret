@@ -154,10 +154,14 @@
       <div class="col-right">
         <section class="lidar" aria-labelledby="lidar-title">
           <header class="section-head">
-            <h2 id="lidar-title">Лидар 360°</h2>
+            <h2 id="lidar-title">Обзор датчиков</h2>
             <span class="panel-meta" id="lidar-meta">нет скана</span>
           </header>
-          <div class="lidar-body">
+          <div class="sensor-switch" role="group" aria-label="Источник обзора">
+            <button type="button" id="sensor-lidar" class="sensor-switch-btn" aria-pressed="true">Лидар · 2D</button>
+            <button type="button" id="sensor-kinect" class="sensor-switch-btn" aria-pressed="false">Kinect · 3D</button>
+          </div>
+          <div class="lidar-body" id="sensor-lidar-view">
             <dl class="lidar-stats">
               <div><dt>точек</dt><dd id="lidar-count">—</dd></div>
               <div><dt>дальность</dt><dd id="lidar-range">10 м</dd></div>
@@ -167,6 +171,19 @@
               <p class="lidar-empty" id="lidar-empty">скана лидара нет</p>
               <div class="robot-marker" aria-hidden="true">▲</div>
             </div>
+          </div>
+          <div id="sensor-kinect-view" class="kinect-view" hidden>
+            <div class="kinect-view-head"><span id="kinect-3d-status" role="status">Ожидание кадра Kinect</span><span>Один кадр · не для навигации</span></div>
+            <div class="kinect-stage">
+              <canvas id="kinect-3d-canvas" tabindex="0" aria-label="Облако точек Kinect: вращение перетаскиванием, масштаб колесом или кнопками"></canvas>
+              <p class="kinect-empty" id="kinect-3d-empty">Нет свежего кадра глубины Kinect</p>
+              <div class="kinect-controls" aria-label="Управление 3D видом">
+                <button type="button" id="kinect-zoom-out" aria-label="Отдалить">−</button>
+                <button type="button" id="kinect-zoom-in" aria-label="Приблизить">+</button>
+                <button type="button" id="kinect-reset-view" aria-label="Сбросить вид">⊙</button>
+              </div>
+            </div>
+            <p class="kinect-view-hint">Перетащите или нажмите стрелки для вращения · щипок или колёсико для масштаба</p>
           </div>
         </section>
       </div>
@@ -1317,6 +1334,7 @@
   <script src="keyboard.js"></script>
   <script src="brake_recovery.js"></script>
   <script src="pc_chip.js"></script>
+  <script src="kinect_view.js"></script>
   <script src="robot.js"></script>
   <script src="full_zero.js"></script>
   <script src="wheel_settings.js"></script>

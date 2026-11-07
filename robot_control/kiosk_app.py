@@ -1329,6 +1329,16 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         payload["units"] = {name: item.status()["connected"] for name, item in kinect_services.items()}
         return jsonify(payload), 200, {"Cache-Control": "no-store"}
 
+    @app.get("/api/kinect/preview")
+    def api_kinect_preview():
+        """Только последний свежий кадр, для 3D-просмотра без влияния на карту."""
+        service, unit = _kinect_for_request()
+        if service is None:
+            return jsonify({"ok": False, "error": "Kinect %s не включён" % unit}), 404
+        payload = service.preview()
+        payload["unit"] = unit
+        return jsonify(payload), 200, {"Cache-Control": "no-store"}
+
     @app.post("/api/kinect/depth")
     def api_kinect_depth():
         """Принять кадр глубины от scripts/kinect_depth_publisher.py."""
@@ -2105,7 +2115,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
     for filename in ("steer_dial.js", "steer_dial.css", "calibration.css", "wheel_settings.js", "pot_mode.js",
                      "wheel_angle.js", "pot_hold.js", "devices.css", "devices.js", "sensors.css", "sensors.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "brake_recovery.js", "battery.js", "receipt.js", "receipt.css", "lidar_settings.css",
-                     "lidar_settings.js", "lidar_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
+                     "lidar_settings.js", "lidar_view.js", "kinect_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
                      "explore.js", "map.css", "viewport.js", "camera_view.js", "camera_stitch.js", "camera_frames.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение

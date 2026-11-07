@@ -103,3 +103,40 @@ def test_stale_depth_is_not_fresh():
     clock["now"] += 10.0
     assert service.fresh() is False
     assert service.status()["connected"] is False
+
+
+def test_preview_decodes_one_frame_preserves_depth_and_expires():
+    clock = {"now": 100.0}
+    service = KinectDepthService(clock=lambda: clock["now"])
+    assert not service.preview()["available"]
+    payload = demo_payload(width=320, height=240)
+    service.feed(payload)
+    preview = service.preview()
+    assert preview["available"] and preview["oneFrameOnly"] and preview["notForNavigation"]
+    assert (preview["width"], preview["height"], preview["stride"]) == (160, 120, 2)
+    assert preview["sourceWidth"] == 320 and preview["sourceHeight"] == 240
+    samples = array.array('H')
+    samples.frombytes(base64.b64decode(preview["data"]))
+    if __import__('sys').byteorder != 'little':
+        samples.byteswap()
+    assert len(samples) == 160 * 120
+    assert samples[60 * 160 + 80] == 2000
+    assert samples[110 * 160 + 80] == 1200  # floor remains in 3D, unlike 2D scan
+    assert preview["fx"] > 0 and preview["fy"] > 0
+    clock["now"] += service.spec["max_age_s"] + .1
+    assert not service.preview()["available"]
+    assert "data" not in service.preview()
+    service.feed({"points": [{"a": 0, "r": 1.5}]})
+    assert not service.preview()["available"]  # 2D cannot be shown as 3D
+    service.reset()
+    assert not service.preview()["available"]
+
+
+def test_preview_rejects_bad_intrinsics_without_replacing_previous_frame():
+    service = KinectDepthService()
+    service.feed(demo_payload())
+    bad = demo_payload()
+    bad['fx'] = float('nan')
+    with pytest.raises(DepthError):
+        service.feed(bad)
+    assert service.preview()['available']
