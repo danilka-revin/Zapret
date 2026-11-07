@@ -151,7 +151,11 @@ case "$name" in
   ldlidar_stl_ros2)
     pkgxml "$target" "$name"
     mkdir -p "$target/ldlidar_driver/src/logger"
-    printf '#include "log_module.h"\n\n#include <time.h>\n' > "$target/ldlidar_driver/src/logger/log_module.cpp" ;;
+    printf '#include "log_module.h"\n\n#include <time.h>\n' > "$target/ldlidar_driver/src/logger/log_module.cpp"
+    printf 'find_package(ament_cmake REQUIRED)\nament_target_dependencies(node rclcpp)\n' > "$target/CMakeLists.txt" ;;
+  rplidar_ros)
+    pkgxml "$target" "$name"
+    printf 'find_package(ament_cmake REQUIRED)\nament_target_dependencies(node rclcpp)\n' > "$target/CMakeLists.txt" ;;
   ros2) mkdir -p "$target"; printf 'repositories: {}\n' > "$target/ros2.repos" ;;
   *) pkgxml "$target" "$name" ;;
 esac
@@ -335,6 +339,9 @@ def test_fresh_ubuntu_gets_ros_drivers_and_a_built_workspace_without_flags(syste
     # Известная ошибка компиляции ldlidar на Ubuntu 24.04+ правится сама.
     log_module = (system.project / "ros2_ws/src/ldlidar_stl_ros2/ldlidar_driver/src/logger/log_module.cpp")
     assert "#include <pthread.h>" in log_module.read_text(encoding="utf-8")
+    # Rolling removed the legacy macro; the installer adds a modern-target shim.
+    cmake = system.project / "ros2_ws/src/ldlidar_stl_ros2/CMakeLists.txt"
+    assert "if(NOT COMMAND ament_target_dependencies)" in cmake.read_text(encoding="utf-8")
     # 4. rosdep для исходников и colcon по ВСЕМУ ros2_ws (не только zapret_lidar).
     assert any(line.startswith("rosdep install") and "--from-paths" in line for line in calls)
     builds = [line for line in calls if line.startswith("colcon build")]
@@ -352,6 +359,14 @@ def test_fresh_ubuntu_gets_ros_drivers_and_a_built_workspace_without_flags(syste
     assert state["state"] == "ok", state
     assert state["distro"] == "humble"
     assert (system.project / "var" / "ros2_setup.log").is_file()
+
+
+def test_rplidar_source_build_has_rolling_cmake_compat_shim(system):
+    result = system.run(FAKE_APT_MISSING="ros-humble-rplidar-ros")
+    assert result.returncode == 0, result.stdout + result.stderr
+    cmake = system.project / "ros2_ws/src/rplidar_ros/CMakeLists.txt"
+    assert cmake.is_file()
+    assert "target_link_libraries" in cmake.read_text(encoding="utf-8")
 
 
 def test_second_run_is_quick_and_installs_nothing(system):

@@ -1044,6 +1044,44 @@ trim_turtlebot3() {
 # иначе «скомпилировалось само» превращается в ошибку компилятора.
 patch_sources() {
   local file="$WS/src/ldlidar_stl_ros2/ldlidar_driver/src/logger/log_module.cpp"
+  local cmake source_dir
+  # В новых ROS 2 Rolling удалён старый CMake-макрос ament_target_dependencies.
+  # Внешние драйверы всё ещё его вызывают; если его нет, добавляем совместимый
+  # shim через современные импортированные targets package::package.
+  for source_dir in "$WS/src/rplidar_ros" "$WS/src/ldlidar_stl_ros2"; do
+    cmake="$source_dir/CMakeLists.txt"
+    [[ -f "$cmake" ]] || continue
+    grep -q 'ament_target_dependencies[[:space:]]*(' "$cmake" || continue
+    grep -q 'function(ament_target_dependencies' "$cmake" && continue
+    log "$(basename "$source_dir"): добавляю совместимость с современным ROS 2 CMake API"
+    as_owner python3 - "$cmake" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+anchor = "find_package(ament_cmake REQUIRED)"
+shim = '''
+
+# Compatibility for ROS 2 distributions that removed ament_target_dependencies.
+if(NOT COMMAND ament_target_dependencies)
+  function(ament_target_dependencies target)
+    foreach(dependency IN LISTS ARGN)
+      if(TARGET "${dependency}::${dependency}")
+        target_link_libraries("${target}" PRIVATE "${dependency}::${dependency}")
+      else()
+        message(FATAL_ERROR
+          "No imported CMake target for dependency ${dependency} (${target})")
+      endif()
+    endforeach()
+  endfunction()
+endif()
+'''
+if anchor not in text:
+    raise SystemExit("find_package(ament_cmake REQUIRED) not found in " + str(path))
+path.write_text(text.replace(anchor, anchor + shim, 1), encoding="utf-8")
+PY
+  done
   # Ubuntu 24.04+ (GCC 13): pthread_mutex_* не объявлены — нет #include <pthread.h>
   # (ldrobotSensorTeam/ldlidar_stl_ros2#23, #29).
   if [[ -f "$file" ]] && ! grep -q '^#include <pthread.h>' "$file"; then
