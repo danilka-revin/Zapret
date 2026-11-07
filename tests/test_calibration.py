@@ -46,14 +46,16 @@ def test_payload_describes_all_measured_fields(clean_geometry):
     payload = calibration.geometry_payload()
     assert payload["ok"] is True and payload["calibrated"] is False
     assert len(payload["groups"]) == 6  # Kinect + 4 камеры + тяга/скорость
-    assert payload["fieldCount"] == 38
+    assert payload["fieldCount"] == 39  # + RC_NAV_ENABLE с новым тумблером
     keys = {field["key"] for group in payload["groups"] for field in group["fields"]}
     assert "RC_KINECT_HFOV_DEG" in keys and "RC_CAMERA_RR_YAW_DEG" in keys
     assert "RC_NAV_MPS_PER_PERCENT" in keys
     assert keys == set(calibration.ALLOWED_KEYS)
     drive = payload["groups"][-1]
     assert drive["id"] == "drive"
-    speed = drive["fields"][0]
+    # Первое поле — тумблер автотяги, второе — обязательный замер скорости.
+    assert drive["fields"][0]["key"] == "RC_NAV_ENABLE"
+    speed = drive["fields"][1]
     assert speed["value"] is None and speed["measured"] is True, \
         "скорость нельзя подставлять по умолчанию — её измеряют"
 
@@ -106,7 +108,7 @@ def test_kiosk_calibration_api(kiosk_client, tmp_path, clean_geometry, monkeypat
     env = tmp_path / ".env"
     monkeypatch.setattr(calibration, "env_file_path", lambda: env)
     page = kiosk_client.get("/api/calibration/geometry")
-    assert page.status_code == 200 and page.json["fieldCount"] == 38
+    assert page.status_code == 200 and page.json["fieldCount"] == 39
     assert kiosk_client.post("/api/calibration/geometry",
                              json={"values": {"RC_NOPE": 1}}).status_code == 400
     reply = kiosk_client.post(
@@ -133,7 +135,7 @@ def test_web_calibration_proxy_requires_csrf(client, operator, kiosk_client, mon
     monkeypatch.setattr(map_peer, "urlopen", forward)
     token = client.get("/api/exploration/status").json["csrfToken"]
     page = client.get("/api/calibration/geometry")
-    assert page.status_code == 200 and page.json["fieldCount"] == 38
+    assert page.status_code == 200 and page.json["fieldCount"] == 39
     assert page.json["csrfToken"] == token
     payload = {"values": {"RC_KINECT_HFOV_DEG": 57}}
     assert client.post("/api/calibration/geometry", json=payload).status_code == 400
@@ -153,3 +155,45 @@ def test_status_exposes_preflight_blockers(kiosk_client):
     assert any("Kinect" in reason for reason in status["blockers"])
     assert any("Калибровка" in reason or "геометрия" in reason.lower()
                for reason in status["warnings"])
+
+
+# --------------------------------------------------------------------------- #
+# Автотяга из формы: включение без перезапуска борта
+# --------------------------------------------------------------------------- #
+def test_drive_form_exposes_the_autopilot_switch_and_accepts_it(tmp_path, monkeypatch):
+    """Форма должна уметь включить автотягу — иначе «Поехать» не оживёт."""
+    monkeypatch.delenv("RC_NAV_ENABLE", raising=False)
+    payload = calibration.geometry_payload()
+    drive = next(group for group in payload["groups"] if group["id"] == "drive")
+    switch = drive["fields"][0]
+    assert switch["key"] == "RC_NAV_ENABLE" and switch["checkbox"] is True
+    assert switch["value"] == 0          # по умолчанию выключено
+
+    target = tmp_path / ".env"
+    calibration.save_geometry({"RC_NAV_ENABLE": 1}, env_path=target)
+    assert "RC_NAV_ENABLE=1" in target.read_text(encoding="utf-8")
+    assert os.environ["RC_NAV_ENABLE"] == "1"
+    # Только 0 или 1: значение вне диапазона не должно попасть в .env.
+    with pytest.raises(calibration.CalibrationError):
+        calibration.validate({"RC_NAV_ENABLE": 3})
+
+
+def test_navigation_applies_the_saved_drive_settings_without_restart(monkeypatch):
+    """Сохранение формы перечитывает RC_NAV_* в самом сервисе навигации."""
+    from robot_control.navigation import NavigationService
+
+    service = NavigationService(None, None, enabled=False, mps_per_percent=None)
+    # Без карты status() не может собрать проверки — смотрим сами поля сервиса.
+    assert service.enabled is False and service.mps_per_percent is None
+
+    monkeypatch.setenv("RC_NAV_ENABLE", "1")
+    monkeypatch.setenv("RC_NAV_MPS_PER_PERCENT", "0.03749")
+    applied = service.reload_drive_settings()
+
+    assert applied["applied"] is True
+    assert applied["enabled"] is True and applied["speedCalibrated"] is True
+    assert service.enabled is True and service.mps_per_percent == pytest.approx(0.03749)
+    # 0,05 м/с при 0,03749 м/с на 1% — это 1% тяги, предел 4% не нарушен.
+    assert 1 <= int(round(service.speed_mps / service.mps_per_percent)) <= service.max_drive_percent
+    # Перечитывание не запускает движение.
+    assert service.active is False

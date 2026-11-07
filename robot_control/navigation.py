@@ -49,7 +49,33 @@ DEFAULT_ROBOT_WIDTH_M = 0.60
 DEFAULT_ROBOT_HEIGHT_M = 0.30
 DEFAULT_QUALITY_MIN = 0.55
 DEFAULT_SPEED_MPS = 0.05
-DEFAULT_MAX_PERCENT = 4
+#: Предел тяги автономии, %. Поднят с 4 %: на замере оператора (Servo 30 ≈ 16,7 %
+#: команды t) 4 % соответствовали ~0,15 м/с, и шасси «не ехало» — тяга ниже
+#: мёртвой зоны. 30 % даёт запас на реальную нагрузку и остаётся вдвое ниже
+#: предела прошивки (DRIVE_MAX_PERCENT=100) и ползунка WASD.
+DEFAULT_MAX_PERCENT = 30
+#: Абсолютный потолок уставки скорости, м/с. Держим его ниже измеренной
+#: скорости на пределе тяги: 30 % × 0,0375 м/с = 1,12 м/с, поэтому 1,0 м/с.
+MAX_SPEED_MPS = 1.0
+#: Период цикла управления, с. Раньше он был жёстко 0,2 с: на 4 % (≈0,15 м/с)
+#: это 3 см за тик, а на 1 м/с — уже 20 см, больше тормозного пути. Опрос
+#: скана и телеметрии ускоряется вместе с уставкой, чтобы за один тик робот
+#: проезжал не больше CONTROL_STEP_M.
+CONTROL_PERIOD_S = 0.2
+MIN_CONTROL_PERIOD_S = 0.1
+CONTROL_STEP_M = 0.05
+
+
+def control_period_s(speed_mps: float) -> float:
+    """Период опроса под текущую уставку: не длиннее шага CONTROL_STEP_M."""
+    try:
+        speed = float(speed_mps)
+    except (TypeError, ValueError):
+        return CONTROL_PERIOD_S
+    if not math.isfinite(speed) or speed <= 0:
+        return CONTROL_PERIOD_S
+    return max(MIN_CONTROL_PERIOD_S,
+               min(CONTROL_PERIOD_S, CONTROL_STEP_M / speed))
 DEFAULT_SCAN_AGE_S = 1.0
 DEFAULT_WAYPOINT_TOLERANCE_M = 0.14
 #: Ближе этого препятствие в коридоре движения — только остановка, без обхода.
@@ -688,17 +714,49 @@ def _initial_blind_zone(snapshot: dict) -> dict:
     return {"x": x + offset * math.cos(yaw), "y": y + offset * math.sin(yaw), "radiusM": radius}
 
 
-def _blind_zone_moved(snapshot: dict, confirmed: Optional[dict]) -> bool:
-    """A physical inspection is tied to the original sensor location."""
-    if not isinstance(confirmed, dict):
+def _blind_zone_moved(snapshot: dict, plan: Optional[dict]) -> bool:
+    """Осмотр всё ещё покрывает слепую зону на новом месте датчика?
+
+    Осмотр привязан к физическому месту лидара, но поза из scan matching
+    «дышит» на сантиметры на каждом витке. Жёсткий порог в 3 см превращал это
+    в бесконечный ``plan_changed``: после «Построить маршрут» нажать «Поехать»
+    было невозможно — каждая попытка видела «сдвиг» и требовала заново
+    осмотреть зону.
+
+    Вместо порога проверяется смысл требования: оператор осматривал круг
+    радиусом ``blindInspectionRadiusM`` вокруг датчика. Пока слепая зона на
+    новом месте целиком внутри этого круга, осмотр остаётся действительным —
+    и радиус самой зоны не изменился. Если робота реально толкнули дальше,
+    зона выходит за осмотренный круг и требование повторного осмотра
+    возвращается.
+    """
+    if not isinstance(plan, dict) or not isinstance(plan.get("blindZone"), dict):
         return True
     current = _initial_blind_zone(snapshot)
+    confirmed = plan["blindZone"]
     try:
-        return (math.hypot(current["x"] - float(confirmed["x"]),
-                           current["y"] - float(confirmed["y"])) > 0.03
-                or abs(current["radiusM"] - float(confirmed["radiusM"])) > 1e-9)
+        inspected = float(plan["blindInspectionRadiusM"])
     except (KeyError, TypeError, ValueError):
         return True
+    if not math.isfinite(inspected) or inspected <= 0:
+        return True
+    try:
+        drift = math.hypot(current["x"] - float(confirmed["x"]),
+                           current["y"] - float(confirmed["y"]))
+        same_radius = abs(current["radiusM"] - float(confirmed["radiusM"])) <= 1e-9
+    except (KeyError, TypeError, ValueError):
+        return True
+    return not (same_radius and drift + current["radiusM"] <= inspected + 1e-9)
+
+
+#: Замеры scan matching «дышат» на сантиметры даже при стоящем роботе: поза
+#: уточняется каждым витком лидара. Слепая зона закреплена в координатах карты,
+#: поэтому её повторный расчёт честно смещается на ту же величину. Пока оператор
+#: смотрит предупреждение, такое смещение не должно требовать нового осмотра —
+#: иначе «Поехать» после «Построить маршрут» отказывает по кругу (`plan_changed`).
+#: Радиус осмотра не уменьшается: окно намеренно меньше самого маленького радиуса
+#: осмотра, и оператор всё равно осматривает не менее указанного круга.
+BLIND_ZONE_STABILITY_M = 0.15
 
 
 def plan_route(snapshot: dict, goals: list[dict], *, footprint_m: float,
@@ -803,12 +861,26 @@ def _plans_equivalent(preview: Optional[dict], current: dict,
         return False
     if (bool(preview.get("partial")) != bool(current.get("partial"))
             or bool(preview.get("manualBlindZone")) != bool(current.get("manualBlindZone"))
-            or (bool(preview.get("manualBlindZone"))
-                and preview.get("blindInspectionRadiusM") != current.get("blindInspectionRadiusM"))
-            or preview.get("blindZone") != current.get("blindZone")
             or preview.get("partialGoalIndex") != current.get("partialGoalIndex")
             or preview.get("goalsRequested") != current.get("goalsRequested")):
         return False
+    if bool(preview.get("manualBlindZone")):
+        # Осмотр привязан к месту датчика с допуском на дрожание локализации,
+        # а не к точному равенству float: иначе каждый новый виток лидара
+        # делал бы подтверждённый маршрут «изменившимся».
+        try:
+            if abs(float(preview.get("blindInspectionRadiusM"))
+                   - float(current.get("blindInspectionRadiusM"))) > 1e-6:
+                return False
+            old_blind = preview["blindZone"]
+            new_blind = current["blindZone"]
+            if (math.hypot(float(old_blind["x"]) - float(new_blind["x"]),
+                           float(old_blind["y"]) - float(new_blind["y"]))
+                    > BLIND_ZONE_STABILITY_M
+                    or abs(float(old_blind["radiusM"]) - float(new_blind["radiusM"])) > 1e-9):
+                return False
+        except (KeyError, TypeError, ValueError):
+            return False
     requested = preview.get("goalRequested") or {}
     current_requested = current.get("goalRequested") or {}
     try:
@@ -910,7 +982,7 @@ class NavigationService:
             if mps_per_percent is None else mps_per_percent
         )
         self.speed_mps = (speed_mps if speed_mps is not None else
-                          _env_float("RC_NAV_SPEED_MPS", DEFAULT_SPEED_MPS, 0.02, 0.10))
+                          _env_float("RC_NAV_SPEED_MPS", DEFAULT_SPEED_MPS, 0.02, MAX_SPEED_MPS))
         if max_drive_percent is None:
             try:
                 max_drive_percent = int(os.environ.get("RC_NAV_MAX_PERCENT", DEFAULT_MAX_PERCENT))
@@ -1106,6 +1178,44 @@ class NavigationService:
             "minimumFootprintM": round(minimum_footprint, 3),
         }
 
+    def reload_drive_settings(self) -> dict:
+        """Перечитать тяговые настройки из окружения без перезапуска сервера.
+
+        Форма «Калибровка геометрии» на /map пишет RC_NAV_* в .env и в текущий
+        процесс. Раньше сервис запоминал их при создании, поэтому после
+        сохранения замера «Поехать» продолжало отказывать «Автономная тяга
+        выключена» до перезагрузки борта — оператор видел, что не работает
+        ровно то, что он только что настроил.
+
+        Перечитываются только тяговые ключи. Движение не запускается и не
+        отменяется; идущий маршрут не меняет скорость на ходу.
+        """
+        from .config import PROJECT_ROOT, _load_dotenv
+        _load_dotenv(PROJECT_ROOT / ".env")
+        with self._lock:
+            active = self.active
+            if not active:
+                self.enabled = _env_bool("RC_NAV_ENABLE", False)
+                self.mps_per_percent = _env_optional_positive("RC_NAV_MPS_PER_PERCENT")
+                self.speed_mps = _env_float("RC_NAV_SPEED_MPS", DEFAULT_SPEED_MPS, 0.02, MAX_SPEED_MPS)
+                try:
+                    requested_percent = int(os.environ.get("RC_NAV_MAX_PERCENT",
+                                                           DEFAULT_MAX_PERCENT))
+                except (TypeError, ValueError):
+                    requested_percent = DEFAULT_MAX_PERCENT
+                self.max_drive_percent = max(1, min(DEFAULT_MAX_PERCENT, requested_percent))
+            return {
+                "ok": True,
+                "applied": not active,
+                "reason": ("Маршрут выполняется: новые значения применятся после его "
+                           "завершения." if active else ""),
+                "enabled": self.enabled,
+                "speedCalibrated": bool(self.mps_per_percent and self.mps_per_percent > 0),
+                "mpsPerPercent": self.mps_per_percent,
+                "speedMps": self.speed_mps,
+                "maxDrivePercent": self.max_drive_percent,
+            }
+
     def status(self) -> dict:
         with self._lock:
             state = dict(self._state)
@@ -1136,6 +1246,9 @@ class NavigationService:
             "canStart": bool(ready and plan and plan.get("executable", True) and not self.active),
             "canResume": bool(resumable),
             "detourLimit": self.max_detours,
+            # Реальные пределы — чтобы экран показывал их, а не константы в подписях.
+            "maxDrivePercent": self.max_drive_percent,
+            "speedMps": self.speed_mps,
             "reason": reason,
             "diagnostics": diagnostics,
             "goal": dict(goal) if goal else None,
@@ -1267,7 +1380,7 @@ class NavigationService:
                 or abs(float(preview_goal.get("y", math.inf)) - y) > 0.01):
             raise NavigationError("plan_mismatch", "Цель отличается от проверенного маршрута; постройте новый план", 409)
         blind_moved = (bool(preview.get("manualBlindZone"))
-                       and _blind_zone_moved(snapshot, preview.get("blindZone")))
+                       and _blind_zone_moved(snapshot, preview))
         blind_zone = _initial_blind_zone(snapshot) if blind_moved else preview.get("blindZone")
         with self._lock:
             avoid = set(self._avoid_cells)
@@ -1595,7 +1708,7 @@ class NavigationService:
             remaining_goals = [dict(g) for g in (confirmed_plan or {}).get("goalsRequested", [goal])]
             blind_zone = (confirmed_plan or {}).get("blindZone") or _initial_blind_zone(initial)
             blind_moved = (bool((confirmed_plan or {}).get("manualBlindZone"))
-                           and _blind_zone_moved(initial, blind_zone))
+                           and _blind_zone_moved(initial, {**confirmed_plan, "blindZone": blind_zone}))
             if blind_moved:
                 blind_zone = _initial_blind_zone(initial)
             with self._lock:
@@ -1624,6 +1737,9 @@ class NavigationService:
                 point = requested
             total_length = max(0.01, float(plan["distanceM"]), requested_length)
             mission_timeout = max(60.0, min(600.0, total_length / self.speed_mps * 4.0 + 30.0))
+            # Чем быстрее уставка, тем чаще проверяем скан и позицию: иначе за
+            # один тик робот проезжает больше тормозного пути.
+            tick_period = control_period_s(self.speed_mps)
             with self._lock:
                 self._plan = plan
             traveled_estimate = 0.0
@@ -1861,7 +1977,7 @@ class NavigationService:
                         waypoint=segment_index, totalWaypoints=plan["waypoints"],
                         currentPose={"x": round(current[0], 3), "y": round(current[1], 3),
                                      "yaw": round(yaw, 3)}, drivePercent=result.get("percent", 0))
-                    cancel.wait(0.2)
+                    cancel.wait(tick_period)
                 if cancel.is_set():
                     break
 

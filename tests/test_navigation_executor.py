@@ -213,7 +213,9 @@ class FakeSource:
 def rig(monkeypatch):
     """Собрать сервис с фальшивым шасси; возвращает все части для проверок."""
 
-    def build(*, detours=None, clock_step: float = CLOCK_STEP, robots=1):
+    def build(*, detours=None, clock_step: float = CLOCK_STEP, robots=1,
+              speed_mps: float = 0.05, mps_per_percent: float = 0.02,
+              max_drive_percent: int = 30):
         if detours is None:
             monkeypatch.delenv("RC_NAV_DETOUR_ATTEMPTS", raising=False)
         else:
@@ -259,7 +261,8 @@ def rig(monkeypatch):
         monkeypatch.setattr(nav, "MasterBridge", Bridge)
         service = NavigationService(
             world, source, lidar, enabled=True,
-            mps_per_percent=0.02, speed_mps=0.05, max_drive_percent=4,
+            mps_per_percent=mps_per_percent, speed_mps=speed_mps,
+            max_drive_percent=max_drive_percent,
             clock=clock,
         )
         return service, world, source, lidar, robot
@@ -544,3 +547,79 @@ def test_route_forwards_extra_blocked_cells():
         plan_route(snapshot, [{"x": 1.0, "y": 0.0}], footprint_m=0.42,
                    extra_blocked=reserved)
     assert caught.value.code == "goal_obstacle"
+
+
+# --------------------------------------------------------------------------- #
+# Натурный замер оператора: колесо 215,9 мм, Servo 30, ≈0,625 м/с, тормоз ≈15 см
+# --------------------------------------------------------------------------- #
+#: Замер: Servo.write(30) → 30 / 1,8 ≈ 16,7 % тяги → 0,625 м/с.
+MEASURED_SERVO = 30
+MEASURED_SPEED_MPS = 0.625
+MEASURED_MPS_PER_PERCENT = MEASURED_SPEED_MPS / (MEASURED_SERVO / 1.8)
+
+
+def test_measured_calibration_drives_to_the_goal(rig):
+    """Калибровка из замера проходит проверку и робот доезжает до цели."""
+    service, world, source, _lidar, _robot = rig(
+        mps_per_percent=MEASURED_MPS_PER_PERCENT, speed_mps=0.05)
+    checks = service.status()["diagnostics"]["checks"]
+    assert checks["speedCalibrated"] is True
+    # 0,05 м/с при 0,0375 м/с на 1% — это 1% тяги, предел 4% не нарушен.
+    assert checks["speedWithinLimit"] is True
+
+    payload, code = start_to_goal(service, 1.0, 0.0)
+    assert code == 202
+    wait_idle(service)
+
+    status = service.status()
+    assert status["phase"] == "succeeded", status
+    assert world.pose()[0] > 0.85
+    assert ("drive", 0) in source.commands
+
+
+def test_measured_calibration_fits_the_raised_traction_limit(rig):
+    """С пределом 30 % рабочая точка оператора (0,625 м/с) проходит."""
+    service, _world, _source, _lidar, _robot = rig(
+        mps_per_percent=MEASURED_MPS_PER_PERCENT, speed_mps=0.625)
+    checks = service.status()["diagnostics"]["checks"]
+    assert checks["speedCalibrated"] is True
+    # 0,625 / 0,0375 = 16,7 % — внутри предела 30 %.
+    assert checks["speedWithinLimit"] is True
+    # А прежний предел в 4 % эту же уставку отверг бы: «не едет» было именно так.
+    tight = NavigationService(service.map_service, service.source, enabled=True,
+                              mps_per_percent=MEASURED_MPS_PER_PERCENT,
+                              speed_mps=0.625, max_drive_percent=4, clock=service.clock)
+    assert tight.status()["diagnostics"]["checks"]["speedWithinLimit"] is False
+
+
+def test_default_traction_limit_is_30_percent(rig):
+    """Предел по умолчанию — 30 %, а не 4 %: на 4 % шасси не трогалось."""
+    service, _world, _source, _lidar, _robot = rig(
+        mps_per_percent=MEASURED_MPS_PER_PERCENT, speed_mps=0.30)
+    assert service.max_drive_percent == 30
+    assert service.status()["diagnostics"]["checks"]["speedWithinLimit"] is True
+
+
+def test_control_period_shrinks_with_speed():
+    """На большой скорости опрос чаще: за тик не больше 5 см пути."""
+    from robot_control.navigation import (CONTROL_PERIOD_S, MIN_CONTROL_PERIOD_S,
+                                          control_period_s)
+    assert control_period_s(0.05) == CONTROL_PERIOD_S          # медленно — как было
+    # 5 см / 0,625 м/с = 0,08 с, но чаще 10 Гц не опрашиваем — берётся нижняя граница.
+    assert control_period_s(0.625) == MIN_CONTROL_PERIOD_S
+    assert control_period_s(0.15) == CONTROL_PERIOD_S           # 0,33 с > потолка 0,2 с
+    assert control_period_s(0.25) == pytest.approx(0.2)         # 5 см / 0,25 = 0,2 с
+    assert control_period_s(5.0) == MIN_CONTROL_PERIOD_S        # не быстрее 10 Гц
+    assert control_period_s(0) == CONTROL_PERIOD_S
+
+
+def test_calibration_is_not_assumed_when_value_is_missing(rig, monkeypatch):
+    # .env на рабочем роботе содержит настоящий замер: для этой проверки
+    # «калибровки нет» её нужно действительно убрать.
+    monkeypatch.delenv("RC_NAV_MPS_PER_PERCENT", raising=False)
+    service, _world, _source, _lidar, _robot = rig(mps_per_percent=None)
+    checks = service.status()["diagnostics"]["checks"]
+    assert checks["speedCalibrated"] is False
+    with pytest.raises(NavigationError) as caught:
+        start_to_goal(service, 1.0, 0.0)
+    assert caught.value.code == "not_ready"

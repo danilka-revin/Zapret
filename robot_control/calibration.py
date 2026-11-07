@@ -52,13 +52,17 @@ KINECT_FIELDS: tuple[tuple[str, str, str], ...] = (
 DRIVE_FIELDS: tuple[tuple[str, str, str, float, float, Optional[float]], ...] = (
     ("RC_NAV_MPS_PER_PERCENT", "Скорость на 1% тяги (измерить!)", "м/с", 0.0001, 1.0, None),
     ("RC_NAV_SPEED_MPS", "Уставка скорости", "м/с", 0.01, 1.0, 0.05),
-    ("RC_NAV_MAX_PERCENT", "Предел тяги", "%", 1.0, 100.0, 4.0),
+    ("RC_NAV_MAX_PERCENT", "Предел тяги", "%", 1.0, 100.0, 30.0),
     ("RC_NAV_FOOTPRINT_M", "Защитный радиус", "м", 0.1, 3.0, 0.55),
     ("RC_LIDAR_OFFSET_M", "Смещение лидара вперёд", "м", 0.0, 1.5, 0.28),
 )
 DRIVE_LIMITS: dict[str, tuple[float, float]] = {
     key: (lo, hi) for key, _label, _unit, lo, hi, _default in DRIVE_FIELDS
 }
+#: Включатель автономной тяги. Отдельно от замеров: значение 1 разрешает
+#: движение только вместе с измеренной калибровкой скорости, иначе навигация
+#: по-прежнему откажет.
+DRIVE_ENABLE_KEY = "RC_NAV_ENABLE"
 
 
 def _allowed_keys() -> dict[str, tuple[str, float, float]]:
@@ -74,6 +78,9 @@ def _allowed_keys() -> dict[str, tuple[str, float, float]]:
             out[keys[field]] = (field, lo, hi)
     for key, (lo, hi) in DRIVE_LIMITS.items():
         out[key] = (key, lo, hi)
+    # Тумблер автотяги: без него форма замера скорости сохраняется, но
+    # «Поехать» всё равно отказывает «Автономная тяга выключена».
+    out[DRIVE_ENABLE_KEY] = (DRIVE_ENABLE_KEY, 0.0, 1.0)
     return out
 
 
@@ -136,6 +143,16 @@ def geometry_payload() -> dict[str, Any]:
             "step": 0.0001 if key == "RC_NAV_MPS_PER_PERCENT" else 0.01,
             "measured": key == "RC_NAV_MPS_PER_PERCENT",
         })
+    # Тумблер автотяги идёт первым: без него остальные замеры не разрешают старт.
+    enable_raw = (os.environ.get(DRIVE_ENABLE_KEY) or "0").strip().lower()
+    enable_on = enable_raw in {"1", "true", "yes", "on"}
+    drive_fields.insert(0, {
+        "key": DRIVE_ENABLE_KEY, "field": DRIVE_ENABLE_KEY,
+        "label": "Автономная тяга разрешена (0/1)", "unit": "",
+        "value": 1 if enable_on else 0, "min": 0, "max": 1, "step": 1,
+        "measured": False, "checkbox": True,
+        "hint": "Включайте только после проверки E-STOP, обзора и торможения на площадке.",
+    })
     groups.append({
         "id": "drive", "title": "Тяга и скорость · обязательно для выезда",
         "fields": drive_fields,
@@ -180,6 +197,8 @@ def validate(values: Any) -> dict[str, str]:
             raise CalibrationError("%s: допустимо %.2f…%.2f" % (key, lo, hi))
         if field == "scan_columns":
             clean[key] = str(int(round(number)))
+        elif key == DRIVE_ENABLE_KEY:
+            clean[key] = "1" if number >= 0.5 else "0"
         else:
             clean[key] = ("%g" % number)
     return clean
