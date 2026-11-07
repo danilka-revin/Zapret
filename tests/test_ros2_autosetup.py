@@ -414,6 +414,20 @@ endif()'''
     assert "${dependency}_TARGETS${_suffix}" in updated
     assert "IMPORTED_TARGETS" in updated
 
+    # PR #121's export-aware shim still used the keyword form, which conflicts
+    # with ldlidar's pre-existing plain target_link_libraries(node pthread).
+    old_keyword_shim = updated.replace(
+        'target_link_libraries("${target}" "',
+        'target_link_libraries("${target}" PRIVATE "').replace(
+        'target_link_libraries("${target}" ${',
+        'target_link_libraries("${target}" PRIVATE ${')
+    cmake.write_text(old_keyword_shim, encoding="utf-8")
+    relinked = system.run()
+    assert relinked.returncode == 0, relinked.stdout + relinked.stderr
+    final = cmake.read_text(encoding="utf-8")
+    assert 'target_link_libraries("${target}" PRIVATE' not in final
+    assert 'target_link_libraries("${target}" "${_dependency_target}")' in final
+
 
 @pytest.mark.skipif(shutil.which("cmake") is None, reason="CMake is not installed")
 def test_rolling_cmake_shim_links_rosidl_exported_targets(tmp_path):

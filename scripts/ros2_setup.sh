@@ -1143,7 +1143,8 @@ marker = "# Compatibility for ROS 2 distributions that removed ament_target_depe
 if marker in text:
     # Upgrade the shim already injected by an earlier ros2_setup.sh release.
     # Otherwise --rebuild would keep the stale package::package-only version.
-    if '_TARGETS${_suffix}' in text and '_imported_targets' in text:
+    if ('_TARGETS${_suffix}' in text and '_imported_targets' in text
+            and 'target_link_libraries("${target}" PRIVATE' not in text):
         raise SystemExit(0)
     start = text.index(marker)
     function_end = text.index("  endfunction()", start) + len("  endfunction()")
