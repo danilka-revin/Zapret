@@ -339,9 +339,18 @@ def test_fresh_ubuntu_gets_ros_drivers_and_a_built_workspace_without_flags(syste
     # Известная ошибка компиляции ldlidar на Ubuntu 24.04+ правится сама.
     log_module = (system.project / "ros2_ws/src/ldlidar_stl_ros2/ldlidar_driver/src/logger/log_module.cpp")
     assert "#include <pthread.h>" in log_module.read_text(encoding="utf-8")
-    # Rolling removed the legacy macro; the installer adds a modern-target shim.
+    # Rolling removed the legacy macro; the shim handles package libraries and
+    # generated ROSIDL targets (e.g. Rolling 5.9's sensor_msgs_library and
+    # std_srvs__rosidl_typesupport_cpp), not only package::package aliases.
     cmake = system.project / "ros2_ws/src/ldlidar_stl_ros2/CMakeLists.txt"
-    assert "if(NOT COMMAND ament_target_dependencies)" in cmake.read_text(encoding="utf-8")
+    patched = cmake.read_text(encoding="utf-8")
+    assert "if(NOT COMMAND ament_target_dependencies)" in patched
+    assert '"${dependency}::${dependency}_library"' in patched
+    assert '"${dependency}::${dependency}__rosidl_typesupport_cpp"' in patched
+    assert "${dependency}_TARGETS" in patched
+    setup_script = (system.project / "scripts/ros2_setup.sh").read_text(encoding="utf-8")
+    assert 'as_owner bash "$ROOT/scripts/ensure_deps.sh"' in setup_script
+    assert "ensure_venv_empy || warn" in setup_script
     # 4. rosdep для исходников и colcon по ВСЕМУ ros2_ws (не только zapret_lidar).
     assert any(line.startswith("rosdep install") and "--from-paths" in line for line in calls)
     builds = [line for line in calls if line.startswith("colcon build")]

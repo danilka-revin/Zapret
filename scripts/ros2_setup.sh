@@ -260,6 +260,19 @@ python_bin() {
   if [[ -x "$ROOT/.venv/bin/python" ]]; then echo "$ROOT/.venv/bin/python"; else echo "python3"; fi
 }
 
+# ROS Python dependencies are normally installed by ensure_deps.sh. Repair the
+# project's venv during ROS setup too, so --rebuild also fixes a missing Empy
+# module (rosidl imports it while loading rclpy) without a separate user step.
+ensure_venv_empy() {
+  local py="$ROOT/.venv/bin/python"
+  [[ -x "$py" ]] || return 0
+  "$py" -c 'import em' >/dev/null 2>&1 && return 0
+  [[ -f "$ROOT/scripts/ensure_deps.sh" ]] || return 1
+  log "в .venv нет Empy (модуль em) — проверяю зависимости Python"
+  as_owner bash "$ROOT/scripts/ensure_deps.sh" || return 1
+  "$py" -c 'import em' >/dev/null 2>&1
+}
+
 prefix_pythonpath() {
   local base="$1" py="${2:-$(python_bin)}" version dir
   version="$("$py" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo 3.10)"
@@ -1047,7 +1060,7 @@ patch_sources() {
   local cmake source_dir
   # В новых ROS 2 Rolling удалён старый CMake-макрос ament_target_dependencies.
   # Внешние драйверы всё ещё его вызывают; если его нет, добавляем совместимый
-  # shim через современные импортированные targets package::package.
+  # shim через импортированные CMake targets, в том числе старые exports ROSIDL.
   for source_dir in "$WS/src/rplidar_ros" "$WS/src/ldlidar_stl_ros2"; do
     cmake="$source_dir/CMakeLists.txt"
     [[ -f "$cmake" ]] || continue
@@ -1064,11 +1077,28 @@ anchor = "find_package(ament_cmake REQUIRED)"
 shim = '''
 
 # Compatibility for ROS 2 distributions that removed ament_target_dependencies.
+# ROS packages export different target names across releases: plain libraries
+# use *_library, while interface packages export a C++ typesupport target.
 if(NOT COMMAND ament_target_dependencies)
   function(ament_target_dependencies target)
     foreach(dependency IN LISTS ARGN)
-      if(TARGET "${dependency}::${dependency}")
-        target_link_libraries("${target}" PRIVATE "${dependency}::${dependency}")
+      set(_dependency_candidates
+        "${dependency}::${dependency}"
+        "${dependency}::${dependency}_library"
+        "${dependency}::${dependency}__rosidl_typesupport_cpp"
+        "${dependency}::${dependency}__rosidl_generator_cpp")
+      if(DEFINED ${dependency}_TARGETS)
+        list(APPEND _dependency_candidates ${${dependency}_TARGETS})
+      endif()
+      set(_dependency_target "")
+      foreach(_candidate IN LISTS _dependency_candidates)
+        if(TARGET "${_candidate}")
+          set(_dependency_target "${_candidate}")
+          break()
+        endif()
+      endforeach()
+      if(_dependency_target)
+        target_link_libraries("${target}" PRIVATE "${_dependency_target}")
       else()
         message(FATAL_ERROR
           "No imported CMake target for dependency ${dependency} (${target})")
@@ -1381,6 +1411,7 @@ main_setup() {
   info "ROS 2: $PREFIX (дистрибутив $DISTRO)"
 
   ensure_tools
+  ensure_venv_empy || warn "Empy не установлен в .venv — импорт rclpy может не работать"
   ensure_drivers
   ws_rosdep
   if [[ $DO_BUILD -eq 1 ]]; then
