@@ -155,6 +155,9 @@ class LidarSupervisor(Node):
 
         self.model = str(value("model") or "auto").strip().lower() or "auto"
         self.port_spec = str(value("port") or "").strip()
+        if self.port_spec:
+            # Share the explicit ROS parameter with the USB guard and probe.
+            os.environ["RC_LIDAR_PORT"] = self.port_spec
         self.baud_override = max(0, _as_int(value("baud"), 0))
         self.scan_topic = str(value("scan_topic") or drv.DEFAULT_SCAN_TOPIC).strip() \
             or drv.DEFAULT_SCAN_TOPIC

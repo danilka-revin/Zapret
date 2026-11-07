@@ -525,9 +525,15 @@ def test_bms_and_python_lidar_share_discovery_without_touching_wheels(boards, us
                    for p in lidar.checked_usb_ports())
         assert lidar.try_lock_port(bms.path) is None  # BMS owns its lock
 
-        # Stale manual hints must not steer the new search onto a wheel/BMS.
+        # A mistaken explicit wheel assignment must not be opened; it also
+        # must not silently fall back to the separately discovered lidar.
         monkeypatch.setenv("RC_LIDAR_SOURCE", "serial")
         monkeypatch.setenv("RC_LIDAR_PORT", wheel["FL"])
+        wrong = lidar.LidarManager()
+        assert not wrong._acquire_port_lock(wheel["FL"])
+        assert not wrong.candidate_ports(wide=True, module_ports=lidar.chassis_module_ports())
+        # The operator corrects the assignment; the explicit lidar can scan.
+        monkeypatch.setenv("RC_LIDAR_PORT", laser.path)
         monkeypatch.setenv("RC_LIDAR_PROTOCOL", "lds01")
         monkeypatch.setenv("RC_LIDAR_MOTOR", "none")
         monkeypatch.setattr(lidar, "LIDAR_RESCAN_S", .1)
@@ -1801,3 +1807,47 @@ def test_pot_feedback_in_real_browser_through_four_firmwares(
             server.server_close()
         for thread in threads:
             thread.join(timeout=3)
+
+
+def test_manual_silent_lds_starts_and_scans_without_discovery(usb_context, monkeypatch):
+    """Exercise the actual serial reader with a silent PTY and no USB owner."""
+    laser = silent_lds_device()
+    manager = None
+    worker = None
+    try:
+        monkeypatch.setenv("RC_LIDAR_SOURCE", "serial")
+        monkeypatch.setenv("RC_LIDAR_PORT", laser.path)
+        monkeypatch.setenv("RC_LIDAR_PROTOCOL", "lds01")
+        monkeypatch.setenv("RC_LIDAR_BAUD", "230400")
+        monkeypatch.setenv("RC_LIDAR_MOTOR", "none")
+        monkeypatch.setenv("RC_LIDAR_AUTOPROBE", "0")
+        monkeypatch.setattr(lidar, "checked_lidar_ports", lambda: [])
+        manager = lidar.LidarManager()
+        worker = threading.Thread(target=manager._serial_worker, daemon=True)
+        worker.start()
+        assert wait_for(lambda: bool(manager.get_scan()), 8), manager.get_status()
+        assert b"b" in laser.received
+        assert manager.get_status()["scan_trusted"] is True
+        assert manager.detected["port"] == laser.path
+    finally:
+        if manager:
+            manager.stop()
+        if worker:
+            worker.join(timeout=3)
+        laser.close()
+
+
+def test_ros_probe_sends_start_to_manual_port_without_classification(usb_context, monkeypatch):
+    """ROS probe shares the same manual admission and still respects BMS."""
+    monkeypatch.syspath_prepend(str(ROOT / "ros2_ws/src/zapret_lidar"))
+    from zapret_lidar import probe
+    laser = silent_lds_device()
+    try:
+        monkeypatch.setenv("RC_LIDAR_PORT", laser.path)
+        data = probe.read_bytes(laser.path, 230400, window=0.3, command=b"b")
+        assert b"b" in laser.received
+        assert data.startswith(b"\xfa")
+        monkeypatch.setenv("RC_BMS_PORT", laser.path)
+        assert probe.read_bytes(laser.path, 230400, window=0.1, command=b"b") == b""
+    finally:
+        laser.close()

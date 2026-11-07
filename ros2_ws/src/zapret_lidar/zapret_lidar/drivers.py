@@ -268,7 +268,9 @@ def reserved_ports() -> set[str]:
     names = (() if os.environ.get("RC_USB_DISCOVERY_MODE") == "1" else
              ("RC_SLAM_PORT", "RC_BMS_PORT", "RC_SLAM_MASTER_PORT",
               "RC_WHEEL_FL_PORT", "RC_WHEEL_FR_PORT", "RC_WHEEL_RL_PORT", "RC_WHEEL_RR_PORT"))
-    values: list[str] = []
+    values: list[str] = (os.environ.get("RC_WHEEL_PORTS") or "").split(",")
+    values.extend(os.environ.get(name) or "" for name in
+                  ("RC_BMS_PORT", "RC_PRINTER_PORT", "RC_SENSOR_PORT"))
     for name in names:
         raw = (os.environ.get(name) or "").strip()
         if raw:
@@ -307,7 +309,11 @@ def candidate_ports(spec: str | Iterable[str] | None = None) -> list[str]:
         real = os.path.realpath(port)
         if port in blocked or real in blocked or real in seen:
             continue
-        if allowed is not None and real not in allowed:
+        configured = (os.environ.get("RC_LIDAR_PORT") or "").strip()
+        if (configured and not any(c in configured for c in "*?[,;") and
+                not usb_guard.manually_selected(port)):
+            continue
+        if allowed is not None and not usb_guard.permitted(port):
             continue
         seen.add(real)
         out.append(port)

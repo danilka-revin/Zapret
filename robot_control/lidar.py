@@ -1124,7 +1124,8 @@ def _natural_key(path: str) -> Tuple[str, int]:
 def excluded_ports() -> set[str]:
     """Порты, которые лидару трогать нельзя: мастер и модули шасси."""
     ports: set[str] = set()
-    raw = os.environ.get("RC_LIDAR_EXCLUDE") or ""
+    raw = ",".join(os.environ.get(name) or "" for name in
+                   ("RC_LIDAR_EXCLUDE", "RC_WHEEL_PORTS", "RC_SENSOR_PORT"))
     if os.environ.get("RC_USB_DISCOVERY_MODE") != "1":
         # Legacy/standalone serial mode only. In master auto mode these old
         # paths can now refer to a completely different device.
@@ -2859,9 +2860,9 @@ class LidarManager:
         Перебор идёт по кругу: если лидар стоял на одном порту, а потом его
         переподключили (или порт заняла другая программа), круг начинается не с
         него, а со следующего кандидата — «залипания» на одном USB нет.
-        ``wide=False`` (``RC_LIDAR_AUTOPROBE=0``) — узкий список: только порт из
-        ``RC_LIDAR_PORT`` и именованные symlink'и; полный перебор в этом случае
-        делает :meth:`_serial_worker` на следующем круге.
+        При одном явно заданном ``RC_LIDAR_PORT`` возвращается только он.
+        Без такого назначения ``wide=False`` ограничивает поиск именованными
+        устройствами; полный перебор возможен на следующем круге.
 
         ``module_ports`` — порты, на которых источник данных шасси подтвердил
         модули телеметрией (см. :func:`chassis_module_ports`). Он держит их
@@ -2877,10 +2878,12 @@ class LidarManager:
             configured=self.port, autoprobe=wide, excluded=excluded
         )
         if os.environ.get("RC_USB_DISCOVERY_MODE") == "1":
-            # Never send lidar motor/scan commands to an unclassified USB
-            # device. The owner first confirms a checksummed streaming lidar.
+            # Unassigned ports still need classification; an explicit single
+            # lidar assignment can start even when the device is silent.
             allowed_paths = checked_lidar_ports()
             allowed = {os.path.realpath(p) for p in allowed_paths}
+            if self.port and not any(c in self.port for c in "*?[,;"):
+                allowed.add(os.path.realpath(self.port))
             ports = [p for p in ports if os.path.realpath(p) in allowed]
             from .battery import reserved_ports
             from .printer import printer_reserved_ports
@@ -2892,6 +2895,9 @@ class LidarManager:
                 if path not in blocked and real not in blocked and real not in seen:
                     ports.append(path)
                     seen.add(real)
+        if self.port and not any(c in self.port for c in "*?[,;"):
+            selected = os.path.realpath(self.port)
+            ports = [p for p in ports if os.path.realpath(p) == selected]
         if ports:
             known = self._sticky_port(ports)
             if known is not None:
@@ -3392,8 +3398,8 @@ class LidarManager:
                 if note:
                     hint = hint + "; " + note
                 self._set_status(reason, hint=hint, warn=True)
-                if not self.autoprobe and not self._fallback_all:
-                    # RC_LIDAR_AUTOPROBE=0 — узкий список. Он только первым, а
+                if not self.port and not self.autoprobe and not self._fallback_all:
+                    # Без назначения RC_LIDAR_AUTOPROBE=0 — узкий список. Он только первым, а
                     # не единственным: со следующего круга перебираем все USB.
                     self._fallback_all = True
                     log.info("Лидар: на закреплённых портах данных нет — "
@@ -3556,7 +3562,10 @@ class LidarManager:
         if os.environ.get("RC_USB_DISCOVERY_MODE") == "1":
             from .battery import reserved_ports
             blocked = reserved_ports() | printer_reserved_ports() | set(chassis_module_ports())
-            if (real not in {os.path.realpath(p) for p in checked_lidar_ports()} or
+            manually_selected = (self.port and not any(c in self.port for c in "*?[,;")
+                                 and real == os.path.realpath(self.port))
+            blocked |= excluded_ports()
+            if ((not manually_selected and real not in {os.path.realpath(p) for p in checked_lidar_ports()}) or
                     real in {os.path.realpath(p) for p in blocked}):
                 unlock_port(fd)
                 return False

@@ -1,7 +1,7 @@
 """Shared USB classification/lock used by the ROS lidar supervisor.
 
-In automatic wheel mode, no port is probed until the onboard owner has
-passively excluded a wheel and positively identified a checksummed lidar stream.
+In automatic wheel mode, an explicitly configured lidar port is permitted;
+other ports require positive identification by the onboard owner.
 An explicitly selected BMS is always excluded.
 The same per-device flock is held while a probe or ROS driver owns the UART.
 """
@@ -76,8 +76,21 @@ def reserved_bms_ports() -> set[str]:
     return ports
 
 
+def manually_selected(port: str) -> bool:
+    """Only a single literal configured port grants manual access, never a glob."""
+    configured = (os.environ.get("RC_LIDAR_PORT") or "").strip()
+    return bool(configured and not any(c in configured for c in "*?[,;") and
+                os.path.realpath(port) == os.path.realpath(configured))
+
+
 def permitted(port: str) -> bool:
-    return not enabled() or os.path.realpath(port) in checked_lidar_ports()
+    if not enabled():
+        return True
+    real = os.path.realpath(port)
+    from .drivers import reserved_ports
+    if real in reserved_bms_ports() or real in reserved_ports():
+        return False
+    return manually_selected(port) or real in checked_lidar_ports()
 
 
 def claim(port: str):
