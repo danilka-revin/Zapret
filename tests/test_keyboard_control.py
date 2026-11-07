@@ -924,3 +924,37 @@ def test_stop_registration_is_atomic_with_newer_sequence_acceptance():
             assert results['ping']['reason'] == 'stale_command'
             assert ctl.handle(stop)[0]['ok']
             ctl.finish_preempted_stop(stop)
+
+
+def test_keyboard_traction_is_capped_at_thirty_percent():
+    """Предел WASD проверяется на борту, а не только ползунком в браузере."""
+    clock, source = Clock(), Wheels()
+    ctl = controller(source, clock)
+    assert ctl.max_percent == 30
+    result, status = ctl.handle({"action": "begin"})
+    assert status == 200 and result["maxPercent"] == 30
+    token = result["session"]
+    armed, status = send(ctl, token, 1, "arm", direction=1, angles=straight())
+    assert status == 200 and armed["ok"]
+    above, status = send(ctl, token, 2, "drive", percent=31, angles=straight(),
+                         permit=armed["permit"])
+    assert status == 400 and above["reason"] == "speed_limit"
+    assert source.commanded == 0
+    # Отказ снимает сессию; предел одинаков и для живой тяги на ходу.
+    token = ctl.handle({"action": "begin"})[0]["session"]
+    armed, _ = send(ctl, token, 1, "arm", direction=1, angles=straight())
+    above, status = send(ctl, token, 2, "live", percent=31,
+                         angles=straight(), permit=armed["permit"])
+    assert status == 400 and above["reason"] == "speed_limit"
+    assert source.commanded == 0
+
+
+def test_keyboard_limit_follows_environment(monkeypatch):
+    monkeypatch.setenv("RC_KEYBOARD_MAX_PERCENT", "12")
+    clock, source = Clock(), Wheels()
+    ctl = controller(source, clock)
+    assert ctl.max_percent == 12
+    assert ctl.handle({"action": "begin"})[0]["maxPercent"] == 12
+    # Некорректное значение не снимает ограничение и не роняет борт.
+    monkeypatch.setenv("RC_KEYBOARD_MAX_PERCENT", "не число")
+    assert controller(source, clock).max_percent == 30

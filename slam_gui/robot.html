@@ -974,7 +974,7 @@
             <div class="keyboard-head"><b>Управление WASD</b><button id="keyboard-enable" type="button" aria-pressed="false">Включить WASD</button></div>
             <div class="keyboard-options">
               <label>Режим <select id="keyboard-mode"><option value="crab">Краб</option><option value="normal">Обычное руление</option></select></label>
-              <label>Тяга, % шкалы Servo <output id="keyboard-speed-value">20</output><input id="keyboard-speed" type="range" min="1" max="100" step="1" value="20"></label>
+              <label>Тяга, % шкалы Servo (макс. <span id="keyboard-speed-max">30</span>) <output id="keyboard-speed-value">20</output><input id="keyboard-speed" type="range" min="1" max="30" step="1" value="20"></label>
               <button id="keyboard-stop" type="button" class="traction-stop">СТОП WASD</button>
             </div>
             <small>W/S/A/D выбирают направление колёс, ↓ включает движение по нему, ↑ — обратно (направления стрелок реверсированы). Стрелки ← / → разворачивают робота на месте, пока их удерживают; при отпускании тяга выключается. Разворот работает отдельно от ↑ / ↓: при одновременном нажатии несовместимых стрелок отпустите все стрелки перед следующим движением. После настройки мышью стрелки снова управляют движением; при настройке клавиатурой нажмите Esc для выхода из поля. В «крабе» A/D выставляют колёса боком, сочетания дают диагональ; противоположная сторона использует обратное вращение. В обычном режиме A/D поворачивают передние и задние колёса в противоположные стороны, отпускание возвращает руль прямо. Руление возможно на ходу; перед сменой направления вращения система тормозит. Нужна fw20 или новее на всех платах. Первые проверки — с вывешенными колёсами и независимым E-STOP.</small>

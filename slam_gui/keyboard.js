@@ -105,8 +105,25 @@
       window.RCKeyboardActive = state.enabled || state.enabling;
     }
     function valid(gen) { return state.enabled && gen === state.generation && !!state.token; }
+    // Предел тяги задаёт борт (RC_KEYBOARD_MAX_PERCENT, по умолчанию 30 %).
+    // Разметка страницы может быть старше сервера, поэтому ползунок не
+    // считается источником истины: значение всё равно срезается по пределу.
+    const FALLBACK_MAX = 30;
+    function speedMax() {
+      const limit = Number(speed && speed.max);
+      return Number.isFinite(limit) && limit > 0 ? Math.min(100, Math.round(limit)) : FALLBACK_MAX;
+    }
+    function applySpeedMax(limit) {
+      if (!speed || !Number.isFinite(Number(limit)) || Number(limit) <= 0) return;
+      speed.max = String(Math.min(100, Math.round(Number(limit))));
+      speed.value = String(speedValue());
+      const output = $('keyboard-speed-value');
+      if (output) output.textContent = String(speedValue());
+      const caption = $('keyboard-speed-max');
+      if (caption) caption.textContent = String(speedMax());
+    }
     function speedValue() {
-      return Math.max(1, Math.min(100, Math.round(Number(speed && speed.value) || 20)));
+      return Math.max(1, Math.min(speedMax(), Math.round(Number(speed && speed.value) || 20)));
     }
     async function post(body, keepalive) {
       const controller = new AbortController();
@@ -172,6 +189,10 @@
     }
     function fail(error) {
       const reason = error && error.message || 'command_failed';
+      if (reason === 'speed_limit') {
+        disable('Предел тяги WASD — ' + speedMax() + ' %: уменьшите ползунок и включите заново.');
+        return;
+      }
       disable(reasons[reason] || 'Нет подтверждения команды; тяга остановлена.');
     }
     function motorMap(data) {
@@ -322,6 +343,8 @@
           const result = await post({action: 'begin'});
           if (gen !== state.generation) { await retire(result.session, 1, false); return; }
           state.token = result.session;
+          // Борт сообщает реальный предел тяги: ползунок подстраивается под него.
+          applySpeedMax(result.maxPercent);
           state.spin = validGeometry(result.spin) ? result.spin : null;
           showGeometry(state.spin);
           state.sequence = 0;
@@ -536,6 +559,7 @@
     window.addEventListener('blur', () => { if (state.enabled || state.enabling) disable('Потерян фокус · WASD выключено.'); });
     window.addEventListener('pagehide', () => { if (state.enabled || state.enabling) disable('Страница закрыта · WASD выключено.', true); });
     document.addEventListener('visibilitychange', () => { if (document.hidden && (state.enabled || state.enabling)) disable('Вкладка скрыта · WASD выключено.', true); });
+    if (speed) applySpeedMax(speedMax());
     updateButton();
     return {disable, waitForStop, isActive: () => state.enabled || state.enabling,
       session: () => state.token,
