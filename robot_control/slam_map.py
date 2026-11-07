@@ -71,7 +71,7 @@ SCAN_STRIDE = 1
 
 # Поза скан-матчера относится к датчику, а путь/габарит — к центру корпуса.
 # Значение должно совпадать с RC_LIDAR_OFFSET_M в навигации.
-DEFAULT_LIDAR_OFFSET_M = 0.35
+DEFAULT_LIDAR_OFFSET_M = 0.28
 
 
 def lidar_mount_offset() -> float:

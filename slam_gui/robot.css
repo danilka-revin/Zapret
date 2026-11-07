@@ -563,14 +563,7 @@ body.soc-crit .kpi-sub { color: var(--err); }
   pointer-events: none;
 }
 .lidar-empty[hidden] { display: none; }
-.robot-marker {
-  position: absolute;
-  left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 26px;
-  color: var(--text);
-  pointer-events: none;
-}
+
 
 .lidar-stats {
   min-width: 0;

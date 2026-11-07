@@ -531,6 +531,22 @@ def normalize_angle(rad: float) -> float:
     return math.atan2(math.sin(rad), math.cos(rad))
 
 
+def lidar_mount_yaw_deg() -> float:
+    """Yaw from the sensor frame into the robot frame; zero is forward."""
+    try:
+        value = float(os.environ.get("RC_LIDAR_YAW_DEG", "180"))
+    except (TypeError, ValueError):
+        return 180.0
+    return value if math.isfinite(value) else 180.0
+
+
+def lidar_points_in_robot_frame(points: list[dict[str, float]], yaw_deg: Optional[float] = None) -> list[dict[str, float]]:
+    yaw = math.radians(lidar_mount_yaw_deg() if yaw_deg is None else yaw_deg)
+    if yaw % math.tau == 0:
+        return list(points)
+    return [{**point, "a": round(normalize_angle(point["a"] + yaw), 4)} for point in points]
+
+
 def scan_from_ranges(
     ranges: list[float],
     angle_min: float,
@@ -2376,6 +2392,10 @@ class LidarManager:
     _instance: Optional["LidarManager"] = None
 
     def __init__(self, port: Optional[str] = None):
+        # Freeze geometry for this session: changing it needs a restart and map reset.
+        from .slam_map import lidar_mount_offset
+        self._lidar_offset_m = lidar_mount_offset()
+        self._lidar_yaw_deg = lidar_mount_yaw_deg()
         # Resolve the same model preset used by the settings panel and .env
         # watcher. In particular, RC_LIDAR_PROTOCOL=lds01 alone means the ROS
         # driver owns the UART; reading each variable independently here used
@@ -2750,6 +2770,8 @@ class LidarManager:
     ) -> int:
         """Принимает параметры LaserScan и сохраняет точки."""
         pts = scan_from_ranges(ranges, angle_min, angle_max, angle_increment, range_min, range_max)
+        if source_label == "ros":
+            pts = lidar_points_in_robot_frame(pts, self._lidar_yaw_deg)
         self._adopt_scan(pts, source_label, stamp=stamp)
         return len(pts)
 
@@ -2825,6 +2847,8 @@ class LidarManager:
             "scan_trusted": scan_trusted,
             "age_s": round(now - scan_at, 2) if scan_at > 0 else None,
             "nearest_m": near if is_fresh else None,
+            "lidar_offset_m": self._lidar_offset_m,
+            "lidar_yaw_deg": self._lidar_yaw_deg,
             "configured_port": self.port,
             "settings": self.current_settings(),
             # В каком интерпретаторе работает веб-приложение и есть ли в нём
@@ -2985,7 +3009,8 @@ class LidarManager:
 
     def _store_scan(self, points: list[dict[str, float]], source_label: str) -> None:
         with self.lock:
-            self.scan = list(points)
+            self.scan = (lidar_points_in_robot_frame(points, self._lidar_yaw_deg)
+                         if source_label.startswith("serial:") else list(points))
             self.scan_at = time.time()
             self.source_type = source_label
             self.scan_peer_source = None

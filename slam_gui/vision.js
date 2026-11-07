@@ -36,7 +36,7 @@ const LIDAR_MAX = 10;
 const ROBOT_LENGTH_M = 0.75;
 const ROBOT_WIDTH_M = 0.60;
 const ROBOT_HEIGHT_M = 0.30;
-const LIDAR_OFFSET_X_M = 0.35;
+const LIDAR_OFFSET_X_M = 0.28;
 const GRID_RES = 0.12;
 const GRID_W = 320;
 const GRID_H = 240;
@@ -513,12 +513,12 @@ function drawRobotTop(ctx, u, v, yaw, s) {
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  /* Лидар спереди корпуса (+35 см по оси X) */
+  /* Лидар спереди корпуса (+28 см по оси X) */
   ctx.fillStyle = "#27c1e8";
   ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = Math.max(1, s * 0.04);
   ctx.beginPath();
-  ctx.arc(L * 0.88, 0, Math.max(2.5, s * 0.14), 0, Math.PI * 2);
+  ctx.arc(L * (LIDAR_OFFSET_X_M / (ROBOT_LENGTH_M / 2)), 0, Math.max(2.5, s * 0.14), 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
 

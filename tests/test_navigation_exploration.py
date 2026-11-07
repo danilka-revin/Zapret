@@ -368,7 +368,7 @@ def test_real_map_scan_matcher_planner_and_worker_in_synthetic_room():
 
         def tick(self):
             with self.lock:
-                scan = room_scan(9, 9, px=self.pose["x"] + 0.35, py=self.pose["y"])
+                scan = room_scan(9, 9, px=self.pose["x"] + 0.28, py=self.pose["y"])
                 self.lidar.points = scan
                 self.map.ingest(scan, stamp=time.time(), trusted=True)
 
@@ -450,7 +450,7 @@ class BlindSpotMap(FakeMap):
         snapshot = super().navigation_snapshot()
         data = bytearray(snapshot['data'])
         # Fixed world cell under the original lidar at the first preview.
-        ix, iy = _cell(snapshot, 0.35, 0.0)
+        ix, iy = _cell(snapshot, 0.28, 0.0)
         data[iy * snapshot['width'] + ix] = 255
         snapshot['data'] = bytes(data)
         return snapshot
@@ -465,7 +465,7 @@ def test_blind_zone_moved_after_preview_requires_new_inspection_and_plan():
     with pytest.raises(NavigationError) as exc:
         nav.start({**body, 'blindZoneChecked': True})
     assert exc.value.code == 'plan_changed'
-    assert exc.value.details['plan']['blindZone']['x'] == pytest.approx(0.4)
+    assert exc.value.details['plan']['blindZone']['x'] == pytest.approx(0.33)
     assert not source.moves and not nav.active
 
 
@@ -488,7 +488,7 @@ def test_blind_zone_moved_during_stop_barrier_never_starts_driving():
     nav.start({**body, 'blindZoneChecked': True})
     state = await_finished(nav)
     assert state['phase'] == 'planned' and 'провер' in state['message'].lower()
-    assert state['plan']['blindZone']['x'] == pytest.approx(0.4)
+    assert state['plan']['blindZone']['x'] == pytest.approx(0.33)
     assert not source.moves and source.percent == 0
 
 

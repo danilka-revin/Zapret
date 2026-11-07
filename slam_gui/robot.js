@@ -394,7 +394,9 @@
   function drawLidar(canvas, pts, d) {
     if (!canvas) return;
     const stamp = d && d.lidarStatus ? d.lidarStatus.scan_at : null;
-    if (window.RCLidarView) window.RCLidarView.render(canvas, pts, { stamp });
+    if (window.RCLidarView) window.RCLidarView.render(canvas, pts, {
+      stamp, lidarOffsetM: d && d.lidarStatus ? d.lidarStatus.lidar_offset_m : null
+    });
   }
 
   // На основной карте остаётся короткая подпись, а подробная диагностика,

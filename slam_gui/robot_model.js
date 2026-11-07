@@ -97,7 +97,7 @@
   function draw(ctx, x, y, yaw, scale, options = {}) {
     const live = options.state || state();
     const pal = palette(options.light);
-    const k = Math.max(scale, options.minScale || 42);
+    const k = Math.max(scale, Number.isFinite(options.minScale) ? options.minScale : 42);
     ctx.save(); ctx.translate(x, y); ctx.rotate(-yaw);
     ctx.fillStyle = pal.body; ctx.strokeStyle = live.estop ? '#c0505a' : pal.edge; ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -140,7 +140,7 @@
     ctx.beginPath(); ctx.moveTo(.20 * k, 0); ctx.lineTo(-.08 * k, -.10 * k);
     ctx.lineTo(-.04 * k, 0); ctx.lineTo(-.08 * k, .10 * k); ctx.closePath(); ctx.fill();
     ctx.fillStyle = live.estop ? '#c0505a' : pal.edge;
-    const lidarOffset = Number.isFinite(options.lidarOffsetM) ? options.lidarOffsetM : .35;
+    const lidarOffset = Number.isFinite(options.lidarOffsetM) ? options.lidarOffsetM : .28;
     ctx.beginPath(); ctx.arc(lidarOffset * k, 0, Math.max(3, .045 * k), 0, Math.PI * 2); ctx.fill();
     ctx.restore();
     return live;
