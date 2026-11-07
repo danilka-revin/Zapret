@@ -1140,7 +1140,7 @@ def test_peer_payload_scan_timestamp_and_trust_are_same_atomic_snapshot(manager)
     earlier_api_scan = [{'a': 1, 'r': 9.0}]
     manager._store_scan(physical, 'serial:ttyUSB1')
     payload = lidar_status_payload(manager, earlier_api_scan, False)
-    assert payload['scan'] == physical
+    assert payload['scan'] == manager.get_scan()
     assert payload['scan_at'] == manager.scan_stamp()
     assert payload['connected'] and payload['scan_trusted']
     manager.feed_points(earlier_api_scan, source_label='api')

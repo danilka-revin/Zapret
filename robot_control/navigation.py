@@ -855,7 +855,7 @@ def _obstacle_ahead(points: list[dict], body_angle: float,
         if not math.isfinite(angle) or not math.isfinite(distance) or distance <= 0:
             continue
         # Точки приходят относительно переднего лидара, не центра корпуса.
-        # Особенно важно для реверса: хвост дальше от датчика на 35 см.
+        # Особенно важно для реверса: хвост дальше от датчика на величину его смещения.
         px, py = lidar_offset_m + distance * math.cos(angle), distance * math.sin(angle)
         along = px * ux + py * uy
         cross = abs(px * uy - py * ux)

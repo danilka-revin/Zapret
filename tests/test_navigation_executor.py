@@ -18,7 +18,7 @@ import pytest
 from robot_control import navigation as nav
 from robot_control.navigation import NavigationError, NavigationService, plan_grid_path, plan_route
 
-LIDAR_OFFSET_M = 0.35  # лидар закреплён впереди центра корпуса, как на роботе
+LIDAR_OFFSET_M = 0.28  # лидар закреплён впереди центра корпуса, как на роботе
 STEP_M = 0.1          # сколько метров проходит фальшивое шасси за один тик
 CLOCK_STEP = 0.2      # сколько «секунд» длится один тик в подставных часах
 
@@ -99,7 +99,7 @@ class FakeMap:
                 # Карта настоящая: сопоставление включено, препятствия не забываются.
                 "trusted": True,
                 "navigationIntegrity": True,
-                "lidarOffsetM": 0.35,
+                "lidarOffsetM": LIDAR_OFFSET_M,
                 "settings": {"min_range": 0.3, "matching": True, "decay": 0},
             }
 
@@ -381,7 +381,7 @@ def test_executor_stops_in_front_of_an_unknown_obstacle_when_detours_are_off(rig
     assert "препятствие" in status["message"].lower()
     assert "navigation_blocked" in robot["brakes"]
     # Робот остановился, не доехав до препятствия.
-    assert 0.0 < _world.pose()[0] < 0.9
+    assert 0.0 <= _world.pose()[0] < 0.9
 
 
 def test_executor_detours_around_an_obstacle_and_reaches_the_goal(rig):

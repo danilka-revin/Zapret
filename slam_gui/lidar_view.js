@@ -32,7 +32,7 @@
   const ROBOT_LENGTH_M = 0.75;
   const ROBOT_WIDTH_M = 0.60;
   const ROBOT_HEIGHT_M = 0.30;
-  const LIDAR_OFFSET_X_M = 0.35;
+  const LIDAR_OFFSET_X_M = 0.28;
   const WHEELBASE_M = 0.50;    // расстояния между осями поворота, по умолчанию
   const TRACK_M = 0.38;
   const WHEEL_LEN_M = 0.14;    // размер колеса вдоль оси, м
@@ -364,10 +364,10 @@
     }
   }
 
-  // Кольца дальности от робота и подписи в метрах (как RViz Grid + distance rings).
+  // Дальность измеряется от датчика, а оси и сетка — от центра корпуса.
   function drawRings(ctx, view, L, step) {
-    const ox = L.cx + view.py * L.k;    // экран робота
-    const oy = L.cy + view.px * L.k;
+    const ox = L.cx + view.py * L.k;
+    const oy = L.cy + (view.px - (view.lidarOffsetM ?? LIDAR_OFFSET_X_M)) * L.k;
     const maxR = Math.hypot(L.w, L.h) / L.k + Math.hypot(view.px, view.py);
     ctx.strokeStyle = 'rgba(214,204,209,0.28)';
     ctx.fillStyle = 'rgba(226,214,220,0.9)';
@@ -420,10 +420,11 @@
   }
 
   // Шасси в масштабе метра: корпус 75×60 см (высота 30 см), четыре колеса,
-  // лидар спереди корпуса (+0.35 м по X) и нос-стрелка.
+  // лидар спереди корпуса (+0.28 м по X) и нос-стрелка.
   function drawRobot(ctx, view, L) {
     if (window.RCRobotModel) {
-      window.RCRobotModel.draw(ctx, L.cx + view.py * L.k, L.cy + view.px * L.k, Math.PI / 2, L.k);
+      window.RCRobotModel.draw(ctx, L.cx + view.py * L.k, L.cy + view.px * L.k, Math.PI / 2, L.k,
+        { lidarOffsetM: view.lidarOffsetM ?? LIDAR_OFFSET_X_M, minScale: 0 });
       return;
     }
     const ox = L.cx + view.py * L.k;
@@ -452,7 +453,7 @@
       });
     });
     // Лидар установлен спереди корпуса (по оси +X).
-    const lidarY = oy - LIDAR_OFFSET_X_M * L.k;
+    const lidarY = oy - (view.lidarOffsetM ?? LIDAR_OFFSET_X_M) * L.k;
     const lidarR = Math.max(3, Math.min(7, 0.055 * L.k));
     ctx.fillStyle = '#27c1e8';
     ctx.strokeStyle = '#ffffff';
@@ -485,7 +486,7 @@
       ctx.globalAlpha = baseAlpha * fade;
       frame.pts.forEach((p) => {
         if (!(p.r >= 0)) return;
-        const wx = p.r * Math.cos(p.a);
+        const wx = (view.lidarOffsetM ?? LIDAR_OFFSET_X_M) + p.r * Math.cos(p.a);
         const wy = p.r * Math.sin(p.a);
         const x = L.cx - (wy - view.py) * L.k;
         const y = L.cy - (wx - view.px) * L.k;
@@ -545,6 +546,8 @@
     const view = attach(canvas);
     if (!view) return;
     view.pts = Array.isArray(pts) ? pts : [];
+    const offset = options && options.lidarOffsetM;
+    view.lidarOffsetM = Number.isFinite(offset) && offset >= 0 && offset <= 1.5 ? offset : LIDAR_OFFSET_X_M;
     const now = Date.now() / 1000;
     if (settings.decay > 0) {
       const key = frameKey(view.pts, options && options.stamp);

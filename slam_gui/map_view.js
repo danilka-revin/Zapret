@@ -1,7 +1,7 @@
 /* Страница «Карта лидара» и отдельное окно «Движение по маршруту».
  *
  * Габариты робота: длина 75 см (0.75 м), ширина 60 см (0.60 м), высота 30 см (0.30 м).
- * Лидар установлен спереди корпуса (+0.35 м по продольной оси +X).
+ * Лидар установлен спереди корпуса (+0.28 м по продольной оси +X).
  *
  * Карту строит сервер (robot_control/slam_map.py): он же впитывает сканы
  * лидара, считает позу и перезаписывает файл карты на рабочем столе.
@@ -22,7 +22,7 @@
   const ROBOT_LENGTH_M = 0.75;
   const ROBOT_WIDTH_M = 0.60;
   const ROBOT_HEIGHT_M = 0.30;
-  const LIDAR_OFFSET_X_M = 0.35;
+  const LIDAR_OFFSET_X_M = 0.28;
   const WHEELBASE_M = 0.50;    // расстояния между осями поворота, по умолчанию
   const TRACK_M = 0.38;
   const GOAL_STORAGE_KEY = 'rc_nav_goal_v1';
@@ -267,7 +267,7 @@
   /* Рисуем робот 75×60 см (высота 30 см) с 4 колёсами и передним лидаром. */
   function drawRobotChassis(ctx, screenX, screenY, yaw, scale, pal, steerRad) {
     if (window.RCRobotModel) {
-      const options = { light: state.theme === 'light', lidarOffsetM: lidarOffset() };
+      const options = { light: state.theme === 'light', lidarOffsetM: lidarOffset(), minScale: 0 };
       if (state.previewActive) {
         // steerRad — в системе ROS: плюс означает поворот влево. Модель шасси
         // рисует углы в системе прошивки (плюс — вправо), поэтому знак
@@ -361,7 +361,7 @@
     const p = worldToCanvas(pose.x, pose.y, view);
     if (window.RCRobotModel) {
       window.RCRobotModel.draw(ctx, p.x, p.y, pose.yaw || 0, view.scale,
-        { light: state.theme === 'light', lidarOffsetM: lidarOffset() });
+        { light: state.theme === 'light', lidarOffsetM: lidarOffset(), minScale: 0 });
     } else drawRobotChassis(ctx, p.x, p.y, pose.yaw || 0, view.scale, pal, 0);
   }
 
@@ -791,7 +791,7 @@
     }
 
     // Башня лидара СПЕРЕДИ (правый передний край корпуса).
-    const lx = bx + bodyW - 8;
+    const lx = bx + bodyW * (0.5 + lidarOffset() / ROBOT_LENGTH_M);
     const ly = by - 6;
     ctx.fillStyle = '#27c1e8';
     ctx.strokeStyle = '#ffffff';

@@ -54,7 +54,7 @@ DRIVE_FIELDS: tuple[tuple[str, str, str, float, float, Optional[float]], ...] = 
     ("RC_NAV_SPEED_MPS", "Уставка скорости", "м/с", 0.01, 1.0, 0.05),
     ("RC_NAV_MAX_PERCENT", "Предел тяги", "%", 1.0, 100.0, 4.0),
     ("RC_NAV_FOOTPRINT_M", "Защитный радиус", "м", 0.1, 3.0, 0.55),
-    ("RC_LIDAR_OFFSET_M", "Смещение лидара вперёд", "м", -2.0, 2.0, 0.35),
+    ("RC_LIDAR_OFFSET_M", "Смещение лидара вперёд", "м", 0.0, 1.5, 0.28),
 )
 DRIVE_LIMITS: dict[str, tuple[float, float]] = {
     key: (lo, hi) for key, _label, _unit, lo, hi, _default in DRIVE_FIELDS
