@@ -38,11 +38,10 @@ fi
 [[ -x .venv/bin/pip ]] || { echo "Не удалось поставить pip в .venv." >&2; exit 127; }
 
 # Какие модули обязаны импортироваться в .venv: flask/gunicorn — веб-пульт,
-# serial (pyserial) — USB-лидар и UART-модули. Проверяем именно импорт, а не
-# только хэш requirements.txt: при прерванной установке хэш уже записан, а
-# pyserial нет — и тогда лидар «не работает» молча, хотя скрипт установки
-# отрапортовал об успехе.
-REQUIRED_MODULES=(flask gunicorn serial)
+# serial (pyserial) — USB-лидар и UART-модули, em (Empy) — ROS 2 rosidl/rclpy.
+# Проверяем именно импорт, а не только хэш requirements.txt: при прерванной
+# установке модуль может отсутствовать, хотя хэш уже записан.
+REQUIRED_MODULES=(flask gunicorn serial em)
 
 missing_deps() {
   local missing=() module
@@ -75,7 +74,8 @@ fi
 MISSING="$(missing_deps)"
 if [[ -n "$MISSING" ]]; then
   echo "Не удалось установить в .venv: $(echo "$MISSING" | tr '\n' ' ')" >&2
-  echo "Без pyserial USB-лидар не читается. Поставь вручную и повтори запуск:" >&2
+  echo "Без pyserial не читается USB-лидар, а без Empy ROS 2 не импортирует rclpy." >&2
+  echo "Поставь зависимости вручную и повтори запуск:" >&2
   echo "  .venv/bin/pip install --no-index --find-links vendor -r requirements.txt" >&2
   exit 1
 fi

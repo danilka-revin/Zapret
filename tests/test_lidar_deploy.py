@@ -109,16 +109,35 @@ def run_deps(project: Path, env: dict) -> subprocess.CompletedProcess:
     )
 
 
-def test_ensure_deps_installs_pyserial_offline(offline_install):
+def test_ensure_deps_installs_pyserial_and_empy_offline(offline_install):
     project, env = offline_install
     result = run_deps(project, env)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "pyserial" in result.stdout
     check = subprocess.run(
-        [str(project / ".venv" / "bin" / "python"), "-c", "import serial; print(serial.VERSION)"],
+        [str(project / ".venv" / "bin" / "python"), "-c",
+         "import serial, em; from importlib.metadata import version; "
+         "print(serial.VERSION, version('empy'))"],
         capture_output=True, text=True, timeout=60,
     )
-    assert check.returncode == 0 and check.stdout.strip() == "3.5", check.stderr
+    assert check.returncode == 0 and check.stdout.strip() == "3.5 4.2.1", check.stderr
+
+
+def test_ensure_deps_repairs_missing_empy(offline_install):
+    project, env = offline_install
+    assert run_deps(project, env).returncode == 0
+    pip = project / ".venv" / "bin" / "pip"
+    python = project / ".venv" / "bin" / "python"
+    assert subprocess.run([str(pip), "uninstall", "-y", "empy"],
+                          capture_output=True, text=True, timeout=300).returncode == 0
+    assert subprocess.run([str(python), "-c", "import em"],
+                          capture_output=True, text=True).returncode != 0
+
+    repaired = run_deps(project, env)
+    assert repaired.returncode == 0, repaired.stdout + repaired.stderr
+    assert "не хватает" in repaired.stdout
+    assert subprocess.run([str(python), "-c", "import em"],
+                          capture_output=True, text=True, timeout=60).returncode == 0
 
 
 def test_ensure_deps_repairs_missing_pyserial(offline_install):
