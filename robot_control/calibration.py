@@ -52,7 +52,7 @@ KINECT_FIELDS: tuple[tuple[str, str, str], ...] = (
 DRIVE_FIELDS: tuple[tuple[str, str, str, float, float, Optional[float]], ...] = (
     ("RC_NAV_MPS_PER_PERCENT", "Скорость на 1% тяги (измерить!)", "м/с", 0.0001, 1.0, None),
     ("RC_NAV_SPEED_MPS", "Уставка скорости", "м/с", 0.01, 1.0, 0.05),
-    ("RC_NAV_MAX_PERCENT", "Предел тяги", "%", 1.0, 100.0, 4.0),
+    ("RC_NAV_MAX_PERCENT", "Предел тяги", "%", 1.0, 100.0, 30.0),
     ("RC_NAV_FOOTPRINT_M", "Защитный радиус", "м", 0.1, 3.0, 0.55),
     ("RC_LIDAR_OFFSET_M", "Смещение лидара вперёд", "м", 0.0, 1.5, 0.28),
 )

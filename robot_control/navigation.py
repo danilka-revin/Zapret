@@ -49,7 +49,33 @@ DEFAULT_ROBOT_WIDTH_M = 0.60
 DEFAULT_ROBOT_HEIGHT_M = 0.30
 DEFAULT_QUALITY_MIN = 0.55
 DEFAULT_SPEED_MPS = 0.05
-DEFAULT_MAX_PERCENT = 4
+#: Предел тяги автономии, %. Поднят с 4 %: на замере оператора (Servo 30 ≈ 16,7 %
+#: команды t) 4 % соответствовали ~0,15 м/с, и шасси «не ехало» — тяга ниже
+#: мёртвой зоны. 30 % даёт запас на реальную нагрузку и остаётся вдвое ниже
+#: предела прошивки (DRIVE_MAX_PERCENT=100) и ползунка WASD.
+DEFAULT_MAX_PERCENT = 30
+#: Абсолютный потолок уставки скорости, м/с. Держим его ниже измеренной
+#: скорости на пределе тяги: 30 % × 0,0375 м/с = 1,12 м/с, поэтому 1,0 м/с.
+MAX_SPEED_MPS = 1.0
+#: Период цикла управления, с. Раньше он был жёстко 0,2 с: на 4 % (≈0,15 м/с)
+#: это 3 см за тик, а на 1 м/с — уже 20 см, больше тормозного пути. Опрос
+#: скана и телеметрии ускоряется вместе с уставкой, чтобы за один тик робот
+#: проезжал не больше CONTROL_STEP_M.
+CONTROL_PERIOD_S = 0.2
+MIN_CONTROL_PERIOD_S = 0.1
+CONTROL_STEP_M = 0.05
+
+
+def control_period_s(speed_mps: float) -> float:
+    """Период опроса под текущую уставку: не длиннее шага CONTROL_STEP_M."""
+    try:
+        speed = float(speed_mps)
+    except (TypeError, ValueError):
+        return CONTROL_PERIOD_S
+    if not math.isfinite(speed) or speed <= 0:
+        return CONTROL_PERIOD_S
+    return max(MIN_CONTROL_PERIOD_S,
+               min(CONTROL_PERIOD_S, CONTROL_STEP_M / speed))
 DEFAULT_SCAN_AGE_S = 1.0
 DEFAULT_WAYPOINT_TOLERANCE_M = 0.14
 #: Ближе этого препятствие в коридоре движения — только остановка, без обхода.
@@ -956,7 +982,7 @@ class NavigationService:
             if mps_per_percent is None else mps_per_percent
         )
         self.speed_mps = (speed_mps if speed_mps is not None else
-                          _env_float("RC_NAV_SPEED_MPS", DEFAULT_SPEED_MPS, 0.02, 0.10))
+                          _env_float("RC_NAV_SPEED_MPS", DEFAULT_SPEED_MPS, 0.02, MAX_SPEED_MPS))
         if max_drive_percent is None:
             try:
                 max_drive_percent = int(os.environ.get("RC_NAV_MAX_PERCENT", DEFAULT_MAX_PERCENT))
@@ -1171,7 +1197,7 @@ class NavigationService:
             if not active:
                 self.enabled = _env_bool("RC_NAV_ENABLE", False)
                 self.mps_per_percent = _env_optional_positive("RC_NAV_MPS_PER_PERCENT")
-                self.speed_mps = _env_float("RC_NAV_SPEED_MPS", DEFAULT_SPEED_MPS, 0.02, 0.10)
+                self.speed_mps = _env_float("RC_NAV_SPEED_MPS", DEFAULT_SPEED_MPS, 0.02, MAX_SPEED_MPS)
                 try:
                     requested_percent = int(os.environ.get("RC_NAV_MAX_PERCENT",
                                                            DEFAULT_MAX_PERCENT))
@@ -1220,6 +1246,9 @@ class NavigationService:
             "canStart": bool(ready and plan and plan.get("executable", True) and not self.active),
             "canResume": bool(resumable),
             "detourLimit": self.max_detours,
+            # Реальные пределы — чтобы экран показывал их, а не константы в подписях.
+            "maxDrivePercent": self.max_drive_percent,
+            "speedMps": self.speed_mps,
             "reason": reason,
             "diagnostics": diagnostics,
             "goal": dict(goal) if goal else None,
@@ -1708,6 +1737,9 @@ class NavigationService:
                 point = requested
             total_length = max(0.01, float(plan["distanceM"]), requested_length)
             mission_timeout = max(60.0, min(600.0, total_length / self.speed_mps * 4.0 + 30.0))
+            # Чем быстрее уставка, тем чаще проверяем скан и позицию: иначе за
+            # один тик робот проезжает больше тормозного пути.
+            tick_period = control_period_s(self.speed_mps)
             with self._lock:
                 self._plan = plan
             traveled_estimate = 0.0
@@ -1945,7 +1977,7 @@ class NavigationService:
                         waypoint=segment_index, totalWaypoints=plan["waypoints"],
                         currentPose={"x": round(current[0], 3), "y": round(current[1], 3),
                                      "yaw": round(yaw, 3)}, drivePercent=result.get("percent", 0))
-                    cancel.wait(0.2)
+                    cancel.wait(tick_period)
                 if cancel.is_set():
                     break
 

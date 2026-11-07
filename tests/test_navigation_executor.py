@@ -214,7 +214,8 @@ def rig(monkeypatch):
     """Собрать сервис с фальшивым шасси; возвращает все части для проверок."""
 
     def build(*, detours=None, clock_step: float = CLOCK_STEP, robots=1,
-              speed_mps: float = 0.05, mps_per_percent: float = 0.02):
+              speed_mps: float = 0.05, mps_per_percent: float = 0.02,
+              max_drive_percent: int = 30):
         if detours is None:
             monkeypatch.delenv("RC_NAV_DETOUR_ATTEMPTS", raising=False)
         else:
@@ -260,7 +261,8 @@ def rig(monkeypatch):
         monkeypatch.setattr(nav, "MasterBridge", Bridge)
         service = NavigationService(
             world, source, lidar, enabled=True,
-            mps_per_percent=mps_per_percent, speed_mps=speed_mps, max_drive_percent=4,
+            mps_per_percent=mps_per_percent, speed_mps=speed_mps,
+            max_drive_percent=max_drive_percent,
             clock=clock,
         )
         return service, world, source, lidar, robot
@@ -575,17 +577,40 @@ def test_measured_calibration_drives_to_the_goal(rig):
     assert ("drive", 0) in source.commands
 
 
-def test_measured_calibration_rejects_a_too_fast_setpoint(rig):
-    """При этой же калибровке 0,10 м/с требует 3% — всё ещё в пределах лимита."""
+def test_measured_calibration_fits_the_raised_traction_limit(rig):
+    """С пределом 30 % рабочая точка оператора (0,625 м/с) проходит."""
     service, _world, _source, _lidar, _robot = rig(
-        mps_per_percent=MEASURED_MPS_PER_PERCENT, speed_mps=0.10)
+        mps_per_percent=MEASURED_MPS_PER_PERCENT, speed_mps=0.625)
     checks = service.status()["diagnostics"]["checks"]
+    assert checks["speedCalibrated"] is True
+    # 0,625 / 0,0375 = 16,7 % — внутри предела 30 %.
     assert checks["speedWithinLimit"] is True
-    # А вот 0,5 м/с потребовали бы 13% — за пределом 4%, старт запрещён.
-    fast = NavigationService(service.map_service, service.source, enabled=True,
-                             mps_per_percent=MEASURED_MPS_PER_PERCENT,
-                             speed_mps=0.10, max_drive_percent=1, clock=service.clock)
-    assert fast.status()["diagnostics"]["checks"]["speedWithinLimit"] is False
+    # А прежний предел в 4 % эту же уставку отверг бы: «не едет» было именно так.
+    tight = NavigationService(service.map_service, service.source, enabled=True,
+                              mps_per_percent=MEASURED_MPS_PER_PERCENT,
+                              speed_mps=0.625, max_drive_percent=4, clock=service.clock)
+    assert tight.status()["diagnostics"]["checks"]["speedWithinLimit"] is False
+
+
+def test_default_traction_limit_is_30_percent(rig):
+    """Предел по умолчанию — 30 %, а не 4 %: на 4 % шасси не трогалось."""
+    service, _world, _source, _lidar, _robot = rig(
+        mps_per_percent=MEASURED_MPS_PER_PERCENT, speed_mps=0.30)
+    assert service.max_drive_percent == 30
+    assert service.status()["diagnostics"]["checks"]["speedWithinLimit"] is True
+
+
+def test_control_period_shrinks_with_speed():
+    """На большой скорости опрос чаще: за тик не больше 5 см пути."""
+    from robot_control.navigation import (CONTROL_PERIOD_S, MIN_CONTROL_PERIOD_S,
+                                          control_period_s)
+    assert control_period_s(0.05) == CONTROL_PERIOD_S          # медленно — как было
+    # 5 см / 0,625 м/с = 0,08 с, но чаще 10 Гц не опрашиваем — берётся нижняя граница.
+    assert control_period_s(0.625) == MIN_CONTROL_PERIOD_S
+    assert control_period_s(0.15) == CONTROL_PERIOD_S           # 0,33 с > потолка 0,2 с
+    assert control_period_s(0.25) == pytest.approx(0.2)         # 5 см / 0,25 = 0,2 с
+    assert control_period_s(5.0) == MIN_CONTROL_PERIOD_S        # не быстрее 10 Гц
+    assert control_period_s(0) == CONTROL_PERIOD_S
 
 
 def test_calibration_is_not_assumed_when_value_is_missing(rig, monkeypatch):
