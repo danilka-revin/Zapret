@@ -36,7 +36,7 @@ WHEEL_TITLES = {"FL": "Переднее левое", "FR": "Переднее п�
 
 #: Один ключ на четыре порта: роли колёс определяет прошивка, а не порядок.
 WHEEL_ENV_KEY = "RC_WHEEL_PORTS"
-#: Порт модуля датчиков задаётся вручную (на /devices этой роли нет).
+#: Порт модуля датчиков задаётся вручную на странице /devices.
 SENSOR_ENV_KEY = "RC_SENSOR_PORT"
 WHEEL_SLOTS = 4
 
@@ -78,6 +78,7 @@ ROLE_ENV: dict[str, tuple[str, ...]] = {
     "kinect": ("RC_KINECT_PORT",),
     "bms": ("RC_BMS_PORT",),
     "printer": ("RC_PRINTER_PORT",),
+    "sensors": (SENSOR_ENV_KEY,),
 }
 ROLE_TITLES: dict[str, str] = {
     "camera_FL": "Камера · передняя левая",
@@ -88,17 +89,19 @@ ROLE_TITLES: dict[str, str] = {
     "kinect": "Kinect · глубина",
     "bms": "BMS · аккумулятор",
     "printer": "Чековый принтер",
+    "sensors": "Модуль датчиков",
 }
 ROLE_KIND: dict[str, str] = {
     "camera_FL": "video", "camera_FR": "video",
     "camera_RL": "video", "camera_RR": "video",
-    "lidar": "serial", "bms": "serial", "printer": "serial", "kinect": "usb",
+    "lidar": "serial", "bms": "serial", "printer": "serial", "sensors": "serial", "kinect": "usb",
 }
 ROLE_ENV_HINTS: dict[str, str] = {
     "lidar": "Порт UART лидара. Сохраняется в .env и применяется сразу.",
     "kinect": "USB-топология Kinect (usb:1-2). Публикатор глубины читает её при запуске.",
     "bms": "Порт USB-UART BMS (JBD). Сохраняется в .env и применяется сразу.",
     "printer": "Порт USB-UART принтера. Подтверждается физически и сразу включается.",
+    "sensors": "Порт USB-UART модуля датчиков. Сохраняется в RC_SENSOR_PORT и применяется сразу.",
 }
 
 #: Кому принадлежит порт — так и пишем в ошибке, а не «занят».
@@ -192,9 +195,6 @@ def assigned_ports(except_role: str | None = None) -> dict[str, str]:
         port = role_port(role)
         if port:
             out[role] = port
-    sensors = env_value(SENSOR_ENV_KEY)
-    if sensors and except_role != "sensors":
-        out["sensors"] = sensors
     return out
 
 

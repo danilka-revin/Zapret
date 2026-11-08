@@ -218,6 +218,7 @@ function foundRows() {
     lidar: picker('pick-lidar'),
     kinect: picker('pick-kinect'),
     printer: picker('pick-printer'),
+    sensors: picker('pick-sensors'),
     wheels: ['1', '2', '3', '4'].map((index) => picker('wheel-pick-' + index)),
     inputs: ['hint-camera_FL', 'hint-lidar', 'wheel-slot-1'].map((id) => byId(id).value),
     status: byId('server-status').textContent,

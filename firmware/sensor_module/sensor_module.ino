@@ -10,8 +10,8 @@
   Замок двери (серво):     сигнал — 7  (питание серво — отдельное, не с 5 В Mega)
 
 Свет:
-  реле 1 — передний свет (head)      реле 3 — левый поворотник (left)
-  реле 2 — стоп-сигнал (stop)        реле 4 — правый поворотник (right)
+  реле 1 — левый поворотник (left)   реле 3 — стоп-сигнал (stop)
+  реле 2 — правый поворотник (right) реле 4 — передний свет (head)
   габариты, стоп и поворотники дублируются адресной лентой; яркость габаритов
   задаётся командой dim.
 
@@ -800,10 +800,12 @@ uint8_t effectiveLights() {
 }
 
 void applyRelays(uint8_t mask) {
-  relayWrite(0, (mask & LIGHT_HEAD) != 0);
-  relayWrite(1, (mask & LIGHT_STOP) != 0);
-  relayWrite(2, (mask & LIGHT_LEFT) != 0);
-  relayWrite(3, (mask & LIGHT_RIGHT) != 0);
+  // Физический порядок реле: 1 левые, 2 правые, 3 стопы, 4 передние.
+  // Биты протокола light= остаются семантическими: left/right/head/stop.
+  relayWrite(0, (mask & LIGHT_LEFT) != 0);
+  relayWrite(1, (mask & LIGHT_RIGHT) != 0);
+  relayWrite(2, (mask & LIGHT_STOP) != 0);
+  relayWrite(3, (mask & LIGHT_HEAD) != 0);
 }
 
 //: Насколько далеко от головы волны пиксель ещё горит (в диодах).

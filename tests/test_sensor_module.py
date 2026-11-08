@@ -91,6 +91,17 @@ def test_rc522_is_fed_from_3v3_and_documented_as_such():
     assert "RC522_VCC" not in text
 
 
+def test_relay_order_matches_vehicle_wiring_without_changing_protocol_bits():
+    text = _text()
+    apply = text[text.index("void applyRelays("):text.index("//: Насколько далеко", text.index("void applyRelays("))]
+    assert re.search(r"relayWrite\(0,\s*\(mask & LIGHT_LEFT\)", apply)
+    assert re.search(r"relayWrite\(1,\s*\(mask & LIGHT_RIGHT\)", apply)
+    assert re.search(r"relayWrite\(2,\s*\(mask & LIGHT_STOP\)", apply)
+    assert re.search(r"relayWrite\(3,\s*\(mask & LIGHT_HEAD\)", apply)
+    assert re.search(r"LIGHT_HEAD\s*=\s*1\s*<<\s*0", text)
+    assert re.search(r"LIGHT_STOP\s*=\s*1\s*<<\s*1", text)
+
+
 def test_relays_and_strip_are_off_after_reset_and_watchdog_runs():
     """После сброса свет выключен, замок закрыт; watchdog включён и кормится."""
     text = _text()

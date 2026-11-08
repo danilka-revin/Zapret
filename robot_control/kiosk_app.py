@@ -1093,6 +1093,23 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             raise
         return "Принтер: %s" % (port or "порт не назначен"), result
 
+    def _sensor_assign(port):
+        """Сохранить порт и сразу переоткрыть клиента платы датчиков."""
+        device_ports.save_role("sensors", port)
+        previous = app.extensions.get("rc_sensor_module")
+        if previous is not None:
+            previous.stop()
+        module = None
+        if port:
+            module = sensor_module_client.open_sensor_module(
+                log=lambda message: eventlog.record("warn", message, source="sensor"))
+            if module is not None:
+                module.start()
+        app.extensions["rc_sensor_module"] = module
+        return ("Модуль датчиков: %s. Применено сразу%s" %
+                (port or "порт не назначен", "" if port else "; подключение отключено")), {
+                    "port": port, "applied": True}
+
     def _ports_body(limit=8192):
         import json
         if request.headers.get("X-Robot-Control") != "devices":
@@ -1142,6 +1159,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                         message, result = _kinect_assign(port)
                     elif role == "bms":
                         message, result = _bms_assign(port)
+                    elif role == "sensors":
+                        message, result = _sensor_assign(port)
                     else:
                         message, result = _printer_assign(port)
             eventlog.record("ok", message, source="устройства")
