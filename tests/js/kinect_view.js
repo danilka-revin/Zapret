@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const {decodeFrame, transformLidar, transformKinect, robotParts} = require('../../slam_gui/kinect_view.js');
+const {decodeFrame, transformLidar, transformKinect, robotParts, orbitCoordinates} = require('../../slam_gui/kinect_view.js');
 const payload = {available: true, oneFrameOnly: true, notForNavigation: true,
   width: 2, height: 2, stride: 2, fx: 2, fy: 2, cx: 1, cy: 1,
   data: Buffer.from([0xe8, 3, 0, 0, 0xd0, 7, 0xb8, 0x0b]).toString('base64')};
@@ -17,6 +17,8 @@ assert.ok(Math.abs(kinectPoint[0] - .2) < 1e-9);
   assert.equal(kinectPoint[1], .45);
 assert.ok(Math.abs(kinectPoint[2] - 1.41) < 1e-9);
 assert.equal(kinectPoint[3], 'kinect');
+assert.deepEqual(orbitCoordinates([0, 0, 0], .4, -.2), [0, 0, 0], 'robot origin is the orbit pivot');
+assert.deepEqual(orbitCoordinates([0, 0, 2], 0, 0), [0, 0, 2], 'no fixed forward offset moves the pivot');
 const articulated = robotParts({fresh: true, wheels: [
   {id: 'FL', angle: 30}, {id: 'FR', angle: -15}, {id: 'RL', angle: 5}, {id: 'RR', angle: null}
 ]}, {wheelbase: .6, track: .4}, .3).filter(part => part.kind === 'wheel');

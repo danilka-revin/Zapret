@@ -52,6 +52,12 @@
       return [-robotLeft, zMount + pitchedUp, sensorX + robotForward, 'kinect'];
     });
   }
+  function orbitCoordinates(point, yaw, pitch, center = [0, 0, 0]) {
+    const x = point[0] - center[0], y = point[1] - center[1], z = point[2] - center[2];
+    const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const rx = x * cy + z * sy, rz = -x * sy + z * cy;
+    return [rx, y * cp - rz * sp, y * sp + rz * cp];
+  }
   function robotParts(live, geometry = {}, lidarOffsetM = DEFAULT_LIDAR_OFFSET_M) {
     const wheelbase = Number.isFinite(Number(geometry.wheelbase)) ? Number(geometry.wheelbase) : 0.50;
     const track = Number.isFinite(Number(geometry.track)) ? Number(geometry.track) : 0.38;
@@ -100,7 +106,7 @@
     return parts;
   }
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { decodeFrame, transformLidar, transformKinect, robotParts };
+    module.exports = { decodeFrame, transformLidar, transformKinect, robotParts, orbitCoordinates };
   }
   if (!root.document) return;
 
@@ -161,14 +167,12 @@
     }
     updateModeMessage(now);
     if (!displayPoints.length && mode !== 'combined') return;
-    // Orbit around a point two metres in front of the sensor/robot frame.
-    const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+    // Orbit around the robot's ground-plane origin, shared with the LiDAR map.
     const focal = Math.min(width, height) * 1.05 * zoom;
     const size = Math.max(1.5 * ratio, Math.min(3 * ratio, width / 220));
     const project = (point) => {
-      const z = point[2] - 2;
-      const rx = point[0] * cy + z * sy, rz = -point[0] * sy + z * cy;
-      const ry = point[1] * cp - rz * sp, depth = point[1] * sp + rz * cp + 6;
+      const [rx, ry, viewDepth] = orbitCoordinates(point, yaw, pitch);
+      const depth = viewDepth + 6;
       if (depth <= 0.1) return null;
       return {x: width / 2 + rx * focal / depth, y: height / 2 - ry * focal / depth, depth};
     };
