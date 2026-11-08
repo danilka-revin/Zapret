@@ -346,3 +346,70 @@ def test_map_settings_reset_and_untrusted_history_fail_closed(monkeypatch, tmp_p
     snapshot = service.navigation_snapshot()
     assert snapshot["navigationIntegrity"] and snapshot["scans"] == 0
     assert snapshot["quality"] == 0 and snapshot["updatedAt"] == 0
+
+
+# ------------------------------------------------ два режима SLAM (карта/локализация) ---
+def test_slam_mode_defaults_to_active_mapping():
+    """По умолчанию — активный SLAM: карту надо чем-то собрать."""
+    settings = MapSettings()
+    assert settings.slam_mode == "mapping"
+    assert settings.to_dict()["slam_mode"] == "mapping"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("localize", "localize"),
+    ("Localization", "localize"),
+    ("локализация", "localize"),
+    ("mapping", "mapping"),
+    ("что-то", "mapping"),
+])
+def test_slam_mode_is_parsed_leniently(raw, expected):
+    assert MapSettings.from_dict({"slam_mode": raw}).slam_mode == expected
+
+
+def test_localize_mode_does_not_draw_into_the_map(tmp_path):
+    """Режим «только локализация»: поза считается, карта не меняется."""
+    service = SlamMapService(MapSettings(size_m=20.0), directory=tmp_path)
+    service.set_settings({"slam_mode": "mapping"})
+    service.ingest(wall_scan(3.0))
+    known_mapping = service.snapshot(with_png=False)["stats"]["known"]
+    assert known_mapping > 0
+
+    service.set_settings({"slam_mode": "localize"})
+    before = service.snapshot(with_png=False)
+    for _ in range(3):
+        assert service.ingest(wall_scan(1.5)) is True
+    after = service.snapshot(with_png=False)
+    # Сканы учтены, поза обновлена, но ни одна клетка карты не изменилась.
+    assert after["scans"] == before["scans"] + 3
+    assert after["stats"]["known"] == before["stats"]["known"]
+    assert after["stats"]["occupied"] == before["stats"]["occupied"]
+    assert after["slamMode"] == "localize" and after["mapping"] is False
+    assert after["updatedAt"] >= before["updatedAt"]
+
+
+def test_localize_mode_keeps_revision_so_navigation_is_not_replanned(tmp_path):
+    """Карта не меняется — ревизия не растёт, планировщику нечего пересчитывать."""
+    service = SlamMapService(MapSettings(size_m=20.0), directory=tmp_path)
+    service.set_settings({"slam_mode": "localize"})
+    first = service.navigation_snapshot()["revision"]
+    service.ingest(wall_scan(2.0))
+    assert service.navigation_snapshot()["revision"] == first
+
+
+def test_kinect_does_not_draw_in_localize_mode(tmp_path):
+    service = SlamMapService(MapSettings(size_m=20.0), directory=tmp_path)
+    service.set_settings({"slam_mode": "localize"})
+    assert service.ingest_kinect([{"a": 0.0, "r": 1.0}, {"a": 1.0, "r": 1.2}]) == 0
+    snapshot = service.snapshot(with_png=False)
+    assert snapshot["kinectScans"] == 0
+
+
+def test_mode_switch_does_not_wipe_the_map(tmp_path):
+    """Переключение режима не очищает карту — только меняет, что с ней делают."""
+    service = SlamMapService(MapSettings(size_m=20.0), directory=tmp_path)
+    service.ingest(wall_scan(3.0))
+    known = service.snapshot(with_png=False)["stats"]["known"]
+    result = service.set_settings({"slam_mode": "localize"})
+    assert result["mapReset"] is False
+    assert service.snapshot(with_png=False)["stats"]["known"] == known

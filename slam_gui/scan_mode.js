@@ -25,6 +25,7 @@
     csrf: '',
     token: null,
     enabled: false,
+    slamMode: 'mapping',
     maxPercent: 20,
     timer: null,
     heartbeatTimer: null,
@@ -155,6 +156,7 @@
   async function refresh() {
     try {
       const body = await getJson('api/scan_mode');
+      if (body && body.slamMode) renderSlamMode(body.slamMode);
       renderStatus(body);
     } catch (error) {
       const link = $('scan-link');
@@ -369,6 +371,37 @@
     });
   }
 
+  /* ---------------------------------------------------------- режим SLAM --- */
+  function renderSlamMode(mode) {
+    const next = mode === 'localize' ? 'localize' : 'mapping';
+    state.slamMode = next;
+    for (const button of document.querySelectorAll('[data-slam-mode]')) {
+      const active = button.getAttribute('data-slam-mode') === next;
+      button.classList.toggle('is-on', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
+    text('map-slam-label', next === 'localize' ? 'Только локализация' : 'Активный SLAM');
+    text('map-slam-hint', next === 'localize'
+      ? 'робот видит стены и сопоставляет их с картой, но не дорисовывает её'
+      : 'скан дорисовывает стены и проходы — карта растёт');
+    if (document.body && document.body.classList) {
+      document.body.classList.toggle('map-localize', next === 'localize');
+    }
+  }
+
+  async function setSlamMode(mode) {
+    const next = mode === 'localize' ? 'localize' : 'mapping';
+    try {
+      const body = await postJson('api/kiosk_map/settings', {settings: {slam_mode: next}});
+      renderSlamMode((body && body.settings && body.settings.slam_mode) || next);
+      message(next === 'localize'
+        ? 'Только локализация: карта больше не дорисовывается.'
+        : 'Активный SLAM: скан снова дорисовывает карту.', 'ok');
+    } catch (error) {
+      message('Не удалось переключить режим карты: ' + (error.message || error), 'err');
+    }
+  }
+
   function bind() {
     const enableButton = $('scan-enable');
     if (enableButton) enableButton.addEventListener('click', () => { void enable(); });
@@ -422,6 +455,14 @@
       void mapAction('api/kiosk_map/reset', 'Новая карта',
                      'Начать новую карту? Текущая сетка будет очищена.');
     });
+
+    // Режим SLAM: при объезде карта дорисовывается, при проезде — только
+    // сопоставляется. Переключение карту не стирает.
+    for (const button of document.querySelectorAll('[data-slam-mode]')) {
+      button.addEventListener('click', () => {
+        void setSlamMode(button.getAttribute('data-slam-mode'));
+      });
+    }
 
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {

@@ -36,8 +36,24 @@
     miss: 0.30,
     decay: 0.0,
     matching: true,
+    slam_mode: 'mapping',
     autosave: true,
     autosave_s: 60.0,
+  };
+
+  //: Два режима SLAM. Имена — как в ROS 2: локализация по готовой карте и
+  //: активное построение. Подписи объясняют, что именно меняется на роботе.
+  const SLAM_MODES = {
+    localize: {
+      label: 'Только локализация',
+      short: 'LOCALIZE',
+      hint: 'робот видит стены и сопоставляет их с картой, но не дорисовывает её',
+    },
+    mapping: {
+      label: 'Активный SLAM',
+      short: 'MAPPING',
+      hint: 'скан дорисовывает стены и проходы — карта растёт',
+    },
   };
 
   const SENSITIVITY = {
@@ -96,6 +112,7 @@
     navigationBusy: false,
     navigationTimer: null,
     navigationStatus: null,
+    slamMode: 'mapping',
     navigationPlan: null,
     routeGoals: [],
     routeTouched: false,
@@ -1178,16 +1195,19 @@
         ? (when ? 'обновлено ' + when.toLocaleTimeString('ru-RU', { hour12: false }) : 'обновляется')
         : 'ждём скан лидара';
     }
-    const badge = $('map-badge');
-    if (badge) {
-      badge.textContent = snap.scans ? 'MAPPING' : 'IDLE';
-      badge.dataset.tone = snap.scans ? 'live' : 'idle';
-    }
+    // Режим приходит с сервера: экран не выдумывает, дорисовывается ли карта.
+    const serverMode = snap.slamMode === 'localize' ? 'localize' : 'mapping';
+    if (serverMode !== state.slamMode) state.slamMode = serverMode;
+    renderSlamMode();
     const empty = $('map-empty');
     if (empty) {
       const noScan = !snap.scans;
       empty.hidden = !noScan;
-      if (noScan) setText(empty, 'скана лидара нет — карта не растёт');
+      if (noScan) {
+        setText(empty, state.slamMode === 'localize'
+          ? 'скана лидара нет — локализоваться не по чему'
+          : 'скана лидара нет — карта не растёт');
+      }
     }
     const quality = $('map-quality');
     if (quality) {
@@ -1214,12 +1234,59 @@
     }
     const decay = $('map-set-decay');
     if (decay) decay.value = String(s.decay);
+    applySlamMode(s.slam_mode === 'localize' ? 'localize' : 'mapping', false);
     const matching = $('map-set-matching');
     if (matching) matching.checked = s.matching !== false;
     const autosave = $('map-set-autosave');
     if (autosave) autosave.checked = s.autosave !== false;
     const autosaveEvery = $('map-set-autosave-every');
     if (autosaveEvery) autosaveEvery.value = String(s.autosave_s);
+  }
+
+  /* ------------------------------------------------------------- режим SLAM */
+  function renderSlamMode() {
+    const mode = SLAM_MODES[state.slamMode] ? state.slamMode : 'mapping';
+    const info = SLAM_MODES[mode];
+    for (const button of document.querySelectorAll('[data-slam-mode]')) {
+      const active = button.getAttribute('data-slam-mode') === mode;
+      button.classList.toggle('is-on', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
+    setText($('map-slam-label'), info.label);
+    setText($('map-slam-hint'), info.hint);
+    const badge = $('map-badge');
+    if (badge && badge.dataset.tone !== 'err') {
+      const scans = state.snapshot && state.snapshot.scans;
+      const live = mode === 'mapping';
+      badge.textContent = scans ? info.short : (live ? 'IDLE' : 'LOCALIZE');
+      badge.dataset.tone = live && scans ? 'live' : 'idle';
+    }
+    const host = document.body;
+    if (host && host.classList) host.classList.toggle('map-localize', mode === 'localize');
+  }
+
+  /* Переключение режима: сохраняется сразу, карта при этом не стирается. */
+  async function applySlamMode(mode, persist) {
+    const next = mode === 'localize' ? 'localize' : 'mapping';
+    const changed = next !== state.slamMode;
+    state.slamMode = next;
+    renderSlamMode();
+    if (!persist || !changed) return;
+    try {
+      await post('api/kiosk_map/settings', { settings: { slam_mode: next } });
+      msg(next === 'localize'
+        ? 'Режим «только локализация»: робот видит стены и сопоставляет их с картой, но карта больше не дорисовывается.'
+        : 'Режим «активный SLAM»: скан снова дорисовывает карту.', 'ok');
+    } catch (err) {
+      state.slamMode = next === 'localize' ? 'mapping' : 'localize';
+      renderSlamMode();
+      msg('Не удалось переключить режим карты: ' + (err.message || err), 'err');
+      return;
+    }
+    // Карта та же, но пересчитать её картинку и статус навигации нужно.
+    state.navigationPlan = null;
+    void fetchMap();
+    void refreshNavigation();
   }
 
   function collectSettings() {
@@ -1237,6 +1304,7 @@
     }
     const decay = $('map-set-decay');
     if (decay) out.decay = Number(decay.value);
+    if (state.slamMode && SLAM_MODES[state.slamMode]) out.slam_mode = state.slamMode;
     const matching = $('map-set-matching');
     if (matching) out.matching = matching.checked;
     const autosave = $('map-set-autosave');
@@ -1954,6 +2022,12 @@
       });
     }
     loadTheme();
+    for (const button of document.querySelectorAll('[data-slam-mode]')) {
+      button.addEventListener('click', () => {
+        void applySlamMode(button.getAttribute('data-slam-mode'), true);
+      });
+    }
+    renderSlamMode();
     const reset = $('map-reset');
     if (reset) reset.addEventListener('click', () => { void resetMap(); });
     const save = $('map-save');

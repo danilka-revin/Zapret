@@ -110,6 +110,10 @@ class MapSettings:
     miss — вероятность промаха: на сколько клетка «свободнеет» за промах;
     decay — период полураспада старых препятствий, с (0 — не забывать);
     matching — считать позу по скану (без неё карта «едет» вместе с роботом);
+    slam_mode — что делать с картой: «localize» — только сопоставлять скан с
+    уже сохранённой картой и не дописывать в неё ни препятствия, ни свободные
+    клетки (проезд по готовой карте); «mapping» — активный SLAM, скан
+    дорисовывает стены и проходы. Режим переключается без очистки карты;
     autosave — перезаписывать файл карты на рабочем столе без запроса;
     autosave_s — как часто это делать, с.
     """
@@ -122,6 +126,7 @@ class MapSettings:
     miss: float = 0.30
     decay: float = 0.0
     matching: bool = True
+    slam_mode: str = "mapping"
     autosave: bool = True
     autosave_s: float = 60.0
 
@@ -140,6 +145,7 @@ class MapSettings:
             "miss": self.miss,
             "decay": self.decay,
             "matching": self.matching,
+            "slam_mode": self.slam_mode,
             "autosave": self.autosave,
             "autosave_s": self.autosave_s,
         }
@@ -162,6 +168,9 @@ class MapSettings:
             miss=_num(data.get("miss"), 0.05, 0.9, default.miss),
             decay=_num(data.get("decay"), 0.0, 3600.0, default.decay),
             matching=bool(data.get("matching", default.matching)),
+            slam_mode=("localize" if str(data.get("slam_mode", default.slam_mode)).strip().lower()
+                       in ("localize", "localization", "локализация")
+                       else "mapping"),
             autosave=bool(data.get("autosave", default.autosave)),
             autosave_s=_num(data.get("autosave_s"), 10.0, 3600.0, default.autosave_s),
         )
@@ -851,14 +860,20 @@ class SlamMapService:
             # его фрейм на начальный сдвиг лидара: центр корпуса на старте
             # остаётся в (0, 0), а лучи исходят из переднего датчика.
             sensor_pose = (sensor[0] + self._lidar_offset_m, sensor[1], sensor[2])
-            self._grid.insert_scan(sensor_pose, points, settings)
+            # Режим «только локализация»: поза считается по тому же скану, но
+            # сетка не меняется. Иначе поездка по готовой карте дописывала бы
+            # в неё случайные точки (прохожие, мебель) — и следующий маршрут
+            # строился бы уже по испорченной карте.
+            if settings.slam_mode != "localize":
+                self._grid.insert_scan(sensor_pose, points, settings)
             self._scans += 1
             self._points += len(points)
             self._updated_at = time.time() if stamp is None else stamp
-            self._dirty = True
-            self._png_stale = True
-            self._revision += 1
-            self._maybe_decay()
+            if settings.slam_mode != "localize":
+                self._dirty = True
+                self._png_stale = True
+                self._revision += 1
+                self._maybe_decay()
         return True
 
     def ingest_kinect(self, points: Sequence[dict], stamp: Optional[float] = None,
@@ -877,6 +892,10 @@ class SlamMapService:
 
         cfg = dict(spec or kinect_spec())
         with self._lock:
+            if self._settings.slam_mode == "localize":
+                # Глубинные точки в режиме локализации не дорисовывают карту:
+                # Kinect — дополнительный обзор, а не источник новой геометрии.
+                return 0
             bx, by, yaw = self._body_pose()
             cos_y, sin_y = math.cos(yaw), math.sin(yaw)
             kx = bx + cfg["x_m"] * cos_y - cfg["y_m"] * sin_y
@@ -1073,6 +1092,10 @@ class SlamMapService:
                 "resolution": self._grid.res,
                 "width": self._grid.width,
                 "height": self._grid.height,
+                # Режим SLAM виден на любом экране: «только локализация» или
+                # активное дорисовывание карты.
+                "slamMode": self._settings.slam_mode,
+                "mapping": self._settings.slam_mode != "localize",
             }
             if with_png:
                 payload["png"] = base64.b64encode(self.png()).decode("ascii")

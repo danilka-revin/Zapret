@@ -2033,6 +2033,13 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         navigation.clear_plan()
         result = map_service.set_settings(body.get("settings") or body)
         settings = result["settings"]
+        if "slam_mode" in settings:
+            # Режим SLAM — не забываем и на пульте: тумблер один на все экраны.
+            eventlog.record(
+                "ok",
+                "карта: режим «%s»" % ("только локализация" if settings["slam_mode"] == "localize"
+                                       else "активный SLAM"),
+                source="карта")
         eventlog.record("ok", "карта: сетка %.2f м, дальность %.1f м%s" % (
             settings["resolution"], settings["max_range"],
             " — карта очищена, сетка новая" if result.get("mapReset") else ""),
@@ -2077,7 +2084,11 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "updatedAt": snapshot.get("updatedAt"),
             "savedAt": snapshot.get("savedAt"),
             "paths": snapshot.get("paths"),
+            "slamMode": snapshot.get("slamMode"),
+            "mapping": snapshot.get("mapping"),
         }
+        # Режим SLAM — общий для карты: экран скана показывает тот же тумблер.
+        payload["slamMode"] = snapshot.get("slamMode")
         return payload
 
     @app.get("/api/scan_mode")

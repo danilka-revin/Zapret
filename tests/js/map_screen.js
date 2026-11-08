@@ -110,6 +110,14 @@ function byId(id) {
   return elements.get(id);
 }
 
+/* Кнопки переключателя режима SLAM — как в разметке map.html. */
+const slamModeButtons = ['localize', 'mapping'].map((mode) => {
+  const button = new El('', 'button');
+  button.setAttribute('data-slam-mode', mode);
+  button.setAttribute('aria-pressed', 'false');
+  return button;
+});
+
 global.document = {
   readyState: 'complete',
   body: new El('body'),
@@ -120,7 +128,10 @@ global.document = {
   createDocumentFragment: () => new El('', 'fragment'),
   createTextNode: (text) => ({ textContent: text }),
   querySelector: () => null,
-  querySelectorAll: () => [],
+  querySelectorAll: (selector) => {
+    const match = /\[data-slam-mode\]/.test(String(selector));
+    return match ? slamModeButtons : [];
+  },
   addEventListener: () => {},
   removeEventListener: () => {},
   hidden: false,
@@ -162,6 +173,21 @@ const renderErrors = [];
 const originalError = console.error.bind(console);
 console.error = (...args) => { renderErrors.push(args.map((a) => String(a)).join(' ')); };
 
+/* Режим SLAM на «сервере»: меняется по POST настроек и возвращается в снимке —
+ * ровно как у настоящего кода карты (slam_map.SlamMapService). */
+const slamState = {
+  mode: (payload.snapshot && payload.snapshot.slamMode) || 'mapping',
+};
+
+function mapSnapshot() {
+  const base = payload.snapshot || payload;
+  return Object.assign({}, base, {
+    slamMode: slamState.mode,
+    mapping: slamState.mode === 'mapping',
+    settings: Object.assign({}, base.settings || {}, {slam_mode: slamState.mode}),
+  });
+}
+
 function reply(body, ok) {
   return {
     ok: ok !== false,
@@ -183,7 +209,10 @@ global.fetch = async (url, options) => {
     return reply(payload.save || { ok: true, paths: payload.paths });
   }
   if (/kiosk_map\/settings/.test(text)) {
-    return reply(payload.settingsReply || { ok: true, settings: payload.settings, mapReset: false });
+    const requested = (body && body.settings) || {};
+    if (requested.slam_mode) slamState.mode = requested.slam_mode === 'localize' ? 'localize' : 'mapping';
+    const merged = Object.assign({}, mapSnapshot().settings, requested);
+    return reply(payload.settingsReply || { ok: true, settings: merged, mapReset: false });
   }
   if (/api\/navigation\/status/.test(text)) {
     return reply(payload.navigationStatus || {
@@ -200,6 +229,7 @@ global.fetch = async (url, options) => {
   if (/api\/navigation\/resume/.test(text)) {
     return reply(payload.navigationResumeReply || { ok: false, error: 'resume fixture missing' });
   }
+  if (/api\/kiosk_map$/.test(text)) return reply(mapSnapshot());
   return reply(payload.snapshot || payload);
 };
 
@@ -223,7 +253,7 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
   global.RCMapView.init();
   await sleep(20);
 
-  const snapshot = payload.snapshot || payload;
+  const snapshot = mapSnapshot();
   const stats = {
     size: byId('map-size').textContent,
     resolution: byId('map-res').textContent,
@@ -253,6 +283,30 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
   byId('map-settings-apply').click();
   await sleep(20);
   const afterApply = { msg: byId('map-msg').textContent, tone: byId('map-msg').dataset.tone };
+
+  // Режим SLAM: по умолчанию активный, переключение уходит на сервер.
+  const modeBefore = {
+    label: byId('map-slam-label').textContent,
+    badge: byId('map-badge').textContent,
+    pressed: slamModeButtons.map((b) => b.getAttribute('aria-pressed')),
+  };
+  slamModeButtons[0].click();
+  await sleep(20);
+  const modeAfter = {
+    label: byId('map-slam-label').textContent,
+    hint: byId('map-slam-hint').textContent,
+    badge: byId('map-badge').textContent,
+    pressed: slamModeButtons.map((b) => b.getAttribute('aria-pressed')),
+    calls: calls.filter((call) => /kiosk_map\/settings/.test(call.url)
+      && call.body && call.body.settings && 'slam_mode' in call.body.settings),
+    localizeClass: global.document.body.classList.contains('map-localize'),
+  };
+  slamModeButtons[1].click();
+  await sleep(20);
+  const modeBack = {
+    label: byId('map-slam-label').textContent,
+    localizeClass: global.document.body.classList.contains('map-localize'),
+  };
 
   // Живой скан: точки лидара рисуются поверх карты.
   global.RCMapView.setScan([{ a: 0, r: 2 }, { a: 1.57, r: 3 }]);
@@ -333,6 +387,7 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
   }
 
   console.log(JSON.stringify({
+    slamMode: { before: modeBefore, after: modeAfter, back: modeBack },
     stats,
     robotModel: global.RCRobotModel.state(),
     themeBefore,

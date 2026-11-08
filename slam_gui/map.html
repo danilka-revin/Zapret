@@ -103,6 +103,26 @@
               <div id="explore-landmarks" class="explore-landmarks" aria-label="Визуальные ориентиры"></div>
             </section>
 
+            <!-- Два режима SLAM, как в ROS 2: проезд по готовой карте и
+                 активное построение. Переключение не стирает карту. -->
+            <div class="map-slam-mode" role="group" aria-labelledby="map-slam-mode-title">
+              <div class="map-slam-mode-head">
+                <b id="map-slam-mode-title">Режим SLAM</b>
+                <span id="map-slam-label">Активный SLAM</span>
+              </div>
+              <div class="map-slam-mode-buttons">
+                <button type="button" class="map-slam-btn" data-slam-mode="localize" aria-pressed="false">
+                  <b>Только локализация</b>
+                  <small>видит и сопоставляет стены, карту не трогает</small>
+                </button>
+                <button type="button" class="map-slam-btn is-on" data-slam-mode="mapping" aria-pressed="true">
+                  <b>Активный SLAM</b>
+                  <small>дорисовывает стены и проходы в карту</small>
+                </button>
+              </div>
+              <p class="map-slam-hint" id="map-slam-hint">скан дорисовывает стены и проходы — карта растёт</p>
+            </div>
+
             <section id="map-settings" class="map-settings" hidden aria-label="Настройки карты">
               <fieldset class="map-wheel-colors">
                 <legend>Углы колёс</legend>
