@@ -52,8 +52,28 @@
       return [-robotLeft, zMount + pitchedUp, sensorX + robotForward, 'kinect'];
     });
   }
+  function robotParts(live, geometry = {}, lidarOffsetM = DEFAULT_LIDAR_OFFSET_M) {
+    const wheelbase = Number.isFinite(Number(geometry.wheelbase)) ? Number(geometry.wheelbase) : 0.50;
+    const track = Number.isFinite(Number(geometry.track)) ? Number(geometry.track) : 0.38;
+    const wheels = new Map((live && Array.isArray(live.wheels) ? live.wheels : []).map(w => [w.id, w]));
+    const boxes = [
+      {kind: 'body', center: [0, 0.19, 0], size: [0.56, 0.28, 0.70], yaw: 0},
+      {kind: 'deck', center: [0, 0.345, -0.015], size: [0.38, 0.035, 0.40], yaw: 0},
+      {kind: 'kinect', center: [0, 0.45, lidarOffsetM + KINECT_FORWARD_OF_LIDAR_M], size: [0.20, 0.085, 0.075], yaw: 0},
+      {kind: 'lidar', center: [0, LIDAR_HEIGHT_M, lidarOffsetM], size: [0.12, 0.065, 0.12], yaw: 0}
+    ];
+    for (const id of ['FL', 'FR', 'RL', 'RR']) {
+      const front = id[0] === 'F', left = id[1] === 'L';
+      const wheel = wheels.get(id);
+      const angle = live && live.fresh && wheel && Number.isFinite(wheel.angle) ? wheel.angle * Math.PI / 180 : 0;
+      boxes.push({kind: 'wheel', id, angle: live && live.fresh && wheel && Number.isFinite(wheel.angle) ? wheel.angle : null,
+        center: [left ? -track / 2 : track / 2, 0.095, front ? wheelbase / 2 : -wheelbase / 2],
+        size: [0.105, 0.16, 0.20], yaw: angle});
+    }
+    return boxes;
+  }
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { decodeFrame, transformLidar, transformKinect };
+    module.exports = { decodeFrame, transformLidar, transformKinect, robotParts };
   }
   if (!root.document) return;
 
@@ -85,7 +105,7 @@
     setMessage('Лидар: ' + lText + ' · Kinect: ' + kText + ' · live, без сохранения');
     const note = $('kinect-3d-mode-note');
     const kinectZ = Number.isFinite(Number(kinectMount.z_m)) ? Number(kinectMount.z_m) : 0.45;
-    if (note) note.textContent = 'Лидар z=550 мм (оранжевый) · Kinect +130 мм вперёд (сине-зелёный), z=' +
+    if (note) note.textContent = 'Модель робота · фактические углы колёс (при свежей телеметрии) · Лидар z=550 мм · Kinect +130 мм вперёд, z=' +
       Math.round(kinectZ * 1000) + ' мм';
   }
   function draw() {
@@ -107,13 +127,13 @@
       : liveKinect;
     const empty = $('kinect-3d-empty');
     if (empty) {
-      empty.hidden = displayPoints.length > 0;
+      empty.hidden = displayPoints.length > 0 || mode === 'combined';
       empty.textContent = mode === 'combined'
         ? 'Ожидание свежего скана лидара и кадра Kinect'
         : 'Нет свежего кадра глубины Kinect';
     }
     updateModeMessage(now);
-    if (!displayPoints.length) return;
+    if (!displayPoints.length && mode !== 'combined') return;
     // Orbit around a point two metres in front of the sensor/robot frame.
     const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
     const focal = Math.min(width, height) * 1.05 * zoom;
@@ -123,7 +143,28 @@
       const rx = point[0] * cy + z * sy, rz = -point[0] * sy + z * cy;
       const ry = point[1] * cp - rz * sp, depth = point[1] * sp + rz * cp + 6;
       if (depth <= 0.1) return null;
-      return {x: width / 2 + rx * focal / depth, y: height / 2 - ry * focal / depth};
+      return {x: width / 2 + rx * focal / depth, y: height / 2 - ry * focal / depth, depth};
+    };
+    const drawBox = (box, palette) => {
+      const [cx, cy0, cz] = box.center, [sx, sy0, sz] = box.size;
+      const c = Math.cos(box.yaw || 0), s = Math.sin(box.yaw || 0);
+      const local = [[-1,-1,-1],[1,-1,-1],[1,-1,1],[-1,-1,1],[-1,1,-1],[1,1,-1],[1,1,1],[-1,1,1]];
+      const vertices = local.map(([x,y,z]) => {
+        const lx = x * sx / 2, lz = z * sz / 2;
+        return [cx + lx * c + lz * s, cy0 + y * sy0 / 2, cz - lx * s + lz * c];
+      });
+      const faces = [
+        {ids:[4,7,6,5], color:palette.top}, {ids:[3,2,6,7], color:palette.front},
+        {ids:[0,4,5,1], color:palette.back}, {ids:[0,3,7,4], color:palette.left},
+        {ids:[1,5,6,2], color:palette.right}, {ids:[0,1,2,3], color:palette.bottom}
+      ].map(face => ({...face, points: face.ids.map(i => project(vertices[i]))}));
+      faces.filter(face => face.points.every(Boolean)).sort((a, b) =>
+        b.points.reduce((sum, p) => sum + p.depth, 0) - a.points.reduce((sum, p) => sum + p.depth, 0))
+        .forEach(face => {
+          ctx.beginPath(); ctx.moveTo(face.points[0].x, face.points[0].y);
+          face.points.slice(1).forEach(p => ctx.lineTo(p.x, p.y)); ctx.closePath();
+          ctx.fillStyle = face.color; ctx.fill(); ctx.strokeStyle = 'rgba(9, 13, 18, .9)'; ctx.lineWidth = Math.max(1, ratio); ctx.stroke();
+        });
     };
     if (mode === 'combined') {
       ctx.strokeStyle = 'rgba(145, 170, 190, 0.20)';
@@ -135,6 +176,25 @@
       };
       for (let forward = 0; forward <= 6; forward += 1) gridLine([-3, 0, forward], [3, 0, forward]);
       for (let left = -3; left <= 3; left += 1) gridLine([-left, 0, 0], [-left, 0, 6]);
+    }
+    if (mode === 'combined') {
+      const live = root.RCRobotModel && typeof root.RCRobotModel.state === 'function'
+        ? root.RCRobotModel.state() : null;
+      const geometry = root.RCRobotModel && typeof root.RCRobotModel.geometry === 'function'
+        ? root.RCRobotModel.geometry() : {wheelbase: 0.50, track: 0.38};
+      const palettes = {
+        body: {top:'#536577', front:'#405264', back:'#2b3947', left:'#344454', right:'#435667', bottom:'#202b35'},
+        deck: {top:'#6d8192', front:'#526879', back:'#3e5262', left:'#4b6070', right:'#5c7181', bottom:'#354653'},
+        kinect: {top:'#34c8c1', front:'#148b91', back:'#106d79', left:'#167d86', right:'#1d9da0', bottom:'#105b65'},
+        lidar: {top:'#ffc875', front:'#db8e39', back:'#b76d2a', left:'#ca7d32', right:'#edaa4c', bottom:'#8d5529'},
+        wheel: {top:'#56616c', front:'#252b31', back:'#151a1f', left:'#333c45', right:'#414b55', bottom:'#101418'},
+        wheelUnknown: {top:'#7e858b', front:'#596168', back:'#454b50', left:'#596168', right:'#6a737a', bottom:'#3a4045'}
+      };
+      const parts = robotParts(live, geometry, lidarOffsetM).map(part => ({part, depth: project(part.center).depth}));
+      parts.sort((a, b) => b.depth - a.depth).forEach(({part}) => {
+        const palette = part.kind === 'wheel' && part.angle === null ? palettes.wheelUnknown : palettes[part.kind];
+        drawBox(part, palette);
+      });
     }
     for (const point of displayPoints) {
       const screen = project(point);

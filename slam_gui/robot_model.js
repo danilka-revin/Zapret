@@ -176,6 +176,6 @@
     ctx.restore();
   }
 
-  window.RCRobotModel = { update, state, draw, drawStatus, summary, STALE_MS,
+  window.RCRobotModel = { update, state, draw, drawStatus, summary, geometry: axisGeometry, STALE_MS,
     getColors, setColors, bindColors, subscribe, DEFAULT_COLORS: { ...DEFAULT_COLORS } };
 })();

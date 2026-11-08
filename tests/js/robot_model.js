@@ -70,6 +70,8 @@ assert.deepEqual(locations, [
 // previous installation may still have the old 450 mm track until edited.
 payload.maneuverConfig = { chassis: { wheelbaseMm: 500, trackMm: 450 } };
 model.update(payload, 10000);
+assert.equal(model.geometry().wheelbase, .5);
+assert.equal(model.geometry().track, .45);
 operations.length = 0;
 model.draw(ctx, 100, 200, 0, 100, { state: model.state(10001) });
 assert.deepEqual(operations.filter(op => op[0] === 'translate').slice(1), [

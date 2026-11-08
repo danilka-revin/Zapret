@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const {decodeFrame, transformLidar, transformKinect} = require('../../slam_gui/kinect_view.js');
+const {decodeFrame, transformLidar, transformKinect, robotParts} = require('../../slam_gui/kinect_view.js');
 const payload = {available: true, oneFrameOnly: true, notForNavigation: true,
   width: 2, height: 2, stride: 2, fx: 2, fy: 2, cx: 1, cy: 1,
   data: Buffer.from([0xe8, 3, 0, 0, 0xd0, 7, 0xb8, 0x0b]).toString('base64')};
@@ -17,13 +17,25 @@ assert.ok(Math.abs(kinectPoint[0] - .2) < 1e-9);
   assert.equal(kinectPoint[1], .45);
 assert.ok(Math.abs(kinectPoint[2] - 1.41) < 1e-9);
 assert.equal(kinectPoint[3], 'kinect');
-console.log('Kinect/LiDAR 3D transforms: OK');
+const articulated = robotParts({fresh: true, wheels: [
+  {id: 'FL', angle: 30}, {id: 'FR', angle: -15}, {id: 'RL', angle: 5}, {id: 'RR', angle: null}
+]}, {wheelbase: .6, track: .4}, .3).filter(part => part.kind === 'wheel');
+assert.equal(articulated.length, 4);
+assert.ok(Math.abs(articulated.find(w => w.id === 'FL').yaw - Math.PI / 6) < 1e-9);
+assert.equal(articulated.find(w => w.id === 'FR').angle, -15);
+assert.deepEqual(articulated.find(w => w.id === 'FL').center, [-.2, .095, .3]);
+assert.equal(articulated.find(w => w.id === 'RR').angle, null);
+const staleRobot = robotParts({fresh: false, wheels: [{id: 'FL', angle: 30}]})
+  .find(part => part.kind === 'wheel' && part.id === 'FL');
+assert.equal(staleRobot.angle, null);
+assert.equal(staleRobot.yaw, 0);
+console.log('Kinect/LiDAR transforms and articulated robot geometry: OK');
 
 // Exercise the actual home-panel event handlers without a browser or hardware.
 const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../../slam_gui/kinect_view.js'), 'utf8');
-let now = 100, interval, fetches = 0, rectangles = [];
+let now = 100, interval, fetches = 0, rectangles = [], polygons = 0;
 class Element {
   constructor() { this.listeners = {}; this.hidden = false; this.attrs = {}; this.textContent = ''; }
   addEventListener(name, fn) { this.listeners[name] = fn; }
@@ -31,7 +43,7 @@ class Element {
   emit(name, event = {}) { if (this.listeners[name]) this.listeners[name]({preventDefault() {}, ...event}); }
   getBoundingClientRect() { return {width: 600, height: 400}; }
   setPointerCapture() {}
-  getContext() { return {clearRect() { rectangles = []; }, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {},
+  getContext() { return {clearRect() { rectangles = []; polygons = 0; }, beginPath() {}, closePath() { polygons++; }, fill() {}, moveTo() {}, lineTo() {}, stroke() {},
     fillRect(x, y, w, h) { rectangles.push([x, y, w, h]); }, set fillStyle(v) {}, set strokeStyle(v) {}, set lineWidth(v) {}}; }
 }
 const ids = ['sensor-lidar', 'sensor-kinect', 'sensor-combined', 'sensor-lidar-view', 'sensor-kinect-view', 'lidar-meta',
@@ -81,7 +93,8 @@ vm.runInNewContext(source, context);
   assert.equal(elements['sensor-combined'].attrs['aria-pressed'], 'true');
   assert.equal(elements['kinect-3d-empty'].hidden, true);
   assert.match(elements['kinect-3d-status'].textContent, /Лидар: 2 точки · Kinect:/);
-  assert.match(elements['kinect-3d-mode-note'].textContent, /z=550 мм \(оранжевый\) · Kinect \+130 мм вперёд.*z=450 мм/);
+  assert.match(elements['kinect-3d-mode-note'].textContent, /Модель робота · фактические углы колёс \(при свежей телеметрии\) · Лидар z=550 мм · Kinect \+130 мм вперёд, z=450 мм/);
   assert.ok(rectangles.length > 0, 'combined view renders the live sensor cloud');
+  assert.ok(polygons >= 30, 'combined view renders the 3D robot chassis, sensors, and wheels');
   console.log('Kinect/LiDAR combined 3D interactions: OK');
 })().catch(err => { console.error(err); process.exitCode = 1; });
