@@ -1900,6 +1900,21 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                 module.light(str(body["light"]), bool(body.get("on", True)))
         return sensor_command(act)
 
+    @app.post("/api/sensor_module/strip")
+    def api_sensor_module_strip():
+        """Режим адресной ленты: {"mode": "auto"|"off"|"floor"|"wave"}.
+
+        Лента внизу рамы: 73 диода смотрят вниз. ``floor`` — только подсветка
+        пола (стопы и поворотники остаются на реле), ``wave`` — бегущая волна,
+        ``auto`` — реакция на стоп/поворотники и подсветка по габаритам.
+        """
+        def act(module, body):
+            mode = body.get("mode")
+            if mode is None:
+                raise ValueError("нужно поле mode: %s" % ", ".join(sensor_module_client.STRIP_MODES))
+            module.strip_mode(str(mode))
+        return sensor_command(act)
+
     @app.post("/api/sensor_module/lock")
     def api_sensor_module_lock():
         """Замок отсека: {"open": true, "seconds": 3} | {"hold": true} | {"open": false}.

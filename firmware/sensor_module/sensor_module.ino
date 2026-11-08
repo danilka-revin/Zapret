@@ -4,7 +4,8 @@
 
   GY-87 (I²C, 5 В):        SDA — 20, SCL — 21
   RC522 (SPI, 3.3 В!):     RST — 9, MISO — 50, MOSI — 51, SCK — 52, SS — 53
-  Адресная лента:          DIN — 6, питание от внешнего 5 В, GND общий
+  Адресная лента:          DIN — 6, 73 диода снизу рамы (светят вниз),
+                           питание от внешнего 5 В, GND общий
   Реле 4 канала (5 В):     IN1 — 2, IN2 — 3, IN3 — 4, IN4 — 5
   Замок двери (серво):     сигнал — 7  (питание серво — отдельное, не с 5 В Mega)
 
@@ -14,16 +15,29 @@
   габариты, стоп и поворотники дублируются адресной лентой; яркость габаритов
   задаётся командой dim.
 
-Лента пока не подключена: SENSOR_STRIP_ENABLED = 0 (по умолчанию). Тогда
-прошивка не трогает D6 (держит LOW), ничего не пишет в пиксели и сообщает
-strip=0; команда strip auto|off принимается молча. После монтажа ленты
-поставьте SENSOR_STRIP_ENABLED в 1 или соберите с -DSENSOR_STRIP_ENABLED=1.
+Лента смонтирована: 73 диода снизу рамы, светят ВНИЗ (подсветка пола под
+роботом). SENSOR_STRIP_ENABLED = 1 по умолчанию, телеметрия сообщает strip=1
+и nleds=73. Подсветка снизу — это НЕ габаритный огонь для людей на уровне
+глаз: стоп и поворотники читаются как красное/янтарное пятно на полу, а не
+как лампа на корпусе, и хвостом ленты нельзя пользоваться как поворотником,
+видным сзади. Габаритные огни на корпусе дают реле.
+
+Эффекты: подсветка пола — ровный тёплый белый; стоп — красный по всей ленте;
+поворотники — янтарная половина стороны поворота; в движении поверх идёт
+бегущая волна по кругу (направление бега = сторона поворота). Яркость задаётся
+командой dim, режим — strip auto|off|floor|wave (floor — только подсветка пола,
+стопы остаются на реле; wave — волна независимо от габаритов).
+
+Для платы без ленты соберите с -DSENSOR_STRIP_ENABLED=0 (или замените значение
+ниже на 0): тогда D6 прижат к земле, пиксели не пишутся, в кадре strip=0, а
+команда strip auto|off принимается молча. Длина ленты переопределяется сборкой
+-DSENSOR_STRIP_LEDS=<n>.
 
 Связь с сервером — только USB Serial 115200, строки с CRC-16/Modbus.
 Это не аутентификация и не аппаратный E-STOP: CRC ловит только порчу линии.
 
   @S fw=3 hdg=12345 pitch=-120 roll=35 gz=12 press=69964 temp=150 alt=301674
-     lock=0 light=5 dim=80 strip=0 cargo=0 rfid=0 cards=2 link=1
+     lock=0 light=5 dim=80 strip=0 nleds=73 cargo=0 rfid=0 cards=2 link=1
      err=0 t=123456 crc=ABCD                          (5 Гц)
   @CARD uid=A1B2C3D4 ok=1 act=open role=admin why=none cards=2 t=1234 crc=ABCD
   @CARDINFO idx=1 uid=A1B2C3D4 role=admin total=2 t=1234 crc=ABCD
@@ -34,7 +48,7 @@ strip=0; команда strip auto|off принимается молча. Пос
 
 Команды (строки, \r\n): ping, stat, ?,
   light head|stop|left|right|dim on|off, light all off|on,
-  dim 0…255, strip auto|off,
+  dim 0…255, strip auto|off|floor|wave,
   lock open [1…10] | lock hold | lock close,
   card list | card add A1B2C3D4 [admin|user] | card learn [admin|user] |
     card role A1B2C3D4 admin|user | card del A1B2C3D4 | card clear,
@@ -87,17 +101,39 @@ static const uint8_t RELAY_PINS[4] = {2, 3, 4, 5};
 static const bool RELAY_ACTIVE_LOW = true;
 static const uint8_t LOCK_SERVO_PIN = 7;
 
-//: Лента светодиодов пока не подключена. 0 — прошивка не трогает D6 и не
-//: обещает габаритов (телеметрия strip=0), 1 — лента на D6 смонтирована.
-//: Можно переопределить при сборке: -DSENSOR_STRIP_ENABLED=1.
+//: Лента светодиодов смонтирована снизу рамы (73 диода, светят вниз).
+//: 1 — лента на D6 подключена, прошивка красит её и заявляет в телеметрии
+//: strip=1. 0 — ленты нет: D6 не трогается и прижат к земле (сборка
+//: -DSENSOR_STRIP_ENABLED=0 для платы без ленты).
 #ifndef SENSOR_STRIP_ENABLED
-#define SENSOR_STRIP_ENABLED 0
+#define SENSOR_STRIP_ENABLED 1
 #endif
 static const bool STRIP_ENABLED = SENSOR_STRIP_ENABLED != 0;
 
-//: Сколько светодиодов в ленте. Лента длиннее — увеличьте, короче — уменьшите.
-static const uint16_t STRIP_LEDS = 30;
+//: Сколько светодиодов в ленте: 73 штуки вдоль низа рамы, смотрят вниз.
+//: Лента другой длины — переопределите при сборке: -DSENSOR_STRIP_LEDS=<n>.
+#ifndef SENSOR_STRIP_LEDS
+#define SENSOR_STRIP_LEDS 73
+#endif
+static const uint16_t STRIP_LEDS = SENSOR_STRIP_LEDS;
+//: Один кадр телеметрии должен влезать в 192 байта: там появилось поле nleds.
+static_assert(STRIP_LEDS >= 1 && STRIP_LEDS <= 300, "SENSOR_STRIP_LEDS вне 1…300");
 static const uint8_t STRIP_BRIGHTNESS = 96;   // общий предел яркости, 0…255
+//: Бюджет по току. Белый на полной яркости — ~60 мА на диод, то есть
+//: 73 × 60 = 4,4 А на всю ленту: это отдельный БП на 5 В с запасом, а не 5 В
+//: Mega. Рабочий предел даёт STRIP_BRIGHTNESS (73 × 60 × 96/255 ≈ 1,65 А), а
+//: STRIP_BUDGET_MA — жёсткий потолок на случай, если яркость поднимут в коде
+//: или в ленте окажутся диоды с большим потреблением.
+static const uint16_t STRIP_WHITE_MA_PER_LED = 60;
+static const uint16_t STRIP_BUDGET_MA = 1800;
+
+//: Множитель яркости по бюджету тока (255 — бюджет не мешает).
+static uint8_t stripBudgetScale() {
+  const uint32_t worst_ma = (uint32_t)STRIP_LEDS * (uint32_t)STRIP_WHITE_MA_PER_LED;
+  if (worst_ma <= (uint32_t)STRIP_BUDGET_MA) return 255;
+  const uint32_t scale = (uint32_t)STRIP_BUDGET_MA * 255UL / worst_ma;
+  return (uint8_t)(scale > 255 ? 255 : scale);
+}
 
 //: Углы серво замка: 0 — закрыто, 90 — открыто. Подберите под свой замок.
 static const uint8_t LOCK_CLOSED_ANGLE = 10;
@@ -252,7 +288,14 @@ static uint32_t cargo_deadline = 0;
 
 static uint8_t light_state = 0;               // биты LIGHT_*
 static uint8_t dim_level = 80;                // яркость габаритов 0…255
-static bool strip_auto = true;
+//: Режим ленты: 0 — auto (стоп/поворотники/подсветка пола), 1 — off,
+//: 2 — floor (только подсветка пола, без стопов и поворотников на ленте),
+//: 3 — wave (бегущая волна без реакции на свет).
+enum StripMode : uint8_t { STRIP_MODE_AUTO = 0, STRIP_MODE_OFF = 1,
+                           STRIP_MODE_FLOOR = 2, STRIP_MODE_WAVE = 3 };
+static uint8_t strip_mode = STRIP_MODE_AUTO;
+static uint8_t wave_phase = 0;                // 0…STRIP_LEDS-1, сдвиг волны
+static uint32_t last_anim_ms = 0;
 
 static bool lock_open = false;
 static bool lock_held = false;                // открыт картой, сам не закроется
@@ -763,33 +806,109 @@ void applyRelays(uint8_t mask) {
   relayWrite(3, (mask & LIGHT_RIGHT) != 0);
 }
 
-//: Лента повторяет свет: стоп — красный, поворотники — янтарные полосы,
-//: габариты — белый на заданной яркости. Иначе лента погашена.
+//: Насколько далеко от головы волны пиксель ещё горит (в диодах).
+static const uint8_t WAVE_LENGTH = 9;
+//: Волна уходит на один диод за этот интервал: 73 диода ≈ 2.4 с на круг.
+static const uint32_t WAVE_STEP_MS = 33;
+
+//: Яркость i-го диода волны: голова яркая, хвост гаснет.
+static uint8_t waveLevel(uint16_t index, bool reverse) {
+  const uint16_t span = STRIP_LEDS;
+  const uint16_t phase = reverse ? (uint16_t)((span - wave_phase) % span) : wave_phase;
+  const uint16_t delta = (uint16_t)((index + span - phase) % span);
+  if (delta >= WAVE_LENGTH) return 0;
+  return (uint8_t)((uint16_t)255 * (WAVE_LENGTH - delta) / WAVE_LENGTH);
+}
+
+//: Лента внизу рамы, 73 диода смотрят вниз: подсветка пола и световые эффекты.
+//:
+//: Приоритет: стоп — красный по всей ленте; поворотник — янтарная половина
+//: стороны поворота; габариты (LIGHT_DIM) — ровный тёплый белый по всему
+//: периметру; иначе лента погашена. В движении (свет «передний») поверх идёт
+//: бегущая волна по кругу.
+//:
+//: Лента смотрит вниз, поэтому яркость держится в пределах STRIP_BRIGHTNESS и
+//: умножается на dim_level: на пол уходит рассеянный свет, а не слепящее пятно.
 void applyStrip(uint8_t mask) {
   if (!STRIP_ENABLED) return;      // ленты нет: D6 не трогаем вовсе
-  if (!strip_auto) return;
+  if (strip_mode == STRIP_MODE_OFF) {
+    // Режим off: пиксели погашены, но линию данных не отпускаем.
+    strip.clear();
+    strip.show();
+    return;
+  }
   strip.clear();
-  const uint8_t scale = (uint8_t)((uint16_t)STRIP_BRIGHTNESS * (uint16_t)dim_level / 255);
-  if (mask & LIGHT_STOP) {
+  // Предел яркости: общий STRIP_BRIGHTNESS и бюджет по току — что меньше.
+  // Бюджет считает всю ленту, поэтому 73 диода не могут «съесть» больше него.
+  const uint8_t budget = stripBudgetScale();
+  const uint8_t limit = STRIP_BRIGHTNESS < budget ? STRIP_BRIGHTNESS : budget;
+  const uint8_t scale = (uint8_t)((uint16_t)limit * (uint16_t)dim_level / 255);
+  const bool wave_only = strip_mode == STRIP_MODE_WAVE;
+  const bool floor_only = strip_mode == STRIP_MODE_FLOOR;
+  const bool show_stop = !wave_only && !floor_only && (mask & LIGHT_STOP);
+  const bool show_turn = !wave_only && !floor_only && (mask & (LIGHT_LEFT | LIGHT_RIGHT));
+  const bool moving = wave_only || (!floor_only && (mask & LIGHT_HEAD));
+
+  if (show_stop) {
     const uint32_t red = strip.Color(scale, 0, 0);
     for (uint16_t i = 0; i < STRIP_LEDS; ++i) strip.setPixelColor(i, red);
-  } else if (mask & (LIGHT_LEFT | LIGHT_RIGHT)) {
+  } else if (show_turn) {
     const uint32_t amber = strip.Color(scale, scale / 2, 0);
-    const uint16_t half = STRIP_LEDS / 2;
+    const uint16_t half = (uint16_t)((STRIP_LEDS + 1) / 2);
     for (uint16_t i = 0; i < STRIP_LEDS; ++i) {
       const bool left_side = i < half;
       if (((mask & LIGHT_LEFT) && left_side) || ((mask & LIGHT_RIGHT) && !left_side)) {
         strip.setPixelColor(i, amber);
       }
     }
-  } else if (mask & LIGHT_DIM) {
-    const uint32_t white = strip.Color(scale / 2, scale / 2, scale / 2);
-    for (uint16_t i = 0; i < STRIP_LEDS; ++i) strip.setPixelColor(i, white);
-  } else if (mask & LIGHT_HEAD) {
-    const uint32_t white = strip.Color(scale, scale, scale);
-    for (uint16_t i = 0; i < STRIP_LEDS; ++i) strip.setPixelColor(i, white);
+  } else if (floor_only || (mask & LIGHT_DIM)) {
+    // Подсветка пола: тёплый белый ровным светом по всему периметру.
+    const uint32_t warm = strip.Color(scale, (uint8_t)((uint16_t)scale * 235 / 255),
+                                      (uint8_t)((uint16_t)scale * 190 / 255));
+    for (uint16_t i = 0; i < STRIP_LEDS; ++i) strip.setPixelColor(i, warm);
+  }
+  // Ничего не включено — лента остаётся погашенной. 73 диода вниз на 5 В
+  // потребляют заметный ток, поэтому после сброса света нет, а не «дыхание»:
+  // подсветку пола включает оператор командой light dim on или strip floor.
+
+  if (moving) {
+    // Бегущая волна: направление бега показывает сторону поворота.
+    const bool reverse = (mask & LIGHT_RIGHT) != 0 && (mask & LIGHT_LEFT) == 0;
+    for (uint16_t i = 0; i < STRIP_LEDS; ++i) {
+      const uint8_t level = waveLevel(i, reverse);
+      if (!level) continue;
+      const uint8_t value = (uint8_t)((uint16_t)scale * level / 255);
+      strip.setPixelColor(i, strip.Color(value, (uint8_t)(value / 2), 0));
+    }
   }
   strip.show();
+}
+
+//: Идёт ли по ленте бегущая волна прямо сейчас.
+static bool stripIsAnimating(uint8_t mask) {
+  if (!STRIP_ENABLED) return false;
+  if (strip_mode == STRIP_MODE_WAVE) return true;
+  if (strip_mode != STRIP_MODE_AUTO) return false;
+  // Стоп и поворотники важнее: волна их не перебивает.
+  if (mask & (LIGHT_STOP | LIGHT_LEFT | LIGHT_RIGHT)) return false;
+  return (mask & LIGHT_HEAD) != 0;
+}
+
+//: Анимация волны: одна ступенька за WAVE_STEP_MS.
+//:
+//: show() для 73 диодов глушит прерывания примерно на 2 мс, поэтому кадры
+//: отправляются только пока волна действительно бежит (≈30 кадров/с), а
+//: статичная картинка не перерисовывается вовсе.
+void stripTick(uint32_t now) {
+  if ((now - last_anim_ms) < WAVE_STEP_MS) return;
+  const uint8_t mask = effectiveLights();
+  if (!stripIsAnimating(mask)) {
+    last_anim_ms = now;
+    return;
+  }
+  last_anim_ms = now;
+  wave_phase = (uint16_t)((wave_phase + 1) % STRIP_LEDS);
+  applyStrip(mask);
 }
 
 void lightsRefresh() {
@@ -893,12 +1012,13 @@ void emitTelemetry() {
   char line[192];
   const int n = snprintf_P(line, sizeof(line),
       PSTR("@S fw=%u hdg=%d pitch=%d roll=%d gz=%d press=%ld temp=%d alt=%ld "
-           "lock=%d light=%u dim=%u strip=%d cargo=%u rfid=%u cards=%u link=%d "
+           "lock=%d light=%u dim=%u strip=%d nleds=%u cargo=%u rfid=%u cards=%u link=%d "
            "err=%u t=%lu"),
       (unsigned)SENSOR_PROTOCOL, (int)heading_cd, (int)pitch_cd, (int)roll_cd,
       (int)gyro_z_dps10, (long)baro_pressure_pa, (int)baro_temp_c10, (long)baro_altitude_cm,
       lock_open ? 1 : 0,
       (unsigned)effectiveLights(), (unsigned)dim_level, STRIP_ENABLED ? 1 : 0,
+      (unsigned)STRIP_LEDS,
       (unsigned)cargo_kind, (unsigned)rfid_state,
       (unsigned)card_count, link_ok ? 1 : 0, (unsigned)error_mask,
       (unsigned long)millis());
@@ -1210,7 +1330,7 @@ bool parseRole(const char* text, uint8_t* role) {
 
 void printHelp() {
   note(PSTR("команды: ping, stat, ?, light head|stop|left|right|dim on|off, light all off|on"));
-  note(PSTR("dim 0…255, strip auto|off, lock open [1…10]|hold|close"));
+  note(PSTR("dim 0…255, strip auto|off|floor|wave, lock open [1…10]|hold|close"));
   note(PSTR("card list|add UID [admin|user]|learn [admin|user]|role UID admin|user|del|clear"));
   note(PSTR("cargo load|unload [1…240]|end, mag cal start|stop|reset"));
   note(PSTR("mag cal start|stop|reset. Пины: I2C 20/21, RC522 SS53 RST9, лента D6, реле D2-D5"));
@@ -1280,19 +1400,24 @@ void handleCommand(char* line) {
   if (strcmp_P(word, PSTR("strip")) == 0) {
     char* value = strtok_r(nullptr, " \t", &save);
     if (!value) { emitAck("strip", false); return; }
-    if (strcmp_P(value, PSTR("auto")) == 0) strip_auto = true;
-    else if (strcmp_P(value, PSTR("off")) == 0) {
-      strip_auto = false;
-      if (STRIP_ENABLED) {
-        strip.clear();
-        strip.show();
-      } else {
+    if (strcmp_P(value, PSTR("auto")) == 0) {
+      strip_mode = STRIP_MODE_AUTO;
+    } else if (strcmp_P(value, PSTR("off")) == 0) {
+      strip_mode = STRIP_MODE_OFF;
+      if (!STRIP_ENABLED) {
         // Ленты нет — линия данных остаётся прижатой к земле.
         pinMode(STRIP_PIN, OUTPUT);
         digitalWrite(STRIP_PIN, LOW);
       }
+    } else if (strcmp_P(value, PSTR("floor")) == 0) {
+      // Только подсветка пола: 73 диода вниз, без стопов и поворотников.
+      strip_mode = STRIP_MODE_FLOOR;
+    } else if (strcmp_P(value, PSTR("wave")) == 0) {
+      // Бегущая волна независимо от того, включены ли габариты.
+      strip_mode = STRIP_MODE_WAVE;
     } else { emitAck("strip", false); return; }
     lightsRefresh();
+    emitTelemetry();
     emitAck("strip", true);
     return;
   }
@@ -1551,6 +1676,9 @@ void loop() {
     blink_phase = !blink_phase;
     lightsRefresh();
   }
+
+  // Лента: шаг бегущей волны. Без ленты stripTick сразу возвращается.
+  stripTick(now);
 
   // Обмен с картой неблокирующий: каждый проход loop() делает один маленький шаг.
   rfidTick(now);

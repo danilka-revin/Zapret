@@ -123,16 +123,34 @@ def test_sketch_version_matches_server_protocol():
     assert 3 in sm.SENSOR_PROTOCOLS
 
 
-def test_led_strip_is_off_until_it_is_actually_wired():
-    """Ленты пока нет: прошивка не должна зависеть от неё ни в чём, кроме света."""
+def test_led_strip_is_wired_73_leds_under_the_frame():
+    """Лента смонтирована: 73 диода снизу рамы, включена по умолчанию.
+
+    Отключение осталось возможным для платы без ленты — флагом сборки
+    -DSENSOR_STRIP_ENABLED=0, и тогда D6 прижат к земле.
+    """
     text = _text()
-    # По умолчанию лента выключена и включается одной строкой или флагом сборки.
-    assert re.search(r"#ifndef SENSOR_STRIP_ENABLED\s*\n#define SENSOR_STRIP_ENABLED 0", text)
-    assert '"-DSENSOR_STRIP_ENABLED=1"' in text or "-DSENSOR_STRIP_ENABLED=1" in text
+    # Лента смонтирована (73 диода внизу рамы), но остаётся выключаемой
+    # сборкой: снятую ленту не должны «озвучивать» пиксели и линия D6.
+    assert re.search(r"#ifndef SENSOR_STRIP_ENABLED\s*\n#define SENSOR_STRIP_ENABLED 1", text)
+    assert "-DSENSOR_STRIP_ENABLED=0" in text
+    # Длина переопределяется сборкой, но по умолчанию ровно 73 диода.
+    assert re.search(r"#define SENSOR_STRIP_LEDS 73", text)
+    assert re.search(r"static const uint16_t STRIP_LEDS = SENSOR_STRIP_LEDS;", text)
+    # Светит вниз: это подсветка пола, и в коде это записано, чтобы никто не
+    # принял её за габаритный огонь на уровне глаз.
+    assert "светят вниз" in text or "светят ВНИЗ" in text
+    # Подсветка снизу ограничена по току: 73 белых диода на полной яркости
+    # это ~4,4 А, поэтому яркость урезается бюджетом.
+    assert "STRIP_BUDGET_MA" in text and "stripBudgetScale" in text
+    budget = re.search(r"STRIP_BUDGET_MA = (\d+);", text)
+    assert budget and int(budget.group(1)) < 73 * 60
+    # Линия данных не остаётся в воздухе и при отключённой ленте.
+    assert "digitalWrite(STRIP_PIN, LOW)" in text
     assert re.search(r"static const bool STRIP_ENABLED = SENSOR_STRIP_ENABLED != 0;", text)
     # Без ленты пиксели не пишутся, а линия данных прижата к земле.
     strip_fn = text[text.index("void applyStrip"):text.index("void lightsRefresh")]
-    assert strip_fn.index("if (!STRIP_ENABLED) return;") < strip_fn.index("if (!strip_auto) return;")
+    assert strip_fn.index("if (!STRIP_ENABLED) return;") < strip_fn.index("if (strip_mode ==")
     setup = text[text.index("void setup()"):text.index("void loop()")]
     assert "if (STRIP_ENABLED) {" in setup and "digitalWrite(STRIP_PIN, LOW)" in setup
     # Команда strip принимается и без ленты: сервер не должен получать отказ.
@@ -152,8 +170,9 @@ def _build(binary: Path, *, strip: bool = False) -> Path:
     if not compiler:
         pytest.skip("нет g++/clang++ — симуляция модуля датчиков пропущена")
     command = [compiler, "-std=c++17", "-O1", "-w"]
-    if strip:
-        command.append("-DSENSOR_STRIP_ENABLED=1")
+    # В прошивке лента теперь включена по умолчанию, поэтому «плата без ленты»
+    # задаётся явно: -DSENSOR_STRIP_ENABLED=0.
+    command.append("-DSENSOR_STRIP_ENABLED=1" if strip else "-DSENSOR_STRIP_ENABLED=0")
     command += ["-I", str(SIM_DIR / "stubs"), str(SIM_DIR / "sensor_sim.cpp"),
                 "-o", str(binary)]
     result = subprocess.run(command, capture_output=True, text=True, timeout=300)
@@ -627,6 +646,10 @@ class FakeModule:
         sm.command_dim(level)
         self.calls.append(("dim", level))
 
+    def strip_mode(self, mode):
+        sm.command_strip_mode(mode)         # опечатка не должна дойти до платы
+        self.calls.append(("strip", mode))
+
     def lock(self, open_, seconds=None, *, hold=False):
         sm.command_lock(open_, seconds, hold=hold)
         self.calls.append(("lock", open_, seconds, hold))
@@ -679,6 +702,23 @@ def test_lights_take_bool_and_reject_unknown_names(kiosk_app):
     bad = client.post("/api/sensor_module/lights", json={"light": "brake", "on": True})
     assert bad.status_code == 400 and "свет" in bad.get_json()["error"]
     assert client.post("/api/sensor_module/lights", json={"dim": 999}).status_code == 400
+
+
+def test_strip_mode_endpoint_covers_all_four_modes(kiosk_app):
+    """Режимы ленты: 73 диода внизу рамы, подсветка пола без стопов и волна."""
+    module = FakeModule()
+    kiosk_app.extensions["rc_sensor_module"] = module
+    client = kiosk_app.test_client()
+    for mode in ("auto", "off", "floor", "wave"):
+        reply = client.post("/api/sensor_module/strip", json={"mode": mode})
+        assert reply.status_code == 200, mode
+        assert module.calls[-1] == ("strip", mode)
+    # Регистр не важен, но опечатка — отказ, а не тихое переключение.
+    assert client.post("/api/sensor_module/strip", json={"mode": "FLOOR"}).status_code == 200
+    assert module.calls[-1] == ("strip", "FLOOR")
+    bad = client.post("/api/sensor_module/strip", json={"mode": "rainbow"})
+    assert bad.status_code == 400 and "режим ленты" in bad.get_json()["error"]
+    assert client.post("/api/sensor_module/strip", json={}).status_code == 400
 
 
 def test_door_lock_needs_the_case_pin(kiosk_app):
@@ -824,3 +864,55 @@ def test_kiosk_state_carries_the_sensor_block():
     """Поле sensorModule в /api/kiosk_state — контракт для экрана."""
     source = (ROOT / "robot_control" / "kiosk_app.py").read_text(encoding="utf-8")
     assert '"sensorModule": sensor_state_payload()' in source
+
+
+# ----------------------------- лента внизу рамы ----------------------------- #
+def test_led_strip_is_73_leds_pointing_down():
+    """Лента: 73 диода внизу рамы, DIN на D6, число уходит в телеметрию."""
+    text = _text()
+    # Длина задаётся одной константой: 73 по умолчанию, иначе — флагом сборки.
+    assert re.search(r"#define SENSOR_STRIP_LEDS 73", text)
+    assert re.search(r"static const uint16_t STRIP_LEDS = SENSOR_STRIP_LEDS;", text)
+    assert "static_assert(STRIP_LEDS >= 1 && STRIP_LEDS <= 300" in text
+    assert sm.STRIP_LEDS_EXPECTED == 73
+    assert "nleds=%u" in text
+    # Режимы ленты: без них нельзя включить подсветку пола отдельно от стопов.
+    for mode in ("auto", "off", "floor", "wave"):
+        assert 'PSTR("%s")' % mode in text, mode
+    # Анимация волны вызывается из loop(), а не только из команд.
+    loop = text[text.index("void loop()"):]
+    assert "stripTick(now);" in loop
+    # После сброса лента погашена: 73 диода вниз на 5 В — это заметный ток.
+    setup = text[text.index("void setup()"):text.index("void loop()")]
+    assert "strip.clear();" in setup
+
+
+def test_strip_mode_command_is_validated_before_it_reaches_the_board():
+    assert sm.command_strip_mode("floor") == "strip floor"
+    assert sm.command_strip_mode("WAVE") == "strip wave"
+    for bad in ("rainbow", "", None, "auto off"):
+        with pytest.raises(ValueError):
+            sm.command_strip_mode(bad)
+
+
+def test_frames_report_the_number_of_leds():
+    """nleds разбирается; старая прошивка без поля не ломает кадр."""
+    board = sm.parse_telemetry(telemetry(strip=1, nleds=73))
+    assert board["stripLeds"] == 73 and board["stripEnabled"] is True
+    assert board["stripLeds"] == sm.STRIP_LEDS_EXPECTED
+    # Прошивка без счётчика (поле не пришло): кадр читается, число неизвестно.
+    legacy = sm.parse_telemetry(telemetry(strip=1))
+    assert legacy["stripLeds"] is None and legacy["stripEnabled"] is True
+
+
+def test_wave_does_not_rewrite_static_frames():
+    """show() на 73 диодах глушит прерывания ~2 мс: статичный кадр не перерисовываем."""
+    text = _text()
+    tick = text[text.index("void stripTick"):]
+    tick = tick[:tick.index("\n}\n")]
+    assert "stripIsAnimating(mask)" in tick
+    assert "effectiveLights()" in tick
+    # Стоп и поворотники перебивают волну, иначе они «мигают» под анимацией.
+    anim = text[text.index("static bool stripIsAnimating"):]
+    anim = anim[:anim.index("\n}\n")]
+    assert "LIGHT_STOP | LIGHT_LEFT | LIGHT_RIGHT" in anim

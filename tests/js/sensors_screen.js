@@ -74,6 +74,15 @@ const lightButtons = LIGHTS.map((name) => {
   return button;
 });
 
+/* Кнопки режима ленты: страница ищет их через [data-strip-mode]. */
+const STRIP_MODES = ['auto', 'floor', 'wave', 'off'];
+const stripButtons = STRIP_MODES.map((mode) => {
+  const button = new El('strip-' + mode, 'button');
+  button.setAttribute('data-strip-mode', mode);
+  button.textContent = mode;
+  return button;
+});
+
 global.document = {
   readyState: 'complete',
   body: new El('body'),
@@ -85,7 +94,11 @@ global.document = {
     return el;
   },
   querySelector: () => null,
-  querySelectorAll: (selector) => (selector === '[data-light]' ? lightButtons : []),
+  querySelectorAll: (selector) => {
+    if (selector === '[data-light]') return lightButtons;
+    if (selector === '[data-strip-mode]') return stripButtons;
+    return [];
+  },
   addEventListener: () => {},
   removeEventListener: () => {},
 };
@@ -215,6 +228,11 @@ function logItems() {
       noteHidden: byId('sm-strip-note').hidden,
       dim: byId('sm-dim').value,
       dimLabel: byId('sm-dim-value').textContent,
+      info: byId('sm-strip-leds').textContent,
+      modes: Array.prototype.map.call(
+        document.querySelectorAll('[data-strip-mode]'),
+        (b) => ({ mode: b.getAttribute('data-strip-mode'), disabled: !!b.disabled,
+                  title: b.title || '' })),
     },
     /* Концевика отсека нет: на экране только замок. */
     lock: { text: byId('sm-lock').textContent,
@@ -252,6 +270,13 @@ function logItems() {
       byId('sm-dim').value = String(acts.dim);
       (byId('sm-dim').events.change || []).forEach((listener) => listener({ target: byId('sm-dim') }));
       await sleep(20);
+    }
+    if (acts.stripMode) {
+      const button = stripButtons.find((b) => b.getAttribute('data-strip-mode') === acts.stripMode);
+      if (button) button.click();
+      await sleep(20);
+      result.afterStripMode = { text: byId('sm-msg').textContent,
+                                tone: byId('sm-msg').dataset.tone || '' };
     }
     if (acts.pin !== undefined) byId('sm-pin').value = String(acts.pin);
     if (acts.lockOpen) {

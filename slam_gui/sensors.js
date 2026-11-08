@@ -150,6 +150,21 @@
     });
     const stripNote = $('sm-strip-note');
     if (stripNote) stripNote.hidden = data.stripEnabled !== false;
+    // Плата сама сообщает число диодов (nleds). Если оно не 73 — так и пишем:
+    // лента могла быть обрезана или удлинена при монтаже.
+    const leds = Number(data.stripLeds);
+    const ledsNote = $('sm-strip-leds');
+    if (ledsNote) {
+      ledsNote.textContent = Number.isFinite(leds) && leds > 0
+        ? 'плата сообщает: ' + leds + ' диодов'
+          + (leds === 73 ? '' : ' — ожидалось 73, проверьте монтаж')
+        : 'плата сообщает: старый прошивный протокол без счётчика';
+    }
+    const modeButtons = document.querySelectorAll ? document.querySelectorAll('[data-strip-mode]') : [];
+    Array.prototype.forEach.call(modeButtons, (button) => {
+      button.disabled = data.stripEnabled === false;
+      button.title = button.disabled ? 'лента не подключена' : 'режим ленты на всё днище';
+    });
     const slider = $('sm-dim');
     if (slider && Number.isFinite(Number(data.dim))) {
       if (String(slider.value) !== String(data.dim)) slider.value = String(data.dim);
@@ -343,6 +358,15 @@
     const off = $('sm-lights-off');
     if (off) off.addEventListener('click', () => act('свет', 'api/sensor_module/lights',
                                                      { all: true, on: false }));
+
+    const stripModes = document.querySelectorAll ? document.querySelectorAll('[data-strip-mode]') : [];
+    Array.prototype.forEach.call(stripModes, (button) => {
+      button.addEventListener('click', () => {
+        if (button.disabled) return;
+        act('режим ленты — ' + button.textContent, 'api/sensor_module/strip',
+            { mode: button.getAttribute('data-strip-mode') });
+      });
+    });
 
     const dim = $('sm-dim');
     if (dim) {
