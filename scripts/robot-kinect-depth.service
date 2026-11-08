@@ -9,7 +9,7 @@
 # не создавая демо-поток и не вызывая цикл перезапуска systemd.
 [Unit]
 Description=Zapret Kinect 360 depth publisher
-Documentation=docs/AUTONOMY.md
+Documentation=https://github.com/danilka-revin/Zapret/blob/main/docs/AUTONOMY.md
 After=robot-kiosk.service
 Wants=robot-kiosk.service
 

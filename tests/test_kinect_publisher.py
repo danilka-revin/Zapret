@@ -115,9 +115,11 @@ def test_list_backends_reports_installed_drivers(monkeypatch, capsys):
 def test_kinect_wrapper_sources_ros_before_backend_detection():
     script = (ROOT / "scripts" / "kinect_depth.sh").read_text(encoding="utf-8")
     source = script.index('source "$RC_ROS_PREFIX/setup.bash"')
+    nounset_off = script.rfind("set +u", 0, source)
+    nounset_on = script.index("set -u", source)
     listing = script.index('exec "$PY" scripts/kinect_depth_publisher.py --list-backends')
     check = script.index('INSTALLED="$(')
-    assert source < listing < check
+    assert nounset_off < source < nounset_on < listing < check
 
 
 def test_kinect_status_reports_drivers():

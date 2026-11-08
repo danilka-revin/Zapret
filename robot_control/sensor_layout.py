@@ -62,7 +62,7 @@ _CAMERA_DEFAULTS: dict[str, dict[str, Any]] = {
 
 _KINECT_DEFAULTS: dict[str, Any] = {
     # Положение и ориентация на корпусе.
-    "x_m": 0.35, "y_m": 0.0, "z_m": 0.30,
+    "x_m": 0.35, "y_m": 0.0, "z_m": 0.45,
     "yaw_deg": 0.0, "pitch_deg": 0.0,
     # Kinect 360: 57° × 43°, рабочий диапазон глубины 0,45…4,0 м.
     "hfov_deg": 57.0, "vfov_deg": 43.0,

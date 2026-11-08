@@ -34,6 +34,7 @@ def test_four_cameras_have_stable_ids_roles_and_angles(monkeypatch):
     payload = layout.layout_payload()
     assert payload["cameraCount"] == 4
     assert payload["kinect"]["model"] == "Kinect 360"
+    assert payload["kinect"]["z_m"] == pytest.approx(0.45)
     assert payload["duplicatePorts"] == []
 
 

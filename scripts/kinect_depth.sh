@@ -53,8 +53,11 @@ if [[ -z "${RC_ROS_PREFIX:-}" ]]; then
   done
 fi
 if [[ -n "${RC_ROS_PREFIX:-}" && -f "$RC_ROS_PREFIX/setup.bash" ]]; then
+  # ROS Rolling setup can read unset variables; source it outside nounset mode.
   # shellcheck disable=SC1091
-  source "$RC_ROS_PREFIX/setup.bash" || true
+  set +u
+  source "$RC_ROS_PREFIX/setup.bash" || log "ROS environment could not be sourced; continuing without it."
+  set -u
 fi
 
 # Явная диагностика работает даже когда публикатор уже запущен: показываем

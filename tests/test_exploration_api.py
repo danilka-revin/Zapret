@@ -170,6 +170,8 @@ def test_kinect_preview_api_is_live_depth_only_and_static_script_is_served(kiosk
     assert response.json['available'] and response.json['notForNavigation']
     assert len(base64.b64decode(response.json['data'])) == 40 * 30 * 2
     assert response.json['captureSource'] == 'unknown'
+    assert set(response.json['mount']) == {'z_m', 'yaw_deg', 'pitch_deg'}
+    assert isinstance(response.json['mount']['z_m'], (int, float))
     demo = depth_payload()
     demo['capture_source'] = 'demo'
     kiosk_client.post('/api/kinect/depth', json=demo, headers={'X-Robot-Control': 'kinect'})

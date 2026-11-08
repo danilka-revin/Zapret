@@ -403,9 +403,12 @@
   // причина отсутствия скана и список USB-портов обновляются в панели настроек.
 
   function renderLidar(d) {
+    const pts = lidarPoints(d);
+    if (window.RCKinectView && typeof window.RCKinectView.setLidarScan === 'function') {
+      window.RCKinectView.setLidarScan(pts, d && d.lidarStatus);
+    }
     if (window.RCKinectView && window.RCKinectView.active()) return;
     const canvas = $('lidar-canvas');
-    const pts = lidarPoints(d);
     const has = pts.length > 0;
     const visibleCount = pts.filter((point) => point.r <= LIDAR_RANGE_M).length;
 
