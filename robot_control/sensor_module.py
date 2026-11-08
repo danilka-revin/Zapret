@@ -496,6 +496,7 @@ class SensorModule:
         #: Список карт с ролями: собирается из кадров @CARDINFO на команду list.
         self._card_list: list[dict[str, Any]] = []
         self._card_list_open = False
+        self._card_list_known = False
 
     # --- жизненный цикл ---
     def open(self) -> None:
@@ -582,6 +583,8 @@ class SensorModule:
                 self._push_event(frame)
             elif frame["kind"] == "cardinfo":
                 if frame.get("end"):
+                    if self._card_list_open:
+                        self._card_list_known = True
                     self._card_list_open = False
                 elif self._card_list_open:
                     self._card_list = [item for item in self._card_list
@@ -643,6 +646,7 @@ class SensorModule:
             with self._lock:
                 self._card_list = []
                 self._card_list_open = True
+                self._card_list_known = False
         self.send(command)
 
     def mag_calibration(self, action: str) -> None:
@@ -674,7 +678,7 @@ class SensorModule:
                 "lastAck": dict(self._last_ack) if self._last_ack else None,
                 "lastCard": dict(self._last_card) if self._last_card else None,
                 "cardList": [dict(item) for item in self._card_list],
-                "cardListKnown": bool(self._card_list) and not self._card_list_open,
+                "cardListKnown": self._card_list_known and not self._card_list_open,
                 "events": [dict(item) for item in self._events[-10:]],
             }
             if frame is None:

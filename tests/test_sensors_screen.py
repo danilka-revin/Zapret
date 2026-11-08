@@ -16,12 +16,16 @@
 
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
+
+from conftest import login
 
 ROOT = Path(__file__).resolve().parent.parent
 HARNESS = Path(__file__).resolve().parent / "js" / "sensors_screen.js"
@@ -86,22 +90,73 @@ def run_screen(payload: dict, tmp_path: Path) -> dict:
 
 
 # --------------------------------------------------------------- страница
-def test_sensors_screen_is_reachable_like_the_other_screens(kiosk_client):
-    page = kiosk_client.get("/sensors")
-    assert page.status_code == 200
-    html = page.text
-    assert "sensors.js" in html and "sensors.css" in html
-    assert 'href="/map"' in html and 'href="/devices"' in html
-    assert 'aria-current="page"' in html
-    # Файлы страницы отдаются тем же сервером, что и остальные экраны.
-    assert kiosk_client.get("/sensors.js").status_code == 200
-    assert kiosk_client.get("/sensors.css").status_code == 200
+def test_sensors_screen_is_reachable_like_the_other_screens(kiosk_client, client, operator):
+    login(client)
+    for web in (kiosk_client, client):
+        page = web.get("/sensors")
+        assert page.status_code == 200
+        html = page.text
+        assert "sensors.js" in html and "sensors.css" in html
+        assert 'href="/map"' in html and 'href="/devices"' in html
+        assert 'aria-current="page"' in html
+        # Статика страницы доступна через оба сервера.
+        assert web.get("/sensors.js").status_code == 200
+        assert web.get("/sensors.css").status_code == 200
     # Ссылка есть на бортовом экране и на инженерном пульте.
     assert "k-sensors-open" in kiosk_client.get("/kiosk").text
     main_page = (ROOT / "slam_gui" / "main.html").read_text(encoding="utf-8")
     assert 'href="/sensors" id="nav-sensors"' in main_page
     console = (ROOT / "slam_gui" / "index.html").read_text(encoding="utf-8")
     assert 'id="console-sensors-link"' in console and 'href="/sensors"' in console
+
+
+def test_remote_sensor_api_proxies_calibration_with_auth_and_csrf(client, operator, kiosk_client,
+                                                                   monkeypatch):
+    from robot_control import map_peer
+
+    class FakeModule:
+        def __init__(self):
+            self.actions = []
+
+        def state(self):
+            return {"configured": True, "ok": True, "connected": True,
+                    "port": "/dev/ttyUSB0", "heading": 12.3, "events": []}
+
+        def mag_calibration(self, action):
+            self.actions.append(action)
+
+    module = FakeModule()
+    kiosk_client.application.extensions["rc_sensor_module"] = module
+    monkeypatch.setenv("RC_SLAM_PEER_URL", "http://owner.example:8090/api/kiosk_state")
+    forwarded = []
+
+    def forward(req, timeout):
+        parsed = urlsplit(req.full_url)
+        forwarded.append((req.full_url, req.get_method(), dict(req.header_items())))
+        response = kiosk_client.open(parsed.path, method=req.get_method(), data=req.data,
+                                     headers=dict(req.header_items()))
+        result = io.BytesIO(response.data)
+        result.code = response.status_code
+        result.headers = response.headers
+        return result
+
+    monkeypatch.setattr(map_peer, "urlopen", forward)
+    assert client.get("/sensors").status_code in (302, 401)
+    assert client.post("/api/sensor_module/mag", json={"action": "start"}).status_code in (302, 401)
+    login(client)
+    status = client.get("/api/sensor_module")
+    assert status.status_code == 200 and status.json["data"]["heading"] == 12.3
+    assert client.post("/api/sensor_module/mag", json={"action": "start"},
+                       headers={"X-Robot-Control": "sensors"}).status_code == 400
+    token = client.get("/api/control/session").json["csrfToken"]
+    headers = {"X-Robot-Control": "sensors", "X-CSRF-Token": token}
+    response = client.post("/api/sensor_module/mag", json={"action": "start"}, headers=headers)
+    assert response.status_code == 200, response.get_json()
+    assert module.actions == ["start"]
+    assert forwarded[-1][0] == "http://owner.example:8090/api/sensor_module/mag"
+    assert forwarded[-1][1] == "POST"
+    assert forwarded[-1][2].get("X-robot-control") == "sensors"
+    assert all("Cookie" not in headers for _, _, headers in forwarded)
 
 
 def test_sensor_api_stays_reachable_and_says_so_when_the_board_is_absent(kiosk_client):
@@ -250,6 +305,38 @@ def test_lights_go_to_the_api_the_operator_pressed(tmp_path):
     assert out["afterToggle"]["head"]["pressed"] == "false"
     assert "передний свет" in out["afterToggleMsg"]["text"]
     assert out["afterToggleMsg"]["tone"] == "ok"
+
+
+def test_empty_rfid_list_is_distinguished_from_not_loaded(tmp_path):
+    out = run_screen(screen(cardList=[], cardListKnown=True), tmp_path)
+    assert out["cards"]["empty"] == ["карт нет"]
+
+    unknown = run_screen(screen(cardList=[], cardListKnown=False), tmp_path)
+    assert unknown["cards"]["empty"] == ["список не загружен"]
+
+
+def test_compass_calibration_buttons_send_all_three_actions(tmp_path):
+    for action in ("start", "stop", "reset"):
+        payload = screen()
+        payload["actions"] = {"mag": action}
+        out = run_screen(payload, tmp_path)
+        posts = [call for call in out["callsAfter"] if call["method"] == "POST"]
+        assert posts == [{"url": "api/sensor_module/mag", "method": "POST",
+                          "body": {"action": action}}]
+        assert out["postHeaders"] == [{"Content-Type": "application/json",
+                                       "X-Robot-Control": "sensors"}]
+        assert out["afterMagMsg"]["tone"] == "ok"
+        assert "команда отправлена" in out["afterMagMsg"]["text"]
+
+
+def test_remote_operator_gets_csrf_header_for_calibration(tmp_path):
+    payload = screen()
+    payload["csrfToken"] = "signed-test-token"
+    payload["actions"] = {"mag": "start"}
+    out = run_screen(payload, tmp_path)
+    assert out["postHeaders"] == [{"Content-Type": "application/json",
+                                   "X-Robot-Control": "sensors",
+                                   "X-CSRF-Token": "signed-test-token"}]
 
 
 def test_lock_and_cards_require_the_case_pin(tmp_path):

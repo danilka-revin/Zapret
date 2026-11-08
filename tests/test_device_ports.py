@@ -265,13 +265,23 @@ def test_offboard_uart_ports_are_not_offered(monkeypatch):
     assert options[0]["vidPid"] == "1a86:7523"
 
 
-def test_usb_only_list_does_not_repeat_devices_with_a_node(monkeypatch):
-    """Колесо уже есть как tty-порт: второй раз как usb:1-2 оно только путает."""
+def test_usb_only_list_keeps_kinect_camera_topology_but_not_other_nodes(monkeypatch):
+    """У Kinect есть video-узел, но depth-драйверу нужна его USB-топология."""
     no_pyserial(monkeypatch)
-    registry = two_ports_topology()
-    usb_options = ports._usb_options(ports._topology(registry))
-    assert [option["port"] for option in usb_options] == ["usb:1-6"]
-    assert usb_options[0]["kinect"] is True
+    registry = FakeRegistry([
+        usb("1-6", "045e:02ae", [node("/dev/video7", "video", index="0")],
+            product="NUI Camera"),
+        usb("1-7", "045e:02ad", product="NUI Audio"),
+        usb("1-8", "1234:5678", [node("/dev/ttyUSB9", "serial")], product="Serial"),
+    ])
+    topology = ports._topology(registry)
+    usb_options = ports._usb_options(topology)
+    by_port = {option["port"]: option for option in usb_options}
+    assert by_port["usb:1-6"]["kinect"] is True
+    assert by_port["usb:1-7"]["kinect"] is False  # audio не глубина
+    assert "usb:1-8" not in by_port             # обычный serial не дублируем
+    video_options = ports._video_options(topology)
+    assert video_options[0]["kinect"] is True   # не назначать как обзорную камеру
 
 
 def test_camera_assignment_does_not_leak_into_the_serial_list(monkeypatch):

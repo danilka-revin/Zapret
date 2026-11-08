@@ -7,15 +7,11 @@
     # демо-кадр (без железа, проверка всей цепочки)
     .venv/bin/python scripts/kinect_depth_publisher.py --source demo --once
 
-    # libfreenect (Kinect 360 / Xbox 360)
-    .venv/bin/python scripts/kinect_depth_publisher.py --source freenect
+    # libfreenect с привязкой к выбранному NUI Camera (RC_KINECT_PORT в .env)
+    ./scripts/kinect_depth.sh --foreground
 
-    # OpenNI2 (если Kinect виден через openni2)
-    .venv/bin/python scripts/kinect_depth_publisher.py --source openni
-
-    # ROS 2: топик sensor_msgs/Image с глубиной 16UC1 (мм) или 32FC1 (м)
-    .venv/bin/python scripts/kinect_depth_publisher.py --source ros2 \
-        --topic /camera/depth/image_rect_raw
+    # OpenNI2/ROS 2 пока не запускаются с RC_KINECT_PORT: для них ещё нет
+    # проверяемой привязки USB-топологии к URI/topic.
 
 Кадр уменьшается до 160×120 и уходит как base64 uint16 (мм) в
 `POST /api/kinect/depth`. Геометрия и фильтры лежат в `.env` борта
@@ -28,15 +24,103 @@ import array
 import base64
 import json
 import math
+import os
+import re
 import struct
 import sys
 import time
 import urllib.request
+from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_URL = "http://127.0.0.1:8090/api/kinect/depth"
 CONTROL_HEADER = "X-Robot-Control"
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 160, 120
+# libfreenect v1 supports Xbox NUI Camera and Kinect-for-Windows camera only.
+FREENECT_CAMERA_IDS = {(0x045E, 0x02AE), (0x045E, 0x02BF)}
+USB_TOPOLOGY_RE = re.compile(r"^usb:(\d+-\d+(?:\.\d+)*)$")
+USB_DEVICE_NODE_RE = re.compile(r"^/dev/bus/usb/(\d{3})/(\d{3})$")
+SYS_USB_ROOT = Path("/sys/bus/usb/devices")
+
+
+def configured_kinect_port() -> str:
+    """RC_KINECT_PORT from process environment or project .env."""
+    value = os.environ.get("RC_KINECT_PORT", "").strip()
+    if value:
+        return value
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("RC_KINECT_PORT="):
+                return line.partition("=")[2].strip().strip("\\\"").strip("'")
+    except OSError:
+        pass
+    return ""
+
+
+def usb_topology_for_port(port: str, sys_usb_root: Path = SYS_USB_ROOT) -> str:
+    """Normalize the saved selector value to sysfs topology (e.g. ``1-2.3``)."""
+    value = str(port or "").strip()
+    match = USB_TOPOLOGY_RE.fullmatch(value)
+    if match:
+        return match.group(1)
+    node = USB_DEVICE_NODE_RE.fullmatch(value)
+    if node:
+        bus, address = (int(part, 10) for part in node.groups())
+        try:
+            paths = sorted(sys_usb_root.iterdir(), key=lambda item: item.name)
+        except OSError:
+            paths = []
+        for path in paths:
+            try:
+                candidate_bus = int((path / "busnum").read_text().strip())
+                candidate_address = int((path / "devnum").read_text().strip())
+            except (OSError, ValueError):
+                continue
+            if candidate_bus == bus and candidate_address == address and re.fullmatch(
+                    r"\d+-\d+(?:\.\d+)*", path.name):
+                return path.name
+    raise RuntimeError("RC_KINECT_PORT должен указывать на выбранный NUI Camera (usb:1-2)")
+
+
+def freenect_index_for_port(port: str, devices=None, *, sys_usb_root: Path = SYS_USB_ROOT) -> int:
+    """Map selected sysfs USB topology to libfreenect's own camera index.
+
+    PyUSB preserves libusb_get_device_list ordering, the same list libfreenect
+    enumerates. NUI Audio is excluded; index counts only freenect camera IDs.
+    """
+    target = usb_topology_for_port(port, sys_usb_root)
+    if devices is None:
+        try:
+            import usb.core  # type: ignore
+            import usb.backend.libusb1  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError("для привязки USB нужен PyUSB: установите pyusb") from exc
+        backend = usb.backend.libusb1.get_backend()
+        if backend is None:
+            raise RuntimeError("PyUSB не нашёл backend libusb-1.0; невозможно безопасно сопоставить индекс")
+        devices = usb.core.find(find_all=True, backend=backend)
+    candidates = []
+    for device in devices or ():
+        try:
+            vendor, product = int(device.idVendor), int(device.idProduct)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if (vendor, product) not in FREENECT_CAMERA_IDS:
+            continue
+        try:
+            bus = int(device.bus)
+            ports = tuple(int(port_number) for port_number in device.port_numbers)
+        except (AttributeError, TypeError, ValueError, NotImplementedError):
+            raise RuntimeError("USB-драйвер не сообщает топологию Kinect; выберите libfreenect с libusb 1.0")
+        if not ports:
+            raise RuntimeError("libusb не сообщил USB-путь NUI Camera")
+        topology = str(bus) + "-" + ".".join(str(port_number) for port_number in ports)
+        candidates.append((topology, device))
+    for index, (topology, _device) in enumerate(candidates):
+        if topology == target:
+            return index
+    raise RuntimeError("выбранный порт %s не найден среди камер, поддерживаемых libfreenect" % port)
 
 
 def resample_u16(samples: array.array, width: int, height: int,
@@ -86,10 +170,10 @@ def freenect_raw_to_mm(raw: int) -> int:
 _FREENECT_MM = tuple(freenect_raw_to_mm(i) for i in range(2048))
 
 
-def freenect_frame() -> tuple[array.array, int, int]:
+def freenect_frame(index: int = 0) -> tuple[array.array, int, int]:
     import freenect  # type: ignore
 
-    depth, _ = freenect.sync_get_depth()
+    depth, _ = freenect.sync_get_depth(index=index)
     width, height = int(depth.shape[1]), int(depth.shape[0])
     try:
         raw = depth.astype("<u2").tobytes()
@@ -169,11 +253,11 @@ def ros2_frame(topic: str, timeout_s: float = 3.0) -> tuple[array.array, int, in
     return samples, width, height
 
 
-def grab(source: str, topic: str) -> tuple[array.array, int, int]:
+def grab(source: str, topic: str, device_index: int = 0) -> tuple[array.array, int, int]:
     if source == "demo":
         return demo_frame()
     if source == "freenect":
-        return freenect_frame()
+        return freenect_frame(device_index)
     if source == "openni":
         return openni_frame()
     if source == "ros2":
@@ -183,7 +267,7 @@ def grab(source: str, topic: str) -> tuple[array.array, int, int]:
 
 def post(url: str, samples: array.array, width: int, height: int,
          stamp: float, timeout_s: float = 3.0, unit: str = "front",
-         capture_source: str = "") -> dict[str, Any]:
+         capture_source: str = "", capture_port: str = "") -> dict[str, Any]:
     if sys.byteorder != "little":
         samples = array.array("H", samples)
         samples.byteswap()
@@ -194,6 +278,8 @@ def post(url: str, samples: array.array, width: int, height: int,
     }
     if capture_source:
         payload["capture_source"] = capture_source
+    if capture_port:
+        payload["capture_port"] = capture_port
     if unit != "front":
         payload["unit"] = unit
         url = url + ("&" if "?" in url else "?") + "unit=" + unit
@@ -225,14 +311,15 @@ def detect_backends() -> list[str]:
     return found
 
 
-def detect_source(allow_demo: bool = False) -> tuple[str, str]:
-    """Выбрать источник для ``--source auto``.
-
-    Раньше при отсутствии драйверов скрипт молча уходил в демо-кадр, и по
-    карте было не отличить настоящий Kinect от заглушки. Теперь без драйвера —
-    честная ошибка, а демо включается только явно.
-    """
+def detect_source(allow_demo: bool = False, *, require_usb_binding: bool = False) -> tuple[str, str]:
+    """Choose a backend; a saved physical port requires libfreenect's index API."""
     found = detect_backends()
+    if require_usb_binding:
+        if "freenect" in found:
+            return "freenect", ""
+        return "", ("Kinect: для точной привязки RC_KINECT_PORT нужен backend freenect "
+                    "и PyUSB. OpenNI/ROS 2 не позволяют этому publisher-у выбрать USB-топологию; "
+                    "источник не подменён.")
     if found:
         return found[0], ""
     if allow_demo:
@@ -251,6 +338,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--list-backends", action="store_true",
                         help="показать установленные драйверы и выйти")
     parser.add_argument("--url", default=DEFAULT_URL)
+    parser.add_argument("--usb-port", default=configured_kinect_port(),
+                        help="selected Kinect USB topology (default: RC_KINECT_PORT from .env)")
     parser.add_argument("--topic", default="/camera/depth/image_rect_raw")
     parser.add_argument("--unit", choices=("front", "rear"), default="front",
                         help="какой Kinect публикует кадр (rear требует RC_KINECT_REAR_ENABLE=1)")
@@ -271,21 +360,45 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     source = args.source
     if source == "auto":
-        detected, hint = detect_source(args.allow_demo)
+        detected, hint = detect_source(args.allow_demo,
+                                       require_usb_binding=bool(args.usb_port))
         if hint:
             print(hint, file=sys.stderr)
         if not detected:
             return 2
         source = detected
 
+    device_index = 0
+    capture_port = ""
+    if source != "demo":
+        if args.unit == "rear":
+            print("Kinect: задний датчик пока не поддержан привязкой к USB-порту; используйте один передний Kinect.",
+                  file=sys.stderr)
+            return 2
+        if not args.usb_port:
+            print("Kinect: сначала выберите NUI Camera во вкладке «Устройства» (RC_KINECT_PORT).",
+                  file=sys.stderr)
+            return 2
+        if source != "freenect":
+            print("Kinect: привязка выбранного USB-порта пока поддерживается только backend freenect; "
+                  "не запускаю другой источник вместо выбранного устройства.", file=sys.stderr)
+            return 2
+        try:
+            topology = usb_topology_for_port(args.usb_port)
+            device_index = freenect_index_for_port(args.usb_port)
+        except RuntimeError as exc:
+            print("Kinect: %s" % exc, file=sys.stderr)
+            return 2
+        capture_port = "usb:" + topology
+
     period = 1.0 / max(0.1, min(30.0, args.fps))
     frames = 0
     try:
         while True:
-            samples, raw_w, raw_h = grab(source, args.topic)
+            samples, raw_w, raw_h = grab(source, args.topic, device_index=device_index)
             small = resample_u16(samples, raw_w, raw_h, args.width, args.height)
             reply = post(args.url, small, args.width, args.height, time.time(),
-                         unit=args.unit, capture_source=source)
+                         unit=args.unit, capture_source=source, capture_port=capture_port)
             frames += 1
             if args.once:
                 print(json.dumps({"source": source, "reply": reply}, ensure_ascii=False))

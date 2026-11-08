@@ -116,6 +116,7 @@ global.clearInterval = () => {};
 
 /* --------------------------------------------------------------- ответы API */
 const calls = [];
+const postHeaders = [];
 function reply(body, status) {
   const code = status || 200;
   return { ok: code < 400, status: code, json: async () => body };
@@ -142,7 +143,13 @@ global.fetch = async (url, options) => {
   calls.push({ url: text, method, body });
   const failed = failure(text);
   if (failed) return failed;
-  if (method === 'POST') posted = true;
+  if (text === '/api/control/session') {
+    return payload.csrfToken ? reply({ok: true, csrfToken: payload.csrfToken}) : reply({ok: false}, 404);
+  }
+  if (method === 'POST') {
+    posted = true;
+    postHeaders.push(Object.assign({}, (options && options.headers) || {}));
+  }
   const current = posted ? after : before;
   if (method === 'POST') {
     if (/mag$/.test(text)) return reply(payload.magReply || { ok: true, data: current });
@@ -333,8 +340,11 @@ function logItems() {
     if (acts.mag) {
       byId('sm-cal-' + acts.mag).click();
       await sleep(20);
+      result.afterMagMsg = { text: byId('sm-msg').textContent,
+                             tone: byId('sm-msg').dataset.tone || '' };
     }
     result.callsAfter = calls.slice();
+    result.postHeaders = postHeaders.slice();
     result.logAfter = logItems();
   }
 

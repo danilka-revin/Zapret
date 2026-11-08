@@ -135,6 +135,25 @@ def proxy_landmark_file(origin: str, name: str):
         return jsonify(ok=False, error="Ориентир недоступен на бортовом сервере"), 503
 
 
+def proxy_sensor_module(origin: str, operation: str):
+    """Прокси экрана GY-87/света/замка на единственный бортовой клиент."""
+    routes = {
+        "state": ("GET", "/api/sensor_module"),
+        "lights": ("POST", "/api/sensor_module/lights"),
+        "strip": ("POST", "/api/sensor_module/strip"),
+        "lock": ("POST", "/api/sensor_module/lock"),
+        "cards": ("POST", "/api/sensor_module/cards"),
+        "cargo": ("POST", "/api/sensor_module/cargo"),
+        "mag": ("POST", "/api/sensor_module/mag"),
+    }
+    route = routes.get(operation)
+    if route is None:
+        return jsonify(ok=False, error="Неизвестная операция модуля датчиков"), 404
+    method, path = route
+    return _forward_json(origin, path, methods={method}, limit=MAX_NAV_REPLY_BYTES,
+                         timeout=4.0, control_header="sensors")
+
+
 def proxy_sensors(origin: str, suffix: str):
     """Только чтение геометрии сенсоров и статуса Kinect с борта."""
     routes = {

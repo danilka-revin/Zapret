@@ -24,6 +24,7 @@ import base64
 import binascii
 import importlib.util
 import math
+import re
 import sys
 import threading
 import time
@@ -288,6 +289,7 @@ class KinectDepthService:
         self._received_at = 0.0
         self._source = ""
         self._capture_source = "unknown"
+        self._capture_port = ""
         self._frames = 0
         self._last_width = 0
         self._last_height = 0
@@ -318,6 +320,9 @@ class KinectDepthService:
             self._capture_source = (capture_source if isinstance(capture_source, str) and
                                     capture_source in {"demo", "freenect", "openni", "ros2"}
                                     else "unknown")
+            capture_port = payload.get("capture_port")
+            self._capture_port = (capture_port if isinstance(capture_port, str) and re.fullmatch(
+                r"usb:\d+-\d+(?:\.\d+)*", capture_port) else "")
             self._frames += 1
             self._error = ""
             self._last_width = int(payload.get("width") or 0)
@@ -350,6 +355,8 @@ class KinectDepthService:
                 "lastStamp": self._stamp,
                 "ageS": round(age, 3) if age is not None else None,
                 "source": self._source,
+                "captureSource": self._capture_source,
+                "capturePort": self._capture_port,
                 "width": self._last_width,
                 "height": self._last_height,
                 "error": self._error,
@@ -367,7 +374,8 @@ class KinectDepthService:
                       "notForNavigation": True, "frameId": self._frames,
                       "ageS": round(age, 3) if age is not None else None,
                       "maxAgeS": float(self._spec["max_age_s"]), "source": self._source,
-                      "captureSource": self._capture_source}
+                      "captureSource": self._capture_source,
+                      "capturePort": self._capture_port}
             if available:
                 result.update(self._preview)
             return result
@@ -377,6 +385,7 @@ class KinectDepthService:
             self._points = []
             self._preview = None
             self._capture_source = "unknown"
+            self._capture_port = ""
             self._stamp = 0.0
             self._received_at = 0.0
             self._frames = 0

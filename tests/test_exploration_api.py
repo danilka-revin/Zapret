@@ -46,11 +46,17 @@ def test_kiosk_status_layout_and_kinect(kiosk_client):
 
 def test_kiosk_kinect_feed_requires_marker_and_feeds_map(kiosk_client):
     assert kiosk_client.post("/api/kinect/depth", json=depth_payload()).status_code == 400
-    reply = kiosk_client.post("/api/kinect/depth", json=depth_payload(),
+    payload = depth_payload()
+    payload["capture_source"] = "freenect"
+    payload["capture_port"] = "usb:1-2.3"
+    reply = kiosk_client.post("/api/kinect/depth", json=payload,
                               headers={"X-Robot-Control": "kinect"})
     assert reply.status_code == 200 and reply.json["ok"] is True
     assert reply.json["points"] > 0
-    assert kiosk_client.get("/api/kinect/status").json["connected"] is True
+    status = kiosk_client.get("/api/kinect/status").json
+    assert status["connected"] is True
+    assert status["captureSource"] == "freenect"
+    assert status["capturePort"] == "usb:1-2.3"
     # Фоновая нить карты выключена в testing-режиме; проверяем саму связь
     # сервис → карта тем же вызовом, который делает _map_worker.
     service = kiosk_client.application.extensions["rc_kinect"]

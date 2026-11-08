@@ -723,8 +723,6 @@ class DeviceRegistry:
         entries.append(item)
 
         item = base("kinect")
-        # The existing publisher does not bind frames to a USB identity; even
-        # fresh data and a visible Kinect cannot prove which device produced it.
         live = kinect.get("connected") is True
         stamp = kinect.get("lastStamp")
         spec = kinect.get("spec") if isinstance(kinect.get("spec"), dict) else {}
@@ -732,16 +730,35 @@ class DeviceRegistry:
         limit = float(raw_limit) if _finite_number(raw_limit) and raw_limit > 0 else 1.5
         capture_age = now - stamp if _finite_number(stamp) else None
         fresh_capture = capture_age is not None and 0 <= capture_age <= limit
-        if live and fresh_capture:
+        hint = hints.get("kinect")
+        configured_port = str(_manual_port("kinect") or "")
+        item["configuredPort"] = configured_port or None
+        capture_source = str(kinect.get("captureSource") or "unknown")
+        capture_port = str(kinect.get("capturePort") or "")
+        item["captureSource"] = capture_source
+        item["capturePort"] = capture_port or None
+        selected_device, _ = _find_port(topology, configured_port) if configured_port else (None, None)
+        selected_topology = ((configured_port[4:] if configured_port.startswith("usb:") else
+                              selected_device.get("topology") if selected_device else ""))
+        capture_topology = capture_port[4:] if capture_port.startswith("usb:") else ""
+        bound_to_selection = bool(capture_source == "freenect" and selected_topology and
+                                  capture_topology == selected_topology)
+        verified_capture = live and fresh_capture and bound_to_selection
+        if verified_capture:
+            check = "Свежий кадр libfreenect с выбранной USB-топологии"
+            connect(item, capture_port)
+            item.update(status="verified", label="Кадры · выбранный Kinect", ageS=age(kinect.get("ageS")),
+                        check=check, detail="capturePort совпадает с назначенным NUI Camera.")
+            updates["kinect"] = (capture_port, check)
+        elif live and fresh_capture:
             item.update(status="warning", label="Кадры глубины идут", ageS=age(kinect.get("ageS")),
-                        check="Свежий кадр; USB-источник драйвером не подтверждён",
-                        detail="Демо и внешний источник без идентификации нельзя принять за проверенный Kinect.")
+                        check="Кадр свежий, но источник не подтверждён выбранным USB-портом",
+                        detail="Проверьте freenect, captureSource, capturePort и назначение во вкладке «Устройства».")
         elif live:
             item.update(status="warning", label="Кадр устарел или время неизвестно",
                         check="Время захвата не подтверждает свежесть")
         else:
             item["detail"] = "Нет свежих кадров глубины; проверьте драйвер Kinect."
-        hint = hints.get("kinect")
         kd, _, _ = _resolve_identity(topology, (hint or {}).get("identity"))
         candidates = [d for d in topology.get("devices", []) if d.get("vidPid") in KINECT_CAMERA_IDS]
         if not hint and len(candidates) == 1:
@@ -750,10 +767,10 @@ class DeviceRegistry:
             item["usbCandidate"] = {k: kd.get(k) for k in ("topology", "vidPid", "product", "connection")}
             if item["status"] == "missing":
                 item.update(status="warning", label="USB-кандидат · нет кадров")
-            if kd.get("vidPid") in KINECT_CAMERA_IDS:
-                updates["kinect"] = ("usb:" + kd["topology"], "USB-дескриптор Kinect; источник кадров не подтверждён")
-        elif len(candidates) > 1 and not hint:
-            item.update(status="conflict", label="Несколько Kinect USB", detail="Выберите устройство; источник потока всё равно требует проверки.")
+            if kd.get("vidPid") in KINECT_CAMERA_IDS and not verified_capture:
+                updates["kinect"] = ("usb:" + kd["topology"], "USB-кандидат Kinect; источник кадров не подтверждён")
+        elif len(candidates) > 1 and not hint and not verified_capture:
+            item.update(status="conflict", label="Несколько Kinect USB", detail="Выберите устройство; источник потока должен совпасть с выбранным портом.")
         entries.append(item)
 
         item = base("bms")

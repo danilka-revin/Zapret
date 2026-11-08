@@ -98,7 +98,7 @@ ROLE_KIND: dict[str, str] = {
 }
 ROLE_ENV_HINTS: dict[str, str] = {
     "lidar": "Порт UART лидара. Сохраняется в .env и применяется сразу.",
-    "kinect": "USB-топология Kinect (usb:1-2). Публикатор глубины читает её при запуске.",
+    "kinect": "Выберите NUI Camera. После сохранения и перезапуска publisher привяжет libfreenect к этой USB-топологии через PyUSB; оставьте один Kinect и проверьте capturePort/свежие кадры.",
     "bms": "Порт USB-UART BMS (JBD). Сохраняется в .env и применяется сразу.",
     "printer": "Порт USB-UART принтера. Подтверждается физически и сразу включается.",
     "sensors": "Порт USB-UART модуля датчиков. Сохраняется в RC_SENSOR_PORT и применяется сразу.",
@@ -514,6 +514,7 @@ def _serial_options(topology: dict | None = None) -> list[dict[str, Any]]:
 
 def _video_options(topology: dict | None = None) -> list[dict[str, Any]]:
     """Видеопорты: одна строка на узел камеры, by-id/by-path — псевдонимы."""
+    from .device_registry import KINECT_CAMERA_IDS
     if topology is None:
         topology = _topology()
     options: list[dict[str, Any]] = []
@@ -538,6 +539,7 @@ def _video_options(topology: dict | None = None) -> list[dict[str, Any]]:
              "name": _device_name(device), "usbPort": str(device.get("topology") or ""),
              "vidPid": str(device.get("vidPid") or ""),
              "index": str(node.get("index") or ""), "byId": by_id, "byPath": by_path,
+             "kinect": str(device.get("vidPid") or "") in KINECT_CAMERA_IDS,
              "connection": str(device.get("connection") or ""),
              "exists": os.path.exists(real)})
 
@@ -566,11 +568,13 @@ def _usb_options(topology: dict | None = None) -> list[dict[str, Any]]:
         topology = _topology()
     out = []
     for device in (topology or {}).get("devices") or []:
-        # Устройство с tty/video-узлом уже есть в своём списке: второй раз как
-        # usb:1-2 оно только путает — одно железо, две строки.
+        # Kinect может одновременно иметь видеоноду (NUI Camera) и требовать
+        # USB-топологию для depth-драйвера. Показываем её именно в списке USB;
+        # остальные устройства с tty/video-нодой не дублируем.
         listed = [node for node in device.get("nodes") or ()
                   if node.get("kind") in ("serial", "video")]
-        if device.get("isHub") or listed:
+        is_kinect = device.get("vidPid") in KINECT_CAMERA_IDS
+        if device.get("isHub") or (listed and not is_kinect):
             continue
         out.append({"port": "usb:" + str(device.get("topology")),
                     "device": "usb:" + str(device.get("topology")),
@@ -578,7 +582,7 @@ def _usb_options(topology: dict | None = None) -> list[dict[str, Any]]:
                     "usbPort": str(device.get("topology") or ""),
                     "vidPid": device.get("vidPid"), "index": "", "byId": "", "byPath": "",
                     "note": device.get("connection") or "",
-                    "kinect": device.get("vidPid") in KINECT_CAMERA_IDS,
+                    "kinect": is_kinect,
                     "connection": device.get("connection") or "", "exists": True})
     out.sort(key=lambda option: _usb_port_key(option.get("usbPort")))
     return out
