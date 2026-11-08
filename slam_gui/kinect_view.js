@@ -56,21 +56,48 @@
     const wheelbase = Number.isFinite(Number(geometry.wheelbase)) ? Number(geometry.wheelbase) : 0.50;
     const track = Number.isFinite(Number(geometry.track)) ? Number(geometry.track) : 0.38;
     const wheels = new Map((live && Array.isArray(live.wheels) ? live.wheels : []).map(w => [w.id, w]));
-    const boxes = [
-      {kind: 'body', center: [0, 0.19, 0], size: [0.56, 0.28, 0.70], yaw: 0},
-      {kind: 'deck', center: [0, 0.345, -0.015], size: [0.38, 0.035, 0.40], yaw: 0},
-      {kind: 'kinect', center: [0, 0.45, lidarOffsetM + KINECT_FORWARD_OF_LIDAR_M], size: [0.20, 0.085, 0.075], yaw: 0},
-      {kind: 'lidar', center: [0, LIDAR_HEIGHT_M, lidarOffsetM], size: [0.12, 0.065, 0.12], yaw: 0}
+    const kinectForward = lidarOffsetM + KINECT_FORWARD_OF_LIDAR_M;
+    const bevel = (width, length, cut) => [
+      [-width / 2 + cut, -length / 2], [width / 2 - cut, -length / 2],
+      [width / 2, -length / 2 + cut], [width / 2, length / 2 - cut],
+      [width / 2 - cut, length / 2], [-width / 2 + cut, length / 2],
+      [-width / 2, length / 2 - cut], [-width / 2, -length / 2 + cut]
+    ];
+    const parts = [
+      // Low, chamfered dark shell and almost flush lid match the robot's angular case.
+      {kind: 'shell', center: [0, .325, 0], yMin: .16, yMax: .49, footprint: bevel(.60, .75, .105)},
+      {kind: 'roof', center: [0, .497, 0], yMin: .49, yMax: .503, footprint: bevel(.575, .725, .095)},
+      // Kinect bar is mounted on the front face; its optical center is at the measured mount.
+      {kind: 'kinectBezel', center: [0, .44, kinectForward - .025], size: [.47, .145, .028], yaw: 0},
+      {kind: 'kinectGlass', center: [0, .445, kinectForward - .010], size: [.405, .078, .012], yaw: 0},
+      ...[-.135, -.045, .055, .145].map((x, i) => ({
+        kind: i === 2 ? 'kinectLed' : 'kinectLens', center: [x, .45, kinectForward], size: [.026, .027, .009], yaw: 0
+      })),
+      // Side camera bezels and amber marker lights are signature details of the shell.
+      ...[-1, 1].flatMap(side => [
+        {kind: 'sideBezel', center: [side * .301, .425, .075], size: [.022, .085, .16], yaw: 0},
+        {kind: 'sideLens', center: [side * .315, .426, .075], size: [.009, .042, .105], yaw: 0},
+        {kind: 'amber', center: [side * .304, .285, .075], size: [.018, .04, .12], yaw: 0}
+      ]),
+      // Four short standoffs and the compact top-mounted lidar puck.
+      ...[-1, 1].flatMap(x => [-1, 1].map(z => ({kind: 'lidarPost',
+        center: [x * .042, .523, lidarOffsetM + z * .042], size: [.012, .045, .012], yaw: 0}))),
+      {kind: 'lidar', center: [0, LIDAR_HEIGHT_M, lidarOffsetM], size: [.135, .07, .135], yaw: 0},
+      // Small silver grab handles on the top deck.
+      ...[-1, 1].flatMap(side => [
+        {kind: 'handleFoot', center: [side * .225, .514, .225], size: [.065, .018, .04], yaw: 0},
+        {kind: 'handle', center: [side * .225, .538, .225], size: [.012, .038, .012], yaw: 0}
+      ])
     ];
     for (const id of ['FL', 'FR', 'RL', 'RR']) {
       const front = id[0] === 'F', left = id[1] === 'L';
       const wheel = wheels.get(id);
       const angle = live && live.fresh && wheel && Number.isFinite(wheel.angle) ? wheel.angle * Math.PI / 180 : 0;
-      boxes.push({kind: 'wheel', id, angle: live && live.fresh && wheel && Number.isFinite(wheel.angle) ? wheel.angle : null,
-        center: [left ? -track / 2 : track / 2, 0.095, front ? wheelbase / 2 : -wheelbase / 2],
-        size: [0.105, 0.16, 0.20], yaw: angle});
+      parts.push({kind: 'wheel', id, angle: live && live.fresh && wheel && Number.isFinite(wheel.angle) ? wheel.angle : null,
+        center: [left ? -track / 2 : track / 2, .145, front ? wheelbase / 2 : -wheelbase / 2],
+        radius: .14, width: .085, yaw: angle});
     }
-    return boxes;
+    return parts;
   }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { decodeFrame, transformLidar, transformKinect, robotParts };
@@ -166,6 +193,66 @@
           ctx.fillStyle = face.color; ctx.fill(); ctx.strokeStyle = 'rgba(9, 13, 18, .9)'; ctx.lineWidth = Math.max(1, ratio); ctx.stroke();
         });
     };
+    const drawFaces = (faces, edge = 'rgba(8, 10, 13, .95)') => {
+      faces.map(face => ({...face, points: face.vertices.map(project)}))
+        .filter(face => face.points.length >= 3 && face.points.every(Boolean))
+        .sort((a, b) => b.points.reduce((sum, p) => sum + p.depth, 0) -
+          a.points.reduce((sum, p) => sum + p.depth, 0))
+        .forEach(face => {
+          ctx.beginPath(); ctx.moveTo(face.points[0].x, face.points[0].y);
+          face.points.slice(1).forEach(point => ctx.lineTo(point.x, point.y)); ctx.closePath();
+          ctx.fillStyle = face.color; ctx.fill(); ctx.strokeStyle = edge;
+          ctx.lineWidth = Math.max(1, ratio); ctx.stroke();
+        });
+    };
+    const drawHull = (part, palette) => {
+      const low = part.footprint.map(([x, z]) => [x, part.yMin, z]);
+      const high = part.footprint.map(([x, z]) => [x, part.yMax, z]);
+      const faces = [{vertices: high, color: palette.top}, {vertices: low, color: palette.bottom}];
+      for (let i = 0; i < low.length; i++) {
+        const next = (i + 1) % low.length;
+        const shade = i === 2 || i === 6 ? palette.sideLight : palette.side;
+        faces.push({vertices: [low[i], low[next], high[next], high[i]], color: shade});
+      }
+      drawFaces(faces, palette.edge);
+    };
+    const drawWheel = (part, palette) => {
+      const [cx, cy0, cz] = part.center, c = Math.cos(part.yaw), s = Math.sin(part.yaw);
+      const segments = 16;
+      const point = (axle, theta, radius = part.radius) => {
+        const y = radius * Math.cos(theta), z = radius * Math.sin(theta);
+        return [cx + axle * c + z * s, cy0 + y, cz - axle * s + z * c];
+      };
+      const left = [], right = [];
+      for (let i = 0; i < segments; i++) {
+        const theta = i * Math.PI * 2 / segments;
+        left.push(point(-part.width / 2, theta)); right.push(point(part.width / 2, theta));
+      }
+      const faces = [
+        {vertices: left.slice().reverse(), color: palette.side},
+        {vertices: right, color: palette.side}
+      ];
+      for (let i = 0; i < segments; i++) {
+        const next = (i + 1) % segments;
+        faces.push({vertices: [left[i], right[i], right[next], left[next]],
+          color: i % 4 === 0 ? palette.treadLight : palette.tread});
+      }
+      drawFaces(faces, palette.edge);
+      // Sidewall accent ring and hub make the wheel plane legible as it steers.
+      const nearAxle = [-part.width / 2 - .001, part.width / 2 + .001]
+        .sort((a, b) => project(point(a, 0, 0)).depth - project(point(b, 0, 0)).depth)[0];
+      for (const axle of [nearAxle]) {
+        const ring = []
+        for (let i = 0; i <= segments; i++) ring.push(project(point(axle, i * Math.PI * 2 / segments, part.radius * .78)));
+        if (ring.every(Boolean)) {
+          ctx.beginPath(); ctx.moveTo(ring[0].x, ring[0].y);
+          ring.slice(1).forEach(p => ctx.lineTo(p.x, p.y)); ctx.closePath();
+          ctx.strokeStyle = palette.rim; ctx.lineWidth = Math.max(1.5 * ratio, 2); ctx.stroke();
+          const hub = project(point(axle, 0, 0));
+          if (hub) { ctx.fillStyle = palette.hub; ctx.fillRect(hub.x - 2 * ratio, hub.y - 2 * ratio, 4 * ratio, 4 * ratio); }
+        }
+      }
+    };
     if (mode === 'combined') {
       ctx.strokeStyle = 'rgba(145, 170, 190, 0.20)';
       ctx.lineWidth = ratio;
@@ -177,25 +264,6 @@
       for (let forward = 0; forward <= 6; forward += 1) gridLine([-3, 0, forward], [3, 0, forward]);
       for (let left = -3; left <= 3; left += 1) gridLine([-left, 0, 0], [-left, 0, 6]);
     }
-    if (mode === 'combined') {
-      const live = root.RCRobotModel && typeof root.RCRobotModel.state === 'function'
-        ? root.RCRobotModel.state() : null;
-      const geometry = root.RCRobotModel && typeof root.RCRobotModel.geometry === 'function'
-        ? root.RCRobotModel.geometry() : {wheelbase: 0.50, track: 0.38};
-      const palettes = {
-        body: {top:'#536577', front:'#405264', back:'#2b3947', left:'#344454', right:'#435667', bottom:'#202b35'},
-        deck: {top:'#6d8192', front:'#526879', back:'#3e5262', left:'#4b6070', right:'#5c7181', bottom:'#354653'},
-        kinect: {top:'#34c8c1', front:'#148b91', back:'#106d79', left:'#167d86', right:'#1d9da0', bottom:'#105b65'},
-        lidar: {top:'#ffc875', front:'#db8e39', back:'#b76d2a', left:'#ca7d32', right:'#edaa4c', bottom:'#8d5529'},
-        wheel: {top:'#56616c', front:'#252b31', back:'#151a1f', left:'#333c45', right:'#414b55', bottom:'#101418'},
-        wheelUnknown: {top:'#7e858b', front:'#596168', back:'#454b50', left:'#596168', right:'#6a737a', bottom:'#3a4045'}
-      };
-      const parts = robotParts(live, geometry, lidarOffsetM).map(part => ({part, depth: project(part.center).depth}));
-      parts.sort((a, b) => b.depth - a.depth).forEach(({part}) => {
-        const palette = part.kind === 'wheel' && part.angle === null ? palettes.wheelUnknown : palettes[part.kind];
-        drawBox(part, palette);
-      });
-    }
     for (const point of displayPoints) {
       const screen = project(point);
       if (!screen || screen.x < 0 || screen.x >= width || screen.y < 0 || screen.y >= height) continue;
@@ -205,6 +273,42 @@
         ctx.fillStyle = 'hsl(' + hue + ', 85%, 65%)';
       }
       ctx.fillRect(screen.x, screen.y, size, size);
+    }
+    if (mode === 'combined') {
+      const live = root.RCRobotModel && typeof root.RCRobotModel.state === 'function'
+        ? root.RCRobotModel.state() : null;
+      const geometry = root.RCRobotModel && typeof root.RCRobotModel.geometry === 'function'
+        ? root.RCRobotModel.geometry() : {wheelbase: 0.50, track: 0.38};
+      const palettes = {
+        shell: {top:'#171b1f', side:'#090b0d', sideLight:'#111519', bottom:'#050607', edge:'#30363b'},
+        roof: {top:'#22272b', side:'#171b1f', sideLight:'#1b2024', bottom:'#111416', edge:'#353b40'},
+        wheel: {side:'#15181b', tread:'#202428', treadLight:'#303438', rim:'#b04d35', hub:'#596168', edge:'#070809'},
+        wheelUnknown: {side:'#34383b', tread:'#45494c', treadLight:'#55595c', rim:'#777b7e', hub:'#888d90', edge:'#161819'},
+        pink: {top:'#ff398c', front:'#e91d72', back:'#b91256', left:'#d61b68', right:'#f52b7f', bottom:'#8e1248'},
+        glass: {top:'#20252a', front:'#090d11', back:'#07090b', left:'#151a1e', right:'#1b2024', bottom:'#050607'},
+        lens: {top:'#69747b', front:'#252b30', back:'#171c20', left:'#414a50', right:'#59636a', bottom:'#101316'},
+        led: {top:'#9aff7c', front:'#38d65d', back:'#158c3d', left:'#23b94b', right:'#55e66a', bottom:'#0b5329'},
+        amber: {top:'#ffc14e', front:'#e88b1b', back:'#a94f0a', left:'#c86a13', right:'#f3a226', bottom:'#773807'},
+        lidar: {top:'#2a3035', front:'#14181b', back:'#090b0d', left:'#1b2024', right:'#252b30', bottom:'#090b0d'},
+        post: {top:'#aeb6bb', front:'#6c757b', back:'#444c51', left:'#596167', right:'#858e94', bottom:'#343a3f'},
+        handle: {top:'#d4dadd', front:'#8e989e', back:'#596168', left:'#747e84', right:'#b1babf', bottom:'#51595e'}
+      };
+      const parts = robotParts(live, geometry, lidarOffsetM).map(part => ({part, depth: project(part.center).depth}));
+      parts.sort((a, b) => b.depth - a.depth).forEach(({part}) => {
+        if (part.kind === 'wheel') drawWheel(part, part.angle === null ? palettes.wheelUnknown : palettes.wheel);
+        else if (part.kind === 'shell' || part.kind === 'roof') drawHull(part, palettes[part.kind]);
+        else {
+          const palette = part.kind === 'kinectBezel' || part.kind === 'sideBezel' ? palettes.pink
+            : part.kind === 'kinectGlass' || part.kind === 'sideLens' ? palettes.glass
+            : part.kind === 'kinectLens' ? palettes.lens
+            : part.kind === 'kinectLed' ? palettes.led
+            : part.kind === 'amber' ? palettes.amber
+            : part.kind === 'lidarPost' ? palettes.post
+            : part.kind === 'handle' || part.kind === 'handleFoot' ? palettes.handle
+            : palettes.lidar;
+          drawBox(part, palette);
+        }
+      });
     }
   }
   function expire(message) {
