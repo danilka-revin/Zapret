@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const {decodeFrame} = require('../../slam_gui/kinect_view.js');
+const {decodeFrame, transformLidar, transformKinect} = require('../../slam_gui/kinect_view.js');
 const payload = {available: true, oneFrameOnly: true, notForNavigation: true,
   width: 2, height: 2, stride: 2, fx: 2, fy: 2, cx: 1, cy: 1,
   data: Buffer.from([0xe8, 3, 0, 0, 0xd0, 7, 0xb8, 0x0b]).toString('base64')};
@@ -7,7 +7,17 @@ assert.deepEqual(decodeFrame(payload), [[-.5, .5, 1], [-1, -1, 2], [1.5, -1.5, 3
 assert.deepEqual(decodeFrame({...payload, data: '!!!!'}), []);
 assert.deepEqual(decodeFrame({...payload, notForNavigation: false}), []);
 assert.deepEqual(decodeFrame({...payload, width: 161}), []);
-console.log('Kinect 3D frame decoding: OK');
+const lidarPoint = transformLidar([{a: 0, r: 1}], .28)[0];
+assert.ok(Math.abs(lidarPoint[0]) < 1e-9);
+assert.equal(lidarPoint[1], .55);
+assert.ok(Math.abs(lidarPoint[2] - 1.28) < 1e-9);
+assert.equal(lidarPoint[3], 'lidar');
+const kinectPoint = transformKinect([[.2, 0, 1]], {z_m: .3, yaw_deg: 0, pitch_deg: 0}, .28)[0];
+assert.ok(Math.abs(kinectPoint[0] - .2) < 1e-9);
+assert.equal(kinectPoint[1], .3);
+assert.ok(Math.abs(kinectPoint[2] - 1.41) < 1e-9);
+assert.equal(kinectPoint[3], 'kinect');
+console.log('Kinect/LiDAR 3D transforms: OK');
 
 // Exercise the actual home-panel event handlers without a browser or hardware.
 const vm = require('node:vm');
@@ -21,10 +31,11 @@ class Element {
   emit(name, event = {}) { if (this.listeners[name]) this.listeners[name]({preventDefault() {}, ...event}); }
   getBoundingClientRect() { return {width: 600, height: 400}; }
   setPointerCapture() {}
-  getContext() { return {clearRect() { rectangles = []; }, fillRect(x, y, w, h) { rectangles.push([x, y, w, h]); }, set fillStyle(v) {}}; }
+  getContext() { return {clearRect() { rectangles = []; }, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {},
+    fillRect(x, y, w, h) { rectangles.push([x, y, w, h]); }, set fillStyle(v) {}, set strokeStyle(v) {}, set lineWidth(v) {}}; }
 }
-const ids = ['sensor-lidar', 'sensor-kinect', 'sensor-lidar-view', 'sensor-kinect-view', 'lidar-meta',
-  'kinect-3d-status', 'kinect-3d-empty', 'kinect-3d-canvas', 'kinect-zoom-in', 'kinect-zoom-out', 'kinect-reset-view'];
+const ids = ['sensor-lidar', 'sensor-kinect', 'sensor-combined', 'sensor-lidar-view', 'sensor-kinect-view', 'lidar-meta',
+  'kinect-3d-status', 'kinect-3d-mode-note', 'kinect-3d-empty', 'kinect-3d-canvas', 'kinect-zoom-in', 'kinect-zoom-out', 'kinect-reset-view'];
 const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
 const window = {
   document: {readyState: 'complete', hidden: false, getElementById: id => elements[id], addEventListener() {}},
@@ -62,5 +73,15 @@ vm.runInNewContext(source, context);
   const requests = fetches;
   interval();
   assert.equal(fetches, requests, 'no Kinect polling in lidar mode');
-  console.log('Kinect 3D interactions: OK');
+  window.RCKinectView.setLidarScan([{a: 0, r: 2}, {a: Math.PI / 2, r: 1}],
+    {connected: true, age_s: .1, lidar_offset_m: .28});
+  elements['sensor-combined'].emit('click');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(window.RCKinectView.mode(), 'combined');
+  assert.equal(elements['sensor-combined'].attrs['aria-pressed'], 'true');
+  assert.equal(elements['kinect-3d-empty'].hidden, true);
+  assert.match(elements['kinect-3d-status'].textContent, /Лидар: 2 точки · Kinect:/);
+  assert.match(elements['kinect-3d-mode-note'].textContent, /z=550 мм \(оранжевый\) · Kinect \+130 мм вперёд/);
+  assert.ok(rectangles.length > 0, 'combined view renders the live sensor cloud');
+  console.log('Kinect/LiDAR combined 3D interactions: OK');
 })().catch(err => { console.error(err); process.exitCode = 1; });

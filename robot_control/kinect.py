@@ -375,7 +375,9 @@ class KinectDepthService:
                       "ageS": round(age, 3) if age is not None else None,
                       "maxAgeS": float(self._spec["max_age_s"]), "source": self._source,
                       "captureSource": self._capture_source,
-                      "capturePort": self._capture_port}
+                      "capturePort": self._capture_port,
+                      "mount": {key: float(self._spec[key]) for key in
+                                ("z_m", "yaw_deg", "pitch_deg")}}
             if available:
                 result.update(self._preview)
             return result

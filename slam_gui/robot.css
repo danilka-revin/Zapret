@@ -2267,7 +2267,7 @@ body[data-remote-view="motors"] .remote-drive-panel small { display: block; marg
 .swipe-camera-view.camera-stitch-open { height:100%; grid-template-rows:minmax(0,1fr); }
 
 /* Live Kinect preview shares the home sensor panel, not the navigation map. */
-.sensor-switch { display: flex; gap: 8px; margin: 0 0 12px; }
+.sensor-switch { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
 .sensor-switch-btn, .kinect-controls button {
   border: 1px solid var(--line); border-radius: 10px; color: var(--text);
   background: var(--bg-2); padding: 9px 16px; font: inherit; cursor: pointer;
