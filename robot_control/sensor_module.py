@@ -105,6 +105,15 @@ TELEMETRY_FIELDS = (
     "lock", "light", "dim", "strip", "cargo", "rfid", "cards", "link", "err",
     "t",
 )
+#: Поля, которые появились позже и потому необязательны: старую прошивку не
+#: прошивают одновременно с обновлением сервера, и кадр без них — норма.
+OPTIONAL_TELEMETRY_FIELDS = ("nleds",)
+#: Сколько диодов ждём в ленте внизу рамы. Прошивка сообщает своё число, а
+#: расхождение с этим значением — повод показать предупреждение, а не молчать.
+STRIP_LEDS_EXPECTED = 73
+#: Режимы ленты: команда strip <mode>. auto — стопы/поворотники/пол,
+#: floor — только подсветка пола, wave — бегущая волна, off — погашено.
+STRIP_MODES = ("auto", "off", "floor", "wave")
 
 #: Пределы, за которыми кадр считается испорченным, а не просто странным.
 HEADING_RANGE = (-36000, 36000)
@@ -146,6 +155,13 @@ def split_checked(line: str) -> str:
 
 def _fields(head: str) -> dict[str, str]:
     return {key: value for key, value in KEY_RE.findall(head)}
+
+
+def _int_optional(fields: dict[str, str], key: str) -> int | None:
+    """Необязательное числовое поле: старая прошивка его ещё не присылает."""
+    if key not in fields:
+        return None
+    return _int(fields, key)
 
 
 def _int(fields: dict[str, str], key: str) -> int:
@@ -211,6 +227,9 @@ def parse_telemetry(line: str) -> dict[str, Any]:
         # Лента пока не подключена: прошивка сама сообщает strip=0, и экран
         # не должен обещать габаритов, которых физически нет.
         "stripEnabled": _int(fields, "strip") == 1,
+        # Число диодов в ленте: 73 внизу рамы. Старая прошивка поля не присылает.
+        # Число диодов в ленте (73 внизу рамы). Старая прошивка поля не шлёт.
+        "stripLeds": (_int_optional(fields, "nleds")),
         # Окно погрузки/выгрузки: в нём карта пользователя тоже открывает отсек.
         "windowKind": WINDOW_STATES[cargo_code],
         "windowActive": cargo_code != 0,
@@ -358,6 +377,15 @@ def command_light(name: str, on: bool) -> str:
 
 def command_lights_all(on: bool) -> str:
     return "light all %s" % ("on" if on else "off")
+
+
+def command_strip_mode(mode: str) -> str:
+    """``strip auto|off|floor|wave``: опечатка не должна дойти до платы."""
+    key = str(mode or "").strip().lower()
+    if key not in STRIP_MODES:
+        raise ValueError("неизвестный режим ленты: %r (нужно %s)"
+                         % (mode, ", ".join(STRIP_MODES)))
+    return "strip %s" % key
 
 
 def command_dim(level: int) -> str:
@@ -586,6 +614,9 @@ class SensorModule:
     def set_dim(self, level: int) -> None:
         self.send(command_dim(level))
 
+    def strip_mode(self, mode: str) -> None:
+        self.send(command_strip_mode(mode))
+
     def lock(self, open_: bool, seconds: float | None = None, *, hold: bool = False) -> None:
         self.send(command_lock(open_, seconds, hold=hold))
 
@@ -635,7 +666,8 @@ class SensorModule:
                     "gyroZ": None, "pressurePa": None, "pressureHpa": None,
                     "temperatureC": None, "altitudeM": None,
                     "lockOpen": None, "lightMask": 0, "lights": {}, "dim": None,
-                    "stripEnabled": False, "windowKind": "none", "windowActive": False,
+                    "stripEnabled": False, "stripLeds": None,
+                    "windowKind": "none", "windowActive": False,
                     "rfid": "none", "cards": 0, "linkOk": False, "errors": [],
                     "errorsMask": 0, "uptimeMs": None,
                 })
@@ -656,6 +688,7 @@ class SensorModule:
             "stale": state["stale"],
             "lockOpen": state["lockOpen"],
             "stripEnabled": state["stripEnabled"],
+            "stripLeds": state.get("stripLeds"),
             "windowKind": state["windowKind"],
             "errors": state["errors"],
         }

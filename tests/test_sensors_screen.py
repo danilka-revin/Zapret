@@ -54,6 +54,7 @@ def snapshot(**kwargs) -> dict:
         "lights": {"head": False, "stop": False, "left": False, "right": False, "dim": False},
         "dim": 80,
         "stripEnabled": False,
+        "stripLeds": None,
         "rfid": "ready",
         "cards": 3,
         "cardList": [{"idx": 1, "uid": "A1B2C3D4", "role": "admin"},
@@ -154,10 +155,48 @@ def test_without_a_led_strip_the_ambient_light_is_marked_unavailable(tmp_path):
 
 
 def test_wired_strip_enables_the_ambient_controls(tmp_path):
-    out = run_screen(screen(stripEnabled=True, dim=140), tmp_path)
+    out = run_screen(screen(stripEnabled=True, dim=140, stripLeds=73), tmp_path)
     assert out["strip"]["noteHidden"] is True
     assert out["lights"]["dim"]["disabled"] is False
     assert out["strip"]["dim"] == "140"
+    # Плата сообщила 73 диода — экран подтверждает монтаж, а не молчит.
+    assert "73" in out["strip"]["info"]
+    assert "проверьте монтаж" not in out["strip"]["info"]
+    # Все четыре режима ленты доступны, когда лента есть.
+    assert [m["mode"] for m in out["strip"]["modes"]] == ["auto", "floor", "wave", "off"]
+    assert all(not m["disabled"] for m in out["strip"]["modes"])
+
+
+def test_a_different_led_count_is_reported_not_hidden(tmp_path):
+    """Лента физически на 73 диода: другое число — повод проверить монтаж."""
+    out = run_screen(screen(stripEnabled=True, stripLeds=30), tmp_path)
+    assert "30" in out["strip"]["info"] and "проверьте монтаж" in out["strip"]["info"]
+    # Старая прошивка без счётчика не должна выдавать ошибку монтажа.
+    legacy = run_screen(screen(stripEnabled=True), tmp_path)
+    assert "проверьте монтаж" not in legacy["strip"]["info"]
+
+
+def test_strip_mode_button_sends_the_mode(tmp_path):
+    """Кнопка режима уходит на сервер тем же маршрутом, что и свет."""
+    payload = screen(stripEnabled=True, stripLeds=73)
+    payload["actions"] = {"stripMode": "floor"}
+    out = run_screen(payload, tmp_path)
+    posts = [c for c in out["callsAfter"] if c["method"] == "POST"]
+    assert {"url": "api/sensor_module/strip", "method": "POST",
+            "body": {"mode": "floor"}} in posts
+    assert out["afterStripMode"]["tone"] == "ok"
+
+
+def test_a_disabled_mode_button_does_not_post(tmp_path):
+    payload = screen(stripEnabled=False)
+    payload["actions"] = {"stripMode": "wave"}
+    out = run_screen(payload, tmp_path)
+    assert not [c for c in out["callsAfter"] if c["method"] == "POST"]
+
+
+def test_without_a_strip_the_modes_are_disabled_too(tmp_path):
+    out = run_screen(screen(stripEnabled=False), tmp_path)
+    assert all(m["disabled"] for m in out["strip"]["modes"])
 
 
 def test_stale_or_missing_board_is_shown_honestly(tmp_path):

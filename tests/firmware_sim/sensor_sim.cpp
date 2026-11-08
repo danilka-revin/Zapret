@@ -617,14 +617,20 @@ static void scenario_dim_strip() {
     run(100);
     return;
   }
-  bool white = !board.pixels.empty();
+  // Подсветка пола — тёплый белый: красного больше, синего меньше, но ровно по
+  // всей ленте и во всех 73 диодах, иначе под роботом будут пятна.
+  bool warm = !board.pixels.empty() && board.pixels.size() == sensors::STRIP_LEDS;
+  const uint32_t first = board.pixels.empty() ? 0 : board.pixels.front();
   for (uint32_t pixel : board.pixels) {
     const uint8_t red = (pixel >> 16) & 0xFF;
     const uint8_t green = (pixel >> 8) & 0xFF;
     const uint8_t blue = pixel & 0xFF;
-    if (red == 0 || red != green || green != blue) white = false;
+    if (pixel != first) warm = false;                 // лента ровная
+    if (red == 0 || red < green || green < blue) warm = false;  // тёплый оттенок
+    if (blue * 3 < red * 2) warm = false;             // не «оранжевая» лампа
   }
-  CHECK(white, "габариты — ровный белый на всей ленте");
+  CHECK(warm, "подсветка пола — ровный тёплый белый на всех %u диодах",
+        (unsigned)sensors::STRIP_LEDS);
   const uint8_t level = board.pixels.empty() ? 0 : (uint8_t)((board.pixels.front() >> 16) & 0xFF);
   CHECK(level > 0 && level < sensors::STRIP_BRIGHTNESS,
         "яркость габаритов ниже предела ленты: %u", (unsigned)level);
@@ -1056,6 +1062,97 @@ struct Scenario {
   void (*run)();
 };
 
+//: 73 диода внизу рамы: адресация, эффекты и команды режима.
+static void scenario_strip_effects() {
+  boot();
+  CHECK(sensors::STRIP_LEDS == 73, "в ленте 73 диода, а не %u",
+        (unsigned)sensors::STRIP_LEDS);
+  CHECK(sensors::STRIP_PIN == 6, "DIN ленты на D6, а не %u", (unsigned)sensors::STRIP_PIN);
+  // Признак ленты и число диодов уезжают в телеметрию: экран не врёт о ленте.
+  size_t mark = board.serial.output.size();
+  run(400);
+  std::string frame = take_output(mark);
+  CHECK(field(lastFrame(frame, "@S "), "strip") == (sensors::STRIP_ENABLED ? 1 : 0),
+        "признак ленты в кадре совпадает со сборкой");
+  CHECK(field(lastFrame(frame, "@S "), "nleds") == 73,
+        "в кадре nleds=%ld", field(lastFrame(frame, "@S "), "nleds"));
+
+  if (!sensors::STRIP_ENABLED) {
+    CHECK(board.strip_shows == 0, "без ленты эффекты не трогают пиксели");
+    return;
+  }
+
+  // Режим auto (по умолчанию): стоп красит всю ленту в красный.
+  send("strip auto");
+  send("light stop on");
+  run(150);
+  CHECK(board.pixels.size() == 73, "auto: буфер ровно на 73 диода");
+  bool all_red = true;
+  for (uint32_t pixel : board.pixels) {
+    const uint8_t red = (pixel >> 16) & 0xFF;
+    const uint8_t green = (pixel >> 8) & 0xFF;
+    if (red == 0 || green != 0) all_red = false;
+  }
+  CHECK(all_red, "auto: стоп — все 73 диода красные");
+  send("light stop off");
+  run(150);
+
+  // Режим floor: подсветка пола. Стопы и поворотники остаются на реле —
+  // лента смотрит вниз, и красный под роботом ничего не сообщает сзади идущим.
+  send("strip floor");
+  run(150);
+  CHECK(board.pixels.size() == 73, "floor: буфер ровно на 73 диода");
+  bool all_on = true;
+  for (uint32_t pixel : board.pixels) if (pixel == 0) all_on = false;
+  CHECK(all_on, "floor: светятся все 73 диода");
+  const uint32_t floor_color = board.pixels.empty() ? 0 : board.pixels.front();
+  send("light stop on");
+  run(150);
+  CHECK(board.pixels.empty() || board.pixels.front() == floor_color,
+        "floor: стоп не перекрашивает подсветку пола (он на реле)");
+  // Реле активны низким уровнем: «включено» — это LOW на пине.
+  CHECK(board.level[3] == LOW, "floor: при этом реле стопа включилось");
+  send("light stop off");
+  send("strip auto");
+  run(150);
+
+  // Волна: бегущая голова идёт по кругу, хвост затухает.
+  send("strip wave");
+  run(120);
+  auto brightest_index = [&]() -> int {
+    int best = -1;
+    uint8_t level = 0;
+    for (uint16_t i = 0; i < board.pixels.size(); ++i) {
+      const uint8_t red = (board.pixels[i] >> 16) & 0xFF;
+      if (red > level) { level = red; best = (int)i; }
+    }
+    return best;
+  };
+  const int before = brightest_index();
+  CHECK(before >= 0, "волна: есть светящийся диод");
+  int moved = 0;
+  for (int step = 0; step < 40 && moved < 3; ++step) {
+    const int was = brightest_index();
+    sim::run_for_ms(20);
+    if (brightest_index() != was) ++moved;
+  }
+  CHECK(moved > 0, "волна бежит: голова смещается по ленте");
+
+  // off: лента гаснет целиком, команда подтверждается.
+  send("strip off");
+  run(200);
+  bool dark = true;
+  for (uint32_t pixel : board.pixels) if (pixel != 0) dark = false;
+  CHECK(dark, "strip off гасит все 73 диода");
+
+  // Неизвестный режим — отказ, а не молчаливое переключение.
+  mark = board.serial.output.size();
+  send("strip rainbow");
+  CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "@ACK "); }, 200),
+        "strip rainbow отвечает отказом");
+  CHECK(contains(board.serial.output.substr(mark), "cmd=strip ok=0"), "неизвестный режим отклонён");
+}
+
 static const Scenario SCENARIOS[] = {
     {"boot_safe", scenario_boot_safe},
     {"compass", scenario_compass},
@@ -1063,6 +1160,7 @@ static const Scenario SCENARIOS[] = {
     {"lights", scenario_lights},
     {"turn_blink", scenario_turn_blink},
     {"dim_strip", scenario_dim_strip},
+    {"strip_effects", scenario_strip_effects},
     {"lock_servo", scenario_lock_servo},
     {"no_door_switch", scenario_no_door_switch},
     {"card_denied", scenario_card_denied},
