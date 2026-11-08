@@ -459,9 +459,21 @@ def test_frontier_without_safe_motion_disables_start(tmp_path):
     assert "нет безопасного участка" in report["navigation"]["summary"]
 
 
+def localize_payload(**overrides) -> dict:
+    """Состояние локализации по карте, как его отдаёт SlamMapService."""
+    info = {
+        "active": True, "hasMap": True, "localized": True, "score": 0.72,
+        "matched": 65, "checked": 90, "meanErrorM": 0.05, "searches": 12,
+        "reason": "", "mode": "localize",
+    }
+    info.update(overrides)
+    return info
+
+
 def test_slam_mode_switch_sends_mode_and_marks_the_map(tmp_path):
     """Тумблер режима SLAM: «только локализация» уходит на сервер и виден на карте."""
-    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS})
+    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS,
+                            "localize": localize_payload()})
     mode = report["slamMode"]
     assert mode["before"]["label"] == "Активный SLAM"
     assert mode["before"]["badge"] == "MAPPING"
@@ -474,7 +486,33 @@ def test_slam_mode_switch_sends_mode_and_marks_the_map(tmp_path):
     assert mode["after"]["calls"], report["calls"]
     assert mode["after"]["calls"][-1]["body"]["settings"]["slam_mode"] == "localize"
     assert mode["after"]["calls"][-1]["method"] == "POST"
+    # Локализация по карте: экран пишет, нашёл ли робот себя среди стен.
+    assert "нашёл себя на карте" in mode["localize"]["text"]
+    assert "72%" in mode["localize"]["text"]
+    assert mode["localize"]["tone"] == ""
+    assert mode["localize"]["score"] == "72"
     # Обратно — активный SLAM, класс с карты снят.
     assert mode["back"]["label"] == "Активный SLAM"
     assert mode["back"]["localizeClass"] is False
     assert report["renderErrors"] == [], report["renderErrors"]
+
+
+def test_localization_line_explains_where_the_robot_is(tmp_path):
+    """Экран честно говорит: нашёл себя по стенам / не нашёл / карты нет."""
+    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS,
+                            "localize": localize_payload(score=0.35, localized=False)})
+    line = report["slamMode"]["localize"]
+    assert "не совпал со стенами карты" in line["text"]
+    assert line["tone"] == "err"
+    assert line["score"] == "35"
+
+    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS,
+                            "localize": localize_payload(hasMap=False, localized=False,
+                                                         score=0.0, searches=0)})
+    line = report["slamMode"]["localize"]
+    assert "Карта пуста" in line["text"]
+    assert line["tone"] == "warn"
+
+    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS,
+                            "localize": localize_payload(searches=0)})
+    assert "Ждём скан лидара" in report["slamMode"]["localize"]["text"]

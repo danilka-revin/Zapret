@@ -2086,6 +2086,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "paths": snapshot.get("paths"),
             "slamMode": snapshot.get("slamMode"),
             "mapping": snapshot.get("mapping"),
+            "localize": snapshot.get("localize"),
         }
         # Режим SLAM — общий для карты: экран скана показывает тот же тумблер.
         payload["slamMode"] = snapshot.get("slamMode")

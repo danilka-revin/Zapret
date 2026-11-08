@@ -1199,6 +1199,7 @@
     const serverMode = snap.slamMode === 'localize' ? 'localize' : 'mapping';
     if (serverMode !== state.slamMode) state.slamMode = serverMode;
     renderSlamMode();
+    renderLocalization(snap);
     const empty = $('map-empty');
     if (empty) {
       const noScan = !snap.scans;
@@ -1244,6 +1245,39 @@
   }
 
   /* ------------------------------------------------------------- режим SLAM */
+  /* Локализация по карте: видно, что робот сравнил скан со стенами карты. */
+  function renderLocalization(snap) {
+    const info = (snap && snap.localize) || {};
+    const box = $('map-localize');
+    if (!box) return;
+    const lines = [];
+    const score = Math.round(Number(info.score || 0) * 100);
+    const mode = state.slamMode;
+    let tone = '';
+    if (mode !== 'localize') {
+      lines.push('Включите «Только локализация», чтобы робот искал себя по стенам карты.');
+    } else if (info.hasMap === false) {
+      lines.push('Карта пуста: сравнивать не с чем — сначала соберите её в активном SLAM.');
+      tone = 'warn';
+    } else if (info.searches === 0) {
+      lines.push('Ждём скан лидара: ищем, где робот на карте.');
+    } else if (score >= 40) {
+      lines.push('Робот нашёл себя на карте: скан совпал со стенами на ' + score + '%.');
+      if (Number(info.matched)) {
+        lines.push('Совпало лучей: ' + Number(info.matched) + ' из ' + Number(info.checked || 0)
+          + ' · ошибка до стены ' + Number(info.meanErrorM || 0).toFixed(2) + ' м.');
+      }
+    } else {
+      lines.push('Скан не совпал со стенами карты (' + score + '%): робот не понимает, где он. '
+        + 'Поставьте его туда, откуда строили карту.');
+      tone = 'err';
+    }
+    box.textContent = lines.join(' ');
+    box.dataset.tone = tone;
+    box.dataset.score = String(score);
+    box.hidden = false;
+  }
+
   function renderSlamMode() {
     const mode = SLAM_MODES[state.slamMode] ? state.slamMode : 'mapping';
     const info = SLAM_MODES[mode];
@@ -2241,6 +2275,8 @@
       drawRouteWindow();
     },
     getSnapshot() { return state.snapshot; },
+    //: Экран без своей карты (скан, навигация) тоже рисует строку локализации.
+    drawLocalization(snap) { renderLocalization(snap || state.snapshot); },
     setGoal(point) {
       if (routeLocked() || !point) return;
       if (!Number.isFinite(+point.x) || !Number.isFinite(+point.y)) return;

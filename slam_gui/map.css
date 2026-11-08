@@ -697,3 +697,17 @@ body.map-localize .map-badge { border-color: var(--map-muted); color: var(--map-
 @media (max-width: 560px) {
   .map-slam-mode-buttons { grid-template-columns: 1fr; }
 }
+
+/* Локализация по карте: понятный ответ на вопрос «робот знает, где он?». */
+.map-localize {
+  margin: 6px 0 0;
+  padding: 7px 9px;
+  border-radius: 9px;
+  border: 1px solid var(--map-line);
+  background: rgba(255, 255, 255, .03);
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--map-muted);
+}
+.map-localize[data-tone="warn"] { border-color: rgba(244, 201, 138, .5); color: #f4c98a; }
+.map-localize[data-tone="err"] { border-color: rgba(224, 78, 62, .6); color: #ff8b83; }

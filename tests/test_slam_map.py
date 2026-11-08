@@ -28,16 +28,19 @@ def wall_scan(distance: float = 3.0, count: int = 360) -> list:
 
 
 def room_scan(width: float = 6.0, depth: float = 6.0, count: int = 360,
-              px: float = 0.0, py: float = 0.0) -> list:
+              px: float = 0.0, py: float = 0.0, pyaw: float = 0.0) -> list:
     """Скан прямоугольной комнаты: лучи упираются в стены.
 
     Комната — в мировых координатах, робот стоит в точке (px, py) и смотрит
-    вдоль +X (как на карте: x — вперёд, y — влево).
+    вдоль +X (как на карте: x — вперёд, y — влево); ``pyaw`` — его курс:
+    лучи считаются от курса робота, поэтому скан поворачивается вместе с ним.
     """
     points = []
     for i in range(count):
+        # Угол в системе робота; в мире он повёрнут на курс робота.
         angle = -math.pi + i * (2 * math.pi / count)
-        dx, dy = math.cos(angle), math.sin(angle)
+        world = angle + pyaw
+        dx, dy = math.cos(world), math.sin(world)
         if dx > 1e-6:
             tx = (width / 2 - px) / dx
         elif dx < -1e-6:
@@ -50,6 +53,8 @@ def room_scan(width: float = 6.0, depth: float = 6.0, count: int = 360,
             ty = (-depth / 2 - py) / dy
         else:
             ty = 1e9
+        # Луч идёт в мире по курсу робота, а в скан попадает угол робота:
+        # так sim-скан ведёт себя как настоящий лидар на повёрнутом корпусе.
         points.append({"a": angle, "r": max(0.05, min(tx, ty))})
     return points
 
@@ -413,3 +418,81 @@ def test_mode_switch_does_not_wipe_the_map(tmp_path):
     result = service.set_settings({"slam_mode": "localize"})
     assert result["mapReset"] is False
     assert service.snapshot(with_png=False)["stats"]["known"] == known
+
+
+# --------------------------------------- локализация по карте (режим localize) ---
+def build_map(tmp_path, scans: int = 10, step: float = 0.2) -> SlamMapService:
+    """Собрать карту комнаты: робот проехал scans шагов вдоль +X."""
+    service = SlamMapService(MapSettings(size_m=20.0), directory=tmp_path)
+    for index in range(scans):
+        service.ingest(room_scan(12.0, 12.0, px=index * step))
+    return service
+
+
+def test_localization_finds_the_robot_among_the_walls_of_the_map(tmp_path):
+    """Режим локализации: позу даёт сравнение скана со стенами карты."""
+    service = build_map(tmp_path)
+    service.set_settings({"slam_mode": "localize"})
+    service.ingest(room_scan(12.0, 12.0, px=2.4))
+    snapshot = service.snapshot(with_png=False)
+    info = snapshot["localize"]
+    assert info["active"] is True and info["hasMap"] is True
+    assert info["localized"] is True
+    # Мягкая оценка: стены карты дискретны (клетка 10 см), идеальной единицы
+    # не бывает, а 0,8 значит «скан лёг на стены».
+    assert info["score"] >= 0.75, info
+    assert info["meanErrorM"] <= 0.1, info
+    # Поза осталась в системе карты и совпадает с настоящим положением робота.
+    assert snapshot["pose"]["x"] == pytest.approx(2.4, abs=0.1)
+    assert abs(snapshot["pose"]["y"]) <= 0.2
+
+
+def test_localization_reports_score_and_matched_rays(tmp_path):
+    service = build_map(tmp_path)
+    service.set_settings({"slam_mode": "localize"})
+    service.ingest(room_scan(12.0, 12.0, px=1.6))
+    info = service.snapshot(with_png=False)["localize"]
+    assert info["checked"] > 20
+    assert 0 < info["matched"] <= info["checked"]
+    assert info["searches"] >= 1
+    assert info["reason"] in ("", None)
+
+
+def test_localization_without_a_map_says_why(tmp_path):
+    """Пустая карта: сравнивать не с чем — экран не делает вид, что поза есть."""
+    service = SlamMapService(MapSettings(size_m=20.0), directory=tmp_path)
+    service.set_settings({"slam_mode": "localize"})
+    service.ingest(room_scan(12.0, 12.0))
+    info = service.snapshot(with_png=False)["localize"]
+    assert info["active"] is True
+    assert info["hasMap"] is False
+    assert info["reason"] == "no_map"
+    assert info["localized"] is False
+
+
+def test_localization_does_not_draw_but_follows_the_robot(tmp_path):
+    """Карта не растёт, а поза при этом меняется — по стенам, не по накоплению."""
+    service = build_map(tmp_path)
+    service.set_settings({"slam_mode": "localize"})
+    before = service.snapshot(with_png=False)
+    for step in range(1, 4):
+        service.ingest(room_scan(12.0, 12.0, px=2.0 + step * 0.2))
+    after = service.snapshot(with_png=False)
+    assert after["stats"]["known"] == before["stats"]["known"]
+    assert after["pose"]["x"] > before["pose"]["x"] + 0.3
+    assert after["pose"]["x"] == pytest.approx(2.6, abs=0.15)
+    assert after["localize"]["score"] >= 0.75
+
+
+def test_localization_survives_rotation_of_the_robot(tmp_path):
+    """Поворот в crab-стиле: поза по карте находит угол, а не только сдвиг."""
+    service = SlamMapService(MapSettings(size_m=20.0), directory=tmp_path)
+    for index in range(8):
+        service.ingest(room_scan(12.0, 12.0, px=index * 0.2, pyaw=index * 0.05))
+    service.set_settings({"slam_mode": "localize"})
+    service.ingest(room_scan(12.0, 12.0, px=1.4, pyaw=0.35))
+    snapshot = service.snapshot(with_png=False)
+    info = snapshot["localize"]
+    assert info["localized"] is True, info
+    assert snapshot["pose"]["yaw"] == pytest.approx(0.35, abs=0.15), snapshot["pose"]
+    assert snapshot["pose"]["x"] == pytest.approx(1.4, abs=0.2), snapshot["pose"]

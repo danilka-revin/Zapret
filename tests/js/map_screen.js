@@ -179,11 +179,21 @@ const slamState = {
   mode: (payload.snapshot && payload.snapshot.slamMode) || 'mapping',
 };
 
+/* Локализация по карте: экран показывает то, что посчитал сервер. */
+const localizeState = payload.localize || {
+  active: false, hasMap: true, localized: false, score: 0.0,
+  matched: 0, checked: 0, meanErrorM: 0.0, searches: 0, reason: '', mode: 'mapping',
+};
+
 function mapSnapshot() {
   const base = payload.snapshot || payload;
   return Object.assign({}, base, {
     slamMode: slamState.mode,
     mapping: slamState.mode === 'mapping',
+    localize: Object.assign({}, localizeState, {
+      active: slamState.mode === 'localize',
+      mode: slamState.mode,
+    }),
     settings: Object.assign({}, base.settings || {}, {slam_mode: slamState.mode}),
   });
 }
@@ -301,6 +311,11 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
       && call.body && call.body.settings && 'slam_mode' in call.body.settings),
     localizeClass: global.document.body.classList.contains('map-localize'),
   };
+  const localizeAfter = {
+    text: byId('map-localize').textContent,
+    tone: byId('map-localize').dataset.tone,
+    score: byId('map-localize').dataset.score,
+  };
   slamModeButtons[1].click();
   await sleep(20);
   const modeBack = {
@@ -387,7 +402,7 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
   }
 
   console.log(JSON.stringify({
-    slamMode: { before: modeBefore, after: modeAfter, back: modeBack },
+    slamMode: { before: modeBefore, after: modeAfter, back: modeBack, localize: localizeAfter },
     stats,
     robotModel: global.RCRobotModel.state(),
     themeBefore,

@@ -65,6 +65,14 @@ MATCH_POINTS = 80
 #: Сколько точек берётся на первом, грубом этапе сопоставления.
 MATCH_COARSE_POINTS = 32
 
+#: Клетка карты, ближе которой точка скана «попала в стену» при локализации, м.
+#: Совпадает с диагональю клетки 0,1 м: точнее сетка всё равно не знает.
+LOCALIZE_HIT_M = 0.20
+
+#: Шаг грубого перебора позы при локализации по карте: смещение, м и угол.
+LOCALIZE_XY_STEP_M = 0.20
+LOCALIZE_YAW_STEP_DEG = 8.0
+
 #: Каждый луч скана идёт в карту без пропусков, чтобы между лучами не оставалось
 #: ложных UNKNOWN-клеток, мешающих выбору цели на карте.
 SCAN_STRIDE = 1
@@ -518,6 +526,15 @@ class PoseEstimator:
         self.matched = 0
         self.moves = 0
 
+    def adopt(self, pose: tuple) -> None:
+        """Принять позу от локализации по карте.
+
+        Скан-матчер продолжает жить своей жизнью, но в режиме «только
+        локализация» позу задаёт карта: иначе после переключения обратно в
+        активный SLAM накопленная ошибка соседних сканов осталась бы в позе.
+        """
+        self.pose = (float(pose[0]), float(pose[1]), float(pose[2]))
+
     # -- точки скана в системе координат робота ---------------------------- #
     @staticmethod
     def robot_points(points: Sequence[dict]) -> list:
@@ -678,6 +695,195 @@ class PoseEstimator:
         return best
 
 
+class LocalizationMatcher:
+    """Поза по уже собранной карте: сравнение скана со стенами из карты.
+
+    Отличие от :class:`PoseEstimator` принципиальное. Scan matching сшивает
+    *соседние* сканы и накапливает ошибку: он не знает, где робот на карте, а
+    только «на сколько сдвинулся». Здесь же каждый скан сравнивается с самой
+    картой, поэтому поза не уезжает от накопленной ошибки, а наоборот —
+    возвращается к стенам.
+
+    Что считается: сколько концов лучей легло на занятые клетки карты в
+    пределах `LOCALIZE_HIT_M` (`score`). Свободные клетки вдоль луча, в которых
+    карта видит стену, снижают оценку: значит скан «сквозь стену», поза не та.
+
+    Когда карта пуста (её ещё не собрали), сравнить не с чем — тогда
+    ``snapshot["localize"]["reason"] = "no_map"``, и экран честно говорит, что
+    локализация невозможна.
+    """
+
+    #: Сколько точек скана участвует в сравнении: чаще — незачем, реже — шумно.
+    MATCH_POINTS = 90
+    #: Точки ближе этого к датчику не проверяем: там слепая зона и сам корпус.
+    MIN_POINT_M = 0.35
+
+    def __init__(self) -> None:
+        self.score: float = 0.0        # доля лучей, попавших в стены карты (0…1)
+        self.matched: int = 0          # сколько лучей попало
+        self.checked: int = 0          # сколько лучей проверяли
+        self.mean_error_m: float = 0.0 # среднее расстояние до стены карты
+        self.pose: tuple = (0.0, 0.0, 0.0)
+        self.searches: int = 0         # сколько раз искали позу по карте
+        self.last_reason: str = ""     # почему локализация не удалась
+
+    def reset(self) -> None:
+        self.score = 0.0
+        self.matched = 0
+        self.checked = 0
+        self.mean_error_m = 0.0
+        self.searches = 0
+        self.last_reason = ""
+
+    # -- геометрия ---------------------------------------------------------- #
+    @staticmethod
+    def scan_points(points: Sequence[dict], min_range: float) -> list[tuple]:
+        """Точки скана в системе координат робота, ближняя зона отброшена."""
+        out = []
+        for point in points:
+            try:
+                angle = float(point["a"])
+                distance = float(point["r"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not (math.isfinite(angle) and math.isfinite(distance)):
+                continue
+            if distance < max(min_range, LocalizationMatcher.MIN_POINT_M):
+                continue
+            out.append((distance * math.cos(angle), distance * math.sin(angle)))
+        return out
+
+    @staticmethod
+    def _occupied_cells(grid: "OccupancyGrid") -> list[tuple]:
+        """Центры занятых клеток карты в мировых координатах."""
+        out = []
+        width, height, res = grid.width, grid.height, grid.res
+        ox, oy = grid.origin
+        data = grid.data
+        for iy in range(height):
+            row = iy * width
+            for ix in range(width):
+                if data[row + ix] < PGM_OCCUPIED_PCT or data[row + ix] == UNKNOWN:
+                    continue
+                out.append((ox + (ix + 0.5) * res, oy + (iy + 0.5) * res))
+        return out
+
+    @staticmethod
+    def _transform(points: Sequence[tuple], pose: tuple) -> list[tuple]:
+        px, py, yaw = pose
+        cos_y, sin_y = math.cos(yaw), math.sin(yaw)
+        return [(px + x * cos_y - y * sin_y, py + x * sin_y + y * cos_y)
+                for x, y in points]
+
+    def _score(self, buckets: dict, walls: Sequence[tuple],
+               points: Sequence[tuple], pose: tuple) -> tuple:
+        """Оценка позы: «мягкое» совпадение и средняя ошибка до стены, м.
+
+        Мягкая оценка важнее числа попаданий: в пустой комнате стены далеко, и
+        сдвиг позы на полметра всё ещё «попадает» в стены по порогу. Здесь
+        каждый луч даёт 1 при точном попадании и линейно до 0 на пороге
+        ``LOCALIZE_HIT_M``, поэтому лишние 20 см перестают быть бесплатными.
+        """
+        if not walls:
+            return 0.0, 0.0
+        total = 0.0
+        error_total = 0.0
+        hits = 0
+        for x, y in self._transform(points, pose):
+            best, dist = PoseEstimator._nearest(buckets, x, y)
+            if best is None or dist is None:
+                continue
+            error = math.sqrt(dist)
+            if error > LOCALIZE_HIT_M:
+                continue
+            hits += 1
+            error_total += error
+            total += 1.0 - error / LOCALIZE_HIT_M
+        count = len(points) or 1
+        mean_error = error_total / hits if hits else 0.0
+        # Доля «мягких» попаданий: 1.0 — скан лёг на стены идеально.
+        return total / count, mean_error
+
+    def locate(self, points: Sequence[dict], grid: "OccupancyGrid",
+               settings: "MapSettings", hint: tuple = (0.0, 0.0, 0.0),
+               *, wide: bool = True, walls: Optional[Sequence[tuple]] = None) -> tuple:
+        """Найти позу (x, y, yaw) по карте рядом с подсказкой ``hint``.
+
+        ``hint`` — прошлая поза (или поза scan matching). Поиск идёт окном
+        вокруг неё: робот не телепортируется, а грубый перебор по всей карте
+        нашёл бы случайную стену, похожую на текущий скан.
+        """
+        self.last_reason = ""
+        walls = list(walls) if walls is not None else self._occupied_cells(grid)
+        if not walls:
+            self.reset()
+            self.last_reason = "no_map"
+            return self.pose
+        local = self.scan_points(points, settings.min_range)
+        if len(local) < 8:
+            self.reset()
+            self.last_reason = "no_scan"
+            return self.pose
+        step = max(1, len(local) // self.MATCH_POINTS)
+        sampled = local[::step] or local
+        buckets = PoseEstimator._hash(walls)
+
+        self.searches += 1
+        # Грубый перебор — по каждой четвёртой точке: позу он находит так же,
+        # а считает вчетверо меньше. Уточнение ниже идёт по полному набору.
+        coarse = sampled[::4] or sampled
+        best_pose, best_score, best_error = hint, -1.0, 0.0
+        # Широкое окно — после простоя, потери локализации и по таймеру:
+        # ±1 м и ±20°. Узкое (обычный проезд) — ±0,24 м и ±6°: робот за кадр
+        # дальше не уезжает, а полный перебор на каждом скане не нужен.
+        if wide:
+            steps_xy = (-1.0, -0.6, -0.3, 0.0, 0.3, 0.6, 1.0)
+            steps_deg = (-20.0, -12.0, -6.0, 0.0, 6.0, 12.0, 20.0)
+        else:
+            steps_xy = (-0.24, -0.12, 0.0, 0.12, 0.24)
+            steps_deg = (-6.0, -3.0, 0.0, 3.0, 6.0)
+        for dx in steps_xy:
+            for dy in steps_xy:
+                for ddeg in steps_deg:
+                    pose = (hint[0] + dx, hint[1] + dy, hint[2] + math.radians(ddeg))
+                    score, error = self._score(buckets, walls, coarse, pose)
+                    if score > best_score:
+                        best_pose, best_score, best_error = pose, score, error
+        # Оценка лучшей позы по полному набору — дальше уточняем уже по ней.
+        best_score, best_error = self._score(buckets, walls, sampled, best_pose)
+        # Точный перебор вокруг лучшего — в три захода по 5 см и 2°, чтобы
+        # дойти до сантиметров: шаг сетки карты 10 см, мельче искать смысла нет.
+        base = best_pose
+        for zoom_xy, zoom_deg in ((0.20, 4.0), (0.10, 2.0), (0.05, 1.0)):
+            for dx in (-zoom_xy, 0.0, zoom_xy):
+                for dy in (-zoom_xy, 0.0, zoom_xy):
+                    for ddeg in (-zoom_deg, 0.0, zoom_deg):
+                        pose = (base[0] + dx, base[1] + dy, base[2] + math.radians(ddeg))
+                        score, error = self._score(buckets, walls, sampled, pose)
+                        if score > best_score:
+                            best_pose, best_score, best_error = pose, score, error
+            base = best_pose
+
+        self.pose = best_pose
+        self.score = round(max(0.0, best_score), 3)
+        self.checked = len(sampled)
+        self.matched = int(round(self.score * self.checked))
+        self.mean_error_m = round(best_error, 3)
+        if self.score <= 0.0:
+            self.last_reason = "no_match"
+        return self.pose
+
+    def to_dict(self) -> dict:
+        return {
+            "score": self.score,
+            "matched": self.matched,
+            "checked": self.checked,
+            "meanErrorM": self.mean_error_m,
+            "searches": self.searches,
+            "reason": self.last_reason,
+        }
+
+
 # ------------------------------------------------------------------- файлы ---
 def settings_path() -> Path:
     """Путь к файлу настроек карты (можно переопределить RC_MAP_SETTINGS)."""
@@ -745,6 +951,18 @@ class SlamMapService:
         self._settings = settings or MapSettings()
         self._grid = OccupancyGrid(self._settings)
         self._pose = PoseEstimator()
+        # Локализация по карте: работает в режиме «только локализация» и
+        # сравнивает скан со стенами карты, а не с предыдущим сканом.
+        self._localizer = LocalizationMatcher()
+        self._localized_at = 0.0
+        # Кэш стен карты для локализации: пересобирать список занятых клеток
+        # на каждом скане (а их до 90 000) незачем — только после изменения карты.
+        self._localize_walls: Optional[list] = None
+        self._localize_walls_revision = -1
+        self._localize_lost = 0
+        # Широкое окно поиска — не чаще раза в секунду: между кадрами робот
+        # не уезжает далеко, а полный перебор дороже узкого в семь раз.
+        self._localize_wide_at = 0.0
         self._lidar_offset_m = lidar_mount_offset()
         self._directory = Path(directory) if directory is not None else None
         self._png_cache: Optional[bytes] = None
@@ -792,6 +1010,7 @@ class SlamMapService:
             if geometry_changed:
                 self._grid = OccupancyGrid(new)
                 self._pose.reset()
+                self._localizer.reset()
                 self._scans = 0
                 self._points = 0
                 self._updated_at = 0.0
@@ -827,6 +1046,7 @@ class SlamMapService:
                     self._settings = MapSettings.from_dict(raw)
                     self._grid = OccupancyGrid(self._settings)
                     self._pose.reset()
+                    self._localizer.reset()
                     self._scans = 0
                     self._points = 0
                     self._updated_at = 0.0
@@ -855,15 +1075,21 @@ class SlamMapService:
             # уже испорченная их предыдущими значениями, требует сброса.
             self._navigation_integrity = (self._navigation_integrity
                                           and settings.matching and settings.decay == 0)
-            sensor = self._pose.update(points, enabled=settings.matching)
             # Скан-матчер начинается в (0, 0) на оси датчика. Переносим весь
             # его фрейм на начальный сдвиг лидара: центр корпуса на старте
             # остаётся в (0, 0), а лучи исходят из переднего датчика.
+            if settings.slam_mode == "localize":
+                # Поза по карте, а не по предыдущему скану: робот ищет себя
+                # среди стен готовой карты и не накапливает ошибку проезда.
+                self._localize(points, settings)
+                sensor = self._pose.pose
+            else:
+                sensor = self._pose.update(points, enabled=settings.matching)
             sensor_pose = (sensor[0] + self._lidar_offset_m, sensor[1], sensor[2])
-            # Режим «только локализация»: поза считается по тому же скану, но
-            # сетка не меняется. Иначе поездка по готовой карте дописывала бы
-            # в неё случайные точки (прохожие, мебель) — и следующий маршрут
-            # строился бы уже по испорченной карте.
+            # Режим «только локализация»: карта не меняется. Иначе поездка по
+            # готовой карте дописывала бы в неё случайные точки (прохожие,
+            # мебель) — и следующий маршрут строился бы уже по испорченной
+            # карте.
             if settings.slam_mode != "localize":
                 self._grid.insert_scan(sensor_pose, points, settings)
             self._scans += 1
@@ -935,6 +1161,7 @@ class SlamMapService:
         with self._lock:
             self._grid.reset()
             self._pose.reset()
+            self._localizer.reset()
             self._png_cache = None
             self._dirty = True
             self._png_stale = True
@@ -1022,6 +1249,7 @@ class SlamMapService:
             grid.data = data
             self._settings = settings
             self._pose.reset()
+            self._localizer.reset()
             self._png_cache = None
             self._png_stale = True
             self._dirty = False
@@ -1052,6 +1280,60 @@ class SlamMapService:
         self.save()
 
     # -- снимок для экрана -------------------------------------------------- #
+    def _localize_walls_cached(self) -> list:
+        """Стены карты для сравнения. Пересобираются только после изменения карты."""
+        if self._localize_walls is None or self._localize_walls_revision != self._revision:
+            self._localize_walls = LocalizationMatcher._occupied_cells(self._grid)
+            self._localize_walls_revision = self._revision
+        return self._localize_walls
+
+    def _localize(self, points: Sequence[dict], settings: "MapSettings") -> None:
+        """Найти позу по карте и записать её в оценку позы."""
+        walls = self._localize_walls_cached()
+        if not walls:
+            # Карту ещё не собрали: сравнивать не с чем, поза остаётся прежней.
+            self._localizer.reset()
+            self._localizer.last_reason = "no_map"
+            self._localized_at = time.time()
+            return
+        now = time.time()
+        # Локализатор работает в координатах луча лидара: карта рисовалась
+        # лучами из точки установки датчика, а поза робота — это центр корпуса.
+        offset = self._lidar_offset_m
+        if self._localized_at:
+            hint = self._localizer.pose
+        else:
+            sensor = self._pose.pose
+            hint = (sensor[0] + offset, sensor[1], sensor[2])
+        lost = self._localize_lost >= 3
+        wide = lost or (now - self._localize_wide_at) >= 1.0 or self._localizer.searches == 0
+        if wide:
+            self._localize_wide_at = now
+        pose = self._localizer.locate(points, self._grid, settings, hint,
+                                      wide=wide, walls=walls)
+        self._localize_lost = 0 if self._localizer.score >= 0.4 else self._localize_lost + 1
+        if self._localizer.score >= 0.4:
+            # Обратно из точки датчика в позу робота (см. перенос выше).
+            self._pose.adopt((pose[0] - offset, pose[1], pose[2]))
+        self._localized_at = now
+
+    def _localize_payload(self) -> dict:
+        """Что видит оператор про локализацию по карте (без карты — причина)."""
+        payload = self._localizer.to_dict()
+        has_walls = any(value >= PGM_OCCUPIED_PCT and value != UNKNOWN
+                        for value in self._grid.data)
+        payload["hasMap"] = has_walls
+        payload["mode"] = self._settings.slam_mode
+        payload["active"] = self._settings.slam_mode == "localize"
+        payload["mapScans"] = self._scans
+        if not has_walls:
+            payload["reason"] = "no_map"
+        elif not payload["active"]:
+            payload["reason"] = payload["reason"] or ""
+        payload["localized"] = bool(payload["active"] and has_walls
+                                    and payload["score"] >= 0.4)
+        return payload
+
     def _body_pose(self) -> tuple[float, float, float]:
         sensor_x, sensor_y, yaw = self._pose.pose
         offset = self._lidar_offset_m
@@ -1096,6 +1378,9 @@ class SlamMapService:
                 # активное дорисовывание карты.
                 "slamMode": self._settings.slam_mode,
                 "mapping": self._settings.slam_mode != "localize",
+                # Состояние локализации по карте: попадание скана в стены,
+                # ошибка и честная причина, если сравнить не с чем.
+                "localize": self._localize_payload(),
             }
             if with_png:
                 payload["png"] = base64.b64encode(self.png()).decode("ascii")
