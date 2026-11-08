@@ -7,7 +7,7 @@
   const cards = new Map();
   const ids = {camera_FL: 0, camera_FR: 2, camera_RL: 1, camera_RR: 3};
   const ROLE_ORDER = ['camera_FL', 'camera_FR', 'camera_RL', 'camera_RR',
-    'lidar', 'kinect', 'printer', 'bms'];
+    'lidar', 'kinect', 'printer', 'bms', 'sensors'];
   let busy = false, online = false, started = false;
   let portsData = null;
   let portsRequest = null;
@@ -58,10 +58,10 @@
   }
   function kind(role) {
     return role.startsWith('wheel_') ? 'КОЛЕСО' : role.startsWith('camera_') ? 'КАМЕРА' :
-      ({lidar: 'СКАНЕР', kinect: 'ГЛУБИНА', printer: 'ПЕРИФЕРИЯ', bms: 'АККУМУЛЯТОР'}[role] || 'USB');
+      ({lidar: 'СКАНЕР', kinect: 'ГЛУБИНА', printer: 'ПЕРИФЕРИЯ', bms: 'АККУМУЛЯТОР', sensors: 'ДАТЧИКИ'}[role] || 'USB');
   }
   function cardCode(role) {
-    return role.includes('_') ? role.split('_')[1] : ({lidar: 'LID', kinect: '3D', printer: 'PRN', bms: 'BMS'}[role] || 'USB');
+    return role.includes('_') ? role.split('_')[1] : ({lidar: 'LID', kinect: '3D', printer: 'PRN', bms: 'BMS', sensors: 'SENS'}[role] || 'USB');
   }
   // Один физический порт — одна строка. Сервер уже отдаёт список без
   // псевдонимов by-id/by-path, но два источника (/api/devices и
@@ -293,6 +293,12 @@
       }).catch(() => { card.link.hidden = true; });
       body.appendChild(card.link);
     }
+    if (role === 'sensors') {
+      card.link = element('a', 'card-link', 'Открыть экран модуля датчиков →');
+      card.link.href = '/sensors';
+      body.appendChild(card.link);
+      card.detail.textContent = 'Укажите USB-последовательный порт платы Arduino. Назначение сохраняется в RC_SENSOR_PORT; после сохранения модуль переподключается сразу.';
+    }
     card.remembered = element('p', 'remembered'); body.appendChild(card.remembered);
     if (!role.startsWith('wheel_')) {
       const form = card.form = element('form', 'hint-form');
@@ -522,6 +528,13 @@
           card.input.value = assigned;
         }
         updateOptions(card);
+        if (card.role === 'sensors') {
+          card.statusText.textContent = role && role.port ? 'Порт назначен · проверить связь на экране датчиков' : 'Порт не назначен';
+          card.status.dataset.tone = role && role.port ? 'warn' : 'dim';
+          const summary = $('sensor-port-summary');
+          if (summary) summary.textContent = role && role.port
+            ? 'Модуль датчиков · ' + role.port : 'Порт модуля датчиков не назначен';
+        }
       }
     }
   }
@@ -681,6 +694,7 @@
   }
 
   buildWheelSlots();
+  buildCard({id: 'sensors', name: 'Модуль датчиков'});
   bindPortsPanel();
   $('devices-refresh').addEventListener('click', () => { void refresh(true); });
   document.addEventListener('visibilitychange', () => {

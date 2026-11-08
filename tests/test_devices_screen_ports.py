@@ -29,6 +29,7 @@ pytestmark = pytest.mark.skipif(
     NODE is None, reason="нет node: экранные скрипты проверяются только с ним")
 
 ROLES = ("camera_FL", "camera_FR", "camera_RL", "camera_RR", "lidar", "kinect", "bms", "printer")
+PORT_ROLES = (*ROLES, "sensors")
 
 
 def option(port, device, name, usb_port, *, by_id="", by_path="", exists=True, kind=""):
@@ -55,7 +56,7 @@ USB = [{"port": "usb:1-6", "device": "usb:1-6", "name": "Kinect", "usbPort": "1-
 def ports_payload(*, serial=None, extra_roles=None):
     roles = {role: {"title": role, "port": (extra_roles or {}).get(role, ""),
                     "envKey": "RC_X", "kind": "serial", "assigned": True, "note": ""}
-             for role in ROLES}
+             for role in PORT_ROLES}
     return {
         "ok": True, "manual": True, "roles": roles,
         "wheels": {"envKey": "RC_WHEEL_PORTS", "slots": ["/dev/ttyUSB0", "", "", ""],
@@ -105,6 +106,12 @@ def test_card_lists_offer_each_physical_port_once(tmp_path):
     # Подпись начинается с настоящего порта, а не с длинного by-id.
     assert lidar["labels"][1] == "1-2.1 · /dev/ttyUSB0 · Maker · CH340"
     assert lidar["labels"][2].startswith("1-2.2 · /dev/ttyUSB1")
+
+
+def test_sensor_module_has_a_serial_port_picker_and_assignment_row(tmp_path):
+    out = run_screen(tmp_path)
+    assert out["sensors"]["values"] == out["lidar"]["values"]
+    assert out["sensors"]["groups"][0]["label"] == "Подходящие · последовательный"
 
 
 def test_matching_kind_goes_first_in_its_own_group(tmp_path):

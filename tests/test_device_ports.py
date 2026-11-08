@@ -60,7 +60,7 @@ def test_save_wheels_writes_one_env_key_and_keeps_other_lines(tmp_path, monkeypa
     assert os.environ[ports.WHEEL_ENV_KEY] == f"{SERIAL_A},{SERIAL_B}"
 
 
-def test_payload_lists_wheels_and_eight_roles(monkeypatch):
+def test_payload_lists_wheels_and_nine_roles(monkeypatch):
     monkeypatch.setenv(ports.WHEEL_ENV_KEY, SERIAL_A)
     monkeypatch.setenv("RC_CAMERA_FRONT", VIDEO_A)
     payload = ports.payload()
@@ -68,7 +68,9 @@ def test_payload_lists_wheels_and_eight_roles(monkeypatch):
     assert payload["wheels"]["slots"] == [SERIAL_A, "", "", ""]
     assert payload["wheels"]["envKey"] == ports.WHEEL_ENV_KEY
     assert set(payload["roles"]) == set(ports.ROLE_ENV)
-    assert len(payload["roles"]) == 8
+    assert len(payload["roles"]) == 9
+    assert payload["roles"]["sensors"]["envKey"] == "RC_SENSOR_PORT"
+    assert payload["roles"]["sensors"]["kind"] == "serial"
     assert payload["roles"]["camera_FL"]["port"] == VIDEO_A
     assert payload["roles"]["camera_FL"]["envKey"] == "RC_CAMERA_FRONT"
     assert {"serial", "video", "usb"} <= set(payload["options"])
@@ -80,7 +82,8 @@ def test_kiosk_ports_api_shows_manual_assignments_without_auth(kiosk_client):
     body = response.get_json()
     assert body["ok"] and body["manual"] is True and body["canEdit"] is True
     assert body["wheels"]["slots"] == ["", "", "", ""]
-    assert len(body["roles"]) == 8
+    assert len(body["roles"]) == 9
+    assert body["roles"]["sensors"]["envKey"] == "RC_SENSOR_PORT"
     assert response.headers["Cache-Control"] == "no-store"
 
 
@@ -135,9 +138,42 @@ def test_kiosk_camera_assignment_writes_env_and_reports_roles(kiosk_client, monk
     assert response.get_json()["ports"]["roles"]["camera_FL"]["port"] == VIDEO_A
 
 
+def test_kiosk_sensor_port_save_applies_without_restart(kiosk_client, monkeypatch):
+    from robot_control import sensor_module as sensor_client
+
+    class FakeModule:
+        def __init__(self):
+            self.started = False
+            self.stopped = False
+
+        def start(self):
+            self.started = True
+            return self
+
+        def stop(self):
+            self.stopped = True
+
+    previous = FakeModule()
+    module = FakeModule()
+    kiosk_client.application.extensions["rc_sensor_module"] = previous
+    monkeypatch.setattr(sensor_client, "open_sensor_module", lambda **kwargs: module)
+    response = kiosk_client.post(
+        "/api/devices/ports",
+        json={"role": "sensors", "port": SERIAL_A},
+        headers={"X-Robot-Control": "devices"},
+    )
+    assert response.status_code == 200, response.get_json()
+    assert "сразу" in response.get_json()["message"]
+    assert module.started and previous.stopped
+    assert kiosk_client.application.extensions["rc_sensor_module"] is module
+    assert response.get_json()["ports"]["roles"]["sensors"]["port"] == SERIAL_A
+
+
 def test_device_page_offers_manual_ports_and_no_camera_modal(kiosk_client):
     page = kiosk_client.get("/devices").get_data(as_text=True)
     assert 'id="ports-panel"' in page and 'id="wheel-slots"' in page
+    assert 'id="sensor-port-summary"' in page
+    assert "модуль датчиков" in page
     assert "Автопоиск портов отключён" in page
     screen = kiosk_client.get("/kiosk").get_data(as_text=True)
     assert "cam-settings-modal" not in screen
@@ -288,6 +324,17 @@ def test_sensor_module_port_is_reserved_too(monkeypatch):
         ports.validate("bms", SERIAL_B)
     assert ports.assignment_owner(SERIAL_B) == "sensors"
     assert ports.owner_env("sensors") == "RC_SENSOR_PORT"
+
+
+def test_sensor_module_port_can_be_validated_saved_and_cannot_be_stolen(monkeypatch, tmp_path):
+    env = tmp_path / ".env"
+    assert ports.validate("sensors", SERIAL_A) == SERIAL_A
+    assert ports.save_role("sensors", SERIAL_A, env_path=env) == SERIAL_A
+    assert "RC_SENSOR_PORT=/dev/ttyUSB0" in env.read_text(encoding="utf-8")
+    assert ports.role_port("sensors") == SERIAL_A
+    with pytest.raises(ports.PortError, match="модуль датчиков"):
+        ports.validate("bms", SERIAL_A)
+    assert ports.validate("sensors", "") == ""
 
 
 def test_options_mark_ports_owned_by_another_device(monkeypatch):

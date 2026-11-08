@@ -36,7 +36,7 @@
     </section>
 
     <div class="summary" aria-label="Сводка по устройствам">
-      <div class="summary-main"><span class="summary-kicker">МОНИТОРИНГ УСТРОЙСТВ</span><strong>12 <small>устройств</small></strong><span>Без модуля датчиков</span></div>
+      <div class="summary-main"><span class="summary-kicker">МОНИТОРИНГ УСТРОЙСТВ</span><strong>12 <small>устройств</small></strong><span id="sensor-port-summary">Порт модуля датчиков не назначен</span></div>
       <div class="summary-stat"><span class="dot good"></span><div><strong id="count-verified">—</strong><span>Подтверждено</span></div></div>
       <div class="summary-stat"><span class="dot warn"></span><div><strong id="count-warning">—</strong><span>Нужна проверка</span></div></div>
       <div class="summary-stat"><span class="dot dim"></span><div><strong id="count-missing">—</strong><span>Нет подтверждения</span></div></div>
@@ -50,7 +50,7 @@
     <div class="notice notice-warning" id="device-alert" role="alert" hidden></div>
 
     <section class="device-section" aria-labelledby="ports-title" id="ports-panel">
-      <header class="section-heading"><div><p class="section-index">00 / НАСТРОЙКА</p><h2 id="ports-title">Порты устройств · вручную</h2></div><span class="section-count">12 УСТРОЙСТВ</span></header>
+      <header class="section-heading"><div><p class="section-index">00 / НАСТРОЙКА</p><h2 id="ports-title">Порты устройств · вручную</h2></div><span class="section-count">13 УСТРОЙСТВ</span></header>
       <p class="section-description">Автопоиск портов отключён. Порты назначает оператор: программа не перебирает USB-порты и не решает за вас, где какое устройство. Колесо считается найденным только после свежей телеметрии с CRC, камера — после свежего кадра.</p>
       <p class="ports-found" id="ports-found" role="status">Ищу подключённые порты…</p>
       <!-- Реальные USB-порты: одна строка на физическое устройство, без
@@ -88,11 +88,11 @@
       <div class="cards" id="camera-cards"></div>
     </section>
     <section class="device-section" aria-labelledby="other-title">
-      <header class="section-heading"><div><p class="section-index">03 / ПЕРИФЕРИЯ</p><h2 id="other-title">Остальные устройства</h2></div><span class="section-count">04 УСТРОЙСТВА</span></header>
-      <p class="section-description">Лидар, Kinect, чековый принтер и BMS тоже назначаются вручную — по одному порту на устройство. Совпадение пути ничего не доказывает: состояние берётся у драйверов.</p>
+      <header class="section-heading"><div><p class="section-index">03 / ПЕРИФЕРИЯ</p><h2 id="other-title">Остальные устройства</h2></div><span class="section-count">05 УСТРОЙСТВ</span></header>
+      <p class="section-description">Лидар, Kinect, чековый принтер, BMS и модуль датчиков назначаются вручную — по одному порту на устройство. Совпадение пути ничего не доказывает: состояние берётся у драйверов.</p>
       <div class="cards" id="other-cards"></div>
     </section>
-    <footer><b>Как это работает</b> · Порты сохраняются в <code>.env</code> (камеры, лидар, BMS, Kinect, порты колёс) и в конфигурацию принтера, применяются сразу или при следующем запуске драйвера. Подтверждение устройства появляется только из данных драйвера: телеметрия с CRC для колеса, свежий кадр для камеры, ответ JBD для BMS. Автопоиска нет.</footer>
+    <footer><b>Как это работает</b> · Порты сохраняются в <code>.env</code> (камеры, лидар, BMS, Kinect, модуль датчиков и порты колёс) и в конфигурацию принтера. Модуль датчиков переподключается сразу; остальные драйверы применяют настройку сразу или при следующем запуске. Подтверждение устройства появляется только из данных драйвера: телеметрия с CRC для колеса, свежий кадр для камеры, ответ JBD для BMS. Автопоиска нет.</footer>
   </main>
   <script src="slam_auth.js"></script>
   <script src="camera_frames.js"></script>
