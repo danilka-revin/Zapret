@@ -119,6 +119,9 @@ STRIP_MODES = ("auto", "off", "floor", "wave")
 HEADING_RANGE = (-36000, 36000)
 TILT_RANGE = (-9001, 9001)
 STALE_AFTER_S = 2.0
+#: Команда с валидным @ACK подтверждает двустороннюю связь, даже если плата
+#: временно не прислала пригодный для телеметрии @S.
+ACK_CONNECTED_AFTER_S = 5.0
 
 
 class SensorFrameError(ValueError):
@@ -483,6 +486,7 @@ class SensorModule:
         self._bad_frames = 0
         self._error: str | None = None
         self._last_ack: dict[str, Any] | None = None
+        self._last_ack_at: float | None = None
         self._last_card: dict[str, Any] | None = None
         #: Список карт с ролями: собирается из кадров @CARDINFO на команду list.
         self._card_list: list[dict[str, Any]] = []
@@ -583,6 +587,7 @@ class SensorModule:
                 self._card_list.sort(key=lambda item: item["idx"])
             elif frame["kind"] == "ack":
                 self._last_ack = frame
+                self._last_ack_at = now
                 self._push_event(frame)
             else:
                 self._push_event(frame)
@@ -643,9 +648,16 @@ class SensorModule:
         """Снимок для экрана и API; безопасен, пока порт молчит."""
         with self._lock:
             frame = self._state
-            age = (self._clock() - self._state_at) if frame else None
+            now = self._clock()
+            age = (now - self._state_at) if frame else None
+            ack_age = (now - self._last_ack_at) if self._last_ack_at is not None else None
+            telemetry_ok = frame is not None and age is not None and age <= STALE_AFTER_S
+            ack_recent = ack_age is not None and ack_age <= ACK_CONNECTED_AFTER_S
             snapshot = {
-                "ok": frame is not None and age is not None and age <= STALE_AFTER_S,
+                "ok": telemetry_ok,
+                "connected": telemetry_ok or ack_recent,
+                "connectionSource": "telemetry" if telemetry_ok else "ack" if ack_recent else None,
+                "lastAckAgeMs": int(ack_age * 1000) if ack_age is not None else None,
                 "configured": True,
                 "port": self.port,
                 "protocol": frame["protocol"] if frame else SENSOR_PROTOCOL,

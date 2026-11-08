@@ -1892,12 +1892,13 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     def sensor_state_payload():
         module = current_sensor_module()
         if module is None:
-            return {"configured": False, "ok": False, "stripEnabled": False,
-                    "error": "не настроен (RC_SENSOR_PORT)"}
+            return {"configured": False, "ok": False, "connected": False,
+                    "stripEnabled": False, "error": "не настроен (RC_SENSOR_PORT)"}
         try:
             return module.state()
         except Exception as exc:  # noqa: BLE001 — экран не должен падать из-за платы
-            return {"configured": True, "ok": False, "error": str(exc) or type(exc).__name__}
+            return {"configured": True, "ok": False, "connected": False,
+                    "error": str(exc) or type(exc).__name__}
 
     def sensor_command(call, *, needs_pin=False):
         """Общий путь: проверка PIN (если нужен), команда, журнал."""

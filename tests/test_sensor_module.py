@@ -94,10 +94,10 @@ def test_rc522_is_fed_from_3v3_and_documented_as_such():
 def test_relay_order_matches_vehicle_wiring_without_changing_protocol_bits():
     text = _text()
     apply = text[text.index("void applyRelays("):text.index("//: Насколько далеко", text.index("void applyRelays("))]
-    assert re.search(r"relayWrite\(0,\s*\(mask & LIGHT_LEFT\)", apply)
-    assert re.search(r"relayWrite\(1,\s*\(mask & LIGHT_RIGHT\)", apply)
-    assert re.search(r"relayWrite\(2,\s*\(mask & LIGHT_STOP\)", apply)
-    assert re.search(r"relayWrite\(3,\s*\(mask & LIGHT_HEAD\)", apply)
+    assert re.search(r"relayWrite\(0,\s*\(mask & LIGHT_HEAD\)", apply)
+    assert re.search(r"relayWrite\(1,\s*\(mask & LIGHT_STOP\)", apply)
+    assert re.search(r"relayWrite\(2,\s*\(mask & LIGHT_RIGHT\)", apply)
+    assert re.search(r"relayWrite\(3,\s*\(mask & LIGHT_LEFT\)", apply)
     assert re.search(r"LIGHT_HEAD\s*=\s*1\s*<<\s*0", text)
     assert re.search(r"LIGHT_STOP\s*=\s*1\s*<<\s*1", text)
 
@@ -547,7 +547,18 @@ def test_cards_acks_and_events_are_kept_for_the_screen():
     state = module.state()
     assert state["lastCard"]["uid"] == "A1B2C3D4" and state["lastCard"]["granted"] is True
     assert state["lastAck"]["cmd"] == "lock" and state["lastAck"]["ok"] is True
+    assert state["connected"] is True and state["ok"] is False
+    assert state["connectionSource"] == "ack"
     assert [item["kind"] for item in state["events"]] == ["card", "event", "ack"]
+
+
+def test_recent_ack_confirms_connection_but_expires_without_telemetry():
+    module, _, clock = make_module()
+    module.feed(frame("@ACK id=3 cmd=light ok=1 t=7"))
+    assert module.state()["connected"] is True
+    clock.now = sm.ACK_CONNECTED_AFTER_S + 0.1
+    state = module.state()
+    assert state["ok"] is False and state["connected"] is False
 
 
 def test_commands_go_out_as_crlf_lines():

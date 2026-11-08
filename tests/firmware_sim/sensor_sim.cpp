@@ -519,8 +519,8 @@ static void scenario_lights() {
   boot();
   size_t mark = board.serial.output.size();
   send("light head on");
-  CHECK(wait_until([]() { return board.level[5] == LOW; }, 100),
-        "передний свет включает реле 4 (D5)");
+  CHECK(wait_until([]() { return board.level[2] == LOW; }, 100),
+        "передний свет включает реле 1 (D2)");
   std::string fresh = take_output(mark);
   const std::string ack = lastFrame(fresh, "@ACK ");
   CHECK(field(ack, "ok") == 1, "ответ на команду: %s", ack.c_str());
@@ -528,10 +528,10 @@ static void scenario_lights() {
         "в телеметрии горит только передний свет");
 
   send("light stop on");
-  CHECK(wait_until([]() { return board.level[4] == LOW; }, 100), "стоп включает реле 3 (D4)");
+  CHECK(wait_until([]() { return board.level[3] == LOW; }, 100), "стоп включает реле 2 (D3)");
   send("light right on");
-  CHECK(wait_until([]() { return board.level[3] == LOW; }, 400),
-        "правый поворотник включает реле 2 (D3)");
+  CHECK(wait_until([]() { return board.level[4] == LOW; }, 400),
+        "правый поворотник включает реле 3 (D4)");
 
   mark = board.serial.output.size();
   send("light all off");
@@ -544,12 +544,12 @@ static void scenario_turn_blink() {
   boot();
   send("light left on");
   int transitions = 0;
-  uint8_t previous = board.level[2];
+  uint8_t previous = board.level[5];
   const int64_t end = sim::now_us + 1500 * 1000;
   while (sim::now_us < end) {
     sim::run_for_ms(1);
-    if (board.level[2] != previous) {
-      previous = board.level[2];
+    if (board.level[5] != previous) {
+      previous = board.level[5];
       ++transitions;
     }
   }
@@ -952,7 +952,7 @@ static void scenario_link_timeout() {
   send("light head on");
   run(1000);
   run((double)sensors::LINK_TIMEOUT_MS + 500);
-  CHECK(board.level[5] == LOW, "потеря связи не выключает передний свет");
+  CHECK(board.level[2] == LOW, "потеря связи не выключает передний свет");
 }
 
 static void scenario_garbage_safe() {
@@ -988,7 +988,7 @@ static void scenario_sensor_faults() {
   CHECK((err & sensors::ERR_BARO) == 0, "BMP180 на месте: err=%ld", err);
   // Отказы датчиков не мешают свету и замку.
   send("light head on");
-  CHECK(wait_until([]() { return board.level[5] == LOW; }, 100),
+  CHECK(wait_until([]() { return board.level[2] == LOW; }, 100),
         "свет работает при отказавших датчиках");
   gy87.mag_present = true;
   rc522.present = true;
@@ -1111,7 +1111,7 @@ static void scenario_strip_effects() {
   CHECK(board.pixels.empty() || board.pixels.front() == floor_color,
         "floor: стоп не перекрашивает подсветку пола (он на реле)");
   // Реле активны низким уровнем: «включено» — это LOW на пине.
-  CHECK(board.level[4] == LOW, "floor: при этом реле стопа включилось (реле 3, D4)");
+  CHECK(board.level[3] == LOW, "floor: при этом реле стопа включилось (реле 2, D3)");
   send("light stop off");
   send("strip auto");
   run(150);
