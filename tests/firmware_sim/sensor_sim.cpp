@@ -563,7 +563,9 @@ static void scenario_turn_blink() {
       sim::run_for_ms(25);
       const uint32_t left = board.pixels.empty() ? 0 : board.pixels.front();
       const uint32_t right = board.pixels.empty() ? 0 : board.pixels.back();
-      if (left != 0 && ((left >> 16) & 0xFF) > ((left & 0xFF) + 8)) saw_left_amber = true;
+      // Янтарный = красный заметно больше зелёного; сравнивать с синим нельзя,
+      // это проверка цвета, а не яркости.
+      if (left != 0 && ((left >> 16) & 0xFF) > (((left >> 8) & 0xFF) + 4)) saw_left_amber = true;
       if (right == 0) saw_right_dark = true;
     }
     CHECK(saw_left_amber, "левая половина ленты горит янтарным");

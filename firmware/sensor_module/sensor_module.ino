@@ -4,7 +4,8 @@
 
   GY-87 (I²C, 5 В):        SDA — 20, SCL — 21
   RC522 (SPI, 3.3 В!):     RST — 9, MISO — 50, MOSI — 51, SCK — 52, SS — 53
-  Адресная лента:          DIN — 6, питание от внешнего 5 В, GND общий
+  Адресная лента:          DIN — 6, 73 диода снизу рамы (светят вниз),
+                           питание от внешнего 5 В, GND общий
   Реле 4 канала (5 В):     IN1 — 2, IN2 — 3, IN3 — 4, IN4 — 5
   Замок двери (серво):     сигнал — 7  (питание серво — отдельное, не с 5 В Mega)
 
@@ -14,10 +15,15 @@
   габариты, стоп и поворотники дублируются адресной лентой; яркость габаритов
   задаётся командой dim.
 
-Лента пока не подключена: SENSOR_STRIP_ENABLED = 0 (по умолчанию). Тогда
-прошивка не трогает D6 (держит LOW), ничего не пишет в пиксели и сообщает
-strip=0; команда strip auto|off принимается молча. После монтажа ленты
-поставьте SENSOR_STRIP_ENABLED в 1 или соберите с -DSENSOR_STRIP_ENABLED=1.
+Лента смонтирована: 73 диода снизу рамы, светят ВНИЗ (подсветка пола под
+роботом). SENSOR_STRIP_ENABLED = 1 по умолчанию, телеметрия сообщает strip=1.
+Подсветка снизу — это НЕ габаритный огонь для людей на уровне глаз: стоп и
+поворотники читаются как красное/янтарное пятно на полу, а не как лампа на
+корпусе, и хвостом ленты нельзя пользоваться как поворотником, видным сзади.
+Для платы без ленты соберите с -DSENSOR_STRIP_ENABLED=0 (или замените
+значение ниже на 0): тогда D6 прижат к
+земле, пиксели не пишутся, в кадре strip=0, а команда strip auto|off
+принимается молча.
 
 Связь с сервером — только USB Serial 115200, строки с CRC-16/Modbus.
 Это не аутентификация и не аппаратный E-STOP: CRC ловит только порчу линии.
@@ -87,17 +93,33 @@ static const uint8_t RELAY_PINS[4] = {2, 3, 4, 5};
 static const bool RELAY_ACTIVE_LOW = true;
 static const uint8_t LOCK_SERVO_PIN = 7;
 
-//: Лента светодиодов пока не подключена. 0 — прошивка не трогает D6 и не
-//: обещает габаритов (телеметрия strip=0), 1 — лента на D6 смонтирована.
-//: Можно переопределить при сборке: -DSENSOR_STRIP_ENABLED=1.
+//: Лента светодиодов смонтирована снизу рамы (73 диода, светят вниз).
+//: 1 — лента на D6 подключена, прошивка красит её и заявляет в телеметрии
+//: strip=1. 0 — ленты нет: D6 не трогается и прижат к земле (сборка
+//: -DSENSOR_STRIP_ENABLED=0 для платы без ленты).
 #ifndef SENSOR_STRIP_ENABLED
-#define SENSOR_STRIP_ENABLED 0
+#define SENSOR_STRIP_ENABLED 1
 #endif
 static const bool STRIP_ENABLED = SENSOR_STRIP_ENABLED != 0;
 
-//: Сколько светодиодов в ленте. Лента длиннее — увеличьте, короче — уменьшите.
-static const uint16_t STRIP_LEDS = 30;
+//: Сколько светодиодов в ленте: 73 штуки вдоль низа рамы, смотрят вниз.
+static const uint16_t STRIP_LEDS = 73;
 static const uint8_t STRIP_BRIGHTNESS = 96;   // общий предел яркости, 0…255
+//: Бюджет по току. Белый на полной яркости — ~60 мА на диод, то есть
+//: 73 × 60 = 4,4 А на всю ленту: это отдельный БП на 5 В с запасом, а не 5 В
+//: Mega. Рабочий предел даёт STRIP_BRIGHTNESS (73 × 60 × 96/255 ≈ 1,65 А), а
+//: STRIP_BUDGET_MA — жёсткий потолок на случай, если яркость поднимут в коде
+//: или в ленте окажутся диоды с большим потреблением.
+static const uint16_t STRIP_WHITE_MA_PER_LED = 60;
+static const uint16_t STRIP_BUDGET_MA = 1800;
+
+//: Множитель яркости по бюджету тока (255 — бюджет не мешает).
+static uint8_t stripBudgetScale() {
+  const uint32_t worst_ma = (uint32_t)STRIP_LEDS * (uint32_t)STRIP_WHITE_MA_PER_LED;
+  if (worst_ma <= (uint32_t)STRIP_BUDGET_MA) return 255;
+  const uint32_t scale = (uint32_t)STRIP_BUDGET_MA * 255UL / worst_ma;
+  return (uint8_t)(scale > 255 ? 255 : scale);
+}
 
 //: Углы серво замка: 0 — закрыто, 90 — открыто. Подберите под свой замок.
 static const uint8_t LOCK_CLOSED_ANGLE = 10;
@@ -769,7 +791,10 @@ void applyStrip(uint8_t mask) {
   if (!STRIP_ENABLED) return;      // ленты нет: D6 не трогаем вовсе
   if (!strip_auto) return;
   strip.clear();
-  const uint8_t scale = (uint8_t)((uint16_t)STRIP_BRIGHTNESS * (uint16_t)dim_level / 255);
+  // Предел яркости: общий STRIP_BRIGHTNESS и бюджет по току — что меньше.
+  const uint8_t budget = stripBudgetScale();
+  const uint8_t limit = STRIP_BRIGHTNESS < budget ? STRIP_BRIGHTNESS : budget;
+  const uint8_t scale = (uint8_t)((uint16_t)limit * (uint16_t)dim_level / 255);
   if (mask & LIGHT_STOP) {
     const uint32_t red = strip.Color(scale, 0, 0);
     for (uint16_t i = 0; i < STRIP_LEDS; ++i) strip.setPixelColor(i, red);

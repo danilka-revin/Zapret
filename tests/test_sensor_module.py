@@ -123,12 +123,28 @@ def test_sketch_version_matches_server_protocol():
     assert 3 in sm.SENSOR_PROTOCOLS
 
 
-def test_led_strip_is_off_until_it_is_actually_wired():
-    """Ленты пока нет: прошивка не должна зависеть от неё ни в чём, кроме света."""
+def test_led_strip_is_wired_73_leds_under_the_frame():
+    """Лента смонтирована: 73 диода снизу рамы, включена по умолчанию.
+
+    Отключение осталось возможным для платы без ленты — флагом сборки
+    -DSENSOR_STRIP_ENABLED=0, и тогда D6 прижат к земле.
+    """
     text = _text()
-    # По умолчанию лента выключена и включается одной строкой или флагом сборки.
-    assert re.search(r"#ifndef SENSOR_STRIP_ENABLED\s*\n#define SENSOR_STRIP_ENABLED 0", text)
-    assert '"-DSENSOR_STRIP_ENABLED=1"' in text or "-DSENSOR_STRIP_ENABLED=1" in text
+    assert re.search(r"#ifndef SENSOR_STRIP_ENABLED\s*\n#define SENSOR_STRIP_ENABLED 1", text)
+    assert re.search(r"static const uint16_t STRIP_LEDS = 73;", text)
+    # Светит вниз: это подсветка пола, и в коде это записано, чтобы никто не
+    # принял её за габаритный огонь на уровне глаз.
+    assert "светят вниз" in text or "светят ВНИЗ" in text
+    # Подсветка снизу ограничена по току: 73 белых диода на полной яркости
+    # это ~4,4 А, поэтому яркость урезается бюджетом.
+    assert "STRIP_BUDGET_MA" in text and "stripBudgetScale" in text
+    budget = re.search(r"STRIP_BUDGET_MA = (\d+);", text)
+    # Жёсткий потолок: 73 × 60 мА = 4,4 А при полностью белой ленте, поэтому
+    # бюджет должен быть заметно ниже и покрывать рабочий режим.
+    assert budget and int(budget.group(1)) < 73 * 60
+    # Линия данных не остаётся в воздухе и при отключённой ленте.
+    assert "digitalWrite(STRIP_PIN, LOW)" in text
+    assert "SENSOR_STRIP_ENABLED=0" in text   # путь «плата без ленты» сохранён
     assert re.search(r"static const bool STRIP_ENABLED = SENSOR_STRIP_ENABLED != 0;", text)
     # Без ленты пиксели не пишутся, а линия данных прижата к земле.
     strip_fn = text[text.index("void applyStrip"):text.index("void lightsRefresh")]
@@ -152,8 +168,9 @@ def _build(binary: Path, *, strip: bool = False) -> Path:
     if not compiler:
         pytest.skip("нет g++/clang++ — симуляция модуля датчиков пропущена")
     command = [compiler, "-std=c++17", "-O1", "-w"]
-    if strip:
-        command.append("-DSENSOR_STRIP_ENABLED=1")
+    # В прошивке лента теперь включена по умолчанию, поэтому «плата без ленты»
+    # задаётся явно: -DSENSOR_STRIP_ENABLED=0.
+    command.append("-DSENSOR_STRIP_ENABLED=1" if strip else "-DSENSOR_STRIP_ENABLED=0")
     command += ["-I", str(SIM_DIR / "stubs"), str(SIM_DIR / "sensor_sim.cpp"),
                 "-o", str(binary)]
     result = subprocess.run(command, capture_output=True, text=True, timeout=300)

@@ -173,11 +173,14 @@
           <button type="button" class="btn" id="sm-lights-off">Всё выключить</button>
         </div>
         <div class="dim-row">
-          <label for="sm-dim">Габариты (лёнта): <output id="sm-dim-value">80</output></label>
+          <label for="sm-dim">Подсветка пола (лёнта снизу): <output id="sm-dim-value">80</output></label>
           <input type="range" id="sm-dim" min="0" max="255" step="5" value="80"
                  aria-describedby="sm-strip-note">
-          <p class="warn" id="sm-strip-note" hidden>Адресная лента не подключена: габариты,
-            стопы и поворотники на неё пока не выводятся — работают только реле.</p>
+          <p class="hint" id="sm-strip-hint">73 диода снизу рамы светят вниз: стоп и
+            поворотники видны как красное/янтарное пятно на полу. Габаритные огни на
+            корпусе дают реле, а не лента.</p>
+          <p class="warn" id="sm-strip-note" hidden>Адресная лента не подключена: подсветка
+            пола, стопы и поворотники на неё не выводятся — работают только реле.</p>
         </div>
       </article>
 
