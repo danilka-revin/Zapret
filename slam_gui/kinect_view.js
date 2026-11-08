@@ -37,7 +37,7 @@
   function transformKinect(points, mount = {}, lidarOffsetM = DEFAULT_LIDAR_OFFSET_M) {
     if (!Array.isArray(points)) return [];
     const offset = Number.isFinite(Number(lidarOffsetM)) ? Number(lidarOffsetM) : DEFAULT_LIDAR_OFFSET_M;
-    const zMount = Number.isFinite(Number(mount.z_m)) ? Number(mount.z_m) : 0.30;
+    const zMount = Number.isFinite(Number(mount.z_m)) ? Number(mount.z_m) : 0.45;
     const yaw = (Number.isFinite(Number(mount.yaw_deg)) ? Number(mount.yaw_deg) : 0) * Math.PI / 180;
     const pitch = (Number.isFinite(Number(mount.pitch_deg)) ? Number(mount.pitch_deg) : 0) * Math.PI / 180;
     const cosY = Math.cos(yaw), sinY = Math.sin(yaw);
@@ -60,7 +60,7 @@
   const $ = (id) => root.document.getElementById(id);
   let mode = 'lidar', kinectPoints = [], lidarCloud = [], yaw = 0.25, pitch = -0.15, zoom = 1;
   let deadline = 0, lidarDeadline = 0, lidarOffsetM = DEFAULT_LIDAR_OFFSET_M;
-  let kinectMount = {z_m: 0.30, yaw_deg: 0, pitch_deg: 0};
+  let kinectMount = {z_m: 0.45, yaw_deg: 0, pitch_deg: 0};
   let running = false, generation = 0, lastFrameId = null, lastDeadline = 0;
   let timer = null;
   const pointers = new Map();
@@ -84,7 +84,7 @@
     const lText = lidarFresh ? pointCountText(lidarCloud.length) : 'нет скана';
     setMessage('Лидар: ' + lText + ' · Kinect: ' + kText + ' · live, без сохранения');
     const note = $('kinect-3d-mode-note');
-    const kinectZ = Number.isFinite(Number(kinectMount.z_m)) ? Number(kinectMount.z_m) : 0.30;
+    const kinectZ = Number.isFinite(Number(kinectMount.z_m)) ? Number(kinectMount.z_m) : 0.45;
     if (note) note.textContent = 'Лидар z=550 мм (оранжевый) · Kinect +130 мм вперёд (сине-зелёный), z=' +
       Math.round(kinectZ * 1000) + ' мм';
   }
