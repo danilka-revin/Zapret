@@ -385,7 +385,7 @@
       ? 'робот видит стены и сопоставляет их с картой, но не дорисовывает её'
       : 'скан дорисовывает стены и проходы — карта растёт');
     if (document.body && document.body.classList) {
-      document.body.classList.toggle('map-localize', next === 'localize');
+      document.body.classList.toggle('map-mode-localize', next === 'localize');
     }
     // Строку «где робот на карте» рисует общий map_view.js по снимку карты:
     // здесь только перерисовываем её под новый режим.

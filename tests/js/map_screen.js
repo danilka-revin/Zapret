@@ -309,7 +309,7 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
     pressed: slamModeButtons.map((b) => b.getAttribute('aria-pressed')),
     calls: calls.filter((call) => /kiosk_map\/settings/.test(call.url)
       && call.body && call.body.settings && 'slam_mode' in call.body.settings),
-    localizeClass: global.document.body.classList.contains('map-localize'),
+    localizeClass: global.document.body.classList.contains('map-mode-localize'),
   };
   const localizeAfter = {
     text: byId('map-localize').textContent,
@@ -320,7 +320,7 @@ const sleep = (ms) => new Promise((resolve) => originalSetTimeout(resolve, ms));
   await sleep(20);
   const modeBack = {
     label: byId('map-slam-label').textContent,
-    localizeClass: global.document.body.classList.contains('map-localize'),
+    localizeClass: global.document.body.classList.contains('map-mode-localize'),
   };
 
   // Живой скан: точки лидара рисуются поверх карты.
