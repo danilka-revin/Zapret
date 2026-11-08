@@ -431,6 +431,42 @@ class OccupancyGrid:
         )
 
 
+def parse_pgm(raw: bytes) -> tuple[dict, bytes]:
+    """Разобрать PGM (P5) в метаданные и пиксели.
+
+    Читаем только то, что сами и пишем: серую карту ROS map_server. Комментарии
+    (``#``) в заголовке допускаются — их пишет и наш ``pgm_bytes``.
+    """
+    if not raw.startswith(b"P5"):
+        raise ValueError("это не PGM P5")
+    fields: list[int] = []
+    position = 2
+    while len(fields) < 3:
+        while position < len(raw) and raw[position:position + 1].isspace():
+            position += 1
+        if position < len(raw) and raw[position:position + 1] == b"#":
+            newline = raw.find(b"\n", position)
+            if newline < 0:
+                raise ValueError("оборванный заголовок PGM")
+            position = newline + 1
+            continue
+        start = position
+        while position < len(raw) and raw[position:position + 1].isdigit():
+            position += 1
+        if position == start:
+            raise ValueError("некорректный заголовок PGM")
+        fields.append(int(raw[start:position]))
+    position += 1                                  # одиночный пробел после maxval
+    width, height, maxval = fields
+    if width <= 0 or height <= 0 or maxval <= 0 or maxval > 255:
+        raise ValueError("некорректные размеры PGM")
+    size = width * height
+    pixels = raw[position:position + size]
+    if len(pixels) < size:
+        raise ValueError("файл карты обрезан: %d из %d байт" % (len(pixels), size))
+    return {"width": width, "height": height, "maxval": maxval}, pixels
+
+
 def _png_gray(width: int, height: int, rows: Sequence[bytes]) -> bytes:
     """Собрать PNG из серых строк (без внешних библиотек)."""
     raw = bytearray()
@@ -912,6 +948,77 @@ class SlamMapService:
                 return {"ok": True, "paths": paths, "savedAt": self._saved_at}
             except OSError as exc:
                 return {"ok": False, "error": str(exc), "paths": paths}
+
+    def load(self) -> dict:
+        """Прочитать карту из файла: «посканировал сегодня — поехал завтра».
+
+        Читается PGM рядом с YAML (формат ROS map_server, тот же, что мы
+        сохраняем), проверяется размер и разрешение. Сетка заменяется целиком,
+        поза сбрасывается в (0, 0, 0) — роботу всё равно нужно понять, где он
+        стоит, по первому скану. Карта помечается несвежей: навигация не должна
+        считать её подтверждённой до нового скана.
+        """
+        with self._lock:
+            paths = map_paths(self._directory)
+            try:
+                raw = Path(paths["pgm"]).read_bytes()
+            except OSError as exc:
+                return {"ok": False, "error": "нет файла карты: %s" % exc, "paths": paths}
+            try:
+                meta, pixels = parse_pgm(raw)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc), "paths": paths}
+            width, height = meta["width"], meta["height"]
+            resolution = meta.get("resolution") or self._settings.resolution
+            origin = meta.get("origin") or (-width * resolution / 2.0,
+                                            -height * resolution / 2.0)
+            settings = replace(self._settings, resolution=resolution)
+            grid = OccupancyGrid(settings)
+            if width != grid.width:
+                # Размер сетки задан настройками: не растягиваем чужую карту
+                # молча, а честно говорим, что разрешение не совпало.
+                return {"ok": False,
+                        "error": "карта %d×%d не совпадает с сеткой %d×%d: "
+                                 "проверьте RC_MAP_SIZE/resolution" % (
+                                     width, height, grid.width, grid.height),
+                        "paths": paths}
+            grid.origin = (float(origin[0]), float(origin[1]))
+            data = bytearray(grid.width * grid.height)
+            # PGM идёт сверху вниз, сетка — снизу вверх.
+            for iy in range(height):
+                source_row = height - 1 - iy
+                base = source_row * width
+                start = iy * width
+                for ix in range(width):
+                    value = pixels[base + ix]
+                    if value == PGM_UNKNOWN_VALUE:
+                        data[start + ix] = UNKNOWN
+                    elif value <= PGM_OCCUPIED_VALUE + 24:
+                        data[start + ix] = 100
+                    elif value >= 245:
+                        data[start + ix] = 0
+                    else:
+                        data[start + ix] = UNKNOWN
+            self._grid = grid
+            grid.data = data
+            self._settings = settings
+            self._pose.reset()
+            self._png_cache = None
+            self._png_stale = True
+            self._dirty = False
+            self._saved_at = time.time()
+            self._scans = 0
+            self._points = 0
+            self._updated_at = self._saved_at
+            # Карта из файла не подтверждена текущим сканом: навигация обязана
+            # получить свежий кадр лидара, прежде чем строить маршрут.
+            self._trusted = True
+            self._navigation_integrity = bool(settings.matching and settings.decay == 0)
+            self._revision += 1
+            stats = self._grid.stats()
+            return {"ok": True, "paths": paths, "loadedAt": self._saved_at,
+                    "resolution": resolution, "origin": list(grid.origin),
+                    "stats": stats}
 
     def maybe_autosave(self) -> None:
         """Перезаписать файл карты, если она менялась и подошло время."""

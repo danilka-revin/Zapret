@@ -19,6 +19,7 @@
   <h1>Карта лидара</h1>
   <span>Габариты робота 75 × 60 × 30 см · лидар спереди</span>
   <div class="map-page-head-actions">
+    <a class="map-btn map-btn--route" id="map-open-scan" href="/scan">Режим «Скан»</a>
     <button type="button" id="map-open-route-win" class="map-btn map-btn--route">К точкам маршрута</button>
 
   </div>
@@ -284,6 +285,8 @@
 const token = new URLSearchParams(location.search).get('st');
 if (token) {
   document.getElementById('map-back').href = '/?st=' + encodeURIComponent(token);
+  const scanLink = document.getElementById('map-open-scan');
+  if (scanLink) scanLink.href = '/scan?st=' + encodeURIComponent(token);
   const routePage = document.getElementById('map-open-route-page');
   if (routePage) routePage.href = '/route?st=' + encodeURIComponent(token);
   const popout = document.getElementById('route-win-popout');
