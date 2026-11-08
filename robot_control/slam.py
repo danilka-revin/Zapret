@@ -805,6 +805,9 @@ ASSETS = {
     # режим «Скан»: съёмка карты с камерами и включаемым управлением
     "scan_mode.js": "scan_mode_js",
     "scan.css": "scan_css",
+    # отдельный экран навигации: цель → маршрут → поездка
+    "navigation_screen.js": "navigation_screen_js",
+    "navigation.css": "navigation_css",
     "viewport.js": "viewport_js",
     "camera_view.js": "camera_view_js",
     "camera_frames.js": "camera_frames_js",
@@ -1343,6 +1346,12 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     @guard
     def route_screen():
         return _send("route.html")
+
+    @bp.get("/navigation")
+    @guard
+    def navigation_screen():
+        """Отдельный экран навигации: цель → маршрут → поездка."""
+        return _send("navigation.html")
 
     # The onboard process owns the map. The web process must never build a
     # second grid or race it when saving the same files.

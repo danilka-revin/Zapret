@@ -96,8 +96,14 @@ class El {
   closest() { return null; }
 }
 
+/* Элементов, которых на странице «Карта» нет, здесь тоже нет: страница
+ * навигации живёт отдельно (/navigation), и её разметку (#navscreen-main)
+ * этот прогон не подставляет — иначе клик по карте ушёл бы в другую ветку. */
+const ABSENT = new Set(['navscreen-main']);
+
 const elements = new Map();
 function byId(id) {
+  if (ABSENT.has(id)) return null;
   if (!elements.has(id)) {
     elements.set(id, new El(id, /canvas/.test(id) ? 'canvas' : 'div'));
   }

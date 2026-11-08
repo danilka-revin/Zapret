@@ -44,7 +44,7 @@
           <span>Функции</span>
         </button>
         <a id="k-map-open" class="k-ctrl-btn" href="/map">Карта</a>
-        <a id="k-route-open" class="k-ctrl-btn" href="/map">Маршрут</a>
+        <a id="k-route-open" class="k-ctrl-btn" href="/navigation">Навигация</a>
         <a id="k-devices-open" class="k-ctrl-btn" href="/devices">Устройства</a>
         <a id="k-sensors-open" class="k-ctrl-btn" href="/sensors">Датчики</a>
         <button id="k-cameras-open" class="k-ctrl-btn" type="button" aria-controls="swipe-cameras-view">Камеры</button>
@@ -550,38 +550,9 @@
             <p class="map-file" id="map-file">файл: —</p>
             <p class="map-quality" id="map-quality">сопоставление сканов: —</p>
 
-            <section class="nav-panel" aria-label="Навигация робота">
-              <header class="nav-panel-head">
-                <b>Навигация</b>
-                <span id="nav-status" class="nav-status" data-phase="idle">ожидание</span>
-              </header>
-              <div class="nav-robot-specs" id="nav-robot-specs">
-                <span>Корпус: <b>75 × 60 см</b></span>
-                <span>Высота: <b>30 см</b></span>
-                <span>Лидар: <b>спереди</b></span>
-              </div>
-              <p class="nav-hint">Добавляйте точки кликом по карте или введите X/Y и нажмите «Добавить». Порядок точек определяет путь. Предпросмотр не включает привод.</p>
-              <ol id="nav-point-list" class="nav-point-list" aria-label="Точки маршрута"></ol>
-              <div class="nav-actions nav-point-actions">
-                <button type="button" id="nav-add-point" class="map-btn">Добавить X/Y</button>
-                <button type="button" id="nav-clear-points" class="map-btn">Очистить точки</button>
-              </div>
-              <div class="nav-goal-grid">
-                <label class="nav-coordinate"><span>X, м</span><input id="nav-goal-x" type="number" step="0.05" inputmode="decimal" placeholder="0.00" /></label>
-                <label class="nav-coordinate"><span>Y, м</span><input id="nav-goal-y" type="number" step="0.05" inputmode="decimal" placeholder="0.00" /></label>
-                <button type="button" id="nav-select-goal" class="map-btn nav-pick">Цель на карте</button>
-              </div>
-              <div class="nav-actions">
-                <button type="button" id="nav-plan" class="map-btn map-btn--primary">Построить маршрут</button>
-                <button type="button" id="nav-start" class="map-btn nav-start" disabled>Поехать</button>
-                <button type="button" id="nav-cancel" class="map-btn" disabled>Остановить маршрут</button>
-                <button type="button" id="nav-estop" class="map-btn map-btn--danger nav-estop" aria-label="Взвести аварийную остановку">E-STOP</button>
-              </div>
-              <button type="button" id="nav-preview" class="map-btn map-btn--route nav-open-win">▶ Предпросмотр пути</button>
-              <p class="nav-route-summary" id="nav-route-summary">траектория не рассчитана</p>
-              <p class="nav-msg" id="nav-msg" role="status" aria-live="polite">Навигация ещё не проверена.</p>
-              <p class="nav-safety-note" id="nav-safety-note">Габариты робота 75×60×30 см, лидар спереди. Текущая прошивка не умеет разворот на месте: доступны прямые/крабовые отрезки в пределах ±28°. Автотяга выключена по умолчанию.</p>
-            </section>
+            <!-- Навигация переехала в отдельный экран /navigation: на карте
+                 остались только карта, настройки и автообследование. -->
+            <a class="map-btn map-btn--primary nav-open-screen" id="map-nav-screen" href="/navigation">Открыть навигацию →</a>
 
             <section id="map-settings" class="map-settings" hidden aria-label="Настройки карты">
               <fieldset class="map-wheel-colors">
@@ -663,66 +634,10 @@
           </aside>
         </div>
 
-        <!-- Отдельное окно движения по маршруту -->
-        <div id="route-window" class="route-window" hidden role="dialog" aria-modal="true" aria-labelledby="route-win-title">
-          <div class="route-window-backdrop" id="route-win-backdrop" aria-hidden="true"></div>
-          <section class="route-window-card">
-            <header class="route-win-head">
-              <div class="route-win-title-wrap">
-                <span class="route-win-dot" aria-hidden="true"></span>
-                <div>
-                  <b id="route-win-title">Движение по маршруту</b>
-                  <small id="route-win-sub">Отдельное окно маршрута · габариты робота 75 × 60 × 30 см · лидар спереди</small>
-                </div>
-              </div>
-              <div class="route-win-head-actions">
-                <span id="route-win-status" class="nav-status" data-phase="idle">ожидание</span>
-                <a id="route-win-popout" class="map-btn route-win-popout" href="/route" target="_blank" rel="noopener">В новой вкладке ↗</a>
-                <button type="button" id="route-win-close" class="route-win-close" aria-label="Закрыть окно движения по маршруту">✕</button>
-              </div>
-            </header>
+        <!-- Окно движения по маршруту и вся навигация переехали на отдельный
+             экран /navigation: на бортовой карте остались только карта,
+             её настройки и автообследование. -->
 
-            <div class="route-win-body">
-              <div class="route-win-stage">
-                <canvas id="route-motion-canvas" aria-label="Визуализация движения робота 75×60×30 см по маршруту"></canvas>
-                <div class="route-win-hud-top">
-                  <span class="route-hud-pill" id="route-hud-dims">Габариты: 75 × 60 × 30 см</span>
-                  <span class="route-hud-pill route-hud-pill--lidar" id="route-hud-lidar">Лидар: спереди</span>
-                  <span class="route-hud-pill" id="route-hud-steer">Колёса: 0°</span>
-                </div>
-                <div class="route-win-progress-bar" aria-hidden="true">
-                  <div class="route-win-progress-fill" id="route-win-progress-fill" style="width: 0%"></div>
-                </div>
-              </div>
-
-              <aside class="route-win-side" aria-label="Управление и телеметрия маршрута">
-                <div class="route-win-kpis">
-                  <div class="route-kpi"><span>Длина пути</span><b id="route-kpi-dist">—</b></div>
-                  <div class="route-kpi"><span>Участки</span><b id="route-kpi-wp">0 / 0</b></div>
-                  <div class="route-kpi"><span>Прогресс</span><b id="route-kpi-pct">0%</b></div>
-                  <div class="route-kpi"><span>Цель X / Y</span><b id="route-kpi-goal">—</b></div>
-                  <div class="route-kpi"><span>Поза робота</span><b id="route-kpi-pose">0.00 / 0.00 м · 0°</b></div>
-                  <div class="route-kpi"><span>Габариты и лидар</span><b>75×60×30 см · спереди</b></div>
-                </div>
-
-                <div class="route-win-goal-box">
-                  <label class="nav-coordinate"><span>Цель X, м</span><input id="route-win-goal-x" type="number" step="0.05" inputmode="decimal" placeholder="1.50" /></label>
-                  <label class="nav-coordinate"><span>Цель Y, м</span><input id="route-win-goal-y" type="number" step="0.05" inputmode="decimal" placeholder="0.00" /></label>
-                  <button type="button" id="route-win-plan" class="map-btn map-btn--primary route-win-plan-btn">Построить маршрут</button>
-                </div>
-
-                <div class="route-win-actions">
-                  <button type="button" id="route-win-preview" class="map-btn map-btn--route">▶ Предпросмотр движения</button>
-                  <button type="button" id="route-win-start" class="map-btn nav-start" disabled>Поехать</button>
-                  <button type="button" id="route-win-cancel" class="map-btn" disabled>Остановить маршрут</button>
-                  <button type="button" id="route-win-estop" class="map-btn map-btn--danger nav-estop">E-STOP</button>
-                </div>
-
-                <p class="route-win-msg" id="route-win-msg" role="status" aria-live="polite">Укажите цель на карте или введите X/Y и нажмите «Построить маршрут».</p>
-              </aside>
-            </div>
-          </section>
-        </div>
       </section>
 
       <!-- Тяга и руление: пресеты углов, схема колёс и движение до СТОП. -->
