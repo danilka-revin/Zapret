@@ -135,6 +135,9 @@ class FakeMap:
         self.quality = 1.0
         self.settings = {"matching": True, "decay": 0.0, "min_range": 0.3}
         self.trusted = True
+        # Состояние локализации по карте, как его отдаёт SlamMapService.
+        self.localize = {"active": False, "hasMap": True, "localized": False,
+                         "score": 0.0, "reason": ""}
 
     def advance(self, dx, dy):
         with self.lock:
@@ -148,7 +151,9 @@ class FakeMap:
         with self.lock:
             result = partial_grid(self.free_until)
             result.update(pose=dict(self.pose), revision=self.revision, quality=self.quality,
-                          settings=dict(self.settings), trusted=self.trusted, updatedAt=time.time())
+                          settings=dict(self.settings), trusted=self.trusted, updatedAt=time.time(),
+                          localize=dict(getattr(self, "localize", {}) or {}),
+                          slamMode=self.settings.get("slam_mode", "mapping"))
             if self.wall_x is not None:
                 data = bytearray(result["data"])
                 x, _ = _cell(result, self.wall_x, 0)
@@ -682,3 +687,40 @@ def test_partial_navigation_in_real_browser_with_simulated_map_and_wheels(kiosk_
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+# ------------------------------------------- локализация по карте в проверках ---
+def test_preflight_uses_map_localization_instead_of_scan_matching():
+    """В режиме локализации позу подтверждает сравнение с картой, не scan matching."""
+    nav, mapping, _source, _lidar = service()
+    assert nav._preflight()[0]
+    mapping.settings["slam_mode"] = "localize"
+    # Scan matching вручную испорчен (quality=0): в этом режиме он не нужен,
+    # но и одной карты мало — нужна уверенная локализация по ней.
+    mapping.quality = 0.0
+    mapping.localize = {"active": True, "hasMap": True, "localized": False,
+                        "score": 0.0, "reason": ""}
+    ready, reason, diagnostics = nav._preflight()
+    assert not ready
+    assert "не совпал со стенами карты" in reason, reason
+    assert diagnostics["checks"]["poseReady"] is False
+    assert diagnostics["localization"]["score"] == 0.0
+
+    mapping.localize = {"active": True, "hasMap": True, "localized": True,
+                        "score": 0.86, "matched": 60, "checked": 70, "reason": ""}
+    ready, reason, diagnostics = nav._preflight()
+    assert ready, reason
+    assert diagnostics["checks"]["poseReady"] is True
+    assert diagnostics["poseQuality"] == pytest.approx(0.86)
+
+
+def test_preflight_explains_empty_map_in_localize_mode():
+    """Локализация без карты: понятная причина вместо «низкое качество»."""
+    nav, mapping, _source, _lidar = service()
+    mapping.settings["slam_mode"] = "localize"
+    mapping.quality = 0.0
+    mapping.localize = {"active": True, "hasMap": False, "localized": False,
+                        "score": 0.0, "reason": "no_map"}
+    ready, reason, _diagnostics = nav._preflight()
+    assert not ready
+    assert "Карта пуста" in reason and "активном SLAM" in reason, reason

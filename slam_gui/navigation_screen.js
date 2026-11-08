@@ -120,6 +120,9 @@
       + Number(map.height || stats.height || 0) + ' клеток · '
       + Number(settings.resolution || map.resolution || 0).toFixed(2) + ' м/клетка · изучено '
       + Math.round(Number(stats.coverage || 0) * 100) + '%');
+    if (window.RCMapView && window.RCMapView.drawLocalization) {
+      window.RCMapView.drawLocalization(map);
+    }
     const pose = map.pose || {x: 0, y: 0, yaw: 0};
     text('navscreen-posemeta',
       'поза: ' + Number(pose.x).toFixed(2) + ' / ' + Number(pose.y).toFixed(2) + ' м · '

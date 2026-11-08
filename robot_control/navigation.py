@@ -1065,7 +1065,19 @@ class NavigationService:
         decay = map_settings.get("decay")
         decay_disabled = (isinstance(decay, (int, float)) and not isinstance(decay, bool)
                           and math.isfinite(decay) and decay == 0)
-        pose_ready = math.isfinite(quality) and quality >= self.quality_min and matching_enabled
+        # В режиме «только локализация» позу даёт сравнение с картой, а не
+        # соседние сканы: качество берём из локализации (попадание в стены),
+        # scan matching для проверки не требуется.
+        localize = snapshot.get("localize") if isinstance(snapshot.get("localize"), dict) else {}
+        localize_active = (map_settings.get("slam_mode") == "localize"
+                           and localize.get("active") is True)
+        localize_score = float(localize.get("score") or 0.0)
+        if localize_active:
+            pose_ready = (localize.get("localized") is True
+                          and math.isfinite(localize_score)
+                          and localize_score >= self.quality_min)
+        else:
+            pose_ready = math.isfinite(quality) and quality >= self.quality_min and matching_enabled
         minimum_footprint = math.hypot(self.robot_length_m, self.robot_width_m) / 2.0
         footprint_usable = self.footprint_m >= minimum_footprint
         drive_status = {}
@@ -1171,13 +1183,23 @@ class NavigationService:
             reason = "Карта строилась без сопоставления сканов или с забыванием препятствий; сбросьте её и соберите заново."
         elif not checks["mapFresh"]:
             reason = "Карта устарела — дождитесь свежего скана лидара."
+        elif not checks["poseReady"] and localize_active:
+            if localize.get("hasMap") is not True:
+                reason = ("Карта пуста: в режиме «только локализация» сравнивать не с чем. "
+                          "Соберите карту в активном SLAM.")
+            else:
+                reason = ("Скан не совпал со стенами карты (совпадение %.0f%%, нужно %.0f%%): "
+                          "робот не понимает, где он. Поставьте его на место, откуда карту "
+                          "строили, и дождитесь уверенной локализации."
+                          % (localize_score * 100, self.quality_min * 100))
         elif not checks["poseReady"]:
             reason = "Низкое качество сопоставления сканов (%.0f%%); проверьте локализацию." % (quality * 100)
         return not reason, reason, {
             "checks": checks,
             "drive": drive_status,
             "mapAgeS": round(max(0.0, age), 2) if math.isfinite(age) else None,
-            "poseQuality": round(quality, 3),
+            "poseQuality": round(localize_score if localize_active else quality, 3),
+            "localization": localize or None,
             "scanPoints": scan_points,
             "scanMaxGapDeg": round(scan_gap, 1) if scan_gap is not None else None,
             "minimumFootprintM": round(minimum_footprint, 3),

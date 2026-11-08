@@ -299,3 +299,27 @@ def test_kiosk_header_buttons_are_icons() -> None:
         assert ">" not in inner or not any(ch.isalpha() for ch in inner.split("</svg>")[-1]), \
             button_id
     assert "k-ctrl-btn--icon" in _html("robot.css")
+
+
+def test_localization_is_visible_on_every_map_screen(kiosk_client, client, operator) -> None:
+    """«Робот знает, где он»: строка локализации есть на карте, скане и навигации."""
+    login(client)
+    for web in (kiosk_client, client):
+        for path in ("/map", "/scan", "/navigation"):
+            page = web.get(path).text
+            assert 'id="map-localize"' in page, path
+    script = (ROOT / "slam_gui" / "map_view.js").read_text(encoding="utf-8")
+    for marker in ("нашёл себя на карте", "не совпал со стенами карты", "Карта пуста"):
+        assert marker in script, marker
+    assert "drawLocalization" in script
+
+
+def test_localization_state_reaches_the_api(kiosk_client) -> None:
+    """Снимок карты отдаёт результат сравнения скана со стенами."""
+    payload = kiosk_client.get("/api/kiosk_map").json
+    assert "localize" in payload
+    info = payload["localize"]
+    for key in ("score", "matched", "checked", "hasMap", "active", "localized", "reason"):
+        assert key in info, key
+    scan = kiosk_client.get("/api/scan_mode").json
+    assert "localize" in scan["map"]
