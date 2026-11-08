@@ -35,6 +35,24 @@
         <span class="map-badge" id="map-badge" data-tone="idle">IDLE</span>
         <p class="map-empty" id="map-empty" hidden>скана лидара нет — карта не растёт</p>
       </div>
+      <div class="map-slam-mode map-slam-mode--compact" role="group" aria-labelledby="map-slam-mode-title">
+        <div class="map-slam-mode-head">
+          <b id="map-slam-mode-title">Режим SLAM</b>
+          <span id="map-slam-label">Активный SLAM</span>
+        </div>
+        <div class="map-slam-mode-buttons">
+          <button type="button" class="map-slam-btn" data-slam-mode="localize" aria-pressed="false">
+            <b>Только локализация</b>
+            <small>видит стены, карту не трогает</small>
+          </button>
+          <button type="button" class="map-slam-btn is-on" data-slam-mode="mapping" aria-pressed="true">
+            <b>Активный SLAM</b>
+            <small>дорисовывает карту</small>
+          </button>
+        </div>
+        <p class="map-slam-hint" id="map-slam-hint">скан дорисовывает стены и проходы — карта растёт</p>
+      </div>
+
       <div class="navscreen-stage-tools">
         <button type="button" class="map-btn" id="map-zoom-out" aria-label="Отдалить">−</button>
         <button type="button" class="map-btn" id="map-zoom-in" aria-label="Приблизить">+</button>

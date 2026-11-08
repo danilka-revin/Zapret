@@ -105,7 +105,7 @@ def test_map_rejects_nonobject_settings(client, operator):
 def test_onboard_map_is_a_standalone_page_without_login(kiosk_client):
     # The map can be reached without a successful robot.js boot or a swipe.
     home = kiosk_client.get('/kiosk').text
-    assert 'id="k-map-open" class="k-ctrl-btn" href="/map"' in home
+    assert 'id="k-map-open"' in home and 'href="/map"' in home
     assert 'id="swipe-map-open"' in home
     response = kiosk_client.get('/map')
     assert response.status_code == 200

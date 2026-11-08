@@ -100,8 +100,10 @@ def test_navigation_panel_removed_from_kiosk_map_view() -> None:
     assert 'id="nav-point-list"' not in robot
     assert 'id="nav-estop"' not in robot
     assert 'id="map-nav-screen" href="/navigation"' in robot
-    # Кнопка «Навигация» в шапке киоска ведёт на отдельный экран.
-    assert 'id="k-route-open" class="k-ctrl-btn" href="/navigation"' in robot
+    # Кнопка-иконка «Навигация» в шапке киоска ведёт на отдельный экран.
+    start = robot.index('id="k-route-open"')
+    assert 'href="/navigation"' in robot[start:start + 400]
+    assert 'aria-label="Навигация: цель, маршрут, поездка"' in robot[start:start + 400]
 
 
 def test_main_menu_links_the_navigation_screen() -> None:
@@ -239,3 +241,61 @@ def test_navigation_screen_keeps_confirmation_and_estop() -> None:
     for marker in ('id="nav-resume"', 'id="nav-cancel"', 'id="nav-estop"',
                    'id="navscreen-route"'):
         assert marker in html, marker
+
+
+# ------------------------------------------- режим SLAM и иконки на борту ---
+def test_map_scan_and_navigation_share_the_slam_mode_switch(kiosk_client,
+                                                            client,
+                                                            operator) -> None:
+    """Тумблер режима SLAM есть на всех экранах с картой и подписан по-русски."""
+    login(client)
+    for web in (kiosk_client, client):
+        for path in ("/map", "/scan", "/navigation"):
+            page = web.get(path).text
+            assert 'data-slam-mode="localize"' in page, (path, "localize")
+            assert 'data-slam-mode="mapping"' in page, (path, "mapping")
+            assert "Только локализация" in page
+            assert "Активный SLAM" in page
+            assert 'id="map-slam-hint"' in page
+
+
+def test_slam_mode_is_stored_on_the_map_service(kiosk_client) -> None:
+    """Переключение режима видно серверу и переживает перечитывание снимка."""
+    app = kiosk_client.application
+    map_service = app.extensions["rc_map"]
+    try:
+        response = kiosk_client.post("/api/kiosk_map/settings",
+                                     json={"settings": {"slam_mode": "localize"}})
+        assert response.status_code == 200
+        assert response.json["settings"]["slam_mode"] == "localize"
+        assert response.json["mapReset"] is False
+        snapshot = kiosk_client.get("/api/kiosk_map").json
+        assert snapshot["slamMode"] == "localize"
+        assert snapshot["mapping"] is False
+        # Режим скана показывает тот же тумблер.
+        assert kiosk_client.get("/api/scan_mode").json["slamMode"] == "localize"
+    finally:
+        map_service.set_settings({"slam_mode": "mapping"})
+        assert kiosk_client.get("/api/kiosk_map").json["slamMode"] == "mapping"
+
+
+def test_kiosk_header_buttons_are_icons() -> None:
+    """Функции/Карта/Навигация/Устройства/Датчики/Камеры — иконки, не текст."""
+    robot = _html("robot.html")
+    for button_id, title in (("k-map-open", "Карта лидара"),
+                             ("k-route-open", "Навигация: цель, маршрут, поездка"),
+                             ("k-devices-open", "Устройства робота"),
+                             ("k-sensors-open", "Модуль датчиков"),
+                             ("k-cameras-open", "Камеры и логи")):
+        start = robot.index('id="%s"' % button_id)
+        block = robot[start:robot.index("</a>", start) if "</a>" in robot[start:start + 900]
+                      else robot.index("</button>", start)]
+        assert "k-ctrl-btn--icon" in block, button_id
+        assert "<svg" in block and 'aria-hidden="true"' in block, button_id
+        assert 'aria-label="%s"' % title in block, button_id
+        assert 'title="%s"' % title in block, button_id
+        # Текста внутри кнопки больше нет: подпись живёт в tooltip и aria-label.
+        inner = block[block.index(">", block.index("<svg")):]
+        assert ">" not in inner or not any(ch.isalpha() for ch in inner.split("</svg>")[-1]), \
+            button_id
+    assert "k-ctrl-btn--icon" in _html("robot.css")

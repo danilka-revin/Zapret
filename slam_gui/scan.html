@@ -39,6 +39,26 @@
         <div><dt>сетка</dt><dd id="map-res">—</dd></div>
       </dl>
       <p class="map-file" id="map-file">файл: —</p>
+      <!-- Два режима SLAM: при объезде карта дорисовывается, при проезде —
+           только сопоставляется. Переключение не стирает карту. -->
+      <div class="map-slam-mode" role="group" aria-labelledby="map-slam-mode-title">
+        <div class="map-slam-mode-head">
+          <b id="map-slam-mode-title">Режим SLAM</b>
+          <span id="map-slam-label">Активный SLAM</span>
+        </div>
+        <div class="map-slam-mode-buttons">
+          <button type="button" class="map-slam-btn" data-slam-mode="localize" aria-pressed="false">
+            <b>Только локализация</b>
+            <small>видит и сопоставляет стены, карту не трогает</small>
+          </button>
+          <button type="button" class="map-slam-btn is-on" data-slam-mode="mapping" aria-pressed="true">
+            <b>Активный SLAM</b>
+            <small>дорисовывает стены и проходы в карту</small>
+          </button>
+        </div>
+        <p class="map-slam-hint" id="map-slam-hint">скан дорисовывает стены и проходы — карта растёт</p>
+      </div>
+
       <div class="scan-map-actions">
         <button type="button" class="map-btn" id="scan-map-save">Сохранить карту</button>
         <button type="button" class="map-btn" id="scan-map-load">Загрузить карту</button>

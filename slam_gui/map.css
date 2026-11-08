@@ -628,3 +628,72 @@
 .explore-nav-check { padding-left: 4px; }
 .explore-nav-check.ok { color: #36c275; }
 .explore-nav-check.bad { color: #e35d6a; }
+
+/* ===================== ДВА РЕЖИМА SLAM (карта / скан / навигация) =====================
+   Локализация — проезд по готовой карте (карта не меняется), активный SLAM —
+   скан дорисовывает стены. Переключатель одинаковый на всех экранах с картой. */
+.map-slam-mode {
+  border: 1px solid var(--map-line);
+  border-radius: 12px;
+  background: var(--map-panel);
+  padding: 10px 11px;
+  margin: 8px 0;
+}
+.map-slam-mode-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.map-slam-mode-head b { font-size: 12px; letter-spacing: .3px; }
+.map-slam-mode-head span {
+  font: 700 11px var(--map-mono);
+  color: var(--map-accent-strong);
+  text-transform: uppercase;
+  letter-spacing: .6px;
+}
+.map-slam-mode-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+.map-slam-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1.5px solid var(--map-line);
+  background: transparent;
+  color: var(--map-muted);
+  cursor: pointer;
+  font: inherit;
+  transition: border-color .15s ease, background .15s ease, color .15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.map-slam-btn b { font-size: 12px; font-weight: 800; color: var(--map-text); }
+.map-slam-btn small { font-size: 10.5px; line-height: 1.25; }
+.map-slam-btn:hover { border-color: var(--map-accent-strong); }
+.map-slam-btn:focus-visible { outline: 2px solid var(--map-accent); outline-offset: 2px; }
+.map-slam-btn.is-on {
+  border-color: var(--map-accent);
+  background: color-mix(in srgb, var(--map-accent) 16%, transparent);
+  color: var(--map-text);
+}
+.map-slam-hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--map-muted);
+}
+.map-slam-mode--compact { margin: 0; }
+
+/* В режиме локализации карта честно помечена: растущих клеток нет. */
+body.map-localize .map-badge { border-color: var(--map-muted); color: var(--map-muted); }
+
+@media (max-width: 560px) {
+  .map-slam-mode-buttons { grid-template-columns: 1fr; }
+}

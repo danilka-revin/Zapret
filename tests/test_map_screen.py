@@ -327,7 +327,7 @@ def test_map_view_stays_available_for_functions_button(kiosk_client):
     assert 'id="swipe-map-view"' in page
     assert 'id="btn-map-view"' in page
     # Отдельная кнопка «Карта» в шапке ведёт на самостоятельную страницу.
-    assert 'id="k-map-open" class="k-ctrl-btn" href="/map"' in page
+    assert 'id="k-map-open"' in page and 'href="/map"' in page
 
 
 def test_camera_page_uses_common_black_red_theme():
@@ -457,3 +457,24 @@ def test_frontier_without_safe_motion_disables_start(tmp_path):
                             "navigationPlanReply": {"ok": True, "plan": plan, "status": status}})
     assert report["navigation"]["startDisabled"]
     assert "нет безопасного участка" in report["navigation"]["summary"]
+
+
+def test_slam_mode_switch_sends_mode_and_marks_the_map(tmp_path):
+    """Тумблер режима SLAM: «только локализация» уходит на сервер и виден на карте."""
+    report = run(tmp_path, {"snapshot": snapshot(), "paths": PATHS})
+    mode = report["slamMode"]
+    assert mode["before"]["label"] == "Активный SLAM"
+    assert mode["before"]["badge"] == "MAPPING"
+    assert mode["after"]["label"] == "Только локализация"
+    assert "не дорисовывает" in mode["after"]["hint"]
+    assert mode["after"]["badge"] == "LOCALIZE"
+    assert mode["after"]["localizeClass"] is True
+    # Состояние кнопок: ровно один режим включён.
+    assert mode["after"]["pressed"] == ["true", "false"]
+    assert mode["after"]["calls"], report["calls"]
+    assert mode["after"]["calls"][-1]["body"]["settings"]["slam_mode"] == "localize"
+    assert mode["after"]["calls"][-1]["method"] == "POST"
+    # Обратно — активный SLAM, класс с карты снят.
+    assert mode["back"]["label"] == "Активный SLAM"
+    assert mode["back"]["localizeClass"] is False
+    assert report["renderErrors"] == [], report["renderErrors"]
