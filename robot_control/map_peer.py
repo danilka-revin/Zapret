@@ -61,6 +61,28 @@ def proxy_map(origin: str, suffix: str):
                          methods=methods, limit=MAX_REPLY_BYTES)
 
 
+def proxy_scan_mode(origin: str, operation: str):
+    """Режим «Скан» целиком живёт на борту: пульт только пересылает."""
+    routes = {
+        "status": ("GET", "/api/scan_mode", ""),
+        "enable": ("POST", "/api/scan_mode/enable", ""),
+        "disable": ("POST", "/api/scan_mode/disable", ""),
+        "heartbeat": ("POST", "/api/scan_mode/heartbeat", ""),
+        "drive": ("POST", "/api/scan_mode/drive", ""),
+        "steer": ("POST", "/api/scan_mode/steer", ""),
+        "map/load": ("POST", "/api/scan_mode/map/load", ""),
+    }
+    route = routes.get(operation)
+    if route is None:
+        return jsonify(ok=False, error="Неизвестная операция режима «Скан»"), 404
+    method, path, marker = route
+    # Тяга коротка, как у обычного руления: зависший запрос не должен
+    # задерживать остановку следующей командой.
+    timeout = 0.6 if operation in {"drive", "steer"} else 4.0
+    return _forward_json(origin, path, methods={method}, limit=MAX_NAV_REPLY_BYTES,
+                         timeout=timeout, control_header=marker)
+
+
 def proxy_navigation(origin: str, suffix: str):
     """Прокси только фиксированных маршрутов навигации на бортовой сервер."""
     routes = {

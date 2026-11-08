@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ru" data-map-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>Скан · карта и управление</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="map.css">
+  <link rel="stylesheet" href="scan.css">
+</head>
+<body class="kiosk-body scan-body">
+  <header class="scan-head">
+    <a id="scan-back" class="swipe-close" href="/map">← Карта</a>
+    <div class="scan-title">
+      <b>Режим «Скан»</b>
+      <span>сначала объезд и карта, потом поездки по ней</span>
+    </div>
+    <div class="scan-head-right">
+      <span class="scan-chip" id="scan-link" data-tone="idle">связь: —</span>
+      <a class="swipe-close" href="/">Главный экран</a>
+    </div>
+  </header>
+
+  <main class="scan-layout">
+    <!-- ------------------------------------------------------------- карта -->
+    <section class="scan-map" aria-label="Карта лидара во время скана">
+      <div class="scan-map-wrap">
+        <canvas id="map-canvas" aria-label="Карта лидара: сетка занятости"></canvas>
+        <span class="map-badge" id="map-badge" data-tone="idle">IDLE</span>
+        <p class="map-empty" id="map-empty" hidden>скана лидара нет — карта не растёт</p>
+      </div>
+      <dl class="scan-stats">
+        <div><dt>изучено</dt><dd id="map-cov">—</dd></div>
+        <div><dt>препятствий</dt><dd id="map-occ">—</dd></div>
+        <div><dt>сканов</dt><dd id="map-scans">—</dd></div>
+        <div><dt>поза</dt><dd id="map-pose">—</dd></div>
+        <div><dt>сетка</dt><dd id="map-res">—</dd></div>
+      </dl>
+      <p class="map-file" id="map-file">файл: —</p>
+      <div class="scan-map-actions">
+        <button type="button" class="map-btn" id="scan-map-save">Сохранить карту</button>
+        <button type="button" class="map-btn" id="scan-map-load">Загрузить карту</button>
+        <button type="button" class="map-btn map-btn--danger" id="scan-map-reset">Новая карта</button>
+        <button type="button" class="map-btn map-btn--theme" id="map-theme-toggle"
+                aria-pressed="false" title="Тёмная или светлая карта">Светлая карта</button>
+      </div>
+    </section>
+
+    <!-- --------------------------------------------------------- управление -->
+    <section class="scan-side" aria-label="Управление съёмкой">
+      <article class="scan-card scan-control" aria-label="Управление">
+        <header class="scan-card-head">
+          <b>Управление</b>
+          <span class="scan-chip" id="scan-state" data-tone="off">выключено</span>
+        </header>
+        <p class="scan-hint" id="scan-hint">Включите управление, чтобы ехать и снимать карту.
+          Пока оно выключено, тяга и руль из этого режима не работают.</p>
+        <div class="scan-row">
+          <button type="button" class="map-btn map-btn--primary" id="scan-enable">Включить управление</button>
+          <button type="button" class="map-btn map-btn--danger" id="scan-disable">Выключить</button>
+        </div>
+        <p class="scan-note" id="scan-msg" role="status" aria-live="polite">Управление выключено.</p>
+
+        <label class="scan-slider" for="scan-speed">
+          <span>Тяга: <output id="scan-speed-value">0</output> % · предел <span id="scan-max">20</span> %</span>
+          <input type="range" id="scan-speed" min="1" max="20" step="1" value="8" disabled>
+        </label>
+
+        <div class="scan-pad" role="group" aria-label="Движение">
+          <button type="button" class="scan-key scan-key--up" id="scan-forward" disabled>▲ вперёд</button>
+          <button type="button" class="scan-key scan-key--left" id="scan-left" disabled>← влево</button>
+          <button type="button" class="scan-key scan-key--stop" id="scan-stop">■ стоп</button>
+          <button type="button" class="scan-key scan-key--right" id="scan-right" disabled>вправо →</button>
+          <button type="button" class="scan-key scan-key--back" id="scan-back-arrow" disabled>▼ назад</button>
+        </div>
+        <p class="scan-hint">Кнопку держат пальцем или мышью — отпустили, робот встал.
+          Клавиши: W/A/S/D или стрелки, Esc — выключить управление.</p>
+      </article>
+
+      <article class="scan-card" aria-label="Порядок работы">
+        <header class="scan-card-head"><b>Как снимать карту</b></header>
+        <ol class="scan-steps">
+          <li>Поставьте робота в точку старта. <b>Новая карта</b> — сетка обнулится.</li>
+          <li>Включите управление и медленно объезжайте помещение: лидар дописывает стены.</li>
+          <li>Вернитесь к старту, нажмите <b>Сохранить карту</b>.</li>
+          <li>Дальше — «Карта» → цель → «Поехать». Загружать карту нужно после перезапуска:
+              <b>Загрузить карту</b>.</li>
+        </ol>
+        <p class="scan-warn">Лента внизу рамы светит на пол и вверх не светит: на тёмном полу
+          стены видно хуже. Сканируйте при включённом свете помещения.</p>
+      </article>
+    </section>
+
+    <!-- ------------------------------------------------------------- камеры -->
+    <section class="scan-cams" aria-label="Камеры робота">
+      <header class="scan-cams-head">
+        <b>Камеры</b>
+        <span class="scan-hint">живой кадр: передняя левая, задняя левая, передняя правая, задняя правая</span>
+      </header>
+      <div class="scan-cam-grid" id="scan-cam-grid">
+        <figure class="scan-cam" data-cam="1">
+          <canvas id="cam1-canvas" aria-label="Камера 1: передняя левая"></canvas>
+          <figcaption><span id="cam1-chip">нет сигнала</span><span id="cam1-meta"></span></figcaption>
+        </figure>
+        <figure class="scan-cam" data-cam="2">
+          <canvas id="cam2-canvas" aria-label="Камера 2: задняя левая"></canvas>
+          <figcaption><span id="cam2-chip">нет сигнала</span><span id="cam2-meta"></span></figcaption>
+        </figure>
+        <figure class="scan-cam" data-cam="3">
+          <canvas id="cam3-canvas" aria-label="Камера 3: передняя правая"></canvas>
+          <figcaption><span id="cam3-chip">нет сигнала</span><span id="cam3-meta"></span></figcaption>
+        </figure>
+        <figure class="scan-cam" data-cam="4">
+          <canvas id="cam4-canvas" aria-label="Камера 4: задняя правая"></canvas>
+          <figcaption><span id="cam4-chip">нет сигнала</span><span id="cam4-meta"></span></figcaption>
+        </figure>
+      </div>
+    </section>
+  </main>
+
+  <script src="slam_auth.js"></script>
+  <script src="viewport.js"></script>
+  <script src="robot_model.js"></script>
+  <script src="map_view.js"></script>
+  <script src="scan_mode.js"></script>
+</body>
+</html>

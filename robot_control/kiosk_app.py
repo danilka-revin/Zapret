@@ -97,6 +97,7 @@ from robot_control.slam import (
 )
 from robot_control.slam_map import SlamMapService, map_paths
 from robot_control.navigation import NavigationError, NavigationService
+from robot_control.scan_mode import ScanModeError, ScanModeService
 from robot_control.kinect import DepthError, KinectDepthService
 from robot_control.exploration import ExplorationError, ExplorationService
 from robot_control.sensor_layout import layout_payload, kinect_spec, rear_kinect_enabled
@@ -748,6 +749,12 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     keyboard = KeyboardControl(lambda: getattr(state, "source", None), dispatch_drive_command,
                                dispatch_steering_command, estop_latch.latched)
     app.extensions["rc_keyboard"] = keyboard
+    # Режим «Скан»: сначала объезд и карта, потом поездки по ней. Управление
+    # включается вручную и снимается кнопкой, Esc или молчанием страницы.
+    scan_mode = ScanModeService(lambda: getattr(state, "source", None),
+                                dispatch_drive_command, dispatch_steering_command,
+                                estop_latch.latched)
+    app.extensions["rc_scan_mode"] = scan_mode
     neutral = NeutralControl(lambda: getattr(state, "source", None), interrupt_keyboard=keyboard.interrupt)
     app.extensions["rc_neutral"] = neutral
     full_zero = FullZeroControl(lambda: getattr(state, "source", None), estop_latch.latched,
@@ -1194,6 +1201,11 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         except Exception as exc:  # noqa: BLE001 — frame proof remains true, driver is still unconfirmed
             result["rescanError"] = str(exc)
         return jsonify(result), 200, {"Cache-Control": "no-store"}
+
+    @app.get("/scan")
+    def kiosk_scan_page():
+        """Отдельный режим съёмки карты: камеры, живая карта, управление."""
+        return _send("scan.html")
 
     @app.get("/map")
     def kiosk_map_page():
@@ -2043,6 +2055,94 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         eventlog.record("ok", "карта сохранена: %s" % result["paths"]["pgm"], source="карта")
         return jsonify(result)
 
+    # --------------------------- Режим «Скан» ----------------------------- #
+    def scan_status_payload():
+        payload = scan_mode.status()
+        # Экран показывает ту же карту, что и /map: отдельного снимка не делаем.
+        snapshot = map_service.snapshot(with_png=False)
+        payload["map"] = {
+            "scans": snapshot.get("scans"),
+            "coverage": (snapshot.get("stats") or {}).get("coverage"),
+            "occupied": (snapshot.get("stats") or {}).get("occupied"),
+            "width": snapshot.get("width"),
+            "updatedAt": snapshot.get("updatedAt"),
+            "savedAt": snapshot.get("savedAt"),
+            "paths": snapshot.get("paths"),
+        }
+        return payload
+
+    @app.get("/api/scan_mode")
+    def api_scan_mode_status():
+        return jsonify(scan_status_payload()), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/scan_mode/enable")
+    def api_scan_mode_enable():
+        try:
+            result = scan_mode.enable()
+        except ScanModeError as exc:
+            eventlog.record("warn", "скан: управление не включено — %s" % exc.message,
+                            source="скан")
+            return jsonify(exc.payload()), exc.status
+        eventlog.record("ok", "скан: управление включено (тяга до %d %%)" % scan_mode.max_percent,
+                        source="скан")
+        return jsonify({**scan_status_payload(), **result})
+
+    @app.post("/api/scan_mode/disable")
+    def api_scan_mode_disable():
+        result = scan_mode.disable("disabled")
+        if result.get("braked"):
+            eventlog.record("ok", "скан: управление выключено, тяга снята",
+                            source="скан")
+        else:
+            eventlog.record("warn", "скан: управление выключено, но шасси не "
+                                    "подтвердило остановку", source="скан")
+        return jsonify({**scan_status_payload(), **result})
+
+    @app.post("/api/scan_mode/heartbeat")
+    def api_scan_mode_heartbeat():
+        body = request.get_json(silent=True) or {}
+        try:
+            result = scan_mode.heartbeat(body.get("token"))
+        except ScanModeError as exc:
+            return jsonify(exc.payload()), exc.status
+        return jsonify(result)
+
+    @app.post("/api/scan_mode/drive")
+    def api_scan_mode_drive():
+        """Тяга только при включённом управлении и строго в пределах потолка."""
+        body = request.get_json(silent=True)
+        try:
+            result, status = scan_mode.drive(body or {},
+                                             request.headers.get("X-Scan-Token"))
+        except ScanModeError as exc:
+            return jsonify(exc.payload()), exc.status
+        return jsonify(result), status
+
+    @app.post("/api/scan_mode/steer")
+    def api_scan_mode_steer():
+        body = request.get_json(silent=True)
+        try:
+            result, status = scan_mode.steer(body or {},
+                                             request.headers.get("X-Scan-Token"))
+        except ScanModeError as exc:
+            return jsonify(exc.payload()), exc.status
+        return jsonify(result), status
+
+    @app.post("/api/scan_mode/map/load")
+    def api_scan_mode_map_load():
+        """Загрузить сохранённую карту: посканировали вчера — едем сегодня."""
+        navigation.cancel("Карта загружается с диска — навигация остановлена.")
+        navigation.clear_plan()
+        result = map_service.load()
+        if not result.get("ok"):
+            eventlog.record("err", "скан: карта не загружена — %s" % result.get("error"),
+                            source="скан")
+            return jsonify(result), 400
+        eventlog.record("ok", "скан: карта загружена из %s" % result["paths"]["pgm"],
+                        source="скан")
+        result["snapshot"] = map_service.snapshot(with_png=False)
+        return jsonify(result)
+
     @app.get("/api/wheels/settings")
     def api_wheel_settings():
         from .wheel_settings import discovery_payload
@@ -2141,7 +2241,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     for filename in ("steer_dial.js", "steer_dial.css", "calibration.css", "wheel_settings.js", "pot_mode.js",
                      "wheel_angle.js", "pot_hold.js", "devices.css", "devices.js", "sensors.css", "sensors.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "brake_recovery.js", "battery.js", "receipt.js", "receipt.css", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "kinect_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
-                     "explore.js", "map.css", "viewport.js", "camera_view.js", "camera_stitch.js", "camera_frames.js", "slam_auth.js",
+                     "explore.js", "scan_mode.js", "scan.css", "map.css", "viewport.js", "camera_view.js", "camera_stitch.js", "camera_frames.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
         def _view(name=filename):

@@ -802,6 +802,9 @@ ASSETS = {
     "map_view.js": "map_view_js",
     # автообследование: статус, пуск/стоп и визуальные ориентиры
     "explore.js": "explore_js",
+    # режим «Скан»: съёмка карты с камерами и включаемым управлением
+    "scan_mode.js": "scan_mode_js",
+    "scan.css": "scan_css",
     "viewport.js": "viewport_js",
     "camera_view.js": "camera_view_js",
     "camera_frames.js": "camera_frames_js",
@@ -1325,6 +1328,12 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
 
     bp.add_url_rule("/index.html", endpoint="console_page", view_func=guard(console))
 
+    @bp.get("/scan")
+    @guard
+    def scan_screen():
+        """Режим съёмки карты: камеры, живая карта и включаемое управление."""
+        return _send("scan.html")
+
     @bp.get("/map")
     @guard
     def map_screen():
@@ -1338,7 +1347,44 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     # The onboard process owns the map. The web process must never build a
     # second grid or race it when saving the same files.
     from .map_peer import (proxy_map, proxy_navigation, proxy_exploration,
-                          proxy_sensors, proxy_landmark_file, proxy_calibration)
+                          proxy_sensors, proxy_landmark_file, proxy_calibration,
+                          proxy_scan_mode)
+
+    def scan_control_allowed():
+        """Управление в режиме «Скан» идёт только с CSRF-токеном сессии."""
+        return csrf_header_ok is not None and bool(csrf_header_ok())
+
+    def scan_proxy(operation):
+        return proxy_scan_mode(peer_kiosk_url().removesuffix("/api/kiosk_state"), operation)
+
+    @bp.get("/api/scan_mode")
+    @guard
+    def api_scan_mode_status():
+        return scan_proxy("status")
+
+    for operation, endpoint in (("enable", "api_scan_mode_enable"),
+                                ("disable", "api_scan_mode_disable"),
+                                ("heartbeat", "api_scan_mode_heartbeat"),
+                                ("map/load", "api_scan_mode_map_load")):
+        def scan_action(operation=operation):
+            if not scan_control_allowed():
+                return jsonify(ok=False, reason="csrf_required"), 400
+            return scan_proxy(operation)
+        bp.add_url_rule("/api/scan_mode/" + operation, endpoint=endpoint,
+                        view_func=guard(scan_action), methods=["POST"])
+
+    for operation, endpoint in (("drive", "api_scan_mode_drive"),
+                                ("steer", "api_scan_mode_steer")):
+        def scan_motion(operation=operation):
+            # Тяга и руль — команды движения: без CSRF и заголовка «скан» их
+            # не пересылаем, иначе пульт стал бы обходным путём блокировки.
+            if not scan_control_allowed():
+                return jsonify(ok=False, reason="csrf_required"), 400
+            if request.headers.get("X-Robot-Control") != "scan":
+                return jsonify(ok=False, reason="request_header_required"), 400
+            return scan_proxy(operation)
+        bp.add_url_rule("/api/scan_mode/" + operation, endpoint=endpoint,
+                        view_func=guard(scan_motion), methods=["POST"])
 
     for suffix, methods in (("", ["GET"]), ("/settings", ["GET", "POST"]),
                             ("/reset", ["POST"]), ("/save", ["POST"])):
