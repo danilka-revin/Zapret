@@ -1,0 +1,160 @@
+/* Экран «Навигация по карте»: карта слева, три шага справа.
+ * Тема — общая с картой (data-map-theme), чтобы экран не мигал при переходе. */
+
+.navscreen-body { --navscreen-gap: 14px; }
+
+/* Экран прокручивается целиком: если шаги не помещаются по высоте, страница
+   должна листаться, а не резать кнопку «Поехали» (у .map-page main фиксированная
+   высота в 100dvh - шапка). */
+.navscreen-body { overflow-y: auto; }
+.navscreen-body main.navscreen {
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  padding: var(--navscreen-gap);
+}
+
+.navscreen {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(340px, 0.95fr);
+  gap: var(--navscreen-gap);
+  padding: var(--navscreen-gap);
+  align-items: start;
+}
+
+/* ------------------------------------------------------------------ карта */
+.navscreen-map { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.navscreen-stage { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+.navscreen-canvas-wrap {
+  position: relative;
+  border: 1px solid var(--line-2, #23262b);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #05070a;
+  min-height: 320px;
+}
+.navscreen-canvas-wrap canvas {
+  display: block;
+  width: 100%;
+  height: min(62vh, 700px);
+  touch-action: none;
+}
+
+.navscreen-stage-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.navscreen-mapbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted, #9aa0a8);
+}
+.navscreen-mapinfo { font-family: var(--mono, ui-monospace, monospace); }
+.navscreen-mapinfo--muted { opacity: .8; }
+
+/* ------------------------------------------------------------------- шаги */
+.navscreen-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+.navstep {
+  border: 1px solid var(--line-2, #23262b);
+  border-radius: 14px;
+  background: var(--panel, #0b0d10);
+  padding: 13px 14px;
+}
+
+.navstep-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.navstep-head b { display: block; font-size: 14px; }
+.navstep-head small { display: block; color: var(--muted, #9aa0a8); font-size: 12px; margin-top: 2px; }
+
+.navstep-num {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid var(--accent, #d5453c);
+  color: var(--accent-text, #ff8b83);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 13px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+/* Пройденный шаг — зелёная рамка и галочка вместо номера; текущий — красная. */
+.navstep[data-state="done"] { border-color: rgba(126, 226, 168, .45); }
+.navstep[data-state="done"] .navstep-num { border-color: #7ee2a8; color: #7ee2a8; }
+.navstep[data-state="next"] { border-color: var(--accent, #d5453c); box-shadow: 0 0 0 1px var(--accent, #d5453c) inset; }
+.navstep[data-state="todo"] { opacity: .86; }
+
+.navscreen-goal {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.navscreen-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.navscreen-wide { width: 100%; margin-top: 8px; }
+
+.navscreen-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted, #9aa0a8);
+}
+.navscreen-note[data-tone="ok"] { color: #7ee2a8; }
+.navscreen-note[data-tone="warn"] { color: #f4c98a; }
+
+.navscreen-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.navscreen-reason { font-size: 12px; color: #f4c98a; line-height: 1.4; }
+
+.nav-start {
+  font-size: 15px;
+  padding: 12px;
+}
+.nav-estop { margin-top: 8px; }
+
+/* --------------------------------------------------------------- проверки */
+.navscreen-checks {
+  border: 1px solid var(--line-2, #23262b);
+  border-radius: 14px;
+  background: var(--panel, #0b0d10);
+  padding: 10px 14px 12px;
+}
+.navscreen-checks summary { cursor: pointer; font-size: 13px; font-weight: 700; }
+.navscreen-checks summary span { color: var(--muted, #9aa0a8); font-weight: 600; }
+
+.navscreen-check-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+}
+.navscreen-check { display: flex; gap: 8px; align-items: flex-start; line-height: 1.4; }
+.navscreen-check-mark { flex: 0 0 auto; width: 14px; text-align: center; font-weight: 700; }
+.navscreen-check.is-ok .navscreen-check-mark { color: #7ee2a8; }
+.navscreen-check.is-bad .navscreen-check-mark { color: #ff8b83; }
+.navscreen-check.is-bad b { color: #ffd0cb; }
+.navscreen-check-text small { color: var(--muted, #9aa0a8); }
+
+@media (max-width: 1020px) {
+  .navscreen { grid-template-columns: minmax(0, 1fr); }
+  .navscreen-canvas-wrap canvas { height: 46vh; }
+}
+
+@media (max-width: 560px) {
+  .navscreen-goal { grid-template-columns: minmax(0, 1fr); }
+}

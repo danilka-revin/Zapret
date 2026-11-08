@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ru" data-map-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>Навигация по карте</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="map.css">
+  <link rel="stylesheet" href="navigation.css">
+  <script>
+    (function () {
+      var theme = 'dark';
+      try { theme = localStorage.getItem('kiosk_map_theme') === 'light' ? 'light' : 'dark'; } catch (e) {}
+      document.documentElement.setAttribute('data-map-theme', theme);
+    })();
+  </script>
+</head>
+<body class="map-page navscreen-body">
+<header class="map-page-head">
+  <a id="navscreen-back" href="/map">← Карта</a>
+  <h1>Навигация по карте</h1>
+  <span>робот 75 × 60 × 30 см · лидар спереди · краб и прямой ход, без разворота на месте</span>
+  <div class="map-page-head-actions">
+    <a class="map-btn" id="navscreen-scan" href="/scan">Режим «Скан»</a>
+  </div>
+</header>
+
+<main class="navscreen" id="navscreen-main">
+  <!-- ======================================================= карта и цель -->
+  <section class="navscreen-map" aria-label="Карта и выбор цели">
+    <div class="navscreen-stage">
+      <div class="map-canvas-wrap navscreen-canvas-wrap">
+        <canvas id="map-canvas" aria-label="Карта лидара: клик по свободной клетке ставит цель"></canvas>
+        <span class="map-badge" id="map-badge" data-tone="idle">IDLE</span>
+        <p class="map-empty" id="map-empty" hidden>скана лидара нет — карта не растёт</p>
+      </div>
+      <div class="navscreen-stage-tools">
+        <button type="button" class="map-btn" id="map-zoom-out" aria-label="Отдалить">−</button>
+        <button type="button" class="map-btn" id="map-zoom-in" aria-label="Приблизить">+</button>
+        <button type="button" class="map-btn" id="map-fit">Вписать</button>
+        <button type="button" class="map-btn" id="map-follow">Следить за роботом</button>
+        <button type="button" class="map-btn map-btn--theme" id="map-theme-toggle" aria-pressed="false">Светлая карта</button>
+      </div>
+    </div>
+
+    <div class="navscreen-mapbar">
+      <span class="navscreen-mapinfo" id="navscreen-mapinfo">карта ещё не собрана</span>
+      <span class="navscreen-mapinfo navscreen-mapinfo--muted" id="navscreen-posemeta">поза: — · сканов: —</span>
+    </div>
+  </section>
+
+  <!-- =========================================================== панель -->
+  <aside class="navscreen-side" aria-label="Порядок навигации">
+
+    <!-- Шаг 1: цель -->
+    <section class="navstep" data-navstep="goal" data-state="todo" aria-labelledby="navstep-goal-title">
+      <header class="navstep-head">
+        <span class="navstep-num">1</span>
+        <div>
+          <b id="navstep-goal-title">Куда ехать</b>
+          <small>кликните по свободной клетке карты или введите X/Y</small>
+        </div>
+      </header>
+      <div class="navscreen-goal">
+        <label class="nav-coordinate"><span>X, м (вперёд)</span>
+          <input id="nav-goal-x" type="number" step="0.05" inputmode="decimal" placeholder="1.50" /></label>
+        <label class="nav-coordinate"><span>Y, м (влево)</span>
+          <input id="nav-goal-y" type="number" step="0.05" inputmode="decimal" placeholder="0.00" /></label>
+      </div>
+      <!-- Одна цель — как «2D Goal Pose» в RViz: клик по карте ставит цель. -->
+      <div class="navscreen-row">
+        <button type="button" id="nav-select-goal" class="map-btn nav-pick">Цель на карте</button>
+        <button type="button" id="nav-use-robot" class="map-btn" title="Поставить цель по текущей позе робота">Здесь стоит робот</button>
+      </div>
+      <p class="navscreen-note" id="navscreen-goal-note">Цель не выбрана.</p>
+    </section>
+
+    <!-- Шаг 2: маршрут -->
+    <section class="navstep" data-navstep="plan" data-state="todo" aria-labelledby="navstep-plan-title">
+      <header class="navstep-head">
+        <span class="navstep-num">2</span>
+        <div>
+          <b id="navstep-plan-title">Построить маршрут</b>
+          <small>проверка свободного коридора без запуска тяги</small>
+        </div>
+      </header>
+      <button type="button" id="nav-plan" class="map-btn map-btn--primary navscreen-wide">Построить маршрут</button>
+      <p class="nav-route-summary" id="nav-route-summary">траектория не рассчитана</p>
+      <a class="map-btn navscreen-wide" id="navscreen-route" href="/route">▶ Предпросмотр движения</a>
+    </section>
+
+    <!-- Шаг 3: поездка -->
+    <section class="navstep" data-navstep="drive" data-state="todo" aria-labelledby="navstep-drive-title">
+      <header class="navstep-head">
+        <span class="navstep-num">3</span>
+        <div>
+          <b id="navstep-drive-title">Поехали</b>
+          <small>робот едет сам, оператор следит и может остановить</small>
+        </div>
+      </header>
+      <div class="navscreen-status">
+        <span id="nav-status" class="nav-status" data-phase="idle">ожидание</span>
+        <span class="navscreen-reason" id="navscreen-reason" data-tone="">Шаг 1: выберите цель на карте.</span>
+      </div>
+      <div class="navscreen-row">
+        <button type="button" id="nav-start" class="map-btn nav-start navscreen-wide" disabled>Поехать</button>
+      </div>
+      <div class="navscreen-row">
+        <button type="button" id="nav-resume" class="map-btn" disabled>Продолжить</button>
+        <button type="button" id="nav-cancel" class="map-btn map-btn--danger" disabled>Остановить</button>
+      </div>
+      <button type="button" id="nav-estop" class="map-btn map-btn--danger navscreen-wide nav-estop">E-STOP</button>
+      <p class="nav-msg" id="nav-msg" role="status" aria-live="polite">Навигация ещё не проверена.</p>
+    </section>
+
+    <!-- Почему нельзя: те же проверки, что у сервера -->
+    <details class="navscreen-checks" id="navscreen-checks" open>
+      <summary>Готовность шага «Поехать» · <span id="navscreen-checks-state">—</span></summary>
+      <ul id="navscreen-check-list" class="navscreen-check-list"></ul>
+      <p class="navscreen-note" id="navscreen-blockers"></p>
+    </details>
+
+    <p class="nav-safety-note" id="nav-safety-note">Габариты 75×60×30 см, лидар спереди. Поворота на месте нет: только прямые и крабовые отрезки. Движение — по подтверждённо свободному коридору; при потере пути робот останавливается.</p>
+  </aside>
+</main>
+
+<script src="slam_auth.js"></script>
+<script src="viewport.js"></script>
+<script src="wheel_angle.js"></script>
+<script src="robot_model.js"></script>
+<script src="map_view.js"></script>
+<script src="navigation_screen.js"></script>
+<script>
+  const token = new URLSearchParams(location.search).get('st');
+  if (token) {
+    for (const [id, href] of [
+      ['navscreen-back', '/map'], ['navscreen-scan', '/scan'], ['navscreen-route', '/route'],
+    ]) {
+      const link = document.getElementById(id);
+      if (link) link.href = href + '?st=' + encodeURIComponent(token);
+    }
+  }
+  // Карта и выбор цели — тот же map_view.js, что и на экране «Карта»:
+  // второй рисовальщик сетки не нужен.
+  RCMapView.init();
+  RCNavigationScreen.init();
+</script>
+</body>
+</html>

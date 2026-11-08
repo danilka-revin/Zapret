@@ -1480,6 +1480,15 @@
       draw();
       drawRouteWindow();
     }
+    // Отдельный экран навигации (/navigation) показывает те же проверки, но
+    // своим видом; статус приходит подпиской — второго потока запросов нет.
+    if (window.RCNavigationScreen && window.RCNavigationScreen.onStatus) {
+      // Второй аргумент — план, который карта считает своим (он уже сверен с
+      // целью): экран навигации не должен гадать по чужому status.plan.
+      try {
+        window.RCNavigationScreen.onStatus(status, state.navigationPlan);
+      } catch (err) {}
+    }
     if (status.csrfToken) state.navigationCsrfToken = status.csrfToken;
     const phase = String(status.phase || 'idle');
     for (const id of ['nav-status', 'route-win-status']) {
@@ -1554,8 +1563,16 @@
     navigationMessage(text, tone, false);
   }
 
+  /* Есть ли на этой странице чем показывать навигацию. На экране карты
+     навигации больше нет — незачем и опрашивать её статус каждые 700 мс. */
+  function hasNavigationUi() {
+    return !!($('navscreen-main') || $('nav-plan') || $('nav-start')
+      || $('route-win-plan') || $('nav-point-list'));
+  }
+
   async function refreshNavigation() {
     if (state.navigationBusy) return;
+    if (!hasNavigationUi()) return;
     const page = $('swipe-map-view');
     if (page && page.hidden && !isRouteWindowVisible()) return;
     try {
@@ -1607,8 +1624,19 @@
     const y = event.clientY - rect.top;
     const wx = view.originX + (x - view.x0) / view.scale;
     const wy = view.originY + (view.y0 - y) / view.scale;
-    if ($('nav-point-list')) { addRoutePoint({ x: wx, y: wy }); return; }
-    setGoalInputs(wx, wy);
+    // Куда попал клик, зависит от страницы:
+    //   • экран навигации (#navscreen-main) — клик ставит цель, как «2D Goal
+    //     Pose» в RViz, и сразу считает маршрут;
+    //   • экран карты с панелью точек (#nav-point-list) — клик добавляет точку
+    //     маршрута (так было всегда);
+    //   • экран карты без панели навигации — клик ничего не запускает.
+    if ($('navscreen-main')) {
+      setGoalInputs(wx, wy);
+    } else if ($('nav-point-list')) {
+      addRoutePoint({ x: wx, y: wy }); return;
+    } else {
+      return;
+    }
     if (state.navigationPlan && !navigationGoalMatches(state.navigationPlan)) {
       state.navigationPlan = null;
     }
@@ -2139,5 +2167,15 @@
       drawRouteWindow();
     },
     getSnapshot() { return state.snapshot; },
+    setGoal(point) {
+      if (routeLocked() || !point) return;
+      if (!Number.isFinite(+point.x) || !Number.isFinite(+point.y)) return;
+      setGoalInputs(+point.x, +point.y);
+      if (state.navigationPlan && !navigationGoalMatches(state.navigationPlan)) {
+        state.navigationPlan = null;
+      }
+      draw();
+      drawRouteWindow();
+    },
   };
 })();

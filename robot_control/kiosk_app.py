@@ -1216,6 +1216,15 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     def kiosk_route_page():
         return _send("route.html")
 
+    @app.get("/navigation")
+    def kiosk_navigation_page():
+        """Отдельный экран навигации: цель → маршрут → поездка.
+
+        Панель навигации убрана с экрана карты: там остались карта, настройки
+        и автообследование, а пошаговый запуск живёт здесь.
+        """
+        return _send("navigation.html")
+
     @app.get("/api/navigation/status")
     def api_navigation_status():
         return jsonify(navigation.status()), 200, {"Cache-Control": "no-store"}
@@ -2241,7 +2250,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     for filename in ("steer_dial.js", "steer_dial.css", "calibration.css", "wheel_settings.js", "pot_mode.js",
                      "wheel_angle.js", "pot_hold.js", "devices.css", "devices.js", "sensors.css", "sensors.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "brake_recovery.js", "battery.js", "receipt.js", "receipt.css", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "kinect_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
-                     "explore.js", "scan_mode.js", "scan.css", "map.css", "viewport.js", "camera_view.js", "camera_stitch.js", "camera_frames.js", "slam_auth.js",
+                     "explore.js", "scan_mode.js", "scan.css", "navigation_screen.js", "navigation.css", "map.css", "viewport.js", "camera_view.js", "camera_stitch.js", "camera_frames.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
         def _view(name=filename):
