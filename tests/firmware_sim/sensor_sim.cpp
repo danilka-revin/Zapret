@@ -49,8 +49,8 @@ struct Gy87Model {
   bool mpu_present = true;
   bool mag_present = true;
   bool baro_present = true;
-  // MPU6050: ускорение в g и угловая скорость вокруг Z в °/с
-  float ax = 0.0f, ay = 0.0f, az = 1.0f, gz_dps = 0.0f;
+  // MPU6050: сырые оси платы, смонтированной лицом вниз (поворот 180° вокруг X).
+  float ax = 0.0f, ay = 0.0f, az = -1.0f, gz_dps = 0.0f;
   // HMC5883L: «сырые» отсчёты магнитного поля
   int16_t mx = 300, my = 0, mz = 0;
   bool mag_flat = false;   // поле не меняется — калибровка должна это заметить
@@ -164,7 +164,8 @@ struct Gy87Model {
   void setHeading(float degrees, float amplitude = 300.0f) {
     const float radians = degrees * 3.14159265f / 180.0f;
     mx = (int16_t)(amplitude * cosf(radians));
-    my = (int16_t)(-amplitude * sinf(radians));
+    // Y/Z в raw системе меняют знак из-за крепления платы вверх ногами.
+    my = (int16_t)(amplitude * sinf(radians));
   }
 };
 
@@ -497,14 +498,20 @@ static void scenario_compass() {
 
 static void scenario_tilt_compensation() {
   boot();
+  size_t mark = board.serial.output.size();
+  std::string frame = telemetry(mark);
+  CHECK(field(frame, "roll") >= -50 && field(frame, "roll") <= 50,
+        "плата вверх ногами, робот ровно: roll=%ld", field(frame, "roll"));
+  CHECK(field(frame, "pitch") >= -50 && field(frame, "pitch") <= 50,
+        "плата вверх ногами, робот ровно: pitch=%ld", field(frame, "pitch"));
   // Наклон 20° вокруг оси X: без компенсации компас «поедет» на десятки градусов.
   const float tilt = 20.0f * 3.14159265f / 180.0f;
   gy87.ax = 0.0f;
-  gy87.ay = sinf(tilt);
-  gy87.az = cosf(tilt);
+  gy87.ay = -sinf(tilt);  // raw sensor axes before the firmware's upside-down remap
+  gy87.az = -cosf(tilt);
   run(300);
-  size_t mark = board.serial.output.size();
-  const std::string frame = telemetry(mark);
+  mark = board.serial.output.size();
+  frame = telemetry(mark);
   CHECK(field(frame, "roll") >= 1950 && field(frame, "roll") <= 2050,
         "крен 20°: roll=%ld", field(frame, "roll"));
   CHECK(field(frame, "pitch") >= -50 && field(frame, "pitch") <= 50,
@@ -512,7 +519,7 @@ static void scenario_tilt_compensation() {
   CHECK(field(frame, "hdg") >= -200 && field(frame, "hdg") <= 200,
         "компас с компенсацией наклона: hdg=%ld", field(frame, "hdg"));
   gy87.ay = 0.0f;
-  gy87.az = 1.0f;
+  gy87.az = -1.0f;
 }
 
 static void scenario_lights() {
@@ -530,8 +537,8 @@ static void scenario_lights() {
   send("light stop on");
   CHECK(wait_until([]() { return board.level[3] == LOW; }, 100), "стоп включает реле 2 (D3)");
   send("light right on");
-  CHECK(wait_until([]() { return board.level[4] == LOW; }, 400),
-        "правый поворотник включает реле 3 (D4)");
+  CHECK(wait_until([]() { return board.level[5] == LOW; }, 400),
+        "правый поворотник включает реле 4 (D5)");
 
   mark = board.serial.output.size();
   send("light all off");
@@ -544,12 +551,12 @@ static void scenario_turn_blink() {
   boot();
   send("light left on");
   int transitions = 0;
-  uint8_t previous = board.level[5];
+  uint8_t previous = board.level[4];
   const int64_t end = sim::now_us + 1500 * 1000;
   while (sim::now_us < end) {
     sim::run_for_ms(1);
-    if (board.level[5] != previous) {
-      previous = board.level[5];
+    if (board.level[4] != previous) {
+      previous = board.level[4];
       ++transitions;
     }
   }
