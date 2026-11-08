@@ -192,6 +192,28 @@ def test_camera_missing_hint_and_clear_are_fail_closed(fake_topology, tmp_path):
     assert DeviceRegistry(reg.path, topology=fake_topology).camera_target('rear_right', '/dev/video3') == ''
 
 
+def test_kinect_is_verified_only_for_fresh_frame_from_selected_usb_port(fake_topology, tmp_path, monkeypatch):
+    from robot_control import device_ports
+
+    monkeypatch.setattr(device_ports, "role_port", lambda role: "usb:1-6" if role == "kinect" else "")
+    reg = DeviceRegistry(tmp_path / "registry.json", topology=fake_topology, clock=lambda: 1000)
+    kinect = {"connected": True, "lastStamp": 999.5, "ageS": .1,
+              "spec": {"max_age_s": 1.5}, "captureSource": "freenect",
+              "capturePort": "usb:1-6"}
+    item = {d["id"]: d for d in reg.snapshot(kinect=kinect)["devices"]}["kinect"]
+    assert item["status"] == "verified"
+    assert item["port"] == "usb:1-6"
+    assert item["captureSource"] == "freenect" and item["capturePort"] == "usb:1-6"
+
+    kinect["capturePort"] = "usb:1-7"
+    mismatch = {d["id"]: d for d in reg.snapshot(kinect=kinect)["devices"]}["kinect"]
+    assert mismatch["status"] != "verified"
+
+    kinect.update(capturePort="usb:1-6", lastStamp=1.0)
+    stale = {d["id"]: d for d in reg.snapshot(kinect=kinect)["devices"]}["kinect"]
+    assert stale["status"] != "verified"
+
+
 def test_snapshot_observes_live_producers_not_cache_or_usb_presence(fake_topology, tmp_path):
     reg = DeviceRegistry(tmp_path / 'registry.json', topology=fake_topology, clock=lambda: 1000)
     reg.set_hint('wheel_FL', '/dev/ttyUSB1')  # intentionally wrong

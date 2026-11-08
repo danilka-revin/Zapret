@@ -17,9 +17,30 @@
   const ROLE_TITLES = {admin: 'администратор', user: 'пользователь'};
   const WINDOW_TITLES = {none: 'нет окна', load: 'погрузка', unload: 'выгрузка'};
 
-  const state = {data: null, busy: false, timer: 0, lastCardSignature: ''};
+  const state = {data: null, busy: false, timer: 0, lastCardSignature: null};
+  let controlSession = null;
 
   function $(id) { return document.getElementById(id); }
+
+  function csrfToken() {
+    if (!controlSession) {
+      const pending = fetch('/api/control/session', {cache: 'no-store'}).then(async response => {
+        // Бортовой киоск не требует веб-сессии; на удалённом пульте API защищён.
+        if (response.status === 404) return '';
+        if (!response.ok) throw new Error('Для команды войдите в учётную запись оператора.');
+        const data = await response.json();
+        if (!data || data.ok !== true || !data.csrfToken) {
+          throw new Error('Не удалось получить защитный токен команды.');
+        }
+        return data.csrfToken;
+      });
+      controlSession = pending;
+      pending.catch(() => {
+        if (controlSession === pending) controlSession = null;
+      });
+    }
+    return controlSession;
+  }
 
   function setText(el, text) {
     if (el && el.textContent !== String(text)) el.textContent = String(text);
@@ -208,7 +229,7 @@
 
     const box = $('sm-card-list-box');
     if (!box) return;
-    const signature = cardSignature(list);
+    const signature = cardSignature(list) + '|' + (data.cardListKnown ? 'known' : 'unknown');
     if (signature === state.lastCardSignature) return;
     state.lastCardSignature = signature;
 
@@ -309,9 +330,12 @@
   }
 
   async function post(url, body) {
+    const token = await csrfToken();
+    const headers = { 'Content-Type': 'application/json', 'X-Robot-Control': 'sensors' };
+    if (token) headers['X-CSRF-Token'] = token;
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(body || {}),
     });
     let payload = {};
@@ -321,6 +345,7 @@
       payload = {};
     }
     if (!response.ok || payload.ok === false) {
+      if (response.status === 400) controlSession = null;
       throw new Error(payload.error || ('HTTP ' + response.status));
     }
     if (payload.data) render(payload.data);

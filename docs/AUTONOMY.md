@@ -23,8 +23,8 @@ Kinect **не** участвует в оценке позы и не подмен
 
 * 4 камеры C930e — в четыре USB-порта с отдельным питанием (хаб с внешним
   питанием обязателен: 4 камеры + 4 Arduino + лидар + Kinect).
-* Kinect 360 — отдельный USB (и его собственный блок питания!): у Kinect v1
-  глубина работает через `libfreenect`, `OpenNI2` или ROS 2.
+* Kinect 360 — один штатный USB-разъём адаптера и отдельный блок питания. В USB-списке `NUI Camera` — интерфейс изображения/глубины, который надо выбирать в карточке Kinect; `NUI Audio` — микрофонный интерфейс того же сенсора, не источник глубины и для Kinect-порта не выбирается. Не подключайте их как два отдельных сенсора. Глубина работает через `libfreenect`, `OpenNI2` или ROS 2.
+* `RC_KINECT_PORT` из вкладки «Устройства» сопоставляется с индексом libfreenect через USB-топологию PyUSB/libusb; в статусе показывается `capturePort`. Для физической привязки нужен именно `freenect` + `pyusb`; OpenNI2/ROS 2 сейчас не запускаются с выбранным портом, чтобы не отдавать кадры от другого устройства. Один передний Kinect поддерживается; второй не включать.
 * Лидар 360° как обычно, см. [connections.md](connections.md) и
   [ROS2_LIDAR.md](ROS2_LIDAR.md).
 
@@ -99,25 +99,21 @@ curl http://127.0.0.1:8090/api/cameras | python3 -m json.tool
 
 ## 3. Запуск Kinect
 
-На борту, вместе с киоском (8090), поднимите публикатор глубины. Он не требует
-изменений в приложении и не открывает USB из Flask-процесса:
+На борту, вместе с киоском (8090), публикатор запускается отдельным процессом.
+Он читает `RC_KINECT_PORT` из `.env` и передаёт libfreenect индекс именно
+выбранного NUI Camera; если порт не найден или драйвер не может сопоставить
+топологию, процесс откажется запускать чужое устройство.
 
 ```bash
-# какие драйверы вообще установлены
-.venv/bin/python scripts/kinect_depth_publisher.py --list-backends
+# выбрать NUI Camera во вкладке /devices, затем установить libfreenect + pyusb
+# после изменения выбора перезапустить: sudo systemctl restart robot-kinect-depth
+./scripts/kinect_depth.sh --list-backends
 
-# сначала без железа: один синтетический кадр, проверка всей цепочки
+# проверить весь API/карту без оборудования (это НЕ тест датчика)
 .venv/bin/python scripts/kinect_depth_publisher.py --source demo --once
 
-# auto выберет установленный драйвер; без драйвера честно остановится с ошибкой
-.venv/bin/python scripts/kinect_depth_publisher.py --source auto
-
-# реальный Kinect 360 через libfreenect
-.venv/bin/python scripts/kinect_depth_publisher.py --source freenect
-
-# или OpenNI2 / ROS 2 (sensor_msgs/Image, 16UC1 мм или 32FC1 м)
-.venv/bin/python scripts/kinect_depth_publisher.py --source openni
-.venv/bin/python scripts/kinect_depth_publisher.py --source ros2 --topic /camera/depth/image_rect_raw
+# запуск с сохранённой RC_KINECT_PORT; предпочтительно через wrapper
+./scripts/kinect_depth.sh --foreground
 ```
 
 Публикатор уменьшает кадр до 160×120 и шлёт `uint16` (мм) в
@@ -154,11 +150,12 @@ curl http://127.0.0.1:8090/api/kinect/status   # connected, frames, points
 curl http://127.0.0.1:8090/api/kiosk_map       # kinectScans, kinectPoints
 ```
 
-Драйверы (`freenect`, `openni2`, `rclpy`) намеренно **не** добавлены в основной
-`requirements.txt`: им нужны системные библиотеки или ROS 2. Команды установки
-и переменные окружения собраны в `requirements-kinect.txt`, ROS 2-вариант —
-в `docs/ROS2_LIDAR.md`. Поле `drivers` в `/api/kinect/status` показывает, что
-реально импортируется на борту.
+`freenect` и `pyusb` намеренно **не** добавлены в основной `requirements.txt`:
+им нужны системные библиотеки. Команды установки — в `requirements-kinect.txt`.
+Хотя status перечисляет OpenNI2/ROS 2 как установленные драйверы, с выбранным
+`RC_KINECT_PORT` publisher разрешает только `freenect`: прочие backends пока не
+умеют гарантировать соответствие USB-топологии. `/api/kinect/status` показывает
+`captureSource` и `capturePort` реально поступившего кадра.
 
 **Автозапуск уже настроен.** `scripts/start_robot.sh` после ответа киоска 8090
 поднимает `scripts/kinect_depth.sh` (по умолчанию
@@ -316,27 +313,13 @@ Kinect. Скрипт повторяет выбор границы, «поезд�
 Отчёт `ok: true` означает только исправность логики, **не** безопасность
 движения: физические проверки из `docs/navigation.md` остаются обязательными.
 
-## 10. Второй Kinect 360 сзади (опция)
+## 10. Второй Kinect 360 сзади (пока не поддержан publisher-ом)
 
-В исходной схеме сзади были только две C930e, поэтому второй Kinect выключен.
-Если он установлен:
-
-```ini
-RC_KINECT_REAR_ENABLE=1
-RC_KINECT_REAR_X_M=-0.35
-RC_KINECT_REAR_YAW_DEG=180
-# остальные RC_KINECT_REAR_* — по замеру, см. .env.example
-```
-
-```bash
-.venv/bin/python scripts/kinect_depth_publisher.py --source auto --unit rear
-curl 'http://127.0.0.1:8090/api/kinect/status?unit=rear'
-```
-
-У заднего датчика свой `KinectDepthService`, свои фильтры и своя точка монтажа;
-точки поворачиваются на его `yaw` ещё до попадания в карту. Поза по-прежнему
-берётся у лидара. `/api/sensors/layout` отдаёт `kinects` и
-`rearKinectEnabled`.
+API и геометрия умеют хранить отдельную конфигурацию `rear`, но отдельная
+привязка второго экземпляра не реализована. Publisher сейчас разрешает только
+передний NUI Camera из `RC_KINECT_PORT` и откажется публиковать `rear`; **не
+подключайте второй Kinect и не включайте `RC_KINECT_REAR_ENABLE`** до отдельной
+реализации и аппаратной проверки.
 
 ## 11. Проверки интерфейса без браузера
 

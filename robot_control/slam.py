@@ -792,6 +792,8 @@ ASSETS = {
     "connections.js": "connections_js",
     "devices.css": "devices_css",
     "devices.js": "devices_js",
+    "sensors.css": "sensors_css",
+    "sensors.js": "sensors_js",
     "main.css": "main_css",
     "main.js": "main_js",
     # карта лидара в стиле RViz (зум, сетка, Decay Time) — общая для пульта и бортового экрана
@@ -1353,6 +1355,12 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         """Отдельный экран навигации: цель → маршрут → поездка."""
         return _send("navigation.html")
 
+    @bp.get("/sensors")
+    @guard
+    def sensors_screen():
+        """Экран датчиков доступен и с компьютера, и из бортового киоска."""
+        return _send("sensors.html")
+
     # The onboard process owns the map. The web process must never build a
     # second grid or race it when saving the same files.
     from .map_peer import (proxy_map, proxy_navigation, proxy_exploration,
@@ -1465,6 +1473,28 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
 
     def sensors_proxy(suffix):
         return proxy_sensors(peer_kiosk_url().removesuffix("/api/kiosk_state"), suffix)
+
+    def sensor_module_proxy(operation):
+        from .map_peer import proxy_sensor_module
+        return proxy_sensor_module(peer_kiosk_url().removesuffix("/api/kiosk_state"), operation)
+
+    def sensor_module_control_allowed():
+        return (request.headers.get("X-Robot-Control") == "sensors" and
+                csrf_header_ok is not None and bool(csrf_header_ok()))
+
+    @bp.get("/api/sensor_module")
+    @guard
+    def api_sensor_module_status():
+        return sensor_module_proxy("state")
+
+    for operation in ("lights", "strip", "lock", "cards", "cargo", "mag"):
+        def sensor_module_action(operation=operation):
+            if not sensor_module_control_allowed():
+                return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
+            return sensor_module_proxy(operation)
+        bp.add_url_rule("/api/sensor_module/" + operation,
+                        endpoint="api_sensor_module_" + operation,
+                        view_func=guard(sensor_module_action), methods=["POST"])
 
     def exploration_control_allowed():
         if request.headers.get("X-Robot-Control") != "exploration":

@@ -5,8 +5,8 @@
 #     /etc/systemd/system/robot-kinect-depth.service
 #   sudo systemctl daemon-reload && sudo systemctl enable --now robot-kinect-depth
 #
-# Без драйвера Kinect скрипт сам завершится с понятной записью в journalctl,
-# не создавая демо-поток и не требуя перезапуска systemd.
+# Без выбранного порта, libfreenect или PyUSB wrapper завершится успешно,
+# не создавая демо-поток и не вызывая цикл перезапуска systemd.
 [Unit]
 Description=Zapret Kinect 360 depth publisher
 Documentation=docs/AUTONOMY.md

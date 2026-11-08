@@ -1,34 +1,27 @@
-# Опциональные драйверы Kinect 360 для scripts/kinect_depth_publisher.py.
+# Опциональный драйвер Kinect 360 для scripts/kinect_depth_publisher.py.
 #
-# НЕ подключён к requirements.txt намеренно: все три варианта требуют
-# системных библиотек/ROS 2 и отсутствуют в обычном pip-окружении робота.
-# Без них приложение, лидар и карта работают как обычно; публикатор в режиме
-# --source auto честно сообщит, что драйвера нет, вместо тихого демо-кадра.
+# Для привязки выбранного RC_KINECT_PORT к физическому NUI Camera сейчас
+# поддержан только libfreenect + PyUSB. OpenNI2 и ROS 2 могут импортировать
+# кадры, но не сопоставляют этот USB-порт с выбранным источником; publisher
+# откажется запускать их вместо явно выбранного Kinect.
+# Этот файл НЕ подключён к requirements.txt: нужны системный libusb и драйвер.
 #
 # Проверить, что видит скрипт:
 #   ./scripts/kinect_depth_publisher.py --list-backends
 #
 # ---------------------------------------------------------------------------
-# 1) libfreenect (Kinect 360 по USB, самый прямой вариант)
-#    Debian/Ubuntu:  sudo apt install libfreenect-dev python3-dev
-#    Затем:          pip install freenect
-#    Запуск:         ./scripts/kinect_depth_publisher.py --source freenect
+# 1) libfreenect (Kinect 360 по USB, выбранная USB-топология привязывается точно)
+#    Debian/Ubuntu:  sudo apt install libfreenect-dev libusb-1.0-0 python3-dev
+#    Затем в .venv:  .venv/bin/pip install freenect pyusb
+#    Запуск:         ./scripts/kinect_depth.sh --foreground
+#    pyusb перечисляет USB-устройства в порядке libusb, затем выбранная
+#    RC_KINECT_PORT сопоставляется с индексом NUI Camera в libfreenect.
 #
-# 2) OpenNI2 (альтернативный USB-драйвер)
-#    Debian/Ubuntu:  sudo apt install libopenni2-dev
-#    Затем:          pip install openni2   # плюс библиотека libOpenNI2.so в LD_LIBRARY_PATH
-#    Запуск:         ./scripts/kinect_depth_publisher.py --source openni
+# 2) OpenNI2 / ROS 2 — альтернативные захватчики остаются заготовками,
+#    но сейчас НЕ запускаются с RC_KINECT_PORT: общий URI/topic не позволяет
+#    гарантировать, что кадр идёт именно с выбранной USB-топологии. Не
+#    отключайте проверку и не считайте их работающей привязкой.
 #
-# 3) ROS 2 (если глубину уже публикует драйвер камеры)
-#    rclpy ставится вместе с ROS 2, НЕ через pip:
-#      source /opt/ros/<дистрибутив>/setup.bash
-#   _topic:          /camera/depth/image_rect_raw ( sensor_msgs/Image, 16UC1, мм )
-#    Запуск:         ./scripts/kinect_depth_publisher.py --source ros2 --topic /camera/depth/image_rect_raw
-#    ROS 2 уже поднимается скриптом scripts/ros2_setup.sh; см. docs/ROS2_LIDAR.md.
-#
-# Строки ниже закомментированы: раскомментируйте только нужный вариант ПОСЛЕ
-# установки системных библиотек, иначе pip завершится с ошибкой сборки.
-#
+# Устанавливать в .venv после системных библиотек:
 # freenect
-# openni2
-# rclpy   # только внутри sourced ROS 2, обычно уже установлен
+# pyusb

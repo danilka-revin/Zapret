@@ -525,6 +525,18 @@ def test_card_list_is_collected_from_cardinfo_frames():
     assert [item["uid"] for item in module.state()["cardList"]] == ["A1B2C3D4"]
 
 
+def test_empty_card_list_is_known_after_the_board_sends_its_terminator():
+    module, _, _ = make_module()
+    module.feed(frame("@CARDINFO end=1 total=0 t=11"))  # unsolicited boot banner
+    assert module.state()["cardListKnown"] is False
+    module.card("list")
+    assert module.state()["cardListKnown"] is False
+    module.feed(frame("@CARDINFO end=1 total=0 t=12"))
+    state = module.state()
+    assert state["cardList"] == []
+    assert state["cardListKnown"] is True
+
+
 def test_cargo_window_comes_from_telemetry():
     module, _, clock = make_module()
     clock.now = 1.0

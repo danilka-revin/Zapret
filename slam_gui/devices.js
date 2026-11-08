@@ -117,7 +117,14 @@
   // порту. Так группы в списке идут подряд, а не перемешиваются.
   function optionsFor(role) {
     const preferred = kindFor(role);
-    return allOptions().sort((a, b) => {
+    let options = allOptions();
+    if (role === 'kinect') {
+      // Для глубины нужен USB-узел NUI Camera; NUI Audio — только микрофон.
+      options = options.filter(option => option.kind === 'usb' && option.kinect === true);
+    } else if (role.startsWith('camera_')) {
+      options = options.filter(option => option.kinect !== true);
+    }
+    return options.sort((a, b) => {
       const rankA = kindRank(a.kind, preferred), rankB = kindRank(b.kind, preferred);
       if (rankA !== rankB) return rankA - rankB;
       if ((a.exists !== false) !== (b.exists !== false)) return a.exists !== false ? -1 : 1;
@@ -629,6 +636,10 @@
     card.usb.textContent = usb ? [item.usbCandidate && !item.usb ? 'Возможный USB' : '', usb.product,
       usb.vidPid, usb.topology && 'USB ' + usb.topology, usb.connection].filter(Boolean).join(' · ') : 'Нет данных о USB-пути';
     card.check.textContent = item.check || 'Ожидание данных драйвера';
+    if (item.id === 'kinect') {
+      card.check.textContent += ' · захват: ' + (item.captureSource || 'unknown') +
+        ' · USB: ' + (item.capturePort || 'не указан');
+    }
     card.detail.textContent = item.detail || '';
     if (card.assigned) {
       const assigned = item.assignedPort || '';

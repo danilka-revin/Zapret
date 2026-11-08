@@ -89,6 +89,28 @@ def run_screen(tmp_path: Path, *, ports=None, snapshot=None, pick=None) -> dict:
 
 
 # ------------------------------------------------------------------ списки
+def test_kinect_picker_uses_nui_camera_not_audio_or_video_node(tmp_path):
+    ports = ports_payload()
+    ports["options"]["video"] = [option(
+        "/dev/video7", "/dev/video7", "NUI Camera", "1-6", kind="video")]
+    ports["options"]["video"][0]["vidPid"] = "045e:02ae"
+    ports["options"]["video"][0]["kinect"] = True
+    ports["options"]["usb"] = [
+        {"port": "usb:1-6", "device": "usb:1-6", "name": "NUI Camera", "usbPort": "1-6",
+         "vidPid": "045e:02ae", "kinect": True, "exists": True},
+        {"port": "usb:1-7", "device": "usb:1-7", "name": "NUI Audio", "usbPort": "1-7",
+         "vidPid": "045e:02ad", "kinect": False, "exists": True},
+    ]
+    snapshot = snapshot_payload(options=ports["options"])
+    out = run_screen(tmp_path, ports=ports, snapshot=snapshot)
+    assert out["kinect"]["values"] == ["usb:1-6"]
+    assert "/dev/video7" not in out["kinect"]["values"]
+    assert "usb:1-7" not in out["kinect"]["values"]
+    assert "usb:1-6" not in out["camera"]["values"]
+    html = (ROOT / "slam_gui" / "devices.html").read_text(encoding="utf-8")
+    assert "NUI Audio" in html and "источник глубины" in html
+
+
 def test_card_lists_offer_each_physical_port_once(tmp_path):
     out = run_screen(tmp_path)
     assert out["errors"] == []

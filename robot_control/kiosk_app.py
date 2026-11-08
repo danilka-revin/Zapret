@@ -1069,8 +1069,10 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
     def _kinect_assign(port):
         device_ports.save_role("kinect", port)
-        return ("Kinect: %s. Публикатор глубины подхватит порт при следующем запуске."
-                % (port or "порт не назначен")), {"port": port}
+        message = ("Kinect: %s. Привязка применится после перезапуска публикатора "
+                   "(systemd: sudo systemctl restart robot-kinect-depth)." %
+                   (port or "порт не назначен"))
+        return message, {"port": port, "applied": False, "restartRequired": True}
 
     def _bms_assign(port):
         result = bms_setup.apply_port(battery, port, operator_confirmed=True)
