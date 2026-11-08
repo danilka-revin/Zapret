@@ -323,3 +323,28 @@ def test_localization_state_reaches_the_api(kiosk_client) -> None:
         assert key in info, key
     scan = kiosk_client.get("/api/scan_mode").json
     assert "localize" in scan["map"]
+
+
+def test_localize_mode_does_not_paint_the_page_white() -> None:
+    """Режим локализации не перекрашивает интерфейс.
+
+    Класс режима навешивается на <body>, а плашка локализации — отдельный
+    элемент с тем же именем. Одно правило на оба красило всю страницу
+    (белый фон, отступы) — интерфейс «ломался» при нажатии «Только локализация».
+    """
+    css = (ROOT / "slam_gui" / "map.css").read_text(encoding="utf-8")
+    # Правила плашки привязаны к самому элементу, а не к классу на <body>.
+    assert "p.map-localize {" in css
+    assert "\n.map-localize {" not in css
+    # Класс состояния тела называется отдельно.
+    assert "body.map-mode-localize" in css
+    for name in ("map_view.js", "scan_mode.js"):
+        script = _html(name)
+        assert "'map-mode-localize'" in script, name
+        # Старое имя на <body> больше не навешивается.
+        assert "classList.toggle('map-localize'" not in script, name
+        assert "classList.toggle('map-mode-localize'" in script, name
+    # Плашка и её подписи на месте во всех трёх экранах.
+    for page in ("map.html", "scan.html", "navigation.html"):
+        html = _html(page)
+        assert '<p class="map-localize" id="map-localize"' in html, page

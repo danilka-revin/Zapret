@@ -1296,7 +1296,9 @@
       badge.dataset.tone = live && scans ? 'live' : 'idle';
     }
     const host = document.body;
-    if (host && host.classList) host.classList.toggle('map-localize', mode === 'localize');
+    // Класс режима на <body> называется map-mode-localize: имя map-localize
+    // занято строкой локализации, и общий стиль заливал страницу белым.
+    if (host && host.classList) host.classList.toggle('map-mode-localize', mode === 'localize');
   }
 
   /* Переключение режима: сохраняется сразу, карта при этом не стирается. */
