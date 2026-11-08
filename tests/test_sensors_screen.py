@@ -9,7 +9,7 @@
   карты и журнал платы;
 * без ленты светодиодов габариты честно помечены как недоступные, а не
   выглядят рабочими;
-* телеметрия без свежего кадра не выдаёт себя за «на связи»;
+* свежий ACK подтверждает USB-связь отдельно от наличия телеметрии;
 * открытие замка и правка карт не уходят на сервер без PIN кейса;
 * ошибка сервера видна оператору, а не остаётся пустым экраном.
 """
@@ -218,6 +218,15 @@ def test_stale_or_missing_board_is_shown_honestly(tmp_path):
                             tmp_path)
     assert port_error["status"]["title"] == "ошибка порта"
     assert "Errno 5" in port_error["status"]["sub"]
+
+
+def test_ack_confirms_command_link_when_sensor_telemetry_is_missing(tmp_path):
+    out = run_screen(screen(ok=False, connected=True, connectionSource="ack",
+                            stale=False, ageMs=None, heading=None), tmp_path)
+    assert out["status"]["tone"] == "warn"
+    assert out["status"]["title"] == "команда подтверждена"
+    assert "ответила по USB" in out["status"]["sub"]
+    assert out["compass"]["heading"] == "—"
 
 
 def test_server_failure_is_reported_instead_of_a_blank_screen(tmp_path):

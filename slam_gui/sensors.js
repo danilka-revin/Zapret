@@ -25,13 +25,17 @@
     if (el && el.textContent !== String(text)) el.textContent = String(text);
   }
 
+  function hasNumber(value) {
+    return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+  }
+
   function fmt(value, digits) {
-    if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+    if (!hasNumber(value)) return '—';
     return Number(value).toFixed(digits);
   }
 
   function cardinal(degrees) {
-    if (!Number.isFinite(Number(degrees))) return '';
+    if (!hasNumber(degrees)) return '';
     const index = Math.round(((Number(degrees) % 360) + 360) % 360 / 45) % 8;
     return CARDINALS[index];
   }
@@ -61,6 +65,7 @@
     const badge = $('sm-status');
     const configured = data.configured;
     const ok = data.ok === true;
+    const connected = data.connected === true || ok;
     let tone = 'err';
     let title = 'нет связи';
     let sub = 'Плата молчит: проверьте кабель и RC_SENSOR_PORT';
@@ -71,6 +76,11 @@
       tone = 'live';
       title = 'на связи';
       sub = 'Плата отвечает и присылает кадры';
+    } else if (connected) {
+      tone = 'warn';
+      title = 'команда подтверждена';
+      sub = 'Плата ответила по USB; свежая телеметрия датчиков пока не получена';
+      if (data.error) sub += ' · ' + String(data.error);
     } else if (data.stale) {
       tone = 'warn';
       title = 'данные устарели';
@@ -108,10 +118,10 @@
 
   function renderCompass(data) {
     const heading = data.heading;
-    setText($('sm-heading'), Number.isFinite(Number(heading)) ? fmt(heading, 0) + '°' : '—');
+    setText($('sm-heading'), hasNumber(heading) ? fmt(heading, 0) + '°' : '—');
     setText($('sm-cardinal'), cardinal(heading));
     const needle = $('sm-needle');
-    if (needle && Number.isFinite(Number(heading))) {
+    if (needle && hasNumber(heading)) {
       needle.style.transform = 'rotate(' + Number(heading).toFixed(1) + 'deg)';
       needle.dataset.known = '1';
     } else if (needle) {
@@ -119,9 +129,9 @@
       needle.dataset.known = '0';
     }
     const parts = [];
-    parts.push(Number.isFinite(Number(data.roll)) ? 'крен ' + fmt(data.roll, 1) + '°' : 'крен —');
-    parts.push(Number.isFinite(Number(data.pitch)) ? 'тангаж ' + fmt(data.pitch, 1) + '°' : 'тангаж —');
-    parts.push(Number.isFinite(Number(data.gyroZ)) ? fmt(data.gyroZ, 1) + ' °/с' : '— °/с');
+    parts.push(hasNumber(data.roll) ? 'крен ' + fmt(data.roll, 1) + '°' : 'крен —');
+    parts.push(hasNumber(data.pitch) ? 'тангаж ' + fmt(data.pitch, 1) + '°' : 'тангаж —');
+    parts.push(hasNumber(data.gyroZ) ? fmt(data.gyroZ, 1) + ' °/с' : '— °/с');
     setText($('sm-tilt'), parts.join(' · '));
   }
 
@@ -132,8 +142,8 @@
     } else {
       setText($('sm-pressure'), '—');
     }
-    setText($('sm-temp'), Number.isFinite(Number(data.temperatureC)) ? fmt(data.temperatureC, 1) : '—');
-    setText($('sm-alt'), Number.isFinite(Number(data.altitudeM)) ? fmt(data.altitudeM, 0) : '—');
+    setText($('sm-temp'), hasNumber(data.temperatureC) ? fmt(data.temperatureC, 1) : '—');
+    setText($('sm-alt'), hasNumber(data.altitudeM) ? fmt(data.altitudeM, 0) : '—');
   }
 
   function renderLights(data) {
@@ -166,7 +176,7 @@
       button.title = button.disabled ? 'лента не подключена' : 'режим ленты на всё днище';
     });
     const slider = $('sm-dim');
-    if (slider && Number.isFinite(Number(data.dim))) {
+    if (slider && hasNumber(data.dim)) {
       if (String(slider.value) !== String(data.dim)) slider.value = String(data.dim);
       setText($('sm-dim-value'), data.dim);
     }
@@ -179,7 +189,7 @@
 
   function renderCards(data) {
     const list = Array.isArray(data.cardList) ? data.cardList : [];
-    setText($('sm-cards-count'), Number.isFinite(Number(data.cards)) ? data.cards : '—');
+    setText($('sm-cards-count'), hasNumber(data.cards) ? data.cards : '—');
     const rfid = $('sm-rfid');
     const last = data.lastCard;
     if (rfid) {
