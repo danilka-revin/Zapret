@@ -23,7 +23,16 @@ const articulated = robotParts({fresh: true, wheels: [
 assert.equal(articulated.length, 4);
 assert.ok(Math.abs(articulated.find(w => w.id === 'FL').yaw - Math.PI / 6) < 1e-9);
 assert.equal(articulated.find(w => w.id === 'FR').angle, -15);
-assert.deepEqual(articulated.find(w => w.id === 'FL').center, [-.2, .095, .3]);
+assert.deepEqual(articulated.find(w => w.id === 'FL').center, [-.2, .145, .3]);
+const fullRobot = robotParts(null, {wheelbase: .5, track: .4}, .3);
+const shell = fullRobot.find(part => part.kind === 'shell');
+assert.equal(Math.max(...shell.footprint.map(point => point[0])), .3);
+assert.equal(Math.min(...shell.footprint.map(point => point[0])), -.3);
+assert.equal(Math.max(...shell.footprint.map(point => point[1])), .375);
+assert.equal(fullRobot.find(part => part.kind === 'lidar').center[1], .55);
+assert.equal(fullRobot.find(part => part.kind === 'lidar').center[2], .3);
+assert.equal(fullRobot.find(part => part.kind === 'kinectLens').center[1], .45);
+assert.equal(fullRobot.find(part => part.kind === 'kinectLens').center[2], .43);
 assert.equal(articulated.find(w => w.id === 'RR').angle, null);
 const staleRobot = robotParts({fresh: false, wheels: [{id: 'FL', angle: 30}]})
   .find(part => part.kind === 'wheel' && part.id === 'FL');
