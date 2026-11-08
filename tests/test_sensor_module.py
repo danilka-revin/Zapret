@@ -96,8 +96,8 @@ def test_relay_order_matches_vehicle_wiring_without_changing_protocol_bits():
     apply = text[text.index("void applyRelays("):text.index("//: Насколько далеко", text.index("void applyRelays("))]
     assert re.search(r"relayWrite\(0,\s*\(mask & LIGHT_HEAD\)", apply)
     assert re.search(r"relayWrite\(1,\s*\(mask & LIGHT_STOP\)", apply)
-    assert re.search(r"relayWrite\(2,\s*\(mask & LIGHT_RIGHT\)", apply)
-    assert re.search(r"relayWrite\(3,\s*\(mask & LIGHT_LEFT\)", apply)
+    assert re.search(r"relayWrite\(2,\s*\(mask & LIGHT_LEFT\)", apply)
+    assert re.search(r"relayWrite\(3,\s*\(mask & LIGHT_RIGHT\)", apply)
     assert re.search(r"LIGHT_HEAD\s*=\s*1\s*<<\s*0", text)
     assert re.search(r"LIGHT_STOP\s*=\s*1\s*<<\s*1", text)
 
@@ -337,6 +337,15 @@ def test_out_of_range_values_are_rejected():
         sm.parse_telemetry(telemetry(light=64))
     with pytest.raises(sm.SensorFrameError):
         sm.parse_telemetry(telemetry(cargo=7))
+
+
+def test_pitch_and_roll_use_their_physical_angle_ranges():
+    parsed = sm.parse_telemetry(telemetry(pitch=-9000, roll=18000))
+    assert parsed["pitch"] == -90.0 and parsed["roll"] == 180.0
+    with pytest.raises(sm.SensorFrameError, match="pitch вне пределов"):
+        sm.parse_telemetry(telemetry(pitch=9002))
+    with pytest.raises(sm.SensorFrameError, match="roll вне пределов"):
+        sm.parse_telemetry(telemetry(roll=-18001))
 
 
 def test_card_event_and_uid_validation():

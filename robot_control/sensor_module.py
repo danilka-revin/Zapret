@@ -115,9 +115,12 @@ STRIP_LEDS_EXPECTED = 73
 #: floor — только подсветка пола, wave — бегущая волна, off — погашено.
 STRIP_MODES = ("auto", "off", "floor", "wave")
 
-#: Пределы, за которыми кадр считается испорченным, а не просто странным.
+#: Пределы физических углов: pitch ограничен ±90°, roll из atan2 — ±180°.
+#: Кадр за ними считаем испорченным, а не просто странным.
 HEADING_RANGE = (-36000, 36000)
-TILT_RANGE = (-9001, 9001)
+PITCH_RANGE = (-9001, 9001)
+# atan2(ay, az) возвращает крен во всём диапазоне [-180°, 180°].
+ROLL_RANGE = (-18000, 18000)
 STALE_AFTER_S = 2.0
 #: Команда с валидным @ACK подтверждает двустороннюю связь, даже если плата
 #: временно не прислала пригодный для телеметрии @S.
@@ -195,8 +198,10 @@ def parse_telemetry(line: str) -> dict[str, Any]:
     roll = _int(fields, "roll")
     if not HEADING_RANGE[0] <= heading <= HEADING_RANGE[1]:
         raise SensorFrameError("hdg вне пределов: %d" % heading)
-    if not TILT_RANGE[0] <= pitch <= TILT_RANGE[1] or not TILT_RANGE[0] <= roll <= TILT_RANGE[1]:
-        raise SensorFrameError("pitch/roll вне пределов: %d/%d" % (pitch, roll))
+    if not PITCH_RANGE[0] <= pitch <= PITCH_RANGE[1]:
+        raise SensorFrameError("pitch вне пределов ±90°: %d" % pitch)
+    if not ROLL_RANGE[0] <= roll <= ROLL_RANGE[1]:
+        raise SensorFrameError("roll вне пределов ±180°: %d" % roll)
     mask = _int(fields, "light")
     if not 0 <= mask <= 0x1F:
         raise SensorFrameError("light вне пределов: %d" % mask)

@@ -10,8 +10,8 @@
   Замок двери (серво):     сигнал — 7  (питание серво — отдельное, не с 5 В Mega)
 
 Свет:
-  реле 1 — передний свет (head)     реле 3 — правый поворотник (right)
-  реле 2 — стоп-сигнал (stop)       реле 4 — левый поворотник (left)
+  реле 1 — передний свет (head)     реле 3 — левый поворотник (left)
+  реле 2 — стоп-сигнал (stop)       реле 4 — правый поворотник (right)
   габариты, стоп и поворотники дублируются адресной лентой; яркость габаритов
   задаётся командой dim.
 
@@ -800,12 +800,12 @@ uint8_t effectiveLights() {
 }
 
 void applyRelays(uint8_t mask) {
-  // Физический порядок реле: 1 передние, 2 стопы, 3 правые, 4 левые.
-  // Биты протокола light= остаются семантическими: head/stop/right/left.
+  // Физический порядок реле: 1 передние, 2 стопы, 3 левые, 4 правые.
+  // Биты протокола light= остаются семантическими: head/stop/left/right.
   relayWrite(0, (mask & LIGHT_HEAD) != 0);
   relayWrite(1, (mask & LIGHT_STOP) != 0);
-  relayWrite(2, (mask & LIGHT_RIGHT) != 0);
-  relayWrite(3, (mask & LIGHT_LEFT) != 0);
+  relayWrite(2, (mask & LIGHT_LEFT) != 0);
+  relayWrite(3, (mask & LIGHT_RIGHT) != 0);
 }
 
 //: Насколько далеко от головы волны пиксель ещё горит (в диодах).
@@ -1075,6 +1075,11 @@ void sensorsTick(uint32_t now) {
   float ax = 0, ay = 0, az = 0;
   if (mpuRead(&ax, &ay, &az, &gyro_z_dps10)) {
     error_mask &= (uint8_t)~ERR_MPU;
+    // GY-87 закреплён лицом вниз: он повёрнут на 180° вокруг своей оси X.
+    // Переводим MPU в координаты робота (x, -y, -z), включая знак гироскопа Z.
+    ay = -ay;
+    az = -az;
+    gyro_z_dps10 = (int16_t)-gyro_z_dps10;
     const float roll = atan2f(ay, az);
     const float pitch = atan2f(-ax, sqrtf(ay * ay + az * az));
     roll_cd = (int16_t)lroundf(roll * 180.0f / PI_F * 100.0f);
@@ -1096,8 +1101,10 @@ void sensorsTick(uint32_t now) {
           if (my > mag_max_y) mag_max_y = my;
         }
       }
+      // HMC5883 закреплён вместе с платой: та же матрица поворота (x,-y,-z).
       const float cx = mx - mag_offset_x;
-      const float cy = my - mag_offset_y;
+      const float cy = -(my - mag_offset_y);
+      mz = -mz;
       // Наклонная компенсация: без неё компас врёт при крене и тангаже.
       const float sr = sinf(roll), cr = cosf(roll);
       const float sp = sinf(pitch), cp = cosf(pitch);
