@@ -258,11 +258,14 @@ def test_scan_page_and_assets_are_served(kiosk_client):
     assert page.status_code == 200
     html = page.text
     for marker in ('id="scan-enable"', 'id="scan-disable"', 'id="map-canvas"',
-                   'id="cam1-canvas"', 'id="scan-stop"', 'scan_mode.js'):
+                   'id="scan-view-2d"', 'id="scan-view-3d"', 'id="kinect-3d-canvas"',
+                   'id="scan-key-mode"', 'id="cam1-canvas"', 'id="scan-stop"', 'scan_mode.js'):
         assert marker in html, marker
     # Камеры не должны ходить на localhost: только относительные запросы.
     assert "127.0.0.1" not in html and "localhost" not in html
     assert kiosk_client.get("/scan_mode.js").status_code == 200
+    assert kiosk_client.get("/kinect_view.js").status_code == 200
+    assert kiosk_client.get("/keyboard.js").status_code == 200
     assert kiosk_client.get("/scan.css").status_code == 200
 
 
@@ -315,6 +318,7 @@ def test_scan_assets_are_registered_for_the_remote_console():
     web = (ROOT / "robot_control" / "slam.py").read_text(encoding="utf-8")
     assert '"scan_mode.js"' in kiosk and '"scan.css"' in kiosk
     assert '"scan_mode.js": "scan_mode_js"' in web
+    assert '"kinect_view.js": "kinect_view_js"' in web
     assert '"/scan"' in kiosk and '"/scan"' in web
 
 

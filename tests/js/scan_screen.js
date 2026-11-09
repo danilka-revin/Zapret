@@ -97,6 +97,16 @@ let mode = {
   ok: true, enabled: false, token: null, maxPercent: 20, deadmanS: 5,
   reason: '', map: {updatedAt: 1, savedAt: 1, paths: {pgm: '/tmp/map.pgm'}},
 };
+const wheelAngles = {FL: 0, FR: 0, RL: 0, RR: 0};
+global.RCRobotModel = {
+  wheels: [],
+  update(data) {
+    this.wheels = (data.motors || []).map((wheel) => ({
+      id: wheel.id, angle: wheel.angle, fault: Boolean(wheel.fault),
+    }));
+  },
+  state() { return {fresh: true, wheels: this.wheels}; },
+};
 
 function reply(body, status) {
   const code = status || 200;
@@ -120,7 +130,12 @@ global.fetch = async (url, options) => {
   }
   if (/api\/scan_mode\/heartbeat$/.test(text)) return reply({...mode});
   if (/api\/scan_mode\/drive$/.test(text)) return reply({ok: true, percent: body.percent});
-  if (/api\/scan_mode\/steer$/.test(text)) return reply({ok: true});
+  if (/api\/scan_mode\/steer$/.test(text)) {
+    wheelAngles[body.module] = body.angle;
+    return reply({ok: true});
+  }
+  if (/api\/state$/.test(text)) return reply({ok: true, data: {motors: Object.entries(wheelAngles).map(([id, angle]) => ({id, angle, fault: false}))}});
+  if (/api\/lidar$/.test(text)) return reply({ok: true, connected: true, scan: []});
   if (/api\/camera\/\d\/frame/.test(text)) return reply({ok: true});
   if (/kiosk_map\/save|kiosk_map\/reset|scan_mode\/map\/load/.test(text)) return reply({ok: true});
   return reply({ok: true, scans: 3, stats: {}, pose: {x: 0, y: 0, yaw: 0}, png: ''});
@@ -135,8 +150,12 @@ global.setTimeout = (fn) => { timeouts.push(fn); return 0; };
 global.clearTimeout = () => {};
 
 /* map_view.js в этом прогоне не нужен: рисуем только «показать»-заглушку. */
-global.RCMapView = {show() {}, draw() {}};
+global.RCMapView = {show() {}, draw() {}, setScan() {}};
+const sensorModes = [];
+global.RCKinectView = {setMode(mode) { sensorModes.push(mode); }, setLidarScan() {}};
 global.RCSessionUrl = (url) => url;
+const keyboardFile = path.join(ROOT, 'slam_gui', 'keyboard.js');
+vm.runInThisContext(fs.readFileSync(keyboardFile, 'utf8'), {filename: keyboardFile});
 
 const file = path.join(ROOT, 'slam_gui', 'scan_mode.js');
 vm.runInThisContext(fs.readFileSync(file, 'utf8'), {filename: file});
@@ -184,7 +203,36 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   await flush();
   assert.equal(lastPost(/scan_mode\/drive/).body.percent, 0, 'отпустил — тяга 0');
 
-  // 6. Esc снимает управление целиком (и тормозит).
+  // 6. 3D — отдельный live-вид, а кнопка WASD использует проверенный планировщик.
+  byId('scan-view-3d').fire('click');
+  await flush();
+  assert.ok(sensorModes.includes('combined'), '3D включает объединённый обзор датчиков');
+  assert.ok(calls.some((call) => /api\/lidar$/.test(call.url)), '3D читает live LiDAR');
+  assert.ok(calls.some((call) => /api\/state$/.test(call.url)), '3D читает свежие углы робота');
+  byId('scan-view-2d').fire('click');
+  assert.ok(sensorModes.includes('lidar'), '2D возвращает прежний обзор карты');
+
+  byId('scan-key-mode').value = 'crab';
+  const keyEvent = (name, key, code) => documentEvents[name].forEach((fn) => fn({
+    key, code, target: document.body, repeat: false, preventDefault() {},
+  }));
+  keyEvent('keydown', 'w', 'KeyW');
+  await flush();
+  await flush();
+  keyEvent('keydown', 'ArrowUp', 'ArrowUp');
+  await flush();
+  await flush();
+  assert.equal(lastPost(/scan_mode\/drive/).body.percent, -8,
+               'W + стрелка вверх дают тягу после подтверждения углов');
+  keyEvent('keyup', 'ArrowUp', 'ArrowUp');
+  await flush();
+  await flush();
+  assert.equal(lastPost(/scan_mode\/drive/).body.percent, 0,
+               'отпускание WASD/стрелки немедленно останавливает тягу');
+  keyEvent('keyup', 'w', 'KeyW');
+  await flush();
+
+  // 7. Esc снимает управление целиком (и тормозит).
   documentEvents.keydown.forEach((fn) => fn({key: 'Escape'}));
   await flush();
   await flush();

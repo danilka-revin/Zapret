@@ -126,9 +126,11 @@ def test_map_and_route_pages_serve_exploration_ui(kiosk_client, client, operator
 
 def test_web_proxy_forwards_exploration_with_csrf(client, operator, kiosk_client, monkeypatch):
     login(client)
+    assert client.get("/kinect_view.js").status_code == 200
 
     def forward(req, timeout):
-        path = urlparse(req.full_url).path
+        parsed = urlparse(req.full_url)
+        path = parsed.path + ("?" + parsed.query if parsed.query else "")
         headers = {}
         marker = req.headers.get("X-robot-control")
         if marker:
@@ -144,6 +146,10 @@ def test_web_proxy_forwards_exploration_with_csrf(client, operator, kiosk_client
     assert token
     assert client.get("/api/sensors/layout").json["cameraCount"] == 4
     assert client.get("/api/kinect/status").json["ok"] is True
+    preview = client.get("/api/kinect/preview")
+    assert preview.status_code == 200 and preview.json["ok"] is True
+    assert preview.json["oneFrameOnly"] and preview.json["notForNavigation"]
+    assert client.get("/api/kinect/preview?unit=invalid").status_code == 400
 
     headers = {"X-Robot-Control": "exploration"}
     assert client.post("/api/exploration/start", json={"blindZoneChecked": True},
