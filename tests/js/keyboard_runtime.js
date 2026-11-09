@@ -25,7 +25,8 @@ const status = new EventTarget('keyboard-status');
 const stopButton = new EventTarget('keyboard-stop');
 const output = new EventTarget('keyboard-speed-value');
 const spinInfo = new EventTarget('keyboard-spin-geometry');
-const elements = Object.fromEntries([panel, button, mode, slider, status, stopButton, output, spinInfo].map(el => [el.id, el]));
+const trimToggle = new EventTarget('keyboard-trim'); trimToggle.checked = false;
+const elements = Object.fromEntries([panel, button, mode, slider, status, stopButton, output, spinInfo, trimToggle].map(el => [el.id, el]));
 global.document = {hidden: false, body: new EventTarget('body'), activeElement: button,
   getElementById: id => elements[id], addEventListener() {}};
 global.window = new EventTarget('window');
@@ -33,7 +34,14 @@ const {create} = require('../../slam_gui/keyboard.js');
 const ids = ['FL', 'FR', 'RL', 'RR'];
 const motors = ids.map(id => ({id, online: true, homed: true, telemetryAgeS: 0,
   calibrating: false, cycling: false, moving: false, angle: 0, drivePercent: 0,
-  scRpm: 0, scRecent: false, firmware: 23, brakeId: 0, liveId: 0, liveSeq: 0}));
+  scRpm: 0, scRecent: false, firmware: 23, brakeId: 0, liveId: 0, liveSeq: 0,
+  potAngle: 0, potOffset: 0}));
+// The pot is rigidly tied to the wheel: a constant offset models a wheel that
+// drifted physically while the open-loop step counter stayed at the command.
+function setAngle(motor, angle) {
+  motor.angle = angle;
+  motor.potAngle = motor.potOffset == null ? null : angle + motor.potOffset;
+}
 const telemetry = {linkOk: true, steeringControl: {available: true}, drive: {available: true, active: false}, motors};
 const calls = [];
 const pivot = Math.atan2(500, 380) * 180 / Math.PI;
@@ -64,15 +72,18 @@ global.fetch = async (_url, init) => {
     if (body.action === 'stop' && holdStop) { const gate = holdStop; holdStop = null; await gate.promise; }
     brake(); result.brakeId = brakeId;
   } else if (body.action === 'steer_all') {
-    for (const motor of motors) motor.angle = body.angles[motor.id] + (body.pattern === 'spin' ? 0.6 : 0);
+    for (const motor of motors) setAngle(motor, body.angles[motor.id] + (body.pattern === 'spin' ? 0.6 : 0));
   } else if (body.action === 'arm') {
     if (holdArm) { const gate = holdArm; holdArm = null; await gate.promise; }
     result.permit = 'permit';
   } else if (body.action === 'live') {
     telemetry.drive.active = true;
-    for (const motor of motors) Object.assign(motor, {
-      drivePercent: body.pattern === 'spin' && ['FR', 'RR'].includes(motor.id) ? -body.percent : body.percent,
-      liveId: brakeId, liveSeq: body.sequence, angle: body.angles[motor.id]});
+    for (const motor of motors) {
+      setAngle(motor, body.angles[motor.id]);
+      Object.assign(motor, {
+        drivePercent: body.pattern === 'spin' && ['FR', 'RR'].includes(motor.id) ? -body.percent : body.percent,
+        liveId: brakeId, liveSeq: body.sequence});
+    }
   }
   return {ok: true, json: async () => result};
 };
@@ -96,7 +107,9 @@ const up = code => key('keyup', code);
 const count = action => calls.filter(call => call.action === action).length;
 
 (async () => {
-  const keyboard = create({getState: () => telemetry, freshAt: () => Date.now(), stopManual: async () => {}});
+  // freshAt() is always in the past (the wheel reply start time); returning
+  // the same Date.now() here races the age check on millisecond boundaries.
+  const keyboard = create({getState: () => telemetry, freshAt: () => Date.now() - 5, stopManual: async () => {}});
   button.emit('click');
   await until(() => button.getAttribute('aria-pressed') === 'true', 'enable');
   down('ArrowUp');
@@ -203,6 +216,36 @@ const count = action => calls.filter(call => call.action === action).length;
   const toggledOff = hotkey();
   window.emit('keydown', toggledOff);
   await until(() => button.getAttribute('aria-pressed') === 'false', 'Ctrl+R disable');
+
+  // Experimental in-drive trim: a wheel whose physical angle drifted from its
+  // step counter is nudged through the live channel (slew-limited) until it
+  // re-centres — other wheels are untouched.
+  trimToggle.checked = true;
+  motors[0].potOffset = 5;
+  motors[0].potAngle = motors[0].angle + 5;
+  button.emit('click');
+  await until(() => button.getAttribute('aria-pressed') === 'true', 'trim: WASD enabled');
+  down('ArrowDown');
+  await until(() => telemetry.drive.active, 'trim: driving');
+  const trimmedLive = () => {
+    const lives = calls.filter(c => c.action === 'live' && c.permit === '');
+    return lives.length ? lives[lives.length - 1] : null;
+  };
+  await until(() => {
+    const live = trimmedLive();
+    return live && live.angles.FL <= -4.5;
+  }, 'trim: correction applied', 6000);
+  await sleep(700);
+  const last = trimmedLive();
+  assert.ok(last.angles.FL <= -4.4 && last.angles.FL >= -6.5,
+    'trim converged, not runaway: ' + JSON.stringify(last.angles));
+  assert.equal(last.angles.FR, 0, 'trim moved an undrifted wheel');
+  up('ArrowDown');
+  await until(() => !telemetry.drive.active, 'trim: released');
+  button.emit('click');
+  await until(() => button.getAttribute('aria-pressed') === 'false', 'trim: WASD disabled');
+  trimToggle.checked = false;
+  motors[0].potOffset = 0; motors[0].potAngle = motors[0].angle;
 
   // A caller reserving the hardware must be able to drain a BEGIN that was
   // cancelled while its reply was still in flight, including its late END.

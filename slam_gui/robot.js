@@ -6,7 +6,9 @@
   const POLL_MS = 250;
   // A small wheel-only snapshot is polled while WASD is enabled. The full
   // lidar/map state keeps its ordinary cadence and is not sent 20 times/s.
-  const WASD_POLL_MS = 50;
+  // Чаще, чем тики телеметрии бортовых плат (30–50 мс): каждый этап
+  // подтверждения (тормоз, угол, тяга) ждёт самое большее один квант опроса.
+  const WASD_POLL_MS = 40;
 
   const $ = (id) => document.getElementById(id);
   const setText = (el, txt) => { if (el) el.textContent = txt; };

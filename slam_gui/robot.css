@@ -1737,6 +1737,8 @@ body.swipe-open .kiosk {
 .keyboard-panel button { cursor: pointer; }
 .keyboard-panel button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .keyboard-panel small, #keyboard-status { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.keyboard-trim-toggle { display: flex; align-items: baseline; gap: 8px; color: var(--text); font-size: 13px; font-weight: 700; cursor: pointer; }
+.keyboard-trim-toggle small { font-weight: 400; }
 #keyboard-status[data-active="true"] { color: var(--accent); }
 .drive-maneuvers > summary { cursor: pointer; color: var(--text); font-size: 13px; font-weight: 800; }
 .maneuver-geometry { margin: 10px 0; padding: 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel-2); }
