@@ -186,6 +186,24 @@ const count = action => calls.filter(call => call.action === action).length;
   await until(() => !telemetry.drive.active, 'right released');
   await keyboard.disable();
 
+  // Ctrl+R toggles the mode exactly like the on-screen button and is
+  // swallowed so the page never reloads mid-drive.
+  const beginsBeforeToggle = count('begin');
+  const hotkey = repeat => ({code: 'KeyR', key: 'r', ctrlKey: true, target: document.body,
+    repeat: !!repeat, prevented: false, preventDefault() { this.prevented = true; }});
+  const swallowed = hotkey();
+  window.emit('keydown', swallowed);
+  assert.equal(swallowed.prevented, true, 'Ctrl+R must be swallowed, not reload');
+  await until(() => count('begin') === beginsBeforeToggle + 1, 'Ctrl+R enable');
+  await until(() => button.getAttribute('aria-pressed') === 'true', 'Ctrl+R enabled');
+  const held = hotkey(true);
+  window.emit('keydown', held);
+  assert.equal(held.prevented, true, 'repeated Ctrl+R is swallowed');
+  assert.equal(count('begin'), beginsBeforeToggle + 1, 'held Ctrl+R flapped the mode');
+  const toggledOff = hotkey();
+  window.emit('keydown', toggledOff);
+  await until(() => button.getAttribute('aria-pressed') === 'false', 'Ctrl+R disable');
+
   // A caller reserving the hardware must be able to drain a BEGIN that was
   // cancelled while its reply was still in flight, including its late END.
   const beginGate = deferred(); holdBegin = beginGate;
