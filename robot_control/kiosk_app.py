@@ -606,6 +606,12 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         battery.use_manual_discovery(wheel_source if getattr(wheel_source, "auto_discovery", False) else None)
         if not getattr(wheel_source, "auto_discovery", False):
             log.error("BMS: жду владельца проверки USB-портов колёс")
+    if not config.testing and config.slam_source == "master":
+        # Ярлык «Запустить робот»: как только все четыре колеса подключатся,
+        # сами один раз за запуск калибруем сначала руль (оптодатчик, k),
+        # потом потенциометры (pm 1 + q). Выключить: RC_AUTO_CALIBRATE=0.
+        from . import auto_calibrate
+        auto_calibrate.start(state)
     if not config.testing:
         battery.start()
 
