@@ -46,11 +46,28 @@
     const speed = $('keyboard-speed');
     const status = $('keyboard-status');
     const spinInfo = $('keyboard-spin-geometry');
+    const trimToggle = $('keyboard-trim');
+    // Экспериментальная доводка на ходу (выключена по умолчанию): руль шаговый
+    // с open-loop удержанием, поэтому физическое колесо медленно уходит от
+    // заданного угла, а телеметрия «угол» (шаги) этого не видит. Если плата
+    // отдаёт откалиброванный угол потенциометра, раз в heartbeat сравниваем
+    // potAngle и угол шагов и подмешиваем поправку к командному углу — тем же
+    // live-каналом руления на ходу (fw20+). Плата шагнёт только в пределах
+    // дрейфа; по шуму потенциометра цели не дёргаются (мёртвая зона,
+    // гистерезис, квантование 0.5°, подтверждение 5 свежих кадров, лимит 15°
+    // и не более 2° за один heartbeat).
+    const TRIM_ON_DEG = 3.0, TRIM_OFF_DEG = 2.5, TRIM_STEP_DEG = 2.0;
+    const TRIM_QUANTUM_DEG = 0.5, TRIM_MAX_DEG = 15.0, TRIM_CONFIRM_FRAMES = 5;
+    const trimState = () => {
+      const fresh = {};
+      for (const id of IDS) fresh[id] = {engaged: false, count: 0, value: 0};
+      return fresh;
+    };
     const state = {enabled: false, enabling: false, token: null, sequence: 0,
       generation: 0, keys: new Set(), timer: null, running: null, planning: false,
       drivePending: null, pingPending: false, lastTick: 0, lastDrive: 0, lastPing: 0,
       brake: null, pendingPlan: null, beginning: Promise.resolve(), retirement: Promise.resolve(),
-      spin: null, arrowConflict: false};
+      spin: null, arrowConflict: false, trim: trimState()};
     // Firmware accepts a fresh tagged brake for up to 6 s. Use a smaller
     // browser-side bound to leave time for the permit and serial delivery.
     const BRAKE_REUSE_MS = 4000;
@@ -174,6 +191,7 @@
       state.brake = null;
       state.pendingPlan = null;
       state.drivePending = null;
+      state.trim = trimState();
       if (state.timer) clearInterval(state.timer);
       state.timer = null;
       updateButton();
@@ -234,6 +252,38 @@
       const motors = motorMap(data);
       return IDS.every((id) => !motors[id].moving && Math.abs(motors[id].angle - angles[id]) <= tolerance);
     }
+    // Поправка к командному углу по расхождению «как видит датчик» минус
+    // «куда шагала плата». Смещение шаги⇄датчик не меняется от шагов, поэтому
+    // одна поправка возвращает физическое колесо к целевому углу и дальше не
+    // двигает его, пока дрейф не появится снова.
+    function trimAngles(desired, data) {
+      const out = Object.assign({}, desired);
+      if (!data) return out;
+      const motors = motorMap(data);
+      for (const id of IDS) {
+        const slot = state.trim[id];
+        const m = motors[id];
+        const pot = m && m.potAngle;
+        const usable = pot !== null && pot !== undefined && Number.isFinite(pot) &&
+          m && Number.isFinite(m.angle);
+        if (!usable) { slot.engaged = false; slot.count = 0; slot.value = 0; continue; }
+        const offset = pot - m.angle;
+        if (!slot.engaged) {
+          slot.count = Math.abs(offset) > TRIM_ON_DEG ? slot.count + 1 : 0;
+          if (slot.count >= TRIM_CONFIRM_FRAMES) { slot.engaged = true; slot.count = 0; }
+          continue;
+        }
+        if (Math.abs(offset) < TRIM_OFF_DEG) { slot.engaged = false; slot.value = 0; continue; }
+        let target = Math.round(-offset / TRIM_QUANTUM_DEG) * TRIM_QUANTUM_DEG;
+        target = Math.max(-TRIM_MAX_DEG, Math.min(TRIM_MAX_DEG, target));
+        const delta = target - slot.value;
+        if (delta > TRIM_STEP_DEG) target = slot.value + TRIM_STEP_DEG;
+        else if (delta < -TRIM_STEP_DEG) target = slot.value - TRIM_STEP_DEG;
+        slot.value = target;
+        out[id] = Math.max(-100, Math.min(100, desired[id] + target));
+      }
+      return out;
+    }
     function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
     async function waitFor(gen, predicate, timeoutMs) {
       const end = Date.now() + timeoutMs;
@@ -283,8 +333,16 @@
       state.drivePending = pending;
       state.lastDrive = Date.now();
       try {
+        // Первый traction-пакет обязан в точности совпасть с выданным permit'ом
+        // (углы, направление, образец), поэтому трим к нему не применяем;
+        // поправка подмешивается только к последующим heartbeat'ам.
+        let wires = current.angles;
+        if (!permit && trimToggle && trimToggle.checked) {
+          const data = options.getState();
+          if (!snapshotError(data)) wires = trimAngles(current.angles, data);
+        }
         await send('live', forPattern({percent: current.direction * pending.speed,
-          angles: current.angles, permit: permit || ''}, current));
+          angles: wires, permit: permit || ''}, current));
       } catch (error) {
         if (valid(gen)) fail(error);
       } finally {
@@ -312,7 +370,9 @@
       if (state.running) {
         // The onboard lease checks each board's sequence and steering progress;
         // being between the old and new target is expected during a live turn.
-        if ((!state.drivePending || state.drivePending.gen !== gen) && now - state.lastDrive >= 120)
+        // Tighter cadence: still comfortably inside the 600 ms lease and the
+        // 650 ms firmware watchdog even with one lost request.
+        if ((!state.drivePending || state.drivePending.gen !== gen) && now - state.lastDrive >= 100)
           void heartbeat(gen, state.running, '');
       } else if (!state.planning && !state.pingPending && now - state.lastPing >= 1000) {
         state.pingPending = true;
@@ -354,7 +414,7 @@
           state.enabling = false;
           if (options.onReady) options.onReady();
           state.lastTick = state.lastPing = Date.now();
-          state.timer = setInterval(tick, 50);
+          state.timer = setInterval(tick, 40);
           updateButton();
           show('WASD включено · удерживайте клавиши.');
           if (state.keys.size) replan();
