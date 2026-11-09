@@ -25,11 +25,29 @@
 
   <main class="scan-layout">
     <!-- ------------------------------------------------------------- карта -->
-    <section class="scan-map" aria-label="Карта лидара во время скана">
-      <div class="scan-map-wrap">
-        <canvas id="map-canvas" aria-label="Карта лидара: сетка занятости"></canvas>
+    <section class="scan-map" aria-label="Карта и 3D-обзор во время скана">
+      <div class="scan-view-tabs" role="tablist" aria-label="Вид карты">
+        <button type="button" id="scan-view-2d" class="scan-view-tab is-active" role="tab" aria-selected="true" aria-controls="scan-map-2d">2D карта для навигации</button>
+        <button type="button" id="scan-view-3d" class="scan-view-tab" role="tab" aria-selected="false" aria-controls="scan-map-3d">3D датчики · live</button>
+      </div>
+      <div class="scan-map-wrap" id="scan-map-2d" role="tabpanel" aria-labelledby="scan-view-2d">
+        <canvas id="map-canvas" aria-label="2D-карта лидара: сетка занятости"></canvas>
         <span class="map-badge" id="map-badge" data-tone="idle">IDLE</span>
         <p class="map-empty" id="map-empty" hidden>скана лидара нет — карта не растёт</p>
+      </div>
+      <div id="scan-map-3d" class="scan-3d-view" role="tabpanel" aria-labelledby="scan-view-3d" hidden>
+        <div class="scan-3d-head"><span id="kinect-3d-status" role="status">Ожидание свежего скана и кадра</span>
+          <span id="kinect-3d-mode-note">Модель робота · свежие данные датчиков</span></div>
+        <div class="scan-3d-stage">
+          <canvas id="kinect-3d-canvas" tabindex="0" aria-label="Свежий 3D-обзор лидара и Kinect вокруг робота"></canvas>
+          <p class="kinect-empty" id="kinect-3d-empty">Ожидание свежего скана лидара и кадра Kinect</p>
+          <div class="scan-3d-controls" aria-label="Управление 3D видом">
+            <button type="button" id="kinect-zoom-out" aria-label="Отдалить">−</button>
+            <button type="button" id="kinect-zoom-in" aria-label="Приблизить">+</button>
+            <button type="button" id="kinect-reset-view" aria-label="Сбросить вид">⊙</button>
+          </div>
+        </div>
+        <p class="scan-3d-hint">Облака показывают только текущий кадр и не записываются в навигационную карту. Перетащите для вращения, колесо — масштаб.</p>
       </div>
       <dl class="scan-stats">
         <div><dt>изучено</dt><dd id="map-cov">—</dd></div>
@@ -61,9 +79,9 @@
       </div>
 
       <div class="scan-map-actions">
-        <button type="button" class="map-btn" id="scan-map-save">Сохранить карту</button>
-        <button type="button" class="map-btn" id="scan-map-load">Загрузить карту</button>
-        <button type="button" class="map-btn map-btn--danger" id="scan-map-reset">Новая карта</button>
+        <button type="button" class="map-btn" id="scan-map-save">Сохранить 2D-карту</button>
+        <button type="button" class="map-btn" id="scan-map-load">Загрузить 2D-карту</button>
+        <button type="button" class="map-btn map-btn--danger" id="scan-map-reset">Новая 2D-карта</button>
         <button type="button" class="map-btn map-btn--theme" id="map-theme-toggle"
                 aria-pressed="false" title="Тёмная или светлая карта">Светлая карта</button>
       </div>
@@ -88,6 +106,13 @@
           <span>Тяга: <output id="scan-speed-value">0</output> % · предел <span id="scan-max">20</span> %</span>
           <input type="range" id="scan-speed" min="1" max="20" step="1" value="8" disabled>
         </label>
+        <div class="scan-keyboard">
+          <label for="scan-key-mode">Клавиатурный режим
+            <select id="scan-key-mode" disabled><option value="crab">Краб</option><option value="normal">Обычное руление</option></select>
+          </label>
+          <p id="scan-key-status" role="status" aria-live="polite">Включите управление выше, затем используйте WASD.</p>
+          <small>W/A/S/D выбирают направление колёс, ↑/↓ дают тягу (назад/вперёд); в обычном режиме A/D задают руление, в «крабе» — боковой ход и диагональ. При отпускании клавиш тяга останавливается. WASD работает только пока включено управление режима «Скан».</small>
+        </div>
 
         <div class="scan-pad" role="group" aria-label="Движение">
           <button type="button" class="scan-key scan-key--up" id="scan-forward" disabled>▲ вперёд</button>
@@ -105,9 +130,8 @@
         <ol class="scan-steps">
           <li>Поставьте робота в точку старта. <b>Новая карта</b> — сетка обнулится.</li>
           <li>Включите управление и медленно объезжайте помещение: лидар дописывает стены.</li>
-          <li>Вернитесь к старту, нажмите <b>Сохранить карту</b>.</li>
-          <li>Дальше — «Карта» → цель → «Поехать». Загружать карту нужно после перезапуска:
-              <b>Загрузить карту</b>.</li>
+          <li>Вернитесь к старту и нажмите <b>Сохранить 2D-карту</b> — она используется для маршрутов.</li>
+          <li>3D-вкладка показывает только текущие датчики. Для поездки откройте «Карту» → цель → «Поехать»; после перезапуска загрузите сохранённую 2D-карту.</li>
         </ol>
         <p class="scan-warn">Лента внизу рамы светит на пол и вверх не светит: на тёмном полу
           стены видно хуже. Сканируйте при включённом свете помещения.</p>
@@ -143,8 +167,11 @@
 
   <script src="slam_auth.js"></script>
   <script src="viewport.js"></script>
+  <script src="wheel_angle.js"></script>
   <script src="robot_model.js"></script>
   <script src="map_view.js"></script>
+  <script src="kinect_view.js"></script>
+  <script src="keyboard.js"></script>
   <script src="scan_mode.js"></script>
 </body>
 </html>

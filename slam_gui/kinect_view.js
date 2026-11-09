@@ -375,12 +375,14 @@
     if (!['lidar', 'kinect', 'combined'].includes(next)) return;
     mode = next; generation++;
     const active = mode !== 'lidar';
-    $('sensor-lidar').setAttribute('aria-pressed', String(mode === 'lidar'));
-    $('sensor-kinect').setAttribute('aria-pressed', String(mode === 'kinect'));
-    $('sensor-combined').setAttribute('aria-pressed', String(mode === 'combined'));
-    $('sensor-lidar-view').hidden = active;
-    $('sensor-kinect-view').hidden = !active;
-    $('lidar-meta').hidden = active;
+    const lidarButton = $('sensor-lidar'), kinectButton = $('sensor-kinect'), combinedButton = $('sensor-combined');
+    if (lidarButton) lidarButton.setAttribute('aria-pressed', String(mode === 'lidar'));
+    if (kinectButton) kinectButton.setAttribute('aria-pressed', String(mode === 'kinect'));
+    if (combinedButton) combinedButton.setAttribute('aria-pressed', String(mode === 'combined'));
+    const lidarView = $('sensor-lidar-view'), kinectView = $('sensor-kinect-view'), lidarMeta = $('lidar-meta');
+    if (lidarView) lidarView.hidden = active;
+    if (kinectView) kinectView.hidden = !active;
+    if (lidarMeta) lidarMeta.hidden = active;
     const note = $('kinect-3d-mode-note');
     if (note && mode !== 'combined') note.textContent = 'Один кадр · не для навигации';
     pointers.clear();
@@ -393,13 +395,15 @@
   }
   function bind() {
     const canvas = $('kinect-3d-canvas');
-    if (!canvas || !$('sensor-lidar') || !$('sensor-kinect') || !$('sensor-combined')) return;
-    $('sensor-lidar').addEventListener('click', () => setMode('lidar'));
-    $('sensor-kinect').addEventListener('click', () => setMode('kinect'));
-    $('sensor-combined').addEventListener('click', () => setMode('combined'));
-    $('kinect-zoom-in').addEventListener('click', () => { zoom = clamp(zoom * 1.25, .4, 5); draw(); });
-    $('kinect-zoom-out').addEventListener('click', () => { zoom = clamp(zoom / 1.25, .4, 5); draw(); });
-    $('kinect-reset-view').addEventListener('click', () => { yaw = .25; pitch = -.15; zoom = 1; draw(); });
+    if (!canvas) return;
+    const lidarButton = $('sensor-lidar'), kinectButton = $('sensor-kinect'), combinedButton = $('sensor-combined');
+    if (lidarButton) lidarButton.addEventListener('click', () => setMode('lidar'));
+    if (kinectButton) kinectButton.addEventListener('click', () => setMode('kinect'));
+    if (combinedButton) combinedButton.addEventListener('click', () => setMode('combined'));
+    const zoomIn = $('kinect-zoom-in'), zoomOut = $('kinect-zoom-out'), reset = $('kinect-reset-view');
+    if (zoomIn) zoomIn.addEventListener('click', () => { zoom = clamp(zoom * 1.25, .4, 5); draw(); });
+    if (zoomOut) zoomOut.addEventListener('click', () => { zoom = clamp(zoom / 1.25, .4, 5); draw(); });
+    if (reset) reset.addEventListener('click', () => { yaw = .25; pitch = -.15; zoom = 1; draw(); });
     canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom = clamp(zoom * Math.exp(-e.deltaY * .001), .4, 5); draw(); }, {passive: false});
     canvas.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowLeft') yaw -= .15;
@@ -444,7 +448,7 @@
       void poll();
     }, 500);
   }
-  root.RCKinectView = {active: () => mode !== 'lidar', mode: () => mode, setLidarScan};
+  root.RCKinectView = {active: () => mode !== 'lidar', mode: () => mode, setMode, draw, setLidarScan};
   if (root.document.readyState === 'loading') root.document.addEventListener('DOMContentLoaded', bind);
   else bind();
 })(typeof window !== 'undefined' ? window : globalThis);

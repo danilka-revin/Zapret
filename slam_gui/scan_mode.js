@@ -33,7 +33,16 @@
     camTimers: [],
     busy: false,
     holding: null,          // {id, direction} пока кнопку держат
+    keys: new Set(),
+    keyboardGeneration: 0,
+    keyboardQueue: Promise.resolve(),
+    keyboardPlanKey: '',
+    keyboardAppliedAngles: null,
     lastStatus: null,
+    lidarBusy: false,
+    robotBusy: false,
+    sourceTimer: null,
+    view3d: false,
   };
 
   const REASONS = {
@@ -123,6 +132,10 @@
       const button = $(id);
       if (button) button.disabled = !state.enabled;
     });
+    const keyMode = $('scan-key-mode');
+    if (keyMode) keyMode.disabled = !state.enabled;
+    const keyStatus = $('scan-key-status');
+    if (keyStatus && !state.enabled) keyStatus.textContent = 'Включите управление выше, затем удерживайте WASD и ↑/↓.';
   }
 
   function renderStatus(status) {
@@ -164,6 +177,54 @@
     }
   }
 
+  async function pollLidarView() {
+    if (state.lidarBusy) return;
+    state.lidarBusy = true;
+    try {
+      const response = await fetch('api/lidar', {cache: 'no-store'});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const body = await response.json();
+      const points = body && Array.isArray(body.scan) ? body.scan : [];
+      if (window.RCMapView && typeof window.RCMapView.setScan === 'function') window.RCMapView.setScan(points);
+      if (window.RCKinectView && typeof window.RCKinectView.setLidarScan === 'function') {
+        window.RCKinectView.setLidarScan(points, body);
+      }
+    } catch (error) {
+      if (window.RCKinectView && typeof window.RCKinectView.setLidarScan === 'function') {
+        window.RCKinectView.setLidarScan([], {connected: false, age_s: null});
+      }
+    } finally { state.lidarBusy = false; }
+  }
+
+  async function pollRobotModel() {
+    if (state.robotBusy || !window.RCRobotModel) return;
+    state.robotBusy = true;
+    try {
+      const response = await fetch('api/state', {cache: 'no-store'});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const body = await response.json();
+      if (body && body.ok && body.data) window.RCRobotModel.update(body.data);
+    } catch (error) {
+      // RCRobotModel expires old angles on its own; a missed poll never refreshes them.
+    } finally { state.robotBusy = false; }
+  }
+
+  function selectMapView(view) {
+    const use3d = view === '3d';
+    state.view3d = use3d;
+    const map2d = $('scan-map-2d'), map3d = $('scan-map-3d');
+    const button2d = $('scan-view-2d'), button3d = $('scan-view-3d');
+    if (map2d) map2d.hidden = use3d;
+    if (map3d) map3d.hidden = !use3d;
+    if (button2d) { button2d.classList.toggle('is-active', !use3d); button2d.setAttribute('aria-selected', String(!use3d)); }
+    if (button3d) { button3d.classList.toggle('is-active', use3d); button3d.setAttribute('aria-selected', String(use3d)); }
+    if (window.RCKinectView && typeof window.RCKinectView.setMode === 'function') {
+      window.RCKinectView.setMode(use3d ? 'combined' : 'lidar');
+    }
+    if (use3d) { void pollLidarView(); void pollRobotModel(); }
+    if (!use3d && window.RCMapView) window.RCMapView.draw();
+  }
+
   /* ------------------------------------------------------------ управление */
   function speed() {
     const slider = $('scan-speed');
@@ -172,15 +233,17 @@
   }
 
   async function sendDrive(percent) {
-    if (!state.enabled && percent !== 0) return;
+    if (!state.enabled && percent !== 0) return false;
     try {
       await postJson('api/scan_mode/drive', {percent: percent});
+      return true;
     } catch (error) {
       if (error.reason === 'scan_disabled' || error.reason === 'scan_timeout'
           || error.reason === 'scan_token') {
         await dropControl(error.reason);
       }
       message(reasonText(error.reason, error.message), 'err');
+      return false;
     }
   }
 
@@ -212,11 +275,106 @@
   function releaseHolding() {
     if (!state.holding) {
       // Кнопка «стоп» и Esc: тяга снимается в любом случае.
-      void sendDrive(0);
-      return;
+      return sendDrive(0);
     }
     stopDriving();
-    void sendDrive(0);
+    return sendDrive(0);
+  }
+
+  const WHEEL_IDS = ['FL', 'FR', 'RL', 'RR'];
+  function keyboardPlanKey(plan) {
+    return String(plan.direction) + ':' + WHEEL_IDS.map(id => Number(plan.angles[id]).toFixed(2)).join(',');
+  }
+  function applyKeyboardPlan() {
+    if (!state.enabled || !window.RCKeyboard || typeof window.RCKeyboard.plan !== 'function') return;
+    if (state.holding && state.holding.id !== 'keyboard') {
+      state.keys.clear();
+      state.keyboardPlanKey = '';
+      text('scan-key-status', 'Отпустите экранную кнопку движения, прежде чем переключать клавиши.');
+      return;
+    }
+    const mode = $('scan-key-mode');
+    const desired = window.RCKeyboard.plan(state.keys, mode ? mode.value : 'crab', null);
+    const key = keyboardPlanKey(desired);
+    if (key === state.keyboardPlanKey) return;
+    state.keyboardPlanKey = key;
+    const generation = ++state.keyboardGeneration;
+    state.keyboardQueue = state.keyboardQueue.catch(() => {}).then(async () => {
+      if (generation !== state.keyboardGeneration || !state.enabled) return;
+      const previous = state.keyboardAppliedAngles;
+      const steeringChanged = !previous || WHEEL_IDS.some(id => Math.abs(previous[id] - desired.angles[id]) > .01);
+      const directionChanged = !state.holding || state.holding.direction !== desired.direction;
+      if (steeringChanged) {
+        await releaseHolding();
+        if (generation !== state.keyboardGeneration || !state.enabled) return;
+        const results = await Promise.all(WHEEL_IDS.map(id => sendSteer(id, desired.angles[id])));
+        if (generation !== state.keyboardGeneration || !state.enabled) return;
+        if (results.some(result => !result)) {
+          state.keyboardPlanKey = '';
+          text('scan-key-status', 'Не удалось выставить все четыре угла; тяга остановлена.');
+          return;
+        }
+        if (!desired.direction) state.keyboardAppliedAngles = {...desired.angles};
+      } else if (desired.direction === 0 && state.holding && state.holding.id === 'keyboard') {
+        await releaseHolding();
+      } else if (directionChanged && state.holding && state.holding.id === 'keyboard') {
+        await releaseHolding();
+      }
+      if (desired.direction) {
+        const arrived = await waitForKeyboardAngles(desired.angles, generation);
+        if (generation !== state.keyboardGeneration || !state.enabled) return;
+        if (!arrived) {
+          state.keyboardPlanKey = '';
+          text('scan-key-status', 'Колёса не подтвердили заданные углы; тяга не включена.');
+          return;
+        }
+        state.keyboardAppliedAngles = {...desired.angles};
+      }
+      if (generation !== state.keyboardGeneration || !state.enabled) return;
+      if (desired.direction && (!state.holding || state.holding.id !== 'keyboard')) {
+        startHolding('keyboard', desired.direction);
+      }
+      const activeKeys = state.keys.size ? [...state.keys].map(code => code.replace('Key', '')).join(' ') : '—';
+      text('scan-key-status', desired.direction
+        ? 'WASD ' + activeKeys + ' · движение удерживается; отпустите клавиши для STOP.'
+        : state.keys.size ? 'WASD ' + activeKeys + ' · углы выставлены, тяга остановлена.'
+          : 'WASD отпущено · тяга остановлена.');
+    });
+  }
+
+  async function waitForKeyboardAngles(angles, generation) {
+    const until = Date.now() + 3500;
+    while (Date.now() < until && generation === state.keyboardGeneration && state.enabled) {
+      try {
+        const response = await fetch('api/state', {cache: 'no-store'});
+        if (response.ok) {
+          const body = await response.json();
+          if (body && body.ok && body.data && window.RCRobotModel) {
+            window.RCRobotModel.update(body.data);
+            const live = window.RCRobotModel.state();
+            if (live.fresh && live.wheels.every(w => w.angle !== null && !w.fault &&
+                Math.abs(w.angle - angles[w.id]) <= 1.5)) return true;
+          }
+        }
+      } catch (error) { /* lost feedback means no traction */ }
+      await new Promise(resolve => setTimeout(resolve, 120));
+    }
+    return false;
+  }
+
+  function scanKeyCode(event) {
+    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown'].includes(event.code)) return event.code;
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') return event.key;
+    const key = String(event.key || '').toUpperCase();
+    return ['W', 'A', 'S', 'D'].includes(key) ? 'Key' + key : '';
+  }
+
+  function clearKeyboardInput() {
+    state.keys.clear();
+    state.keyboardPlanKey = '';
+    state.keyboardAppliedAngles = null;
+    state.keyboardGeneration++;
+    if (state.holding && state.holding.id === 'keyboard') void releaseHolding();
   }
 
   async function enable() {
@@ -227,7 +385,9 @@
       const body = await postJson('api/scan_mode/enable', {});
       state.token = body.token || null;
       state.enabled = true;
-      message('Управление включено. Держите кнопку — робот едет.', 'ok');
+      state.keyboardAppliedAngles = null;
+      state.keyboardPlanKey = '';
+      message('Управление включено. Держите кнопку или используйте WASD.', 'ok');
       renderStatus(body);
     } catch (error) {
       state.enabled = false;
@@ -243,6 +403,7 @@
   async function dropControl(reason) {
     state.enabled = false;
     state.token = null;
+    clearKeyboardInput();
     stopDriving();
     renderState();
     try {
@@ -261,6 +422,7 @@
       if (body.enabled === false) {
         state.enabled = false;
         state.token = null;
+        clearKeyboardInput();
         stopDriving();
         message('Управление снято сервером. Включите заново.', 'warn');
         renderState();
@@ -408,6 +570,15 @@
   }
 
   function bind() {
+    const view2d = $('scan-view-2d'), view3d = $('scan-view-3d');
+    if (view2d) view2d.addEventListener('click', () => selectMapView('2d'));
+    if (view3d) view3d.addEventListener('click', () => selectMapView('3d'));
+    selectMapView('2d');
+    const keyMode = $('scan-key-mode');
+    if (keyMode) keyMode.addEventListener('change', () => {
+      state.keyboardPlanKey = '';
+      applyKeyboardPlan();
+    });
     const enableButton = $('scan-enable');
     if (enableButton) enableButton.addEventListener('click', () => { void enable(); });
     const disableButton = $('scan-disable');
@@ -475,20 +646,30 @@
         releaseHolding();
         return;
       }
-      if (!state.enabled) return;
-      const forward = event.key === 'w' || event.key === 'W' || event.key === 'ArrowUp';
-      const back = event.key === 's' || event.key === 'S' || event.key === 'ArrowDown';
-      if (forward && !state.holding) startHolding('scan-forward', 1);
-      if (back && !state.holding) startHolding('scan-back-arrow', -1);
+      if (!state.enabled || event.ctrlKey || event.altKey || event.metaKey) return;
+      const target = event.target;
+      if (target && target.closest && target.closest('input, select, textarea, [contenteditable="true"], #kinect-3d-canvas')) return;
+      const code = scanKeyCode(event);
+      if (!code) return;
+      event.preventDefault();
+      if (event.repeat || state.keys.has(code)) return;
+      state.keys.add(code);
+      applyKeyboardPlan();
     });
     document.addEventListener('keyup', (event) => {
-      const forward = event.key === 'w' || event.key === 'W' || event.key === 'ArrowUp';
-      const back = event.key === 's' || event.key === 'S' || event.key === 'ArrowDown';
-      if (forward || back) releaseHolding();
+      const code = scanKeyCode(event);
+      if (!code || !state.keys.has(code)) return;
+      event.preventDefault();
+      state.keys.delete(code);
+      applyKeyboardPlan();
     });
     // Ушли со страницы или переключили вкладку — тяга снимается сразу.
-    window.addEventListener('blur', () => { if (state.holding) releaseHolding(); });
+    window.addEventListener('blur', () => {
+      clearKeyboardInput();
+      if (state.holding) releaseHolding();
+    });
     window.addEventListener('pagehide', () => {
+      clearKeyboardInput();
       stopDriving();
       stopCameras();
       if (state.enabled) {
@@ -508,8 +689,14 @@
     }
     startCameras();
     void refresh();
+    void pollLidarView();
     state.timer = setInterval(() => { void refresh(); }, POLL_MS);
     state.heartbeatTimer = setInterval(() => { void heartbeat(); }, HEARTBEAT_MS);
+    if (state.sourceTimer) clearInterval(state.sourceTimer);
+    state.sourceTimer = setInterval(() => {
+      void pollLidarView();
+      if (state.view3d) void pollRobotModel();
+    }, POLL_MS);
   }
 
   const api = {init, refresh, enable, disable: dropControl, getState: () => ({...state})};

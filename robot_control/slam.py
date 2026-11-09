@@ -799,6 +799,7 @@ ASSETS = {
     # карта лидара в стиле RViz (зум, сетка, Decay Time) — общая для пульта и бортового экрана
     "lidar_view.js": "lidar_view_js",
     "robot_model.js": "robot_model_js",
+    "kinect_view.js": "kinect_view_js",
     "wheel_ports.js": "wheel_ports_js",
     "map.css": "map_css",
     "map_view.js": "map_view_js",
@@ -1580,6 +1581,13 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     @guard
     def api_kinect_status():
         return sensors_proxy("/kinect")
+
+    @bp.get("/api/kinect/preview")
+    @guard
+    def api_kinect_preview():
+        from .map_peer import proxy_kinect_preview
+        unit = (request.args.get("unit") or "front").strip().lower()
+        return proxy_kinect_preview(peer_kiosk_url().removesuffix("/api/kiosk_state"), unit)
 
     # --------- экран киоска на борту робота: без авторизации -------- #
     # Открывается локально в киоск-браузере на роботе; телеметрия публична,

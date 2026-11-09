@@ -135,6 +135,14 @@ def proxy_landmark_file(origin: str, name: str):
         return jsonify(ok=False, error="Ориентир недоступен на бортовом сервере"), 503
 
 
+def proxy_kinect_preview(origin: str, unit: str = "front"):
+    """Forward the latest read-only Kinect depth frame from the onboard owner."""
+    if unit not in {"front", "rear"}:
+        return jsonify(ok=False, error="Неизвестный Kinect"), 400
+    path = "/api/kinect/preview?unit=" + quote(unit)
+    return _forward_json(origin, path, methods={"GET"}, limit=512 * 1024, timeout=2.5)
+
+
 def proxy_sensor_module(origin: str, operation: str):
     """Прокси экрана GY-87/света/замка на единственный бортовой клиент."""
     routes = {
