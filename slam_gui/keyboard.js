@@ -473,6 +473,25 @@
     function editable(target) {
       return !!(target && (target.isContentEditable || (target.closest && target.closest('input, textarea, select, [contenteditable="true"]'))));
     }
+    // Ctrl+R включает или выключает WASD точно так же, как кнопка «Включить
+    // WASD»: тот же вход через полное подтверждение/снятие тяги на борту.
+    // Страница робота/киоска по Ctrl+R больше не перезагружается; Ctrl+Shift+R
+    // остаётся обычной перезагрузкой как аварийный выход. event.code не зависит
+    // от раскладки, key нужен только для браузеров без code.
+    function isToggleHotkey(event) {
+      if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return false;
+      const code = String(event.code || '');
+      const key = String(event.key || '').toLowerCase();
+      return code === 'KeyR' || key === 'r' || key === 'к';
+    }
+    window.addEventListener('keydown', (event) => {
+      if (!isToggleHotkey(event)) return;
+      // Не дать браузеру перезагрузить страницу и закрыть режим по ходу работы.
+      event.preventDefault();
+      // Удержание клавиши не должно дёргать режим туда-обратно.
+      if (event.repeat) return;
+      void enable();
+    });
     panel.addEventListener('keydown', (event) => {
       if ((!state.enabled && !state.enabling) || event.key !== 'Escape' || !editable(event.target)) return;
       // Handle this before the enclosing screen's document-level Esc handler;
