@@ -1,11 +1,11 @@
-"""Flask-приложение: вход оператора и веб-интерфейс робота RUS SLAM.
+"""Flask-приложение: вход оператора и веб-интерфейс робота BULKA_v1.
 
 Сессия держится в cookie, но есть резервный механизм для сред, где cookie
 не сохраняются (встроенный cross-site предпросмотр в iframe с opaque-origin):
 подписанный токен ``st`` в URL. Cookie всегда в приоритете; ``st`` используется
 только когда cookie-сессии нет.
 
-После входа открывается интерфейс RUS SLAM (см. :mod:`robot_control.slam`):
+После входа открывается интерфейс BULKA_v1 (см. :mod:`robot_control.slam`):
 основной экран робота на ``/`` и инженерный пульт на ``/console``.
 """
 
@@ -294,7 +294,7 @@ def create_app(config: Config | None = None) -> Flask:
         response.headers.setdefault("Cache-Control", "no-store")
         return response
 
-    # --------------------- Интерфейс RUS SLAM ---------------------------- #
+    # --------------------- Интерфейс BULKA_v1 ---------------------------- #
     # Он занимает "/" и "/console"; если подключить не удалось, "/" показывает
     # внятную ошибку вместо пустого 404.
     try:
@@ -318,11 +318,11 @@ def create_app(config: Config | None = None) -> Flask:
             csrf_token_provider=lambda: csrf_signer.dumps("csrf"),
         ))
         log.info(
-            "интерфейс RUS SLAM подключён (источник данных: %s)",
+            "интерфейс BULKA_v1 подключён (источник данных: %s)",
             getattr(slam_state.source, "name", "?"),
         )
     except Exception as exc:  # noqa: BLE001 — пульт должен подняться в любом случае
-        log.error("интерфейс RUS SLAM не подключён: %s", exc)
+        log.error("интерфейс BULKA_v1 не подключён: %s", exc)
         # Имя exc живёт только внутри except (Python удаляет его в конце блока),
         # а страница рисуется позже — поэтому текст ошибки сохраняем сразу.
         reason = str(exc)

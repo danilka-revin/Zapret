@@ -1,5 +1,5 @@
 /* ============================================================================
- * console.js — окно «Сервис» веб-пульта RUS SLAM (DOM-слой).
+ * console.js — окно «Сервис» веб-пульта BULKA_v1 (DOM-слой).
  *
  * Технический план: docs/SERVICE_CONSOLE.md (раздел 8.1 — десять улучшений).
  * Ядро без DOM: gui/console-core.js (window.RS), тесты gui/tests/console.test.js.

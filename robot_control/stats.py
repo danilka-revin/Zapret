@@ -364,7 +364,7 @@ class RobotStats:
         t = s["totals"]
         out = io.StringIO()
         writer = csv.writer(out, delimiter=";", lineterminator="\n")
-        writer.writerow(["# RUS SLAM — сводка работы робота (реальная телеметрия)"])
+        writer.writerow(["# BULKA_v1 — сводка работы робота (реальная телеметрия)"])
         writer.writerow(["# сформировано", time.strftime("%Y-%m-%dT%H:%M:%S")])
         writer.writerow([])
         writer.writerow(["Показатель", "Значение"])
@@ -403,7 +403,7 @@ class RobotStats:
         return json.dumps(
             {
                 "generatedAt": _iso(self.clock()),
-                "device": "RUS SLAM 4WIS/4WID, НТЦ АО «АВТОВАЗ»",
+                "device": "BULKA_v1 4WIS/4WID, НТЦ АО «АВТОВАЗ»",
                 "summary": self.summary(),
                 "trips": self.trips,
                 "unavailable": list(UNAVAILABLE_METRICS),

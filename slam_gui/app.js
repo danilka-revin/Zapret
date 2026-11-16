@@ -1639,7 +1639,7 @@ pollWheelState();
 setInterval(pollWheelState, 800);
 renderFsm();
 renderDets();
-log("ok", "пульт RUS SLAM онлайн");
+log("ok", "пульт BULKA_v1 онлайн");
 log("warn", "CAM-01 нет сигнала — perception выключен");
 log("ok", "знаки СТОП/переход/светофор · маяк · груз до 250 кг");
 seedStationPads();

@@ -1023,7 +1023,7 @@ body.is-stale #data-chip { color: var(--warn); border-color: #3a3a3e; }
 /* --- 20 тем: переопределяем переменные через body[data-theme="..."] --- */
 /* 1 red — чёрно-красный (базовый, как до набора тем; красный приглушён, текст белый) */
 body[data-theme="red"] { --bg:#000000; --bg-2:#0a0a0b; --panel:#101012; --panel-2:#17171a; --line:#232327; --line-2:#2e2e34; --text:#f4f4f6; --muted:#8b8b93; --accent:#c0505a; --accent-strong:#f4f4f6; --ok:#f4f4f6; --idle:#6f6f74; }
-/* 2 rus — RUS SLAM оригинал (лайм) */
+/* 2 rus — BULKA_v1 оригинал (лайм) */
 body[data-theme="rus"] { --bg:#070d0a; --bg-2:#0f1a15; --panel:#12201a; --panel-2:#172921; --line:#233a30; --line-2:#2b4439; --text:#edf4ef; --muted:#8aa496; --accent:#9fe36b; --ok:#6bd39a; --idle:#6f857d; }
 /* 3 lavender — WEB TACTICS сирень */
 body[data-theme="lavender"] { --bg:#0a0a14; --bg-2:#13131d; --panel:#181826; --panel-2:#1f1f30; --line:#2a2a3a; --line-2:#34344a; --text:#ece8ff; --muted:#9a96b2; --accent:#c9b3ff; --ok:#c9b3ff; --idle:#6e6b85; }
