@@ -135,6 +135,15 @@ def test_unknown_flag_is_rejected():
     assert "неизвестный аргумент" in result.stderr
 
 
+def test_check_mode_works_without_sudo(fake_host):
+    """--check ничего не ставит, поэтому не требует root/sudo."""
+    fake_host.set_os(UBUNTU_2004)
+    (fake_host.root / "bin" / "sudo").unlink()
+    result = run("--check")
+    assert "нужен root или sudo" not in (result.stdout + result.stderr)
+    assert result.returncode in (0, 1)
+
+
 def test_check_mode_reports_installed_python_without_touching_anything():
     """--check только смотрит: код 0, версия в выводе, apt не вызывается."""
     result = run("--check")
