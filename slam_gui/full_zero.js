@@ -16,18 +16,45 @@
   let token = null;
   let phase = 'opening';
   let last = {};
-  let busy = false; // operator command in flight; status polls never disable buttons
+  let busy = false;
   let statusRequest = null;
   let timer = null;
   let previousFocus = null;
   let errorText = '';
   let generation = 0;
 
+  function endpoint() {
+    // Remote console (8080) proxies via /api/control/full_zero; kiosk (8090) uses /api/kiosk_full_zero directly.
+    // Allow override via data attribute for tests.
+    if (modal && modal.dataset.endpoint) return modal.dataset.endpoint;
+    const path = location.pathname || '';
+    if (path.startsWith('/console') || path.startsWith('/controls')) return 'api/control/full_zero';
+    // Try kiosk endpoint; if we're on remote peer it will 404 and we fallback in send().
+    return 'api/kiosk_full_zero';
+  }
+  function endpointFallback(primary) {
+    if (primary === 'api/kiosk_full_zero') return 'api/control/full_zero';
+    return 'api/kiosk_full_zero';
+  }
+  function csrfHeaders() {
+    const headers = {'Content-Type': 'application/json', 'X-Robot-Control': 'steering'};
+    // Remote proxy requires CSRF; kiosk ignores it. Include if available.
+    try {
+      const t = (window.state && window.state.csrfToken) || (window.__rsCsrf || document.querySelector('meta[name=csrf-token]')?.content);
+      if (t) headers['X-CSRF-Token'] = t;
+    } catch(_) {}
+    return headers;
+  }
+
   function cancelDetached(session) {
     if (!session) return;
-    void fetch('api/kiosk_full_zero', {method: 'POST', keepalive: true,
-      headers: {'Content-Type': 'application/json', 'X-Robot-Control': 'steering'},
+    const ep = endpoint();
+    const tryCancel = (url) => fetch(url, {method: 'POST', keepalive: true,
+      headers: csrfHeaders(),
       body: JSON.stringify({action: 'cancel', token: session})}).catch(() => {});
+    tryCancel(ep);
+    // best-effort second endpoint for cross-origin preview setups
+    tryCancel(endpointFallback(ep));
   }
 
   const reasons = {
@@ -87,31 +114,40 @@
   function render() {
     const data = last || {};
     const saved = phase === 'saved';
-    calibrate.disabled = busy || phase !== 'ready';
-    faultPanel.hidden = phase !== 'fault';
-    resetFault.disabled = busy || phase !== 'fault';
+    if (calibrate) calibrate.disabled = busy || phase !== 'ready';
+    if (faultPanel) faultPanel.hidden = phase !== 'fault';
+    if (resetFault) resetFault.disabled = busy || phase !== 'fault';
     const faulty = Array.isArray(data.faultyModules) ? data.faultyModules : [];
-    $('full-zero-fault-detail').textContent = faulty.length
+    const faultDetail = $('full-zero-fault-detail');
+    if (faultDetail) faultDetail.textContent = faulty.length
       ? 'Платы с ошибкой памяти: ' + faulty.join(', ') + '.'
       : 'На одной из плат повреждена или не распознана запись.';
-    save.disabled = busy || phase !== 'adjust';
+    if (save) save.disabled = busy || phase !== 'adjust';
     adjustButtons.forEach((button) => { button.disabled = busy || phase !== 'adjust'; });
-    retry.hidden = !(['idle', 'recovery', 'failed'].includes(phase) || (phase === 'connection' && !token));
-    retry.disabled = busy;
-    $('full-zero-cancel').textContent = saved || ['idle', 'recovery', 'failed'].includes(phase)
+    if (retry) {
+      retry.hidden = !(['idle', 'recovery', 'failed'].includes(phase) || (phase === 'connection' && !token));
+      retry.disabled = busy;
+    }
+    const cancelBtn = $('full-zero-cancel');
+    if (cancelBtn) cancelBtn.textContent = saved || ['idle', 'recovery', 'failed'].includes(phase)
       ? 'Закрыть' : 'СТОП и отменить';
     const issue = errorText || (data.reason && reasons[data.reason]) || '';
     const recovery = data.pendingRecovery && phase !== 'saved'
       ? 'Внимание: восстановление или сохранение не завершено, движение заблокировано. ' : '';
-    message.textContent = recovery + (issue || messages[phase] || 'Проверяем состояние…');
-    message.dataset.tone = saved && !issue ? 'success' : (issue || phase === 'recovery' || phase === 'connection' ? 'error' : 'normal');
+    if (message) {
+      message.textContent = recovery + (issue || messages[phase] || 'Проверяем состояние…');
+      message.dataset.tone = saved && !issue ? 'success' : (issue || phase === 'recovery' || phase === 'connection' ? 'error' : 'normal');
+      message.style.borderColor = message.dataset.tone === 'error' ? '#ffd4cf' : message.dataset.tone === 'success' ? '#c8e6d0' : 'var(--line)';
+      message.style.background = message.dataset.tone === 'error' ? '#fff0ed' : message.dataset.tone === 'success' ? '#e9f8ee' : 'var(--bg)';
+    }
     const seen = Array.isArray(data.calibratingSeen) ? data.calibratingSeen : [];
     const acknowledged = Array.isArray(data.acknowledged) ? data.acknowledged : [];
     ids.forEach((id) => {
       const motor = (data.motors || {})[id] || {};
       const angle = motor.online === true && typeof motor.angle === 'number' && Number.isFinite(motor.angle)
         ? (Math.abs(motor.angle) < 0.005 ? '0,00' : motor.angle.toFixed(2).replace('.', ',')) + '°' : '—';
-      $('full-zero-angle-' + id).textContent = angle;
+      const angleEl = $('full-zero-angle-' + id);
+      if (angleEl) angleEl.textContent = angle;
       let label = 'ожидание';
       if (motor.online === false) label = 'нет связи';
       else if (motor.fullZeroFault === true) label = 'ошибка памяти';
@@ -123,13 +159,26 @@
       else if (saved) label = 'запись подтверждена';
       else if (['adjust', 'adjusting'].includes(phase)) label = 'опора подтверждена';
       else if (motor.firmware && motor.firmware < 23) label = 'обновите прошивку';
-      $('full-zero-state-' + id).textContent = label;
+      const stateEl = $('full-zero-state-' + id);
+      if (stateEl) stateEl.textContent = label;
     });
   }
 
   function abortStatus() {
     if (statusRequest) statusRequest.controller.abort();
     statusRequest = null;
+  }
+
+  async function fetchWithFallback(url, opts) {
+    let res = await fetch(url, opts);
+    // If kiosk endpoint missing on remote peer, try fallback once
+    if (res.status === 404) {
+      const alt = endpointFallback(url);
+      if (alt !== url) {
+        try { res = await fetch(alt, opts); } catch(_) {}
+      }
+    }
+    return res;
   }
 
   async function send(action, extra) {
@@ -146,9 +195,11 @@
     const payload = Object.assign({action}, action === 'begin' ? {} : {token}, extra || {});
     const timeout = setTimeout(() => controller.abort(), 3000);
     try {
-      const response = await fetch('api/kiosk_full_zero', {
+      const url = endpoint();
+      const headers = csrfHeaders();
+      const response = await fetchWithFallback(url, {
         method: 'POST', cache: 'no-store', signal: controller.signal,
-        headers: {'Content-Type': 'application/json', 'X-Robot-Control': 'steering'},
+        headers,
         body: JSON.stringify(payload)
       });
       const data = await response.json().catch(() => ({}));
@@ -156,8 +207,6 @@
         if (action === 'begin' && data.token) cancelDetached(data.token);
         return null;
       }
-      // An operator command supersedes an older status response. The server
-      // still validates the command against its own current state.
       if (isStatus && statusRequest !== request) return null;
       if (data.phase) { last = data; phase = data.phase; }
       else if (typeof data.pendingRecovery === 'boolean') last = {...last, pendingRecovery: data.pendingRecovery};
@@ -222,39 +271,55 @@
     if (timer) clearInterval(timer);
     timer = null;
     modal.hidden = true;
+    modal.style.display = 'none';
     token = null;
     busy = false;
-    if (needsStop) cancelDetached(session);  // never wait for an in-flight request
+    if (needsStop) cancelDetached(session);
     if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+    // Clear overlay display fix for our inline style
+    modal.hidden = true;
   }
+  // Ensure modal hidden uses style toggle for our inline overlay
+  const origHidden = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'hidden');
+  // Patch show: when hidden=false, display flex
+  const observer = new MutationObserver(() => {
+    if (!modal.hidden) modal.style.display = 'flex';
+    else modal.style.display = 'none';
+  });
+  observer.observe(modal, {attributes:true, attributeFilter:['hidden']});
+  if (!modal.hidden) modal.style.display = 'flex'; else modal.style.display = 'none';
 
   open.addEventListener('click', () => {
     if (!modal.hidden) return;
     previousFocus = document.activeElement;
     modal.hidden = false;
-    $('full-zero-close').focus();
+    const closeBtn = $('full-zero-close');
+    if (closeBtn) closeBtn.focus();
     void begin();
   });
-  $('full-zero-close').addEventListener('click', () => { void close(); });
-  $('full-zero-cancel').addEventListener('click', () => { void close(); });
-  retry.addEventListener('click', () => { if (!busy) void begin(); });
-  resetFault.addEventListener('click', () => {
+  const closeBtn = $('full-zero-close');
+  if (closeBtn) closeBtn.addEventListener('click', () => { void close(); });
+  const cancelBtn = $('full-zero-cancel');
+  if (cancelBtn) cancelBtn.addEventListener('click', () => { void close(); });
+  if (retry) retry.addEventListener('click', () => { if (!busy) void begin(); });
+  if (resetFault) resetFault.addEventListener('click', () => {
     if (busy || phase !== 'fault') return;
     const boards = Array.isArray(last.faultyModules) ? last.faultyModules.join(', ') : 'отмеченные';
-    const warning = 'Сбросить сохранённые поправки полного нуля на платах ' + boards + '?\n\n' +
+    const warning = 'Сбросить сохранённые поправки полного нуля на платах ' + boards + '?\\n\\n' +
       'Закрепите раму, вывесите колёса и подготовьте независимый E-STOP. ' +
       'После сброса нужно откалибровать и сохранить все четыре колеса заново.';
     if (typeof window.confirm === 'function' && window.confirm(warning)) void send('reset_fault', {confirm: true});
   });
-  calibrate.addEventListener('click', () => { if (!busy && phase === 'ready') void send('calibrate'); });
-  save.addEventListener('click', () => { if (!busy && phase === 'adjust') void send('save'); });
+  if (calibrate) calibrate.addEventListener('click', () => { if (!busy && phase === 'ready') void send('calibrate'); });
+  if (save) save.addEventListener('click', () => { if (!busy && phase === 'adjust') void send('save'); });
   adjustButtons.forEach((button) => button.addEventListener('click', () => {
     if (!busy && phase === 'adjust') void send('adjust', {module: button.dataset.fullZeroAdjust, delta: Number(button.dataset.delta)});
   }));
-  $('full-zero-estop').addEventListener('click', async () => {
-    // Independent physical E-STOP remains necessary; this is a software latch.
+  const estopBtn = $('full-zero-estop');
+  if (estopBtn) estopBtn.addEventListener('click', async () => {
     try {
-      await fetch('api/estop', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Robot-Control': 'drive'}, body: '{}'});
+      const estopEp = endpoint().includes('control') ? 'api/control/estop' : 'api/estop';
+      await fetch(estopEp, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Robot-Control': 'drive'}, body: '{}'});
       errorText = reasons.estop;
     } catch (_error) { errorText = 'Нет подтверждения E-STOP. Используйте независимый аварийный выключатель.'; }
     render();
@@ -267,6 +332,9 @@
     const current = focusable.indexOf(document.activeElement);
     if (event.shiftKey && current <= 0) { event.preventDefault(); focusable[focusable.length - 1].focus(); }
     else if (!event.shiftKey && current === focusable.length - 1) { event.preventDefault(); focusable[0].focus(); }
+  });
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal || e.target.classList.contains('full-zero-backdrop')) void close();
   });
   window.addEventListener('pagehide', () => {
     if (!token || modal.hidden || phase === 'saved') return;

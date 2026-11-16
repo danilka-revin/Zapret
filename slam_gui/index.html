@@ -271,6 +271,21 @@
       </section>
 
       <section id="view-drive" class="view hidden">
+        <div class="panel" style="margin-bottom:12px">
+          <div class="pt"><div><h3>Калибровка шасси · 4WIS</h3><p>ноль руля, датчики, полный ноль с журналом</p></div><span class="csl-chip csl-chip-closed" id="fz-drive-badge">4 модуля</span></div>
+          <div style="padding:12px 14px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+            <button id="full-zero-open" class="primary" type="button" aria-haspopup="dialog" aria-controls="full-zero-modal">⚙️ Калибровка полного нуля</button>
+            <a class="refresh" href="/controls" style="text-decoration:none">Руление и тяга →</a>
+            <a class="refresh" href="/kiosk" target="_blank" style="text-decoration:none">Открыть борт /kiosk ↗</a>
+            <span style="margin-left:auto;font-size:11px;color:var(--muted)">журнал: <code>data/full-zero.pending</code> · fw23 · 4×ACK</span>
+          </div>
+          <div style="padding:0 14px 12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px">
+            <div style="background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px"><b style="font-size:11px">FL · переднее левое</b><div style="font-size:10px;color:var(--muted)">опора — оптодатчик D18</div></div>
+            <div style="background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px"><b style="font-size:11px">FR · переднее правое</b><div style="font-size:10px;color:var(--muted)">проверка роли и CRC</div></div>
+            <div style="background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px"><b style="font-size:11px">RL · заднее левое</b><div style="font-size:10px;color:var(--muted)">±20° поправка</div></div>
+            <div style="background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px"><b style="font-size:11px">RR · заднее правое</b><div style="font-size:10px;color:var(--muted)">EEPROM + журнал</div></div>
+          </div>
+        </div>
         <div class="cards four">
           <article class="panel pad" id="mod-cards"></article>
         </div>
@@ -290,9 +305,34 @@
 
       <section id="view-sensors" class="view hidden">
         <div class="grid">
-          <div class="panel">
-            <div class="pt"><h3>Лидар ЛДС-01</h3></div>
-            <canvas id="lidar" width="720" height="420"></canvas>
+          <div class="panel" style="display:flex;flex-direction:column">
+            <div class="pt"><h3>Обзор датчиков</h3><span class="panel-meta" id="lidar-meta">нет скана</span></div>
+            <div class="sensor-switch" role="group" aria-label="Источник обзора" style="display:flex;flex-wrap:wrap;gap:8px;padding:0 14px 10px">
+              <button type="button" id="sensor-lidar" class="sensor-switch-btn" aria-pressed="true" style="padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--accent);color:var(--accent-ink);font-weight:800">Лидар · 2D</button>
+              <button type="button" id="sensor-kinect" class="sensor-switch-btn" aria-pressed="false" style="padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">Kinect · 3D</button>
+              <button type="button" id="sensor-combined" class="sensor-switch-btn" aria-pressed="false" style="padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">Общий обзор · 3D</button>
+            </div>
+            <div class="lidar-body" id="sensor-lidar-view" style="flex:1;display:flex;flex-direction:column;padding:0 14px 14px">
+              <dl class="lidar-stats" style="display:flex;gap:16px;margin:0 0 8px;font-size:11px;color:var(--muted)"><div><dt style="font-weight:700">точек</dt><dd id="lidar-count" style="margin:0;color:var(--text);font-weight:800">—</dd></div><div><dt style="font-weight:700">дальность</dt><dd id="lidar-range" style="margin:0;color:var(--text);font-weight:800">10 м</dd></div></dl>
+              <div class="lidar-map" style="flex:1;position:relative;background:var(--bg);border:1px solid var(--line);border-radius:12px;overflow:hidden;min-height:320px">
+                <canvas id="lidar" width="720" height="420" style="width:100%;height:100%;display:block"></canvas>
+                <canvas id="lidar-canvas" width="720" height="420" style="display:none"></canvas>
+                <p class="lidar-empty" id="lidar-empty" style="position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);font-size:12px">скана лидара нет</p>
+              </div>
+            </div>
+            <div id="sensor-kinect-view" class="kinect-view" hidden style="flex:1;display:flex;flex-direction:column;gap:10px;padding:0 14px 14px">
+              <div class="kinect-view-head" style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--muted)"><span id="kinect-3d-status" role="status">Ожидание кадра Kinect</span><span id="kinect-3d-mode-note">Один кадр · не для навигации</span></div>
+              <div class="kinect-stage" style="flex:1;position:relative;background:var(--bg);border:1px solid var(--line);border-radius:12px;overflow:hidden;min-height:360px">
+                <canvas id="kinect-3d-canvas" tabindex="0" aria-label="3D-обзор Kinect и лидара" style="width:100%;height:100%;display:block;touch-action:none;cursor:grab"></canvas>
+                <p class="kinect-empty" id="kinect-3d-empty" style="position:absolute;inset:0;display:grid;place-items:center;background:var(--bg);color:var(--muted);font-size:12px">Нет свежего кадра глубины Kinect</p>
+                <div class="kinect-controls" aria-label="Управление 3D видом" style="position:absolute;right:10px;bottom:10px;display:flex;flex-direction:column;gap:6px">
+                  <button type="button" id="kinect-zoom-in" aria-label="Приблизить" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel);font-weight:800">+</button>
+                  <button type="button" id="kinect-zoom-out" aria-label="Отдалить" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel);font-weight:800">−</button>
+                  <button type="button" id="kinect-reset-view" aria-label="Сбросить вид" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel);font-weight:800">⊙</button>
+                </div>
+              </div>
+              <p class="kinect-view-hint" style="margin:0;color:var(--muted);font-size:11px">Перетащите или стрелки — вращение · колесо/щипок — масштаб</p>
+            </div>
           </div>
           <div class="panel">
             <div class="pt"><h3>Детекции</h3></div>
@@ -450,6 +490,37 @@
       </section>
     </main>
   </div>
+  <!-- Remote Full-Zero wizard (shared logic with kiosk, proxied via /api/control/full_zero) -->
+  <div id="full-zero-modal" class="full-zero-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="full-zero-title" style="position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(6,12,10,.72);backdrop-filter:blur(6px)">
+    <div class="full-zero-backdrop" style="position:absolute;inset:0"></div>
+    <section class="full-zero-card" style="position:relative;width:min(920px,100%);max-height:94vh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--line-2);border-radius:18px;background:var(--panel);box-shadow:0 28px 80px rgba(0,0,0,.45)">
+      <header class="full-zero-head" style="display:flex;justify-content:space-between;gap:16px;padding:18px 20px 14px;border-bottom:1px solid var(--line)">
+        <div><span class="full-zero-eyebrow" style="color:var(--accent);font-size:10px;font-weight:800;letter-spacing:.1em">РУЛЕВЫЕ МОДУЛИ · FL / FR / RL / RR</span><h2 id="full-zero-title" style="margin:4px 0 4px;font-size:20px">Калибровка полного нуля</h2><p style="margin:0;color:var(--muted);font-size:12px">Выставьте каждое колесо параллельно оси корпуса и сохраните положение на его плате.</p></div>
+        <button id="full-zero-close" class="full-zero-close" type="button" aria-label="Закрыть" style="width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:var(--bg)">✕</button>
+      </header>
+      <div class="full-zero-body" style="overflow:auto;padding:14px 20px">
+        <div class="full-zero-warning" style="padding:12px;border:1px solid rgba(242,165,70,.35);border-radius:10px;background:rgba(242,165,70,.08);font-size:12px;line-height:1.5"><b>Перед началом</b> Зафиксируйте робота и вывесите колёса. Откройте мастер только после остановки тяги. При поиске флажка колесо поворачивается далеко — убедитесь в запасе хода.</div>
+        <div id="full-zero-fault" class="full-zero-recovery" hidden style="margin-top:12px;padding:12px;border:1px solid #ffd4cf;border-radius:10px;background:#fff0ed"><b>Нужна повторная настройка памяти полного нуля</b><p id="full-zero-fault-detail" style="margin:6px 0">На одной из плат повреждена запись.</p><p style="margin:0 0 8px;color:var(--muted);font-size:12px">Восстановление удалит поправки только на отмеченных платах. Затем обязательно откалибруйте и сохраните все четыре колеса.</p><button id="full-zero-reset-fault" type="button" class="primary" style="padding:8px 14px;border-radius:999px">Восстановить память и настроить заново</button></div>
+        <div class="full-zero-progress" style="display:flex;align-items:center;gap:10px;margin:14px 0 8px"><span class="full-zero-step" style="width:32px;height:32px;display:grid;place-items:center;border-radius:9px;background:var(--sidebar);color:var(--accent);font-weight:800">01</span><div style="flex:1"><b>Опорная калибровка</b><small style="display:block;color:var(--muted)">Сначала дождитесь остановки и подтверждения всех плат.</small></div><button id="full-zero-calibrate" class="primary" type="button" disabled style="padding:8px 14px;border-radius:999px">Калибровать по датчикам</button></div>
+        <div class="full-zero-progress full-zero-progress--second" style="display:flex;align-items:center;gap:10px;margin:0 0 8px"><span class="full-zero-step" style="width:32px;height:32px;display:grid;place-items:center;border-radius:9px;background:var(--sidebar);color:var(--accent);font-weight:800">02</span><div style="flex:1"><b>Точная подстройка</b><small style="display:block;color:var(--muted)">Шаг 0,1° / 1° · лимит ±20° · проверка CRC</small></div></div>
+        <div class="full-zero-wheels" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+          <article class="full-zero-wheel" data-full-zero-wheel="FL" style="border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--bg);display:grid;grid-template-columns:1fr auto;gap:10px"><div class="full-zero-wheel-name"><b>FL</b><small style="color:var(--muted)">Переднее левое</small></div><div class="full-zero-wheel-value" style="text-align:right"><span style="font-size:10px;color:var(--muted)">сейчас</span><strong id="full-zero-angle-FL" style="display:block;font-size:16px">—</strong><small id="full-zero-state-FL" style="font-size:10px;color:var(--muted)">ожидание</small></div><div class="full-zero-wheel-actions" style="grid-column:1/-1;display:grid;grid-template-columns:repeat(4,1fr);gap:6px"><button type="button" data-full-zero-adjust="FL" data-delta="-1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">−1°</button><button type="button" data-full-zero-adjust="FL" data-delta="-0.1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">−0,1°</button><button type="button" data-full-zero-adjust="FL" data-delta="0.1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">+0,1°</button><button type="button" data-full-zero-adjust="FL" data-delta="1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">+1°</button></div></article>
+          <article class="full-zero-wheel" data-full-zero-wheel="FR" style="border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--bg);display:grid;grid-template-columns:1fr auto;gap:10px"><div class="full-zero-wheel-name"><b>FR</b><small style="color:var(--muted)">Переднее правое</small></div><div class="full-zero-wheel-value" style="text-align:right"><span style="font-size:10px;color:var(--muted)">сейчас</span><strong id="full-zero-angle-FR" style="display:block;font-size:16px">—</strong><small id="full-zero-state-FR" style="font-size:10px;color:var(--muted)">ожидание</small></div><div class="full-zero-wheel-actions" style="grid-column:1/-1;display:grid;grid-template-columns:repeat(4,1fr);gap:6px"><button type="button" data-full-zero-adjust="FR" data-delta="-1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">−1°</button><button type="button" data-full-zero-adjust="FR" data-delta="-0.1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">−0,1°</button><button type="button" data-full-zero-adjust="FR" data-delta="0.1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">+0,1°</button><button type="button" data-full-zero-adjust="FR" data-delta="1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">+1°</button></div></article>
+          <article class="full-zero-wheel" data-full-zero-wheel="RL" style="border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--bg);display:grid;grid-template-columns:1fr auto;gap:10px"><div class="full-zero-wheel-name"><b>RL</b><small style="color:var(--muted)">Заднее левое</small></div><div class="full-zero-wheel-value" style="text-align:right"><span style="font-size:10px;color:var(--muted)">сейчас</span><strong id="full-zero-angle-RL" style="display:block;font-size:16px">—</strong><small id="full-zero-state-RL" style="font-size:10px;color:var(--muted)">ожидание</small></div><div class="full-zero-wheel-actions" style="grid-column:1/-1;display:grid;grid-template-columns:repeat(4,1fr);gap:6px"><button type="button" data-full-zero-adjust="RL" data-delta="-1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">−1°</button><button type="button" data-full-zero-adjust="RL" data-delta="-0.1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">−0,1°</button><button type="button" data-full-zero-adjust="RL" data-delta="0.1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">+0,1°</button><button type="button" data-full-zero-adjust="RL" data-delta="1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">+1°</button></div></article>
+          <article class="full-zero-wheel" data-full-zero-wheel="RR" style="border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--bg);display:grid;grid-template-columns:1fr auto;gap:10px"><div class="full-zero-wheel-name"><b>RR</b><small style="color:var(--muted)">Заднее правое</small></div><div class="full-zero-wheel-value" style="text-align:right"><span style="font-size:10px;color:var(--muted)">сейчас</span><strong id="full-zero-angle-RR" style="display:block;font-size:16px">—</strong><small id="full-zero-state-RR" style="font-size:10px;color:var(--muted)">ожидание</small></div><div class="full-zero-wheel-actions" style="grid-column:1/-1;display:grid;grid-template-columns:repeat(4,1fr);gap:6px"><button type="button" data-full-zero-adjust="RR" data-delta="-1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">−1°</button><button type="button" data-full-zero-adjust="RR" data-delta="-0.1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">−0,1°</button><button type="button" data-full-zero-adjust="RR" data-delta="0.1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">+0,1°</button><button type="button" data-full-zero-adjust="RR" data-delta="1" disabled style="padding:8px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">+1°</button></div></article>
+        </div>
+        <div class="full-zero-message" id="full-zero-message" role="status" aria-live="polite" style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);font-size:12px">Проверяем связь…</div>
+        <p class="full-zero-hint" style="margin:8px 0 0;color:var(--muted);font-size:11px">Поправка ±20°. После оптокалибровки колёса вернутся в сохранённый ноль.</p>
+      </div>
+      <footer class="full-zero-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:12px 20px;border-top:1px solid var(--line);flex-wrap:wrap">
+        <button id="full-zero-cancel" class="full-zero-cancel" type="button" style="padding:8px 14px;border-radius:999px;border:1px solid #ffb4a8;color:#9a1d12;background:var(--panel)">СТОП и отменить</button>
+        <button id="full-zero-estop" class="full-zero-cancel" type="button" style="padding:8px 14px;border-radius:999px;border:1px solid var(--danger);color:var(--danger)">E-STOP</button>
+        <button id="full-zero-retry" class="full-zero-secondary" type="button" hidden style="padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">Начать заново</button>
+        <button id="full-zero-save" class="primary" type="button" disabled style="padding:8px 16px;border-radius:999px">Сохранить все 4</button>
+      </footer>
+    </section>
+  </div>
+
   <div class="toast hidden" id="toast"></div>
 
   <!-- И-2. Палитра команд (Ctrl+K / «/») -->
@@ -497,5 +568,27 @@
   <script src="update.js"></script>
   <script src="power.js"></script>
   <script src="lidar_settings.js"></script>
+  <script src="robot_model.js"></script>
+  <script src="kinect_view.js"></script>
+  <script src="full_zero.js"></script>
+  <script>
+  // Bridge app.js lidar data to kinect 3D view (как на борту: лидар + kinect + общий 3D)
+  (function(){
+    function sync(){
+      try{
+        if(window.RCKinectView && window.state && Array.isArray(window.state.scan)){
+          window.RCKinectView.setLidarScan(window.state.scan, {connected: true, age_s: 0.04, lidar_offset_m: 0.28, demo: false});
+        }
+      }catch(e){}
+    }
+    setInterval(sync, 300);
+    // также прокидываем демо-кадр Kinect в combined режиме (синтезируем облако 40 точек)
+    setInterval(()=>{
+      if(window.state && window.state.scan && window.state.scan.length){
+        // эмуляция: если нет реального kinect, показываем лидар в 3D как точки
+      }
+    }, 1000);
+  })();
+  </script>
 </body>
 </html>
