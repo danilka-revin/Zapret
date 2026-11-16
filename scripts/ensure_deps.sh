@@ -7,7 +7,11 @@ cd "$(dirname "$0")/.."
 log() { printf '\033[1;32m[deps]\033[0m %s\n' "$*"; }
 
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null \
-  || { echo "Нужен Python 3.9+ (у вас $(python3 --version 2>&1))." >&2; exit 1; }
+  || {
+    echo "Нужен Python 3.9+ (у вас $(python3 --version 2>&1))." >&2
+    echo "Поставьте его: ./scripts/install_python.sh" >&2
+    exit 1
+  }
 
 if [[ ! -x .venv/bin/python ]]; then
   log "создаю .venv…"

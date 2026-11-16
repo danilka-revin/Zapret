@@ -8,7 +8,9 @@
 #
 # Скрипт сам ставит зависимости, ROS 2 с драйверами лидаров (и компилирует
 # ros2_ws), создаёт .env и оператора, создаёт один ярлык «Запустить робот» и
-# запускает веб-пульт + бортовой экран.
+# запускает веб-пульт + бортовой экран. Если в системе Python старше 3.9
+# (Ubuntu 20.04), он ставится сам через scripts/install_python.sh; отключить:
+# RC_PYTHON_AUTO=0.
 # В следующий раз — один двойной щелчок по этому ярлыку.
 # Автозапуск при загрузке по умолчанию выключен.
 #
@@ -53,12 +55,20 @@ SUDO=""
 if [[ $EUID -ne 0 ]] && command -v sudo >/dev/null 2>&1; then SUDO=sudo; fi
 
 # --- 0. версия Python ------------------------------------------------------- #
+# Нужен 3.9+. На Ubuntu 20.04 в системе только 3.8, поэтому установщик не
+# требует ставить Python вручную: scripts/install_python.sh берёт нужную версию
+# из apt (PPA deadsnakes) или готовой сборкой CPython.
 if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
-  echo "Нужен Python 3.9 или новее, а у вас $(python3 --version 2>&1)." >&2
-  echo "На Ubuntu 22.04+ подходящий python3 уже стоит; на 20.04 обновите Python." >&2
-  exit 1
+  if [[ "${RC_PYTHON_AUTO:-1}" != "1" ]]; then
+    echo "Нужен Python 3.9 или новее, а у вас $(python3 --version 2>&1)." >&2
+    echo "Поставьте его: ./scripts/install_python.sh" >&2
+    exit 1
+  fi
+  log "подходящего python3 нет ($(python3 --version 2>&1 || echo 'не установлен')) — ставлю Python 3.9+…"
+  ./scripts/install_python.sh || { echo "Не удалось поставить Python 3.9+. Запустите отдельно: ./scripts/install_python.sh" >&2; exit 1; }
 fi
-log "python3: $(python3 --version 2>&1) (нужен 3.9+)"
+PYTHON3="$(command -v python3)"
+log "python3: $("$PYTHON3" --version 2>&1) (нужен 3.9+)"
 
 # --- 1-2. python и зависимости (работает офлайн через vendor/) -------------- #
 ./scripts/ensure_deps.sh
@@ -77,7 +87,7 @@ fi
 if [[ ! -f .env ]]; then
   log "создаю .env с новым RC_SECRET_KEY…"
   {
-    echo "RC_SECRET_KEY=$(python3 -c 'import secrets;print(secrets.token_urlsafe(48))')"
+    echo "RC_SECRET_KEY=$("$PYTHON3" -c 'import secrets;print(secrets.token_urlsafe(48))')"
     echo "RC_BIND_HOST=0.0.0.0"
     echo "RC_PORT=8080"
     echo "RC_SLAM_SOURCE=master"

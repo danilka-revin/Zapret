@@ -576,8 +576,14 @@ USB-разветвителя (для нескольких плат и камер
 
 ### Ubuntu: скачать с GitHub и запустить одной командой
 
-Нужен Python **3.9+** (на Ubuntu 22.04 и новее стоит по умолчанию; установщик
-сам проверит версию и поставит `python3-venv`, если его нет).
+Нужен Python **3.9+**. Установщик проверяет версию сам и, если её нет, ставит
+(на Ubuntu 20.04 — из PPA deadsnakes, без ручных действий). Поставить Python
+отдельно, до установки робота:
+
+```bash
+./scripts/install_python.sh          # Python 3.9+ одной командой
+./scripts/install_python.sh --check  # только проверить, что версия подходит
+```
 
 ```bash
 git clone https://github.com/danilka-revin/Zapret.git robot-control
