@@ -608,9 +608,9 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if not getattr(wheel_source, "auto_discovery", False):
             log.error("BMS: жду владельца проверки USB-портов колёс")
     if not config.testing and config.slam_source == "master":
-        # Ярлык «Запустить робот»: как только все четыре колеса подключатся,
-        # сами один раз за запуск калибруем сначала руль (оптодатчик, k),
-        # потом потенциометры (pm 1 + q). Выключить: RC_AUTO_CALIBRATE=0.
+        # Ярлык «Запустить робот»: сначала проверяем связь (4 платы FL/FR/RL/RR),
+        # затем один раз за запуск калибруем руль (оптодатчик, k) и потенциометры
+        # (pm 1 + q). Выключить: RC_AUTO_CALIBRATE=0.
         from . import auto_calibrate
         auto_calibrate.start(state)
     if not config.testing:
@@ -1791,6 +1791,17 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
         result, status = dispatch_maneuver_config(state.source, request.get_json(silent=True))
         return jsonify(result), status
+
+    @app.get("/api/auto_calibrate")
+    def api_auto_calibrate_status():
+        from . import auto_calibrate as ac
+        try:
+            snap = ac.status_snapshot()
+            conn = ac.check_connection(state.source) if state and getattr(state, "source", None) else {"ok": False, "missing": list(ac.MODULE_IDS)}
+        except Exception:
+            snap = {"phase": "unknown"}
+            conn = {"ok": False}
+        return jsonify(ok=True, status=snap, connection=conn, enabled=ac.autostart_enabled())
 
     @app.post("/api/kiosk_calibrate")
     def api_kiosk_calibrate():
