@@ -1,0 +1,598 @@
+{
+  "schemaVersion": 1,
+  "mapId": "enterprise-satellite-draft",
+  "title": "Примерная зона испытаний · черновик по спутниковому снимку",
+  "status": "draft",
+  "reference": {
+    "file": "delivery_reference.png",
+    "source": "Снимок экрана, предоставленный пользователем",
+    "imageWidth": 808,
+    "imageHeight": 699,
+    "scaleMetersPerUnit": null,
+    "georeferenced": false,
+    "coordinateNote": "X вправо, Y вверх; координаты сняты приближённо со снимка 808×699. Видимые оси проездов проведены вручную; ширины, бордюры и масштаб не подтверждены."
+  },
+  "notes": "Черновик для проверки графа и маршрутизатора. Проведены только наиболее различимые оси проездов; часть внутренних проездов намеренно не угадана. Масштаб, ширины, разрешения движения и актуальность препятствий не подтверждены. Тяга не подключается. Добавлены объекты ПДД для проверки: светофоры на north_mid и east_mid, знак СТОП у ntc_turn, пешеходные переходы и ограничение скорости на n_m_ntc_t (8 ед/с).",
+  "nodes": [
+    {
+      "id": "west_south",
+      "label": "Западный южный въезд",
+      "xy": [
+        22.67,
+        128.18
+      ],
+      "kind": "dock",
+      "approachYawDeg": 80
+    },
+    {
+      "id": "west_mid",
+      "label": "Западная площадка",
+      "xy": [
+        36.07,
+        233.33
+      ],
+      "kind": "delivery",
+      "approachYawDeg": 60
+    },
+    {
+      "id": "west_north",
+      "label": "Западный северный поворот",
+      "xy": [
+        154.59,
+        413.59
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "north_west",
+      "label": "Северо-западный узел",
+      "xy": [
+        159.74,
+        478.68
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "north_mid",
+      "label": "Северный центральный узел",
+      "xy": [
+        360.71,
+        453.65
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "center_mid",
+      "label": "Центральный средний узел",
+      "xy": [
+        345.26,
+        323.46
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "center_south",
+      "label": "Центральный южный поворот",
+      "xy": [
+        331.86,
+        198.28
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "south_mid",
+      "label": "Южная центральная точка",
+      "xy": [
+        314.34,
+        113.16
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "south_east",
+      "label": "Южная восточная площадка",
+      "xy": [
+        535.92,
+        103.15
+      ],
+      "kind": "delivery",
+      "approachYawDeg": 0
+    },
+    {
+      "id": "east_south",
+      "label": "Восточный южный узел",
+      "xy": [
+        778.11,
+        98.14
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "east_mid",
+      "label": "Восточный средний узел",
+      "xy": [
+        778.11,
+        368.53
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "east_north",
+      "label": "Восточный северный узел",
+      "xy": [
+        778.11,
+        598.86
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "ntc_north_west",
+      "label": "Северный объезд НТЦ · запад",
+      "xy": [
+        381.33,
+        638.91
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "ntc_north_east",
+      "label": "Северный объезд НТЦ · восток",
+      "xy": [
+        602.91,
+        623.89
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "ntc_east_top",
+      "label": "Восточный объезд НТЦ",
+      "xy": [
+        618.37,
+        428.61
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "ntc_turn",
+      "label": "Поворот к НТЦ",
+      "xy": [
+        592.6,
+        398.57
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "ntc_diagonal",
+      "label": "Косой съезд",
+      "xy": [
+        644.13,
+        363.52
+      ],
+      "kind": "junction"
+    },
+    {
+      "id": "ntc_delivery",
+      "label": "НТЦ · черновая точка доставки",
+      "xy": [
+        680.2,
+        413.59
+      ],
+      "kind": "delivery",
+      "approachYawDeg": 0
+    }
+  ],
+  "edges": [
+    {
+      "id": "w_s_w_m",
+      "label": "Западный проезд юг-середина",
+      "from": "west_south",
+      "to": "west_mid",
+      "geometry": [
+        [
+          22.67,
+          128.18
+        ],
+        [
+          36.07,
+          233.33
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "w_m_w_n",
+      "label": "Западный диагональный проезд",
+      "from": "west_mid",
+      "to": "west_north",
+      "geometry": [
+        [
+          36.07,
+          233.33
+        ],
+        [
+          154.59,
+          413.59
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "w_n_n_w",
+      "label": "Западный подъём к северу",
+      "from": "west_north",
+      "to": "north_west",
+      "geometry": [
+        [
+          154.59,
+          413.59
+        ],
+        [
+          159.74,
+          478.68
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "n_w_n_m",
+      "label": "Северный проезд к центру",
+      "from": "north_west",
+      "to": "north_mid",
+      "geometry": [
+        [
+          159.74,
+          478.68
+        ],
+        [
+          360.71,
+          453.65
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "n_m_c_m",
+      "label": "Центральный проезд север-середина",
+      "from": "north_mid",
+      "to": "center_mid",
+      "geometry": [
+        [
+          360.71,
+          453.65
+        ],
+        [
+          345.26,
+          323.46
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "c_m_c_s",
+      "label": "Центральный проезд середина-юг",
+      "from": "center_mid",
+      "to": "center_south",
+      "geometry": [
+        [
+          345.26,
+          323.46
+        ],
+        [
+          331.86,
+          198.28
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "c_s_s_m",
+      "label": "Центральный выезд на юг",
+      "from": "center_south",
+      "to": "south_mid",
+      "geometry": [
+        [
+          331.86,
+          198.28
+        ],
+        [
+          314.34,
+          113.16
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "s_m_s_e",
+      "label": "Южная хорда запад-восток",
+      "from": "south_mid",
+      "to": "south_east",
+      "geometry": [
+        [
+          314.34,
+          113.16
+        ],
+        [
+          535.92,
+          103.15
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12,
+      "speedLimitMps": 10.0
+    },
+    {
+      "id": "s_e_e_s",
+      "label": "Южная хорда восток",
+      "from": "south_east",
+      "to": "east_south",
+      "geometry": [
+        [
+          535.92,
+          103.15
+        ],
+        [
+          778.11,
+          98.14
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "e_s_e_m",
+      "label": "Восточный проезд юг-середина",
+      "from": "east_south",
+      "to": "east_mid",
+      "geometry": [
+        [
+          778.11,
+          98.14
+        ],
+        [
+          778.11,
+          368.53
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "e_m_e_n",
+      "label": "Восточный проезд середина-север",
+      "from": "east_mid",
+      "to": "east_north",
+      "geometry": [
+        [
+          778.11,
+          368.53
+        ],
+        [
+          778.11,
+          598.86
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "n_m_ntc_nw",
+      "label": "Северный объезд НТЦ · подъём",
+      "from": "north_mid",
+      "to": "ntc_north_west",
+      "geometry": [
+        [
+          360.71,
+          453.65
+        ],
+        [
+          381.33,
+          638.91
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "ntc_nw_ntc_ne",
+      "label": "Северный объезд НТЦ",
+      "from": "ntc_north_west",
+      "to": "ntc_north_east",
+      "geometry": [
+        [
+          381.33,
+          638.91
+        ],
+        [
+          602.91,
+          623.89
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "ntc_ne_ntc_et",
+      "label": "Восточный объезд НТЦ · спуск",
+      "from": "ntc_north_east",
+      "to": "ntc_east_top",
+      "geometry": [
+        [
+          602.91,
+          623.89
+        ],
+        [
+          618.37,
+          428.61
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "ntc_et_ntc_t",
+      "label": "Восточный объезд НТЦ · поворот",
+      "from": "ntc_east_top",
+      "to": "ntc_turn",
+      "geometry": [
+        [
+          618.37,
+          428.61
+        ],
+        [
+          592.6,
+          398.57
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12
+    },
+    {
+      "id": "n_m_ntc_t",
+      "label": "Проезд перед НТЦ",
+      "from": "north_mid",
+      "to": "ntc_turn",
+      "geometry": [
+        [
+          360.71,
+          453.65
+        ],
+        [
+          535.92,
+          428.61
+        ],
+        [
+          592.6,
+          398.57
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 12,
+      "speedLimitMps": 8.0
+    },
+    {
+      "id": "ntc_t_ntc_d",
+      "label": "Косой съезд НТЦ",
+      "from": "ntc_turn",
+      "to": "ntc_diagonal",
+      "geometry": [
+        [
+          592.6,
+          398.57
+        ],
+        [
+          644.13,
+          363.52
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 10
+    },
+    {
+      "id": "ntc_d_e_m",
+      "label": "Съезд к восточному проезду",
+      "from": "ntc_diagonal",
+      "to": "east_mid",
+      "geometry": [
+        [
+          644.13,
+          363.52
+        ],
+        [
+          778.11,
+          368.53
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 10
+    },
+    {
+      "id": "ntc_t_delivery",
+      "label": "Подход к точке НТЦ",
+      "from": "ntc_turn",
+      "to": "ntc_delivery",
+      "geometry": [
+        [
+          592.6,
+          398.57
+        ],
+        [
+          638.98,
+          430.62
+        ],
+        [
+          680.2,
+          413.59
+        ]
+      ],
+      "direction": "both",
+      "widthUnits": 10
+    }
+  ],
+  "trafficLights": [
+    {
+      "id": "tl_north_mid",
+      "label": "Светофор на въезде в северный узел",
+      "nodeId": "north_mid",
+      "controlledEdges": [
+        "n_w_n_m"
+      ],
+      "stopOffsetUnits": 8.0,
+      "cycle": {
+        "red": 5.0,
+        "yellow": 1.0,
+        "green": 5.0
+      },
+      "initialState": "red"
+    },
+    {
+      "id": "tl_east_mid",
+      "label": "Светофор на восточном проезде",
+      "nodeId": "east_mid",
+      "controlledEdges": [
+        "e_s_e_m"
+      ],
+      "stopOffsetUnits": 6.0,
+      "cycle": {
+        "red": 6.0,
+        "yellow": 1.0,
+        "green": 6.0
+      },
+      "initialState": "red"
+    }
+  ],
+  "stopSigns": [
+    {
+      "id": "stop_ntc_turn",
+      "label": "Знак СТОП перед поворотом к НТЦ",
+      "nodeId": "ntc_turn",
+      "approachEdgeId": "n_m_ntc_t",
+      "stopOffsetUnits": 6.0,
+      "stopDurationS": 2.5
+    }
+  ],
+  "crosswalks": [
+    {
+      "id": "cross_ntc",
+      "label": "Пешеходный переход на подъезде к НТЦ",
+      "edgeId": "n_m_ntc_t",
+      "atDistanceUnits": 120.0,
+      "widthUnits": 4.0,
+      "signalized": false
+    },
+    {
+      "id": "cross_south",
+      "label": "Переход на южной хорде",
+      "edgeId": "s_m_s_e",
+      "atDistanceUnits": 110.0,
+      "widthUnits": 3.5,
+      "signalized": false
+    }
+  ]
+}

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ru" data-map-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>Доставка по векторной карте</title>
+  <link rel="stylesheet" href="map.css">
+  <link rel="stylesheet" href="delivery.css">
+  <script>
+    (function () {
+      var theme = 'dark';
+      try { theme = localStorage.getItem('kiosk_map_theme') === 'light' ? 'light' : 'dark'; } catch (e) {}
+      document.documentElement.setAttribute('data-map-theme', theme);
+    })();
+  </script>
+</head>
+<body class="map-page delivery-body">
+<header class="map-page-head delivery-head">
+  <a id="delivery-back" href="/map">← Карта</a>
+  <h1>Доставка по векторной карте</h1>
+  <span class="delivery-mode-badge">СУХОЙ ПРОГОН · ТЯГА ОТКЛЮЧЕНА</span>
+  <div class="map-page-head-actions">
+    <a class="map-btn" id="delivery-navigation" href="/navigation">Навигация по лидару</a>
+  </div>
+</header>
+
+<main class="delivery-layout">
+  <section class="delivery-map" aria-label="Векторная карта территории">
+    <div class="delivery-canvas-wrap">
+      <canvas id="delivery-canvas" aria-label="Карта: клик ставит старт, перетаскивание от стрелки задаёт курс"></canvas>
+      <span class="map-badge" id="delivery-map-badge" data-tone="idle">ЧЕРНОВИК</span>
+      <p class="map-empty" id="delivery-map-empty" hidden>Карта недоступна</p>
+    </div>
+    <div class="delivery-toolbar" role="group" aria-label="Управление картой">
+      <button type="button" class="map-btn" id="delivery-zoom-out" aria-label="Отдалить">−</button>
+      <button type="button" class="map-btn" id="delivery-zoom-in" aria-label="Приблизить">+</button>
+      <button type="button" class="map-btn" id="delivery-fit">Вписать</button>
+      <button type="button" class="map-btn" id="delivery-pick-start" aria-pressed="true">Поставить старт</button>
+      <label class="delivery-check-inline"><input type="checkbox" id="delivery-background" checked> Спутниковый фон</label>
+      <button type="button" class="map-btn" id="delivery-theme" aria-pressed="false">Светлая карта</button>
+    </div>
+    <p class="delivery-map-note" id="delivery-map-note">Координаты приближённые. Масштаб не подтверждён: расстояния показываются в единицах карты, не в метрах. Светофоры — красный стоп, знак СТОП — полная остановка, зебра — уступить пешеходу.</p>
+  </section>
+
+  <aside class="delivery-side" aria-label="Настройка доставки и сухой прогон">
+    <section class="delivery-step" data-delivery-step="start" aria-labelledby="delivery-start-title">
+      <header class="delivery-step-head"><span class="delivery-step-num">1</span>
+        <div><b id="delivery-start-title">Где стоит робот</b><small>точка на проезде + курс; это настройка до рейса</small></div>
+      </header>
+      <div class="delivery-fields">
+        <label><span>X</span><input id="delivery-x" type="number" step="0.1" inputmode="decimal"></label>
+        <label><span>Y</span><input id="delivery-y" type="number" step="0.1" inputmode="decimal"></label>
+        <label><span>Курс, °</span><input id="delivery-yaw" type="number" step="1" min="-360" max="360" inputmode="decimal"></label>
+      </div>
+      <label class="delivery-range"><span>Курс робота</span><input id="delivery-yaw-range" type="range" min="-180" max="180" step="1" value="0"></label>
+      <p class="delivery-note" id="delivery-start-note">Кликните по дороге на карте. Стрелку курса можно повернуть ползунком или перетаскиванием от робота.</p>
+    </section>
+
+    <section class="delivery-step" data-delivery-step="goal" aria-labelledby="delivery-goal-title">
+      <header class="delivery-step-head"><span class="delivery-step-num">2</span>
+        <div><b id="delivery-goal-title">Куда доставить</b><small>цель — узел доставки или док, не крыша здания</small></div>
+      </header>
+      <label class="delivery-select"><span>Пункт назначения</span><select id="delivery-goal"></select></label>
+      <label class="delivery-ack"><input type="checkbox" id="delivery-ack"> Понимаю: карта черновая, масштаб и проезды не подтверждены, реальное движение запрещено.</label>
+      <div class="delivery-row">
+        <button type="button" class="map-btn" id="delivery-save">Сохранить настройку</button>
+        <button type="button" class="map-btn map-btn--primary" id="delivery-plan">Построить маршрут</button>
+      </div>
+      <p class="delivery-note" id="delivery-goal-note">Цель не выбрана.</p>
+    </section>
+
+    <section class="delivery-step" data-delivery-step="route" aria-labelledby="delivery-route-title">
+      <header class="delivery-step-head"><span class="delivery-step-num">3</span>
+        <div><b id="delivery-route-title">Маршрут по графу</b><small>повороты + объекты ПДД: светофоры, СТОП, переходы</small></div>
+      </header>
+      <p class="delivery-route-summary" id="delivery-route-summary">Маршрут не построен.</p>
+      <ol class="delivery-maneuvers" id="delivery-maneuvers"></ol>
+    </section>
+
+    <section class="delivery-step" data-delivery-step="sim" aria-labelledby="delivery-sim-title">
+      <header class="delivery-step-head"><span class="delivery-step-num">4</span>
+        <div><b id="delivery-sim-title">Сухой прогон</b><small>ямы/кочки + ПДД: красный, СТОП, пешеход, скорость — без тяги</small></div>
+      </header>
+      <label class="delivery-select"><span>Сценарий</span><select id="delivery-scenario"></select></label>
+      <div class="delivery-row">
+        <button type="button" class="map-btn map-btn--primary" id="delivery-simulate" disabled>Запустить сухой прогон</button>
+        <button type="button" class="map-btn" id="delivery-reset">Сбросить результат</button>
+      </div>
+      <div class="delivery-sim-status"><span id="delivery-sim-state" data-tone="idle">ожидание</span><span id="delivery-sim-distance">—</span></div>
+      <progress id="delivery-progress" max="100" value="0"></progress>
+      <ol class="delivery-events" id="delivery-events" aria-live="polite"></ol>
+      <p class="delivery-note" id="delivery-sim-note">Кнопки реального движения нет. Этот этап проверяет только логику маршрута и реакций.</p>
+    </section>
+
+    <details class="delivery-checks" open>
+      <summary>Готовность и ограничения · <span id="delivery-checks-state">—</span></summary>
+      <ul id="delivery-check-list" class="delivery-check-list"></ul>
+      <p class="delivery-note" id="delivery-blockers"></p>
+    </details>
+    <p class="delivery-safety" id="delivery-safety">Перед реальным рейсом нужны подтверждённый масштаб, проверка топологии, дорожное восприятие, локализация и единый арбитр тяги. Сейчас всё это не подключено.</p>
+  </aside>
+</main>
+
+<script src="slam_auth.js"></script>
+<script src="delivery.js"></script>
+<script>
+  (function () {
+    var token = new URLSearchParams(location.search).get('st');
+    if (token) {
+      [['delivery-back', '/map'], ['delivery-navigation', '/navigation']].forEach(function (pair) {
+        var link = document.getElementById(pair[0]);
+        if (link) link.href = pair[1] + '?st=' + encodeURIComponent(token);
+      });
+    }
+    RCDelivery.init();
+  })();
+</script>
+</body>
+</html>

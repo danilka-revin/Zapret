@@ -811,6 +811,10 @@ ASSETS = {
     # отдельный экран навигации: цель → маршрут → поездка
     "navigation_screen.js": "navigation_screen_js",
     "navigation.css": "navigation_css",
+    # доставка по векторной карте: черновик, старт/цель, сухой прогон без тяги
+    "delivery.js": "delivery_js",
+    "delivery.css": "delivery_css",
+    "delivery_reference.png": "delivery_reference_png",
     "viewport.js": "viewport_js",
     "camera_view.js": "camera_view_js",
     "camera_frames.js": "camera_frames_js",
@@ -1356,6 +1360,12 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         """Отдельный экран навигации: цель → маршрут → поездка."""
         return _send("navigation.html")
 
+    @bp.get("/delivery")
+    @guard
+    def delivery_screen():
+        """Доставка по векторной карте: старт, цель и сухой прогон без тяги."""
+        return _send("delivery.html")
+
     @bp.get("/sensors")
     @guard
     def sensors_screen():
@@ -1366,7 +1376,7 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     # second grid or race it when saving the same files.
     from .map_peer import (proxy_map, proxy_navigation, proxy_exploration,
                           proxy_sensors, proxy_landmark_file, proxy_calibration,
-                          proxy_scan_mode)
+                          proxy_scan_mode, proxy_delivery)
 
     def scan_control_allowed():
         """Управление в режиме «Скан» идёт только с CSRF-токеном сессии."""
@@ -1467,6 +1477,50 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         if not navigation_control_allowed():
             return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
         return navigation_proxy("/estop")
+
+    # ---------- доставка по векторной карте: прокси на борт, без тяги ------ #
+    def delivery_proxy(suffix):
+        return proxy_delivery(peer_kiosk_url().removesuffix("/api/kiosk_state"), suffix)
+
+    @bp.get("/api/delivery/map")
+    @guard
+    def api_delivery_map():
+        return delivery_proxy("/map")
+
+    @bp.get("/api/delivery/status")
+    @guard
+    def api_delivery_status():
+        response = delivery_proxy("/status")
+        if isinstance(response, tuple):
+            response_obj, status_code = response[0], response[1]
+        else:
+            response_obj, status_code = response, response.status_code
+        if csrf_token_provider and getattr(response_obj, "is_json", False):
+            payload = response_obj.get_json(silent=True)
+            if isinstance(payload, dict):
+                payload["csrfToken"] = csrf_token_provider()
+                return jsonify(payload), status_code, {"Cache-Control": "no-store"}
+        return response
+
+    @bp.post("/api/delivery/plan")
+    @guard
+    def api_delivery_plan():
+        return delivery_proxy("/plan")
+
+    def delivery_control_allowed():
+        if request.headers.get("X-Robot-Control") != "delivery":
+            return False
+        return csrf_header_ok is not None and bool(csrf_header_ok())
+
+    for suffix, endpoint in (("/setup", "api_delivery_setup"),
+                             ("/simulate", "api_delivery_simulate"),
+                             ("/reset", "api_delivery_reset")):
+        def delivery_action(suffix=suffix):
+            if not delivery_control_allowed():
+                return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
+            return delivery_proxy(suffix)
+        bp.add_url_rule("/api/delivery" + suffix, endpoint=endpoint,
+                        view_func=guard(delivery_action), methods=["POST"])
 
     # ---------- автообследование: те же вход, CSRF и владелец железа -------- #
     def exploration_proxy(suffix):

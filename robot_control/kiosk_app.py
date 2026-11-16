@@ -100,6 +100,7 @@ from robot_control.navigation import NavigationError, NavigationService
 from robot_control.scan_mode import ScanModeError, ScanModeService
 from robot_control.kinect import DepthError, KinectDepthService
 from robot_control.exploration import ExplorationError, ExplorationService
+from robot_control.delivery_service import DeliveryError, DeliveryService
 from robot_control.sensor_layout import layout_payload, kinect_spec, rear_kinect_enabled
 from robot_control import sensor_module as sensor_module_client
 from robot_control import calibration as geometry_calibration
@@ -607,9 +608,9 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         if not getattr(wheel_source, "auto_discovery", False):
             log.error("BMS: жду владельца проверки USB-портов колёс")
     if not config.testing and config.slam_source == "master":
-        # Ярлык «Запустить робот»: как только все четыре колеса подключатся,
-        # сами один раз за запуск калибруем сначала руль (оптодатчик, k),
-        # потом потенциометры (pm 1 + q). Выключить: RC_AUTO_CALIBRATE=0.
+        # Ярлык «Запустить робот»: сначала проверяем связь (4 платы FL/FR/RL/RR),
+        # затем один раз за запуск калибруем руль (оптодатчик, k) и потенциометры
+        # (pm 1 + q). Выключить: RC_AUTO_CALIBRATE=0.
         from . import auto_calibrate
         auto_calibrate.start(state)
     if not config.testing:
@@ -721,6 +722,10 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     nav_lidar = None if config.testing else (app.extensions.get("rc_lidar") or LidarManager.get_instance())
     navigation = NavigationService(map_service, getattr(state, "source", None), nav_lidar)
     app.extensions["rc_navigation"] = navigation
+    # Доставка по векторной карте: отдельный безопасный этап без тяги. Сервис
+    # не получает source/мост/манёвры и физически не может включить привод.
+    delivery = DeliveryService()
+    app.extensions["rc_delivery"] = delivery
     # Модуль датчиков (свет, замок двери, карты доступа, компас) — отдельная
     # плата на своём USB. Порт задаётся вручную (RC_SENSOR_PORT), автопоиска нет:
     # без порта экран показывает «не подключён», а не чужое устройство.
@@ -1310,6 +1315,61 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         result["status"] = navigation.status()
         return jsonify(result), 200, {"Cache-Control": "no-store"}
 
+    # ---------------- Доставка по векторной карте (без тяги) ------------- #
+    @app.get("/delivery")
+    def kiosk_delivery_page():
+        """Черновая карта территории, старт/цель и сухой прогон маршрута."""
+        return _send("delivery.html")
+
+    @app.get("/api/delivery/map")
+    def api_delivery_map():
+        payload = delivery.map_payload()
+        return jsonify(payload), 200 if payload.get("ok") else 503, {"Cache-Control": "no-store"}
+
+    @app.get("/api/delivery/status")
+    def api_delivery_status():
+        return jsonify(delivery.status()), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/delivery/plan")
+    def api_delivery_plan():
+        try:
+            return jsonify(delivery.plan(request.get_json(silent=True))), 200, {"Cache-Control": "no-store"}
+        except DeliveryError as exc:
+            return jsonify(exc.payload()), exc.status
+
+    def _delivery_control_allowed() -> bool:
+        return request.headers.get("X-Robot-Control") == "delivery"
+
+    @app.post("/api/delivery/setup")
+    def api_delivery_setup():
+        if not _delivery_control_allowed():
+            return jsonify({"ok": False, "code": "request_header_required",
+                            "error": "Запрос без заголовка X-Robot-Control: delivery"}), 400
+        try:
+            return jsonify(delivery.save_setup(request.get_json(silent=True))), 200, {"Cache-Control": "no-store"}
+        except DeliveryError as exc:
+            return jsonify(exc.payload()), exc.status
+
+    @app.post("/api/delivery/simulate")
+    def api_delivery_simulate():
+        if not _delivery_control_allowed():
+            return jsonify({"ok": False, "code": "request_header_required",
+                            "error": "Запрос без заголовка X-Robot-Control: delivery"}), 400
+        try:
+            payload = delivery.simulate(request.get_json(silent=True))
+        except DeliveryError as exc:
+            return jsonify(exc.payload()), exc.status
+        eventlog.record("ok", "доставка: сухой прогон завершён без тяги (%s)" %
+                        payload.get("simulation", {}).get("finalState", "?"), source="доставка")
+        return jsonify(payload), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/delivery/reset")
+    def api_delivery_reset():
+        if not _delivery_control_allowed():
+            return jsonify({"ok": False, "code": "request_header_required",
+                            "error": "Запрос без заголовка X-Robot-Control: delivery"}), 400
+        return jsonify(delivery.reset()), 200, {"Cache-Control": "no-store"}
+
     # ---------------- Автономное обследование и Kinect ------------------- #
     # Владелец моторов — только этот процесс. Команды требуют маркера
     # X-Robot-Control: exploration, как и остальные команды движения.
@@ -1731,6 +1791,17 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "reason": "request_header_required"}), 400
         result, status = dispatch_maneuver_config(state.source, request.get_json(silent=True))
         return jsonify(result), status
+
+    @app.get("/api/auto_calibrate")
+    def api_auto_calibrate_status():
+        from . import auto_calibrate as ac
+        try:
+            snap = ac.status_snapshot()
+            conn = ac.check_connection(state.source) if state and getattr(state, "source", None) else {"ok": False, "missing": list(ac.MODULE_IDS)}
+        except Exception:
+            snap = {"phase": "unknown"}
+            conn = {"ok": False}
+        return jsonify(ok=True, status=snap, connection=conn, enabled=ac.autostart_enabled())
 
     @app.post("/api/kiosk_calibrate")
     def api_kiosk_calibrate():
@@ -2290,7 +2361,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     for filename in ("steer_dial.js", "steer_dial.css", "calibration.css", "wheel_settings.js", "pot_mode.js",
                      "wheel_angle.js", "pot_hold.js", "devices.css", "devices.js", "sensors.css", "sensors.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "brake_recovery.js", "battery.js", "receipt.js", "receipt.css", "lidar_settings.css",
                      "lidar_settings.js", "lidar_view.js", "kinect_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
-                     "explore.js", "scan_mode.js", "scan.css", "navigation_screen.js", "navigation.css", "map.css", "viewport.js", "camera_view.js", "camera_stitch.js", "camera_frames.js", "slam_auth.js",
+                     "explore.js", "scan_mode.js", "scan.css", "navigation_screen.js", "navigation.css",
+                     "delivery.js", "delivery.css", "delivery_reference.png", "map.css", "viewport.js", "camera_view.js", "camera_stitch.js", "camera_frames.js", "slam_auth.js",
                      "steer_presets.js", "power.css", "power.js"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
         def _view(name=filename):

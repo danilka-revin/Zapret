@@ -1,16 +1,19 @@
 """Автоматическая калибровка при запуске по ярлыку.
 
 Ярлык «Запустить робот» поднимает бортовой киоск (``kiosk_app``), который
-владеет USB-линками четырёх колёс. Как только все четыре платы дали свежие
-кадры, киоск сам один раз за жизнь процесса:
+владеет USB-линками четырёх колёс. При старте киоск сам один раз за жизнь
+процесса выполняет фиксированную последовательность:
 
-1. калибрует руль по оптодатчику — команда ``k`` у всех четырёх колёс
+0. **проверка связи** — убедиться, что все четыре платы (FL/FR/RL/RR) дают
+   свежие кадры телеметрии; какие именно модули отсутствуют — пишется в
+   журнал каждые 60 с;
+1. **калибровка руля по оптодатчику** — команда ``k`` у всех четырёх колёс
    (поиск флажка в пределах ±125°, прошивка ``CALIB_TIMEOUT_MS`` = 120 с);
-2. включает режим потенциометра (``pm 1``) и калибрует потенциометры —
-   команда ``q`` (ноль 0°, −60°, +60°, наклон сохраняется в EEPROM).
+2. **режим и калибровка потенциометров** — команда ``pm 1`` + ``q``
+   (ноль 0°, −60°, +60°, наклон сохраняется в EEPROM).
 
 Порядок жёсткий: потенциометру нужен ноль руля (``zero_set``), который даёт
-только калибровка по датчику, поэтому сначала колёса, потом потенциометры —
+только оптическая калибровка, поэтому сначала колёса, потом потенциометры —
 и только при свежих кадрах от всех четырёх модулей.
 
 Калибровка руля физически вращает колесо, поэтому:
@@ -57,6 +60,67 @@ QUEUE_RETRY_SEC = 5.0
 
 _DISABLED_VALUES = {"0", "false", "no", "off"}
 _SOURCE_TAG = "автокалибровка"
+_STATUS: dict[str, Any] = {"phase": "idle", "reason": "", "startedAt": None, "finishedAt": None, "modules": {}}
+_STATUS_LOCK = threading.Lock()
+
+
+def status_snapshot() -> dict[str, Any]:
+    with _STATUS_LOCK:
+        return dict(_STATUS)
+
+
+def _set_status(phase: str, reason: str = "", modules: dict | None = None) -> None:
+    with _STATUS_LOCK:
+        _STATUS["phase"] = phase
+        _STATUS["reason"] = reason
+        if phase == "running":
+            _STATUS["startedAt"] = time.time()
+            _STATUS["finishedAt"] = None
+        if phase in {"done", "error", "idle"} and reason or phase in {"done", "error"}:
+            _STATUS["finishedAt"] = time.time()
+        if modules is not None:
+            _STATUS["modules"] = dict(modules)
+
+
+def check_connection(source, *, now_fn=None) -> dict[str, Any]:
+    """Синхронная проверка связи с четырьмя платами колёс.
+
+    Возвращает ``{ok, connected, missing, stale, frames}``. Не отправляет
+    команды — только читает свежие кадры. Используется как первый шаг
+    автокалибровки и как ручная диагностика.
+    """
+    if now_fn is None:
+        now_fn = time.time
+    now = now_fn()
+    fresh = _fresh_frames(source, now)
+    missing = sorted(set(MODULE_IDS) - set(fresh))
+    stale = []
+    try:
+        stale_s = float(getattr(source, "STALE_S", 1.0))
+        frames_raw = getattr(source, "frames", {}) or {}
+        if getattr(source, "lock", None) is not None:
+            with source.lock:
+                frames_raw = dict(frames_raw)
+        for mid in MODULE_IDS:
+            entry = frames_raw.get(mid)
+            if entry is None:
+                continue
+            try:
+                _, ts = entry
+                if now - float(ts) >= stale_s:
+                    stale.append(mid)
+            except Exception:
+                stale.append(mid)
+    except Exception:
+        pass
+    return {
+        "ok": len(missing) == 0,
+        "connected": sorted(fresh),
+        "missing": missing,
+        "stale": sorted(stale),
+        "frames": {mid: {"age": round(now - float(ts), 3)} for mid, (_, ts) in
+                   ((m, getattr(source, "frames", {}).get(m)) for m in fresh) if ts is not None},
+    }
 
 
 def autostart_enabled(env: Any = None) -> bool:
@@ -187,27 +251,39 @@ def run(source, latched, *, sleep=time.sleep, monotonic=time.monotonic,
         else:
             log.info("автокалибровка: %s", message)
 
-    # --- 0. ждём подключения всех четырёх ---------------------------------- #
+    # --- 0. ждём подключения всех четырёх + явная проверка связи ------------ #
     if latched() is not None:
+        _set_status("error", "estop")
         note("warn", "E-STOP взведён до старта — автокалибровка отменена")
         return {"ok": False, "reason": "estop", "stage": "wait"}
-    note("info", "жду подключения всех четырёх колёс…")
+    _set_status("running", "wait")
+    note("info", "проверяю связь с колёсами: жду свежие кадры FL/FR/RL/RR…")
+    diag = check_connection(source, now_fn=now)
+    if not diag["ok"]:
+        note("info", "связь: подключено %s, нет кадров: %s" %
+             (", ".join(diag["connected"]) or "—", ", ".join(diag["missing"]) or "—"))
     last_reminder = monotonic()
     while _all_fresh(source, now()) is None:
         if latched() is not None:
+            _set_status("error", "estop")
             note("warn", "E-STOP взведён в ожидании модулей — автокалибровка отменена")
             return {"ok": False, "reason": "estop", "stage": "wait"}
         if monotonic() - last_reminder >= WAIT_REMIND_SEC:
             last_reminder = monotonic()
             missing = sorted(set(MODULE_IDS) - set(_fresh_frames(source, now())))
+            _set_status("running", "wait", {"missing": missing})
             note("info", "всё ещё жду колёса, нет кадров: %s" % (", ".join(missing) or "все"))
         sleep(POLL_SEC)
+    diag = check_connection(source, now_fn=now)
+    _set_status("running", "wheel")
     note("ok", "все четыре модуля подключены — калибрую руль (оптодатчик)")
 
     # --- 1. калибровка руля по оптодатчику --------------------------------- #
+    _set_status("running", "wheel")
     result = _queue_with_retry(lambda: source.calibrate_module("ALL"), latched, note,
                                sleep, "калибровка руля")
     if not result.get("ok"):
+        _set_status("error", result.get("reason") or "wheel")
         note("err", "калибровка руля не запущена: %s" % (result.get("reason") or "unknown"))
         return {"ok": False, "reason": result.get("reason"), "stage": "wheel"}
     # Сначала обязательно дождаться старта: иначе свежее «cal=…, calib=0»
@@ -217,31 +293,39 @@ def run(source, latched, *, sleep=time.sleep, monotonic=time.monotonic,
                       timeout=WHEEL_START_TIMEOUT_SEC,
                       sleep=sleep, monotonic=monotonic, latched=latched)
     if state == "estop":
+        _set_status("error", "estop")
         note("warn", "E-STOP взведён до старта калибровки руля — последовательность прервана")
         return {"ok": False, "reason": "estop", "stage": "wheel"}
     if state != "ok":
+        _set_status("error", "not_started")
         note("err", "калибровка руля не стартовала: платы не отреагировали на k (связь?) — потенциометры пропускаю")
         return {"ok": False, "reason": "not_started", "stage": "wheel"}
     state = _wait_for(lambda: _wheels_done(source, now()), timeout=WHEEL_DONE_TIMEOUT_SEC,
                       sleep=sleep, monotonic=monotonic, latched=latched)
     if state == "estop":
+        _set_status("error", "estop")
         note("warn", "E-STOP взведён во время калибровки руля — последовательность прервана")
         return {"ok": False, "reason": "estop", "stage": "wheel"}
     if state != "ok":
+        _set_status("error", "timeout")
         note("err", "калибровка руля не завершилась за %d с — потенциометры пропускаю" %
              int(WHEEL_DONE_TIMEOUT_SEC))
         return {"ok": False, "reason": "timeout", "stage": "wheel"}
     missing = _wheels_homed(source, now())
     if missing:
+        _set_status("error", "not_homed", {"missing": missing})
         note("err", "калибровка руля завершилась, но ноль не задан у: %s — потенциометры пропускаю"
              % ", ".join(missing))
         return {"ok": False, "reason": "not_homed", "stage": "wheel", "modules": missing}
+    _set_status("running", "pot")
     note("ok", "калибровка руля завершена: ноль по датчику у всех четырёх")
 
     # --- 2. режим потенциометра --------------------------------------------- #
+    _set_status("running", "pot_mode")
     result = _queue_with_retry(lambda: source.set_pot_mode("on"), latched, note,
                                sleep, "включение потенциометра")
     if not result.get("ok"):
+        _set_status("error", result.get("reason") or "pot_mode")
         note("err", "режим потенциометра не включён: %s" % (result.get("reason") or "unknown"))
         return {"ok": False, "reason": result.get("reason"), "stage": "pot_mode"}
     def _pot_mode_confirmed() -> bool:
@@ -251,6 +335,7 @@ def run(source, latched, *, sleep=time.sleep, monotonic=time.monotonic,
     confirmed = _wait_for(_pot_mode_confirmed,
                           timeout=POT_MODE_TIMEOUT_SEC, sleep=sleep, monotonic=monotonic, latched=latched)
     if confirmed == "estop":
+        _set_status("error", "estop")
         note("warn", "E-STOP взведён перед калибровкой потенциометров — последовательность прервана")
         return {"ok": False, "reason": "estop", "stage": "pot_mode"}
     if confirmed != "ok":
@@ -259,41 +344,51 @@ def run(source, latched, *, sleep=time.sleep, monotonic=time.monotonic,
         note("warn", "платы не подтвердили pm 1 в кадрах — продолжаю с калибровкой потенциометра")
 
     # --- 3. калибровка потенциометров ---------------------------------------- #
+    _set_status("running", "pot")
     note("info", "калибрую потенциометры (ноль 0°, −60°, +60°)…")
     result = _queue_with_retry(lambda: source.set_pot_mode("calibrate"), latched, note,
                                sleep, "калибровка потенциометра")
     if not result.get("ok"):
+        _set_status("error", result.get("reason") or "pot")
         note("err", "калибровка потенциометра не запущена: %s" % (result.get("reason") or "unknown"))
         return {"ok": False, "reason": result.get("reason"), "stage": "pot"}
     state = _wait_for(lambda: any(f.get("calib") or f.get("moving") for f in _fresh_frames(source, now()).values()),
                       timeout=POT_START_TIMEOUT_SEC, sleep=sleep, monotonic=monotonic, latched=latched)
     if state == "estop":
+        _set_status("error", "estop")
         note("warn", "E-STOP взведён до старта калибровки потенциометров — последовательность прервана")
         return {"ok": False, "reason": "estop", "stage": "pot"}
     if state != "ok":
+        _set_status("error", "not_started")
         note("err", "калибровка потенциометра не стартовала: платы не отреагировали на q (связь?)")
         return {"ok": False, "reason": "not_started", "stage": "pot"}
     state = _wait_for(lambda: _pot_done(source, now()), timeout=POT_DONE_TIMEOUT_SEC,
                       sleep=sleep, monotonic=monotonic, latched=latched)
     if state == "estop":
+        _set_status("error", "estop")
         note("warn", "E-STOP взведён во время калибровки потенциометров — последовательность прервана")
         return {"ok": False, "reason": "estop", "stage": "pot"}
     if state != "ok":
+        _set_status("error", "timeout")
         note("err", "калибровка потенциометра не завершилась за %d с" % int(POT_DONE_TIMEOUT_SEC))
         return {"ok": False, "reason": "timeout", "stage": "pot"}
     missing = _pot_ready(source, now())
     if missing:
+        _set_status("error", "not_calibrated", {"missing": missing})
         note("err", "потенциометр не подтверждён у: %s — проверьте датчик A0 и провод" %
              ", ".join(missing))
         return {"ok": False, "reason": "not_calibrated", "stage": "pot", "modules": missing}
+    _set_status("done", "ok")
     note("ok", "калибровка потенциометров завершена у всех четырёх; режим потенциометра включён")
     return {"ok": True, "stage": "done"}
 
 
 def _run_quietly(source, latched) -> None:
+    _set_status("running", "wait")
     try:
         outcome = run(source, latched)
     except Exception:  # noqa: BLE001 — поток-демон не должен ронять киоск
+        _set_status("error", "internal_error")
         log.exception("автокалибровка: неожиданная ошибка")
         try:
             eventlog.record("err", "автокалибровка: неожиданная ошибка, см. лог процесса",
@@ -302,6 +397,8 @@ def _run_quietly(source, latched) -> None:
             pass
         return
     if not outcome.get("ok"):
+        if status_snapshot().get("phase") != "error":
+            _set_status("error", outcome.get("reason") or outcome.get("stage") or "unknown")
         log.warning("автокалибровка: остановлена на этапе %s (%s)",
                     outcome.get("stage"), outcome.get("reason"))
 
