@@ -53,6 +53,10 @@
            title="Навигация: цель, маршрут, поездка" aria-label="Навигация: цель, маршрут, поездка">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="18" r="2.4"/><path d="M8.3 16.6c3.4-1.2 2.4-4.6 5-5.6 1.9-.7 3.3.3 4.4 1.6M15 6.5h5v5"/><path d="M17.7 12.6 20 15.4l-2.9 1.9" stroke-linejoin="round"/></svg>
         </a>
+        <a id="k-delivery-open" class="k-ctrl-btn k-ctrl-btn--icon" href="/delivery"
+           title="Доставка: векторная карта, старт и цель, сухой прогон" aria-label="Доставка: векторная карта, старт и цель, сухой прогон">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/><path d="M6 4h5"/></svg>
+        </a>
         <a id="k-devices-open" class="k-ctrl-btn k-ctrl-btn--icon" href="/devices"
            title="Устройства робота" aria-label="Устройства робота">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/><rect x="10" y="10" width="4" height="4" rx="1" fill="currentColor" stroke="none"/><path d="M10 3v2.5M14 3v2.5M10 18.5V21M14 18.5V21M3 10h2.5M3 14h2.5M18.5 10H21M18.5 14H21"/></svg>
@@ -225,6 +229,7 @@
         <small id="swipe-title-hint">камеры и журнал · свайп вправо — назад к статистике</small>
       </div>
       <a id="swipe-map-open" class="swipe-close" href="/map">Карта</a>
+      <a id="swipe-delivery-open" class="swipe-close" href="/delivery">Доставка</a>
       <button id="swipe-battery-open" class="swipe-close battery-open" type="button" aria-controls="swipe-battery-view">АКБ</button>
       <span class="swipe-live" id="swipe-live">● LIVE</span>
     </header>
@@ -571,6 +576,7 @@
             <!-- Навигация переехала в отдельный экран /navigation: на карте
                  остались только карта, настройки и автообследование. -->
             <a class="map-btn map-btn--primary nav-open-screen" id="map-nav-screen" href="/navigation">Открыть навигацию →</a>
+            <a class="map-btn nav-open-screen" id="map-delivery-screen" href="/delivery">Доставка по векторной карте →</a>
 
             <section id="map-settings" class="map-settings" hidden aria-label="Настройки карты">
               <fieldset class="map-wheel-colors">

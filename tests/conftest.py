@@ -91,6 +91,13 @@ def isolated_map_files(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_delivery_files(tmp_path, monkeypatch):
+    """Настройка доставки — во временную папку, постоянная карта не меняется."""
+    monkeypatch.setenv("RC_DELIVERY_DIR", str(tmp_path / "delivery"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def clean_event_journal():
     """Журнал событий бортового экрана — состояние процесса, а не теста.
 

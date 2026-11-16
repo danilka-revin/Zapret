@@ -21,6 +21,7 @@
   <div class="map-page-head-actions">
     <a class="map-btn map-btn--route" id="map-open-scan" href="/scan">Режим «Скан»</a>
     <a class="map-btn map-btn--route" id="map-open-navigation" href="/navigation">Навигация →</a>
+    <a class="map-btn map-btn--route" id="map-open-delivery" href="/delivery">Доставка →</a>
 
   </div>
 </header>
@@ -215,6 +216,8 @@ if (token) {
   if (scanLink) scanLink.href = '/scan?st=' + encodeURIComponent(token);
   const navPage = document.getElementById('map-open-navigation');
   if (navPage) navPage.href = '/navigation?st=' + encodeURIComponent(token);
+  const deliveryPage = document.getElementById('map-open-delivery');
+  if (deliveryPage) deliveryPage.href = '/delivery?st=' + encodeURIComponent(token);
 }
 RCMapView.init();
 </script></body></html>
