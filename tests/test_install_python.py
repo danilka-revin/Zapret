@@ -158,6 +158,29 @@ def test_check_mode_fails_when_minimum_is_too_high():
     assert "install_python.sh" in result.stderr
 
 
+def test_existing_newer_python_is_activated_when_python3_is_old(fake_host):
+    """Не только находит python3.9, но и делает его используемым как python3."""
+    fake_host.set_os(UBUNTU_2004)
+    candidate = fake_host.root / "no_python" / "python3.9"
+    candidate.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"${1:-}\" == \"--version\" ]]; then echo 'Python 3.9.5'; exit 0; fi\n"
+        "if [[ \"${1:-}\" == \"-c\" ]]; then\n"
+        "  case \"${2:-}\" in *sys.version_info*) echo 3.9; exit 0;; esac\n"
+        "  exit 0\n"
+        "fi\nexit 0\n",
+        encoding="utf-8",
+    )
+    candidate.chmod(0o755)
+
+    result = run()
+    activated = fake_host.root / "usr_local" / "bin" / "python3"
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert activated.is_symlink()
+    assert activated.resolve() == candidate.resolve()
+    assert "Python 3.9.5" in result.stdout
+
+
 # ------------------------------------------------------- apt: PPA и версии --- #
 
 
@@ -236,7 +259,10 @@ def test_install_ubuntu_installs_python_instead_of_failing():
     assert "RC_PYTHON_AUTO" in text
 
 
-def test_ensure_deps_points_at_the_installer():
-    """ensure_deps.sh не просто ругается версией — он говорит, чем это лечится."""
-    text = (SCRIPTS / "ensure_deps.sh").read_text(encoding="utf-8")
-    assert "./scripts/install_python.sh" in text
+def test_ensure_deps_uses_selected_interpreter_and_points_at_installer():
+    """ensure_deps получает выбранный Python и не падает обратно на старый python3."""
+    deps = (SCRIPTS / "ensure_deps.sh").read_text(encoding="utf-8")
+    installer = (SCRIPTS / "install_ubuntu.sh").read_text(encoding="utf-8")
+    assert 'PYTHON3="${RC_PYTHON3:-$(command -v python3)}"' in deps
+    assert 'RC_PYTHON3="$PYTHON3" ./scripts/ensure_deps.sh' in installer
+    assert "./scripts/install_python.sh" in deps

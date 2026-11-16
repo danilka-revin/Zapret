@@ -67,11 +67,24 @@ if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2
   log "подходящего python3 нет ($(python3 --version 2>&1 || echo 'не установлен')) — ставлю Python 3.9+…"
   ./scripts/install_python.sh || { echo "Не удалось поставить Python 3.9+. Запустите отдельно: ./scripts/install_python.sh" >&2; exit 1; }
 fi
-PYTHON3="$(command -v python3)"
-log "python3: $("$PYTHON3" --version 2>&1) (нужен 3.9+)"
+# Не полагаться только на PATH: на Ubuntu 20.04 `python3` может по-прежнему
+# указывать на 3.8, даже если установщик обнаружил python3.9+.
+PYTHON3=""
+for candidate in /usr/local/bin/python3 /usr/bin/python3 /usr/local/bin/python3.[0-9]* /usr/bin/python3.[0-9]*; do
+  [[ -x "$candidate" ]] || continue
+  if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+    PYTHON3="$candidate"
+    break
+  fi
+done
+if [[ -z "$PYTHON3" ]]; then
+  echo "Не найден рабочий Python 3.9+ после установки. Повторите: ./scripts/install_python.sh" >&2
+  exit 1
+fi
+log "Python проекта: $PYTHON3 — $("$PYTHON3" --version 2>&1) (нужен 3.9+)"
 
 # --- 1-2. python и зависимости (работает офлайн через vendor/) -------------- #
-./scripts/ensure_deps.sh
+RC_PYTHON3="$PYTHON3" ./scripts/ensure_deps.sh
 
 # USB Serial мастера доступен пользователю через группу dialout.
 LOGIN_USER="${SUDO_USER:-${USER:-$(id -un)}}"

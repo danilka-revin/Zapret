@@ -7,7 +7,8 @@
 #   ./scripts/install_python.sh 3.11       # конкретная версия (3.9 … 3.13)
 #
 # Что делает:
-#   1) ищет уже установленный подходящий python3 и, если нашёл, ничего не ставит;
+#   1) ищет уже установленный подходящий Python; если системный python3 старый,
+#      делает найденную версию доступной как /usr/local/bin/python3;
 #   2) на Ubuntu берёт python3.X из apt, а чего в репозиториях нет — из PPA
 #      deadsnakes (на 20.04 в системе только 3.8, на 22.04 — 3.10);
 #   3) если apt не помог (нет сети до PPA, не-Ubuntu, 32-битная ARM) — ставит
@@ -133,9 +134,22 @@ find_python() {  # ищет интерпретатор нужной версии
 report_ok() { log "готово: $1 — $("$1" --version 2>&1) (нужен ${WANT:-$MIN_VERSION}+)"; }
 
 if FOUND="$(find_python)"; then
+  if [[ "$MODE" == "check" ]]; then
+    report_ok "$FOUND"
+    exit 0
+  fi
+  # Частая ситуация на Ubuntu 20.04: python3 остаётся системным 3.8,
+  # но python3.9/3.11 уже установлен. Недостаточно просто «найти» его:
+  # установщик проекта затем вызывал python3 и снова получал старую версию.
+  # Сделаем найденный подходящий интерпретатор доступным как python3 в
+  # /usr/local/bin (не трогая /usr/bin/python3 и Python, нужный самой Ubuntu).
+  if ! have python3 || ! version_ok "$(py_version python3)"; then
+    $SUDO mkdir -p "$INSTALL_DIR/bin"
+    $SUDO ln -sf "$FOUND" "$INSTALL_DIR/bin/python3"
+    log "python3 направлен на подходящий интерпретатор: $INSTALL_DIR/bin/python3"
+  fi
   report_ok "$FOUND"
-  if [[ "$MODE" == "check" ]]; then exit 0; fi
-  log "ставить ничего не нужно. Для проекта дальше: ./scripts/install_ubuntu.sh"
+  log "ставить Python не нужно. Для проекта дальше: ./scripts/install_ubuntu.sh"
   exit 0
 fi
 
