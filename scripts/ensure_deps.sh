@@ -6,23 +6,33 @@ cd "$(dirname "$0")/.."
 
 log() { printf '\033[1;32m[deps]\033[0m %s\n' "$*"; }
 
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null \
-  || {
-    echo "Нужен Python 3.9+ (у вас $(python3 --version 2>&1))." >&2
-    echo "Поставьте его: ./scripts/install_python.sh" >&2
-    exit 1
-  }
+PYTHON3="${RC_PYTHON3:-$(command -v python3)}"
+if [[ -z "$PYTHON3" ]] || ! "$PYTHON3" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+  HAVE_VERSION=""
+  if [[ -n "$PYTHON3" ]]; then HAVE_VERSION="$("$PYTHON3" --version 2>&1 || true)"; fi
+  [[ -n "$HAVE_VERSION" ]] || HAVE_VERSION="python3 не найден"
+  echo "Нужен Python 3.9+ (выбранный интерпретатор: $HAVE_VERSION)." >&2
+  echo "Полная установка: ./scripts/install_ubuntu.sh (или ./scripts/install_python.sh)." >&2
+  exit 1
+fi
+
+if [[ -x .venv/bin/python ]] && ! .venv/bin/python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+  log "существующий .venv создан на неподдерживаемом Python — пересоздаю его на $PYTHON3…"
+  rm -rf .venv
+fi
 
 if [[ ! -x .venv/bin/python ]]; then
-  log "создаю .venv…"
-  if ! python3 -m venv .venv 2>/dev/null && ! python3 -m venv --without-pip .venv 2>/dev/null; then
+  log "создаю .venv на основе $PYTHON3 ($($PYTHON3 --version 2>&1))…"
+  if ! "$PYTHON3" -m venv .venv 2>/dev/null && ! "$PYTHON3" -m venv --without-pip .venv 2>/dev/null; then
     if command -v apt >/dev/null 2>&1; then
-      log "ставлю python3-venv через apt…"
+      PYTHON_VERSION="$("$PYTHON3" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+      VENV_PACKAGE="python${PYTHON_VERSION}-venv"
+      log "ставлю $VENV_PACKAGE через apt…"
       if command -v sudo >/dev/null 2>&1 && [[ $EUID -ne 0 ]]; then SUDO=sudo; else SUDO=; fi
-      $SUDO apt update -y && $SUDO apt install -y python3-venv
-      python3 -m venv --without-pip .venv
+      $SUDO apt update -y && $SUDO apt install -y "$VENV_PACKAGE"
+      "$PYTHON3" -m venv --without-pip .venv
     else
-      echo "python3-venv не установлен, apt недоступен." >&2
+      echo "Не удалось создать venv на основе $PYTHON3, а apt недоступен." >&2
       exit 1
     fi
   fi

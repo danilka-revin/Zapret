@@ -98,6 +98,9 @@ def offline_install(tmp_path):
         "PIP_FIND_LINKS": str(project / "vendor"),
         "PIP_DISABLE_PIP_VERSION_CHECK": "1",
         "PIP_NO_INPUT": "1",
+        # Должно использоваться именно переданное установщиком Python, а не
+        # заново выбранный системный python3.
+        "RC_PYTHON3": shutil.which("python3"),
     })
     return project, env
 
