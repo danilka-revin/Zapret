@@ -37,12 +37,15 @@ def test_stats_reports_download(client, operator):
     assert csv_resp.status_code == 200
     assert csv_resp.mimetype == "text/csv"
     assert "rus_slam_stats.csv" in csv_resp.headers["Content-Disposition"]
-    assert "Пробег, м" in csv_resp.get_data(as_text=True)
+    csv_text = csv_resp.get_data(as_text=True)
+    assert "Пробег, м" in csv_text
+    assert "BULKA_v1" in csv_text
 
     json_resp = client.get("/api/stats/report.json")
     assert json_resp.status_code == 200
     assert json_resp.mimetype == "application/json"
     doc = json.loads(json_resp.get_data(as_text=True))
+    assert doc["device"].startswith("BULKA_v1")
     assert doc["summary"]["totals"]["trips"] == 0
     assert "unavailable" in doc
 

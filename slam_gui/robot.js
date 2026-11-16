@@ -837,7 +837,7 @@
     // ========================= ТЕМЫ: 20 видов =========================
     const THEMES = [
       {id:'red',      name:'Чёрно-красный', hint:'базовый',            accent:'#c0505a', bg:'#000000', panel:'#101012'},
-      {id:'rus',      name:'RUS SLAM',      hint:'оригинал лайм',      accent:'#9fe36b', bg:'#070d0a', panel:'#12201a'},
+      {id:'rus',      name:'BULKA_v1',      hint:'оригинал лайм',      accent:'#9fe36b', bg:'#070d0a', panel:'#12201a'},
       {id:'lavender', name:'Lavender',      hint:'WEB TACTICS',        accent:'#c9b3ff', bg:'#0a0a14', panel:'#181826'},
       {id:'ocean',    name:'Ocean',         hint:'голубой',            accent:'#4fc3f7', bg:'#061018', panel:'#122636'},
       {id:'sunset',   name:'Sunset',        hint:'оранжевый',          accent:'#ff8c42', bg:'#120a06', panel:'#241a0f'},

@@ -1,4 +1,4 @@
-"""Проверки веб-интерфейса RUS SLAM: страницы, API, замок отсека, статика."""
+"""Проверки веб-интерфейса BULKA_v1: страницы, API, замок отсека, статика."""
 
 from __future__ import annotations
 
@@ -34,7 +34,9 @@ def test_main_screen_after_login(client, operator):
     response = client.get("/")
     assert response.status_code == 200
     text = response.get_data(as_text=True)
-    # это основной экран робота из rus_slam, а не наша заглушка
+    # Проверяем бренд и основной экран робота (а не заглушку).
+    assert "BULKA_v1" in text
+    assert "RUS SLAM" not in text
     assert 'href="main.css"' in text
     assert 'src="main.js"' in text
     assert "Управление роботом ещё не подключено" not in text

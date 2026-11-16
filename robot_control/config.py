@@ -49,7 +49,7 @@ class Config:
     session_lifetime_minutes: int = 60
     pbkdf2_iterations: int = 200_000
     testing: bool = False
-    # --- интерфейс RUS SLAM ---
+    # --- интерфейс BULKA_v1 ---
     slam_source: str = "master"        # master | auto | sim | serial | ros
     slam_ports: tuple[str, ...] = ()   # UART-порты для serial
     #: Ручные порты колёсных модулей (RC_WHEEL_PORTS). Роли платы сообщают сами.

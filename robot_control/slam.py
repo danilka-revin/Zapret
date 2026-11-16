@@ -1,4 +1,4 @@
-"""Веб-интерфейс RUS SLAM внутри пульта оператора.
+"""Веб-интерфейс BULKA_v1 внутри пульта оператора.
 
 Интерфейс взят из https://github.com/danilka-revin/rus_slam (каталог ``gui/``)
 и лежит в репозитории в ``slam_gui/`` — робот работает без интернета, поэтому
@@ -872,7 +872,7 @@ def load_backend():
     if _backend is not None:
         return _backend
     if not BACKEND_PY.is_file():
-        raise RuntimeError(f"не найден {BACKEND_PY} — интерфейс RUS SLAM не установлен")
+        raise RuntimeError(f"не найден {BACKEND_PY} — интерфейс BULKA_v1 не установлен")
     spec = importlib.util.spec_from_file_location("rus_slam_backend", str(BACKEND_PY))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -1188,7 +1188,7 @@ def start_lidar(*, testing: bool = False, port: int | None = None, force: bool =
 
 def create_blueprint(state, guard=None, *, csrf_header_ok=None,
                      csrf_token_provider=None) -> Blueprint:
-    """Маршруты интерфейса RUS SLAM.
+    """Маршруты интерфейса BULKA_v1.
 
     ``guard`` — декоратор авторизации пульта; без него маршруты открыты
     (используется в тестах самого интерфейса). Команды навигации в веб-пульте

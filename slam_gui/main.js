@@ -726,7 +726,7 @@
     } catch (err) {
       if (!failedSteps[name]) {
         failedSteps[name] = true;
-        console.warn('RUS SLAM main: блок ' + name + ' не нарисован:', err && err.message ? err.message : err);
+        console.warn('BULKA_v1 main: блок ' + name + ' не нарисован:', err && err.message ? err.message : err);
       }
     }
   }
@@ -767,7 +767,7 @@
       await poll();
       render();
     } catch (err) {
-      console.error('RUS SLAM main:', err);
+      console.error('BULKA_v1 main:', err);
     } finally {
       setTimeout(loop, POLL_MS);
     }

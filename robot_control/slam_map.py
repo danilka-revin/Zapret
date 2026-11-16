@@ -430,7 +430,7 @@ class OccupancyGrid:
 
     def pgm_bytes(self) -> bytes:
         """Файл карты в формате ROS map_server (P5)."""
-        header = ("P5\n# RUS SLAM lidar map\n%d %d\n255\n"
+        header = ("P5\n# BULKA_v1 lidar map\n%d %d\n255\n"
                   % (self.width, self.height)).encode("ascii")
         body = b"".join(self.grayscale_rows())
         return header + body

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-backend.py — сервер борта RUS SLAM: отдаёт экраны и данные любому браузеру.
+backend.py — сервер борта BULKA_v1: отдаёт экраны и данные любому браузеру.
 
 Ничего не открывает и не показывает сам: робот лишь отвечает по сети, а
 страницы смотрят в браузере — на дисплее робота, планшете или ноутбуке.
@@ -4122,7 +4122,7 @@ def build_app(args):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="RUS SLAM: основной экран робота и API")
+    ap = argparse.ArgumentParser(description="BULKA_v1: основной экран робота и API")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--source", choices=["none", "serial", "ros", "auto"], default="auto",
@@ -4157,7 +4157,7 @@ def main(argv=None):
                                  partial(ApiHandler))
     url = "http://127.0.0.1:%d%s" % (args.port, MAIN_PAGE)
 
-    print("RUS SLAM · сервер борта: страницы и API (сам окон не открывает)")
+    print("BULKA_v1 · сервер борта: страницы и API (сам окон не открывает)")
     print("  источник данных : %s" % getattr(app.source, "name", "?"))
     print("  на роботе       : %s" % url)
     for ip in local_ips():

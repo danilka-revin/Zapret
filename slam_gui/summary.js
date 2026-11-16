@@ -299,12 +299,12 @@
       + esc(durHms(tr.movingSec)) + '</td><td>' + esc(resultText(tr.result)) + '</td></tr>').join('');
     const na = (s.unavailable || []).map((x) => '<li>' + esc(x) + '</li>').join('');
     const html = '<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
-      + '<title>RUS SLAM — сводка работы</title><style>'
+      + '<title>BULKA_v1 — сводка работы</title><style>'
       + 'body{font:13px/1.45 Arial,Helvetica,sans-serif;color:#17211d;margin:24px}'
       + 'h1{font-size:19px;margin:0 0 4px}h2{font-size:14px;margin:18px 0 6px}'
       + 'table{border-collapse:collapse;width:100%}th,td{border:1px solid #cfd8d3;padding:4px 6px;font-size:11px;text-align:left}'
       + 'th{background:#eef3f0}.muted{color:#6a7570;font-size:11px}</style></head><body>'
-      + '<h1>RUS SLAM — сводка работы робота</h1>'
+      + '<h1>BULKA_v1 — сводка работы робота</h1>'
       + '<div class="muted">НТЦ АО «АВТОВАЗ» · сформировано ' + esc(new Date().toLocaleString('ru-RU', { hour12: false }))
       + ' · с ' + esc(dateTime(s.since)) + ' · данные только с робота</div>'
       + '<h2>Показатели</h2><table>'
