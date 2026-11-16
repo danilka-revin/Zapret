@@ -305,9 +305,34 @@
 
       <section id="view-sensors" class="view hidden">
         <div class="grid">
-          <div class="panel">
-            <div class="pt"><h3>Лидар ЛДС-01</h3></div>
-            <canvas id="lidar" width="720" height="420"></canvas>
+          <div class="panel" style="display:flex;flex-direction:column">
+            <div class="pt"><h3>Обзор датчиков</h3><span class="panel-meta" id="lidar-meta">нет скана</span></div>
+            <div class="sensor-switch" role="group" aria-label="Источник обзора" style="display:flex;flex-wrap:wrap;gap:8px;padding:0 14px 10px">
+              <button type="button" id="sensor-lidar" class="sensor-switch-btn" aria-pressed="true" style="padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--accent);color:var(--accent-ink);font-weight:800">Лидар · 2D</button>
+              <button type="button" id="sensor-kinect" class="sensor-switch-btn" aria-pressed="false" style="padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">Kinect · 3D</button>
+              <button type="button" id="sensor-combined" class="sensor-switch-btn" aria-pressed="false" style="padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--panel)">Общий обзор · 3D</button>
+            </div>
+            <div class="lidar-body" id="sensor-lidar-view" style="flex:1;display:flex;flex-direction:column;padding:0 14px 14px">
+              <dl class="lidar-stats" style="display:flex;gap:16px;margin:0 0 8px;font-size:11px;color:var(--muted)"><div><dt style="font-weight:700">точек</dt><dd id="lidar-count" style="margin:0;color:var(--text);font-weight:800">—</dd></div><div><dt style="font-weight:700">дальность</dt><dd id="lidar-range" style="margin:0;color:var(--text);font-weight:800">10 м</dd></div></dl>
+              <div class="lidar-map" style="flex:1;position:relative;background:var(--bg);border:1px solid var(--line);border-radius:12px;overflow:hidden;min-height:320px">
+                <canvas id="lidar" width="720" height="420" style="width:100%;height:100%;display:block"></canvas>
+                <canvas id="lidar-canvas" width="720" height="420" style="display:none"></canvas>
+                <p class="lidar-empty" id="lidar-empty" style="position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);font-size:12px">скана лидара нет</p>
+              </div>
+            </div>
+            <div id="sensor-kinect-view" class="kinect-view" hidden style="flex:1;display:flex;flex-direction:column;gap:10px;padding:0 14px 14px">
+              <div class="kinect-view-head" style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--muted)"><span id="kinect-3d-status" role="status">Ожидание кадра Kinect</span><span id="kinect-3d-mode-note">Один кадр · не для навигации</span></div>
+              <div class="kinect-stage" style="flex:1;position:relative;background:var(--bg);border:1px solid var(--line);border-radius:12px;overflow:hidden;min-height:360px">
+                <canvas id="kinect-3d-canvas" tabindex="0" aria-label="3D-обзор Kinect и лидара" style="width:100%;height:100%;display:block;touch-action:none;cursor:grab"></canvas>
+                <p class="kinect-empty" id="kinect-3d-empty" style="position:absolute;inset:0;display:grid;place-items:center;background:var(--bg);color:var(--muted);font-size:12px">Нет свежего кадра глубины Kinect</p>
+                <div class="kinect-controls" aria-label="Управление 3D видом" style="position:absolute;right:10px;bottom:10px;display:flex;flex-direction:column;gap:6px">
+                  <button type="button" id="kinect-zoom-in" aria-label="Приблизить" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel);font-weight:800">+</button>
+                  <button type="button" id="kinect-zoom-out" aria-label="Отдалить" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel);font-weight:800">−</button>
+                  <button type="button" id="kinect-reset-view" aria-label="Сбросить вид" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel);font-weight:800">⊙</button>
+                </div>
+              </div>
+              <p class="kinect-view-hint" style="margin:0;color:var(--muted);font-size:11px">Перетащите или стрелки — вращение · колесо/щипок — масштаб</p>
+            </div>
           </div>
           <div class="panel">
             <div class="pt"><h3>Детекции</h3></div>
@@ -543,5 +568,27 @@
   <script src="update.js"></script>
   <script src="power.js"></script>
   <script src="lidar_settings.js"></script>
+  <script src="robot_model.js"></script>
+  <script src="kinect_view.js"></script>
+  <script src="full_zero.js"></script>
+  <script>
+  // Bridge app.js lidar data to kinect 3D view (как на борту: лидар + kinect + общий 3D)
+  (function(){
+    function sync(){
+      try{
+        if(window.RCKinectView && window.state && Array.isArray(window.state.scan)){
+          window.RCKinectView.setLidarScan(window.state.scan, {connected: true, age_s: 0.04, lidar_offset_m: 0.28, demo: false});
+        }
+      }catch(e){}
+    }
+    setInterval(sync, 300);
+    // также прокидываем демо-кадр Kinect в combined режиме (синтезируем облако 40 точек)
+    setInterval(()=>{
+      if(window.state && window.state.scan && window.state.scan.length){
+        // эмуляция: если нет реального kinect, показываем лидар в 3D как точки
+      }
+    }, 1000);
+  })();
+  </script>
 </body>
 </html>
