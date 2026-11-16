@@ -34,9 +34,36 @@ ROS 2 для лидара ставится **сам** — флаги не нуж
 
 ## 1. Зависимости
 
+### Python 3.9 или новее — одной командой
+
+Команды выполняются в каталоге проекта (после `git clone`, см. выше):
+
+```bash
+./scripts/install_python.sh            # поставить/проверить Python 3.9+
+./scripts/install_python.sh --check    # только проверить версию, ничего не менять
+./scripts/install_python.sh 3.11       # конкретная версия
+```
+
+Скрипт сам разбирается с версией Ubuntu:
+
+| Система | Что делает |
+| --- | --- |
+| Ubuntu 24.04 и новее | подходящий `python3` уже стоит — только проверяет и ничего не ставит |
+| Ubuntu 22.04 | ставит `python3.11` из PPA deadsnakes (в системе 3.10) |
+| Ubuntu 20.04 | ставит `python3.11` из PPA deadsnakes (в системе 3.8 — ниже 3.9) |
+| apt/PPA недоступны | ставит готовую сборку CPython (python-build-standalone) в `/usr/local/pythonX.Y` |
+
+Повторный запуск безопасен, `python3` в `/usr/local/bin` начинает указывать на
+новую версию, а системный `/usr/bin/python3` (нужный apt и systemd) остаётся на
+месте. **Установщик робота зовёт этот скрипт сам**, если версия меньше 3.9, —
+`./scripts/install_ubuntu.sh` на Ubuntu 20.04 тоже проходит без ручной возни.
+Отключить это: `RC_PYTHON_AUTO=0 ./scripts/install_ubuntu.sh`.
+
+### Остальные пакеты
+
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip network-manager iw
+sudo apt install -y python3-venv python3-pip network-manager iw
 ```
 
 ## 2. Код и окружение
