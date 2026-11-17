@@ -60,6 +60,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import replace
+from urllib.parse import quote
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -489,6 +490,10 @@ def browser_command(exe: str, url: str, profile_dir: Path | str | None = None) -
 # --------------------------------------------------------- режимы экрана --- #
 #: Cookie с подписанным режимом окна: «main» (обычный киоск) или «monitor».
 KIOSK_MODE_COOKIE = "rc_kiosk_mode"
+#: Тот же режим в адресе (``?m=<подписанный токен>``). Нужен там, где cookie не
+#: сохраняется: встроенный предпросмотр — iframe на другом домене, и браузер
+#: отбрасывает SameSite=Lax. Ссылку с токеном никто не подделает: подпись.
+KIOSK_MODE_PARAM = "m"
 #: Стартовый экран с PIN и гостевой «бортовой монитор».
 START_PAGE = "start.html"
 MONITOR_PAGE = "monitor.html"
@@ -534,15 +539,32 @@ class KioskSessionModes:
         """Подписанное значение cookie для записи режима."""
         return self._signer.dumps(mode) if self._signer is not None else ""
 
-    def current(self, cookie_value: str | None) -> str | None:
-        """Режим из cookie или ``None`` (тогда экран начинается с PIN)."""
-        if not cookie_value or self._signer is None:
+    def _load(self, token: str | None) -> str | None:
+        """Разобрать подписанный токен режима; ``None`` — токена нет или он чужой."""
+        if not token or self._signer is None:
             return None
         try:
-            mode = self._signer.loads(cookie_value, max_age=KIOSK_MODE_TTL_S)
-        except Exception:  # noqa: BLE001 — испорченная/просроченная cookie = нет режима
+            mode = self._signer.loads(token, max_age=KIOSK_MODE_TTL_S)
+        except Exception:  # noqa: BLE001 — испорченный/просроченный токен = нет режима
             return None
         return mode if mode in {KIOSK_MODE_MAIN, KIOSK_MODE_MONITOR} else None
+
+    def current(self, cookie_value: str | None) -> str | None:
+        """Режим из cookie или ``None`` (тогда экран начинается с PIN)."""
+        return self._load(cookie_value)
+
+    def request_mode(self) -> str | None:
+        """Режим текущего запроса: cookie, а если её нет — подписанный параметр.
+
+        Параметр ``?m=`` появился из-за встроенного предпросмотра: в iframe на
+        другом домене браузер не сохраняет cookie SameSite=Lax, и без него
+        выбор режима терялся сразу после ввода PIN. Токен подписан секретным
+        ключом сервера, поэтому «открыть монитор» в адресной строке нельзя.
+        """
+        mode = self._load(request.cookies.get(KIOSK_MODE_COOKIE))
+        if mode is not None:
+            return mode
+        return self._load(request.args.get(KIOSK_MODE_PARAM))
 
     def remaining_lock_ms(self) -> int:
         return max(0, int((self._locked_until - self.clock()) * 1000))
@@ -599,7 +621,7 @@ def kiosk_mode_gate(modes: KioskSessionModes):
     path = request.path
     if not path.startswith("/api/"):
         return None
-    mode = modes.current(request.cookies.get(KIOSK_MODE_COOKIE))
+    mode = modes.request_mode()
     if mode != KIOSK_MODE_MONITOR:
         return None
     if request.method in {"GET", "HEAD", "OPTIONS"}:
@@ -1158,15 +1180,24 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             )
         return response
 
+    def _page_for(mode: str | None) -> str | None:
+        """Адрес экрана режима вместе с его токеном (cookie может не сохраниться)."""
+        if mode == KIOSK_MODE_MONITOR:
+            return "%s?%s=%s" % (MONITOR_URL_PATH, KIOSK_MODE_PARAM,
+                                 quote(session_modes.dump(mode), safe=""))
+        if mode == KIOSK_MODE_MAIN:
+            return KIOSK_URL_PATH
+        return None
+
     # ---------- стартовый экран: PIN выбирает киоск или монитор ---------- #
     @app.get("/")
     def root():
         """Стартовый экран с PIN. Уже выбранный режим сразу его и открывает."""
-        mode = session_modes.current(request.cookies.get(KIOSK_MODE_COOKIE))
-        if mode == KIOSK_MODE_MAIN and not request.args.get("choose"):
-            return redirect(KIOSK_URL_PATH)
-        if mode == KIOSK_MODE_MONITOR and not request.args.get("choose"):
-            return redirect(MONITOR_URL_PATH)
+        if request.args.get("choose"):
+            return _send(START_PAGE)
+        page = _page_for(session_modes.request_mode())
+        if page:
+            return redirect(page)
         return _send(START_PAGE)
 
     @app.get("/start")
@@ -1182,14 +1213,24 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         Без выбранного режима страница не открывается: иначе монитор был бы
         доступен по прямой ссылке в обход PIN. Сначала — стартовый экран.
         """
-        if session_modes.current(request.cookies.get(KIOSK_MODE_COOKIE)) != KIOSK_MODE_MONITOR:
+        token = request.args.get(KIOSK_MODE_PARAM)
+        if session_modes.request_mode() != KIOSK_MODE_MONITOR:
             return redirect("/?choose=1")
-        return _send(MONITOR_PAGE)
+        response = _send(MONITOR_PAGE)
+        if token:
+            # Дальше страница сама передаёт токен в запросах (в iframe-предпросмотре
+            # cookie не сохраняется). Адрес не переписываем: он и есть ключ входа.
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/api/kiosk_mode")
     def api_kiosk_mode():
-        return jsonify({"ok": True, **session_modes.status(
-            request.cookies.get(KIOSK_MODE_COOKIE))}), 200, {"Cache-Control": "no-store"}
+        mode = session_modes.request_mode()
+        payload = session_modes.status(None)
+        payload["mode"] = mode
+        payload["page"] = _page_for(mode)
+        payload["monitorReadOnly"] = mode == KIOSK_MODE_MONITOR
+        return jsonify({"ok": True, **payload}), 200, {"Cache-Control": "no-store"}
 
     @app.post("/api/kiosk_mode")
     def api_kiosk_mode_set():
@@ -1205,8 +1246,11 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                             ("бортовой монитор" if result["mode"] == KIOSK_MODE_MONITOR
                              else "обычный киоск"), source="экран")
             response = jsonify({"ok": True, "mode": result["mode"],
-                                "page": MONITOR_URL_PATH if result["mode"] == KIOSK_MODE_MONITOR
-                                else KIOSK_URL_PATH,
+                                # Ссылка с токеном: работает и там, где cookie не
+                                # сохраняется (встроенный предпросмотр).
+                                "page": _page_for(result["mode"]),
+                                "token": session_modes.dump(result["mode"]),
+                                "param": KIOSK_MODE_PARAM,
                                 "attemptsLeft": result["attemptsLeft"]})
             return _set_mode_cookie(response, result["mode"]), 200
         eventlog.record("warn", "стартовый экран: PIN не принят (%s)" %

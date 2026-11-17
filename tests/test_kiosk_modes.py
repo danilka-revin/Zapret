@@ -200,3 +200,59 @@ def test_pin_codes_come_from_the_environment(config, monkeypatch):
 
     assert open_mode(client, "7232").status_code == 403
     assert open_mode(client, "2468").get_json()["mode"] == "monitor"
+
+
+# ------------------------- встроенный предпросмотр (без cookie) ------------- #
+def _token(client, pin="5656"):
+    body = open_mode(client, pin).get_json()
+    assert body["ok"] and body["token"], body
+    return body
+
+
+def test_monitor_opens_by_signed_link_without_cookie(kiosk_client):
+    """В iframe cookie не сохраняется: режим подтверждается ссылкой из ответа."""
+    body = _token(kiosk_client)
+    client = kiosk_client.application.test_client()          # совсем новый «браузер»
+    assert body["param"] == "m"
+    page = body["page"]
+    response = client.get(page)
+    assert response.status_code == 200
+    assert "monitor.js" in response.get_data(as_text=True)
+
+
+def test_signed_link_keeps_monitor_restrictions(kiosk_client):
+    token = _token(kiosk_client)["token"]
+    client = kiosk_client.application.test_client()
+    state = client.get("/api/kiosk_state?m=" + token)
+    assert state.status_code == 200
+    steer = client.post("/api/kiosk_steer?m=" + token, json={"module": "FL", "angle": 5},
+                        headers={"X-Robot-Control": "steering"})
+    assert steer.status_code == 403
+    assert steer.get_json()["reason"] == "monitor_mode"
+
+
+def test_root_follows_signed_link(kiosk_client):
+    token = _token(kiosk_client)["token"]
+    client = kiosk_client.application.test_client()
+    response = client.get("/?m=" + token)
+    assert response.status_code == 302
+    assert response.headers["Location"].startswith("/monitor?m=")
+
+
+def test_forged_link_is_refused(kiosk_client):
+    """Не подписанный ссылкой режим не открывается и прав монитора не даёт."""
+    client = kiosk_client.application.test_client()
+    assert client.get("/monitor?m=monitor").status_code == 302
+    assert client.get("/api/kiosk_mode?m=monitor").get_json()["mode"] is None
+    close = client.post("/api/kiosk_lock/close?m=monitor", json={})
+    assert close.status_code == 200          # это обычный клиент без режима, не монитор
+
+
+def test_start_screen_does_not_print_the_codes(kiosk_client):
+    """На стартовом экране нет подписи, какой PIN что открывает."""
+    page = kiosk_client.get("/start").get_data(as_text=True)
+    js = kiosk_client.get("/start.js").get_data(as_text=True)
+    for text in (page, js):
+        assert "7232" not in text
+        assert "5656" not in text
+        assert "Коды режимов" not in text and "коды режимов" not in text

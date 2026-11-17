@@ -9,13 +9,12 @@
 </head>
 <body class="start-body">
   <!--
-    Стартовый экран робота. Один и тот же PIN-ввод открывает два режима:
-      7232 (RC_KIOSK_PIN_MAIN)    — обычный бортовой киоск;
-      5656 (RC_KIOSK_PIN_MONITOR) — «бортовой монитор» для конечных пользователей.
-    PIN проверяет сервер (/api/kiosk_mode) и запоминает режим в подписанной
-    cookie; страница только показывает клавиатуру и переходит по адресу из
-    ответа. Коды на экране не печатаются — подсказка внизу для тех, кто
-    ставил робота.
+    Стартовый экран робота. Введённый PIN открывает один из двух режимов:
+    обычный бортовой экран или «бортовой монитор» для конечных пользователей.
+    PIN проверяет сервер (/api/kiosk_mode), режим запоминается в подписанной
+    cookie, а если cookie не сохраняется (встроенный предпросмотр) — в
+    подписанной ссылке. Какие коды что открывают, экран не подсказывает:
+    коды задаются в .env (RC_KIOSK_PIN_MAIN, RC_KIOSK_PIN_MONITOR).
   -->
   <main class="start">
     <section class="start-hero">
@@ -45,7 +44,7 @@
           кнопкой «Выход» — тогда снова понадобится PIN.</p>
       </div>
 
-      <div class="mode-cards" aria-label="Что открывают PIN-коды">
+      <div class="mode-cards" aria-label="Режимы бортового дисплея">
         <article class="mode-card" data-mode="main">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4" />
@@ -53,7 +52,7 @@
           </svg>
           <div>
             <b>Бортовой экран</b>
-            <small>Полный доступ: телеметрия, настройка, карта, руление и журнал.</small>
+            <small>Телеметрия, карта, журнал и управление роботом.</small>
           </div>
         </article>
         <article class="mode-card" data-mode="monitor">
@@ -62,7 +61,7 @@
           </svg>
           <div>
             <b>Бортовой монитор</b>
-            <small>Только общая информация и кейс по PIN — без настройки и управления.</small>
+            <small>Общая информация о роботе и грузовой отсек.</small>
           </div>
         </article>
       </div>
@@ -106,10 +105,6 @@
       <div class="pin-foot">
         <span>Enter — открыть · Backspace — стереть · Esc — очистить</span>
       </div>
-      <p class="pin-hint">
-        Коды режимов: <b>7232</b> — обычный бортовой экран · <b>5656</b> — бортовой
-        монитор. PIN грузового кейса по-прежнему спрашивается при его открытии.
-      </p>
     </section>
   </main>
 

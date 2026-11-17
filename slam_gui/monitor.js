@@ -14,6 +14,12 @@
   const MAX_DIGITS = 8;
   const MIN_DIGITS = 4;
 
+  // Встроенный предпросмотр — iframe на другом домене: браузер не сохраняет
+  // cookie SameSite=Lax, поэтому режим подтверждается подписанным токеном из
+  // адреса страницы (?m=…). Тот же токен добавляем к каждому запросу.
+  const MODE_PARAM = 'm';
+  const MODE_TOKEN = new URLSearchParams(window.location.search).get(MODE_PARAM) || '';
+
   const $ = (id) => document.getElementById(id);
   const setText = (el, text) => { if (el) el.textContent = text; };
   const num = (value, digits) => {
@@ -46,8 +52,15 @@
     chip.textContent = text;
   }
 
+  function withMode(path, method) {
+    if (!MODE_TOKEN) return path;
+    if (method && method !== 'GET') return path;
+    const join = path.includes('?') ? '&' : '?';
+    return path + join + MODE_PARAM + '=' + encodeURIComponent(MODE_TOKEN);
+  }
+
   async function getJson(path) {
-    const response = await fetch(path, { cache: 'no-store', credentials: 'same-origin' });
+    const response = await fetch(withMode(path), { cache: 'no-store', credentials: 'same-origin' });
     const body = await response.json().catch(() => ({}));
     return { response, body };
   }
@@ -285,7 +298,7 @@
     renderDots();
     caseMessage('Проверяю PIN…');
     try {
-      const response = await fetch('api/kiosk_lock/open', {
+      const response = await fetch(withMode('api/kiosk_lock/open', 'POST'), {
         method: 'POST',
         cache: 'no-store',
         credentials: 'same-origin',
@@ -349,7 +362,7 @@
     exit.addEventListener('click', async () => {
       exit.disabled = true;
       try {
-        await fetch('api/kiosk_mode/exit', {
+        await fetch(withMode('api/kiosk_mode/exit', 'POST'), {
           method: 'POST', cache: 'no-store', credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' }, body: '{}',
         });
