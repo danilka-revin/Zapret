@@ -45,6 +45,7 @@ backend.py — сервер борта BULKA_v1: отдаёт экраны и д
 
 import argparse
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -3835,7 +3836,20 @@ class Vault:
     # --- крипто ---
     @staticmethod
     def _hash(salt, pin):
-        return hashlib.sha256((salt + ":" + str(pin)).encode("utf-8")).hexdigest()
+        """Безопасный KDF для PIN: PBKDF2-HMAC-SHA256 (с поддержкой легаси SHA-256)."""
+        return "pbkdf2$" + hashlib.pbkdf2_hmac("sha256", str(pin).encode("utf-8"), str(salt).encode("utf-8"), 50_000).hex()
+
+    @staticmethod
+    def _verify_pin_hash(salt, pin, stored_hash):
+        if not stored_hash:
+            return False
+        # Новый безопасный формат: PBKDF2
+        if stored_hash.startswith("pbkdf2$"):
+            expected = "pbkdf2$" + hashlib.pbkdf2_hmac("sha256", str(pin).encode("utf-8"), str(salt).encode("utf-8"), 50_000).hex()
+            return hmac.compare_digest(expected, stored_hash)
+        # Обратная совместимость с ранее записанным быстрым SHA-256
+        legacy = hashlib.sha256((str(salt) + ":" + str(pin)).encode("utf-8")).hexdigest()
+        return hmac.compare_digest(legacy, stored_hash)
 
     def _audit(self, action, ok, detail=""):
         prev = self.data["audit"][-1]["hash"] if self.data["audit"] else "genesis"
@@ -3885,10 +3899,13 @@ class Vault:
             pin = re.sub(r"\D", "", str(pin or ""))
             if not 4 <= len(pin) <= 8:
                 return {"ok": False, "reason": "format", "attemptsLeft": self.state()["attemptsLeft"]}
-            if self._hash(self.data["salt"], pin) == self.data["pinHash"]:
+            if self._verify_pin_hash(self.data["salt"], pin, self.data.get("pinHash")):
                 self.data["fails"] = 0
                 self.data["lockUntil"] = 0
                 self.data["lastOpenAt"] = now
+                # Если хеш был в старом формате sha256, мигрируем на стойкий PBKDF2
+                if not str(self.data.get("pinHash", "")).startswith("pbkdf2$"):
+                    self.data["pinHash"] = self._hash(self.data["salt"], pin)
                 self._audit("unlock", True, "доступ разрешён")
                 self._persist()
                 return {"ok": True, "reason": "ok", "attemptsLeft": self.max_attempts}

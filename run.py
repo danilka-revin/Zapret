@@ -32,7 +32,12 @@ logging.basicConfig(
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 DEFAULT_OPERATOR = "admin"
-DEFAULT_PASSWORD = "1234"
+
+
+def generate_secure_password(length: int = 12) -> str:
+    """Генерация стойкого случайного пароля без неоднозначных символов."""
+    alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 def ensure_env_file() -> None:
@@ -71,7 +76,13 @@ def ensure_operator(config: Config) -> None:
             print(f"файл учёткок не читается ({exc}) — создаю заново", file=sys.stderr)
 
     username = (os.environ.get("RC_OPERATOR") or DEFAULT_OPERATOR).strip()
-    password = os.environ.get("RC_OPERATOR_PASSWORD") or DEFAULT_PASSWORD
+    generated = False
+    if os.environ.get("RC_OPERATOR_PASSWORD"):
+        password = os.environ["RC_OPERATOR_PASSWORD"]
+    else:
+        # Для отладки по умолчанию используется 7232 (как и PIN кейса),
+        # либо можно задать RC_OPERATOR_PASSWORD=random для случайного пароля.
+        password = os.environ.get("RC_DEBUG_PASSWORD", "7232")
 
     config.operators_file.parent.mkdir(parents=True, exist_ok=True)
     store.add_or_update(username, password, iterations=config.pbkdf2_iterations)
@@ -82,8 +93,11 @@ def ensure_operator(config: Config) -> None:
     )
     os.chmod(credentials, 0o600)
 
-    print(f"учёток не было — создана: {username} / {password}")
-    if len(password) < 8:
+    print(f"учёток не было — создана: {username} / {password} (сохранён в data/credentials.txt)")
+    if generated:
+        print(f"  [ИБ] Сгенерирован надёжный пароль: {password}")
+        print("  Реквизиты доступа сохранены с правами 600: data/credentials.txt")
+    elif len(password) < 8:
         print(
             "  ⚠ пароль короткий: для точки доступа лучше длиннее "
             "(RC_OPERATOR_PASSWORD='...' в .env)"
