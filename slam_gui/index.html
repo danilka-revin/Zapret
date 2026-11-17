@@ -66,6 +66,7 @@
         <a id="console-battery-link" class="nav-map-link" href="/battery">АКБ</a>
         <a id="console-controls-link" class="nav-map-link" href="/controls">Руление и тяга</a>
         <a id="console-map-link" class="nav-map-link" href="/map">Карта лидара</a>
+        <a id="console-autonomy-link" class="nav-map-link" href="/autonomy">Автономность · трасса</a>
       </nav>
       <div class="side-status">
         <div><span class="pulse" id="link-pulse"></span>Связь с базой</div>
@@ -551,6 +552,8 @@
     { const st = new URLSearchParams(location.search).get('st');
       if (st) {
         document.getElementById('console-map-link').href = '/map?st=' + encodeURIComponent(st);
+        const autonomy = document.getElementById('console-autonomy-link');
+        if (autonomy) autonomy.href = '/autonomy?st=' + encodeURIComponent(st);
       }
     }
   </script>

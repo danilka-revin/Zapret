@@ -115,6 +115,8 @@ from robot_control.scan_mode import ScanModeError, ScanModeService
 from robot_control.kinect import DepthError, KinectDepthService
 from robot_control.exploration import ExplorationError, ExplorationService
 from robot_control.delivery_service import DeliveryError, DeliveryService
+from robot_control.track_autonomy import (AUTONOMY_HEADER, TrackAutonomyError,
+                                         TrackAutonomyService)
 from robot_control.sensor_layout import layout_payload, kinect_spec, rear_kinect_enabled
 from robot_control import sensor_module as sensor_module_client
 from robot_control import calibration as geometry_calibration
@@ -982,6 +984,66 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                                 neutral.status, lambda: navigation.active)
     app.extensions["rc_full_zero"] = full_zero
 
+    # Отдельная вкладка «Автономность»: трасса с конусами, СТОП, кочка и
+    # светофор. Живёт только здесь, на владельце камер/Kinect/привода; пульт
+    # 8080 проксирует команды (см. map_peer.proxy_autonomy). Провайдеры
+    # ленивые: сенсорный модуль и шасси могут переподключиться на ходу.
+    def _track_source():
+        return getattr(state, "source", None) if state is not None else None
+
+    def _track_sensor_module():
+        return app.extensions.get("rc_sensor_module")
+
+    def _track_rivals():
+        rivals: list[str] = []
+        if getattr(navigation, "active", False):
+            rivals.append("навигация по карте")
+        if getattr(exploration, "active", False):
+            rivals.append("автообследование")
+        try:
+            if scan_mode.status().get("enabled"):
+                rivals.append("режим «Скан»")
+        except Exception:  # noqa: BLE001 — статус чужого режима не блокирует наш
+            pass
+        return rivals
+
+    def _track_preempt():
+        """Перед пуском снять чужие режимы тяги: один владелец привода."""
+        try:
+            keyboard.interrupt()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            navigation.cancel("Автономность трассы: маршрут остановлен.")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            scan_mode.disable("Автономность трассы: режим «Скан» выключен.")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if getattr(exploration, "active", False):
+                exploration.stop("Автономность трассы: обследование остановлено.")
+        except Exception:  # noqa: BLE001
+            pass
+
+    track = TrackAutonomyService(
+        vision_provider=vision_service.state,
+        layout_provider=layout_payload,
+        kinect_provider=lambda: kinect_service,
+        imu_provider=lambda: (_track_sensor_module().state()
+                              if _track_sensor_module() is not None else {}),
+        telemetry_provider=lambda: (_track_source().read()
+                                    if _track_source() is not None else {}),
+        source_provider=_track_source,
+        rivals_provider=_track_rivals,
+        preempt=_track_preempt,
+        drive=dispatch_drive_command,
+        steer=dispatch_steering_command,
+        estop=estop_latch.latched,
+    )
+    app.extensions["rc_track"] = track
+
     def device_snapshot(*, refresh=False):
         # Reuse each subsystem's single owner; this service never opens a
         # serial/video port or actively probes an unknown USB device.
@@ -1024,6 +1086,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         "/api/kiosk_maneuver_config", "/api/navigation/start", "/api/navigation/resume",
         "/api/navigation/cancel", "/api/navigation/estop", "/api/estop", "/api/estop/release",
         "/api/exploration/start", "/api/exploration/stop", "/api/system/stop",
+        # отдельная вкладка «Автономность»: тот же владелец тяги на борту
+        "/api/autonomy/start", "/api/autonomy/stop", "/api/autonomy/simulate",
     }
 
     @app.before_request
@@ -1044,13 +1108,14 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             is_stop = isinstance(action, str) and action in {"stop", "end"}
         else:
             is_stop = request.path in {"/api/estop", "/api/navigation/cancel", "/api/navigation/estop",
-                                       "/api/exploration/stop", "/api/system/stop"}
+                                       "/api/exploration/stop", "/api/autonomy/stop", "/api/system/stop"}
         # STOP gets an immediate best-effort brake even if an earlier HTTP
         # motion request is still finishing. The normal STOP runs again under
         # the gate so that this in-flight request cannot overtake the final b.
         marker = ("steering" if request.path == "/api/kiosk_maneuver" else
                   "navigation" if request.path.startswith("/api/navigation/") else
                   "exploration" if request.path.startswith("/api/exploration/") else
+                  AUTONOMY_HEADER if request.path.startswith("/api/autonomy/") else
                   STOP_COMMAND_HEADER_VALUE if request.path == "/api/system/stop" else "drive")
         global_stop = (request.path != "/api/kiosk_drive" or body.get("module") in (None, "ALL", "all")
                        or arrival_locked or zero_locked)
@@ -1114,6 +1179,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "/api/estop", "/api/navigation/start", "/api/navigation/resume",
             "/api/navigation/cancel", "/api/navigation/estop",
             "/api/exploration/start", "/api/exploration/stop", "/api/system/stop",
+            "/api/autonomy/start", "/api/autonomy/stop",
         }:
             # A global system STOP must retire live steering under the motion
             # gate too; the early best-effort brake alone can be overtaken by
@@ -1690,6 +1756,47 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             return jsonify({"ok": False, "code": "request_header_required",
                             "error": "Запрос без заголовка X-Robot-Control: delivery"}), 400
         return jsonify(delivery.reset()), 200, {"Cache-Control": "no-store"}
+
+    # ---------------- Вкладка «Автономность» (трасса с конусами) --------- #
+    # Отдельный экран бортового ПК: пуск/стоп режима, готовность, сухой прогон.
+    # Команды требуют маркера X-Robot-Control: autonomy; владелец тяги — киоск.
+    @app.get("/autonomy")
+    def kiosk_autonomy_page():
+        return _send("autonomy.html")
+
+    @app.get("/api/autonomy/status")
+    def api_autonomy_status():
+        return jsonify(track.status()), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/autonomy/start")
+    def api_autonomy_start():
+        if request.headers.get(STEERING_COMMAND_HEADER) != AUTONOMY_HEADER:
+            return jsonify({"ok": False, "error":
+                            "Запрос без заголовка X-Robot-Control: autonomy"}), 400
+        try:
+            payload, status = track.start(request.get_json(silent=True) or {})
+        except TrackAutonomyError as exc:
+            return jsonify(exc.payload()), exc.status
+        return jsonify(payload), status
+
+    @app.post("/api/autonomy/stop")
+    def api_autonomy_stop():
+        if request.headers.get(STEERING_COMMAND_HEADER) != AUTONOMY_HEADER:
+            return jsonify({"ok": False, "error":
+                            "Запрос без заголовка X-Robot-Control: autonomy"}), 400
+        return jsonify(track.stop()), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/autonomy/simulate")
+    def api_autonomy_simulate():
+        """Сухой прогон: тот же автомат на скрипте, без камер и без тяги."""
+        if request.headers.get(STEERING_COMMAND_HEADER) != AUTONOMY_HEADER:
+            return jsonify({"ok": False, "error":
+                            "Запрос без заголовка X-Robot-Control: autonomy"}), 400
+        body = request.get_json(silent=True) or {}
+        scenario = str(body.get("scenario") or "full")
+        if scenario not in {"full", "straight", "stop", "bump", "light"}:
+            return jsonify({"ok": False, "error": "Неизвестный сценарий"}), 400
+        return jsonify(track.simulate(scenario)), 200, {"Cache-Control": "no-store"}
 
     # ---------------- Автономное обследование и Kinect ------------------- #
     # Владелец моторов — только этот процесс. Команды требуют маркера
@@ -2684,6 +2791,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                      "lidar_settings.js", "lidar_view.js", "kinect_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
                      "explore.js", "scan_mode.js", "scan.css", "navigation_screen.js", "navigation.css",
                      "delivery.js", "delivery.css", "delivery_reference.png", "map.css", "viewport.js", "camera_view.js", "camera_stitch.js", "camera_frames.js", "slam_auth.js",
+                     "autonomy.js", "autonomy.css",
                      "steer_presets.js", "power.css", "power.js",
                      "start.js", "start.css", "monitor.js", "monitor.css"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение

@@ -639,6 +639,14 @@ body.is-stale #data-chip { color: var(--warn); border-color: #3a3a3e; }
 .k-ctrl-btn:hover { border-color: #3a3a3e; background: linear-gradient(180deg, #202022, #1e1e20); transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,0,0,.35), 0 0 18px rgba(255,255,255,.18); }
 .k-ctrl-btn:active { transform: translateY(0) scale(.98); box-shadow: 0 2px 10px rgba(0,0,0,.25); }
 .k-ctrl-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Отдельная вкладка автономности на бортовом экране: заметнее соседних иконок. */
+.k-autonomy-btn, a.k-autonomy-btn {
+  text-decoration: none;
+  border-color: rgba(224, 78, 62, .65);
+  background: linear-gradient(180deg, #2a1718, #1d1112);
+}
+.k-autonomy-btn:hover { border-color: rgba(224, 78, 62, .95); }
+a.ctrl-card { text-decoration: none; }
 
 /* ========================= ОВЕРЛЕЙ: PIN + ФУНКЦИИ ========================= */
 .ctrl-overlay {

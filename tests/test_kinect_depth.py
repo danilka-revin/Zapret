@@ -44,7 +44,12 @@ def test_decode_and_reject_bad_frames():
 
 def test_depth_to_scan_wall_in_front_and_floor_filtered():
     frame = decode_depth_payload(demo_payload())
-    points = depth_to_scan(frame)
+    # Калибровка по умолчанию видит препятствия от 12 см; синтетический «пол»
+    # на 1,2 м попадает в этот диапазон. Для проверки фильтра пола задаём
+    # порог высоты, при котором он заведомо ниже среза, стена же остаётся.
+    spec = dict(kinect_spec())
+    spec["min_height_m"] = 0.3
+    points = depth_to_scan(frame, spec)
     assert points, "стена впереди должна дать лучи"
     assert all(-math.radians(30) <= p["a"] <= math.radians(30) for p in points)
     assert all(1.8 <= p["r"] <= 2.2 for p in points), points

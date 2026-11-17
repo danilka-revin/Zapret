@@ -296,6 +296,12 @@ class KinectDepthService:
         self._error = ""
         self._consumed_stamp = 0.0
         self._preview: Optional[dict[str, Any]] = None
+        # Полный кадр глубины для навигационных потребителей (кочка/рельеф).
+        # preview() специально помечен notForNavigation: он уменьшен и годится
+        # только для 3D-просмотра. points/ranges-пакеты кадра не содержат.
+        self._depth_frame: Optional[DepthFrame] = None
+        self._depth_frame_id = 0
+        self._depth_frame_received_at = 0.0
 
     @property
     def spec(self) -> dict[str, Any]:
@@ -304,6 +310,7 @@ class KinectDepthService:
     def feed(self, payload: Any) -> dict[str, Any]:
         """Принять кадр; исключение DepthError пробрасывается в HTTP как 400."""
         preview = None
+        frame = None
         if isinstance(payload, dict) and not isinstance(payload.get("ranges"), list) and not isinstance(payload.get("points"), list):
             frame = decode_depth_payload(payload, clock=self._clock)
             points, stamp, source = depth_to_scan(frame, self._spec), frame.stamp, "depth"
@@ -324,6 +331,11 @@ class KinectDepthService:
             self._capture_port = (capture_port if isinstance(capture_port, str) and re.fullmatch(
                 r"usb:\d+-\d+(?:\.\d+)*", capture_port) else "")
             self._frames += 1
+            # Навигационный кадр живёт только вместе с raw depth: по нему
+            # считается рельеф. points/ranges не должны оставлять старый кадр.
+            self._depth_frame = frame
+            self._depth_frame_id = self._frames
+            self._depth_frame_received_at = self._received_at if frame is not None else 0.0
             self._error = ""
             self._last_width = int(payload.get("width") or 0)
             self._last_height = int(payload.get("height") or 0)
@@ -341,6 +353,34 @@ class KinectDepthService:
         limit = float(max_age_s if max_age_s is not None else self._spec["max_age_s"])
         with self._lock:
             return bool(self._points) and (self._clock() - self._received_at) <= limit
+
+    def navigation_fresh(self, max_age_s: Optional[float] = None) -> bool:
+        """Есть ли свежий ПОЛНЫЙ кадр глубины для рельефа/кочки.
+
+        В отличие от ``fresh()``, не считает достаточным ``points``/``ranges``:
+        для плоскости пола нужен исходный кадр с оптикой, а не псевдоскан.
+        """
+        limit = float(max_age_s if max_age_s is not None else self._spec["max_age_s"])
+        with self._lock:
+            return (self._depth_frame is not None and
+                    (self._clock() - self._depth_frame_received_at) <= limit)
+
+    def navigation_frame(self) -> Optional[dict[str, Any]]:
+        """Снимок навигационного кадра: сам кадр, оптика и его номер.
+
+        Возвращает неизменяемую ссылку на ``DepthFrame`` (новый feed просто
+        заменяет атрибут, старый объект остаётся валидным). ``frameId`` нужен,
+        чтобы один и тот же кадр не попал в трекер кочек несколько раз.
+        """
+        with self._lock:
+            frame = self._depth_frame
+            if frame is None:
+                return None
+            return {"ok": True, "frameId": self._depth_frame_id,
+                    "frame": frame, "spec": dict(self._spec),
+                    "stamp": frame.stamp,
+                    "ageS": round(self._clock() - self._depth_frame_received_at, 3),
+                    "notForNavigation": False}
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -360,6 +400,10 @@ class KinectDepthService:
                 "width": self._last_width,
                 "height": self._last_height,
                 "error": self._error,
+                "navigationFrameAvailable": self._depth_frame is not None,
+                "navigationFrameId": self._depth_frame_id,
+                "navigationFrameAgeS": (round(age, 3) if self._depth_frame is not None
+                                        and age is not None else None),
                 "spec": dict(self._spec),
                 "drivers": available_backends(),
             }
@@ -393,3 +437,6 @@ class KinectDepthService:
             self._frames = 0
             self._error = ""
             self._consumed_stamp = 0.0
+            self._depth_frame = None
+            self._depth_frame_id = 0
+            self._depth_frame_received_at = 0.0
