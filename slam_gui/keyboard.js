@@ -67,7 +67,7 @@
       generation: 0, keys: new Set(), timer: null, running: null, planning: false,
       drivePending: null, pingPending: false, lastTick: 0, lastDrive: 0, lastPing: 0,
       brake: null, pendingPlan: null, beginning: Promise.resolve(), retirement: Promise.resolve(),
-      spin: null, arrowConflict: false, trim: trimState()};
+      spin: null, arrowConflict: false, zeroSpeed: false, trim: trimState()};
     // Firmware accepts a fresh tagged brake for up to 6 s. Use a smaller
     // browser-side bound to leave time for the permit and serial delivery.
     const BRAKE_REUSE_MS = 4000;
@@ -122,25 +122,30 @@
       window.RCKeyboardActive = state.enabled || state.enabling;
     }
     function valid(gen) { return state.enabled && gen === state.generation && !!state.token; }
-    // Предел тяги задаёт борт (RC_KEYBOARD_MAX_PERCENT, по умолчанию 30 %).
-    // Разметка страницы может быть старше сервера, поэтому ползунок не
-    // считается источником истины: значение всё равно срезается по пределу.
-    const FALLBACK_MAX = 30;
+    // Диапазон тяги WASD — 0…100 %. Борт может сузить потолок через
+    // RC_KEYBOARD_MAX_PERCENT; разметка страницы не считается источником
+    // истины, потому что begin сообщает действующий предел. 0 % — STOP.
+    const FALLBACK_MAX = 100;
     function speedMax() {
       const limit = Number(speed && speed.max);
-      return Number.isFinite(limit) && limit > 0 ? Math.min(100, Math.round(limit)) : FALLBACK_MAX;
+      return Number.isFinite(limit) && limit >= 0 ? Math.min(100, Math.round(limit)) : FALLBACK_MAX;
     }
     function applySpeedMax(limit) {
-      if (!speed || !Number.isFinite(Number(limit)) || Number(limit) <= 0) return;
+      if (!speed || !Number.isFinite(Number(limit)) || Number(limit) < 0) return;
       speed.max = String(Math.min(100, Math.round(Number(limit))));
       speed.value = String(speedValue());
       const output = $('keyboard-speed-value');
       if (output) output.textContent = String(speedValue());
       const caption = $('keyboard-speed-max');
       if (caption) caption.textContent = String(speedMax());
+      state.zeroSpeed = speedValue() === 0;
     }
     function speedValue() {
-      return Math.max(1, Math.min(speedMax(), Math.round(Number(speed && speed.value) || 20)));
+      // Явно отличаем 0 от пустого/нечислового значения: раньше `|| 20`
+      // превращал нижнюю границу ползунка в прежние 20 %.
+      const raw = Number(speed && speed.value);
+      const requested = Number.isFinite(raw) ? Math.round(raw) : 20;
+      return Math.max(0, Math.min(speedMax(), requested));
     }
     async function post(body, keepalive) {
       const controller = new AbortController();
@@ -208,7 +213,7 @@
     function fail(error) {
       const reason = error && error.message || 'command_failed';
       if (reason === 'speed_limit') {
-        disable('Предел тяги WASD — ' + speedMax() + ' %: уменьшите ползунок и включите заново.');
+        disable('Предел тяги WASD — ' + speedMax() + ' %: установите ползунок не выше и включите заново.');
         return;
       }
       disable(reasons[reason] || 'Нет подтверждения команды; тяга остановлена.');
@@ -328,7 +333,8 @@
       return null;
     }
     async function heartbeat(gen, current, permit) {
-      if (!valid(gen) || (state.drivePending && state.drivePending.gen === gen)) return;
+      if (!valid(gen) || (state.drivePending && state.drivePending.gen === gen) ||
+          speedValue() === 0) return;
       const pending = {gen, current, speed: speedValue()};
       state.drivePending = pending;
       state.lastDrive = Date.now();
@@ -428,10 +434,12 @@
 
     function replan() {
       if (!state.enabled) return;
-      const desired = state.arrowConflict
+      let desired = state.arrowConflict
         ? {angles: {FL: 0, FR: 0, RL: 0, RR: 0}, direction: 0}
         : plan(state.keys, mode ? mode.value : 'crab', state.spin);
       if (desired.error) { fail(new Error(desired.error)); return; }
+      // Нижняя граница 0 % — удержание STOP: руль выставляется, тяги нет.
+      if (speedValue() === 0 && desired.direction) desired = {...desired, direction: 0};
       const preparing = state.pendingPlan;
       if (state.planning && preparing && preparing.gen === state.generation &&
           (desired.pattern || 'drive') === preparing.pattern &&
@@ -627,9 +635,16 @@
       window.addEventListener('pointerup', finishPointer, true);
       window.addEventListener('pointercancel', finishPointer, true);
       speed.addEventListener('input', () => {
+        const value = speedValue(), zero = value === 0;
+        const crossedZero = zero !== state.zeroSpeed;
+        state.zeroSpeed = zero;
         const output = $('keyboard-speed-value');
-        if (output) output.textContent = String(speedValue());
-        if (state.enabled && state.running &&
+        if (output) output.textContent = String(value);
+        if (state.enabled && crossedZero) {
+          // Переход 0 ↔ тяга меняет сам план: при 0 % отправляем STOP и
+          // удерживаем колёса, при выходе из нуля заново запрашиваем permit.
+          replan();
+        } else if (state.enabled && state.running && !zero &&
             (!state.drivePending || state.drivePending.gen !== state.generation)) {
           void heartbeat(state.generation, state.running, '');
         }

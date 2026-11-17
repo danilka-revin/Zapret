@@ -76,10 +76,10 @@ def test_spin_stop_reverse_and_stale_heartbeat():
     assert launch(ctl, token, geometry)[0]["ok"]
     source.pulses()
     clock.now += 0.12
-    # Тяга разворота тоже подчинена пределу WASD (RC_KEYBOARD_MAX_PERCENT=30).
-    assert send(ctl, token, 4, "live", pattern="spin", percent=-30,
+    # Разворот использует тот же полный диапазон 0…100 %, что и прямая тяга.
+    assert send(ctl, token, 4, "live", pattern="spin", percent=-100,
                 angles=geometry["angles"])[0]["ok"]
-    assert source.commanded_modules == {"FL": -30, "FR": 30, "RL": -30, "RR": 30}
+    assert source.commanded_modules == {"FL": -100, "FR": 100, "RL": -100, "RR": 100}
     assert send(ctl, token, 6, "stop")[0]["ok"]
     assert not source.commanded_modules
     old = send(ctl, token, 5, "live", pattern="spin", percent=-20, angles=geometry["angles"])[0]

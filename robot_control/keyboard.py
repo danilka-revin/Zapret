@@ -18,20 +18,20 @@ from . import maneuvers
 
 MODULES = ("FL", "FR", "RL", "RR")
 
-#: Потолок тяги режима WASD, % шкалы Servo. Клавиатура не даёт оператору
-#: обратной связи по скорости (нет ни ползунка под рукой, ни плавного
-#: наращивания), поэтому предел ниже общего предела привода. Ограничение
-#: проверяется на борту: браузер присылает только процент из своего ползунка.
-DEFAULT_MAX_PERCENT = 30
+#: Потолок тяги режима WASD, % шкалы Servo. По умолчанию доступен весь ход
+#: привода 0…100 %; при необходимости борт может снова сузить диапазон через
+#: RC_KEYBOARD_MAX_PERCENT. Ограничение проверяется на борту, а не только
+#: ползунком браузера. 0 % означает «тяга снята», 100 % — полный ход Servo.
+DEFAULT_MAX_PERCENT = 100
 
 
 def env_max_percent() -> int:
-    """Потолок тяги WASD из ``RC_KEYBOARD_MAX_PERCENT`` (1…100)."""
+    """Потолок тяги WASD из ``RC_KEYBOARD_MAX_PERCENT`` (0…100)."""
     try:
         limit = int(os.environ.get("RC_KEYBOARD_MAX_PERCENT", DEFAULT_MAX_PERCENT))
     except (TypeError, ValueError):
         limit = DEFAULT_MAX_PERCENT
-    return max(1, min(100, limit))
+    return max(0, min(100, limit))
 
 
 class KeyboardControl:
@@ -60,7 +60,7 @@ class KeyboardControl:
         self._steer = steer
         self._estop = estop
         self._clock = clock
-        self.max_percent = env_max_percent() if max_percent is None else max(1, min(100, int(max_percent)))
+        self.max_percent = env_max_percent() if max_percent is None else max(0, min(100, int(max_percent)))
         self._lock = threading.RLock()
         # STOP must be advertised without waiting for the motion gate or the
         # potentially blocked request holding _lock. The short fence lock is
@@ -111,9 +111,8 @@ class KeyboardControl:
         except Exception:  # hardware watchdog remains the backstop
             return {"ok": False, "reason": "command_failed"}, 503
 
-    def _clear(self):
-        with self._stop_lock:
-            self._token = None
+    def _reset_motion(self):
+        """Снять текущую тягу, сохранив сессию и геометрию разворота."""
         self._running = False
         self._direction = self._percent = 0
         self._angles = None
@@ -125,6 +124,20 @@ class KeyboardControl:
         self._live_angles_since = None
         self._pattern = None
         self._wheel_percents = {}
+
+    def _stop_motion(self, now, *, clear=False):
+        """Общий STOP: 0 % и обычная команда остановки идут через тормоз."""
+        self._reset_motion()
+        self._last_activity = now
+        result, status = self._brake()
+        if clear or not result.get("ok"):
+            self._clear()
+        return result, status
+
+    def _clear(self):
+        with self._stop_lock:
+            self._token = None
+        self._reset_motion()
         self._spin_geometry = None
         self._spin_source = None
 
@@ -363,7 +376,7 @@ class KeyboardControl:
         if pattern is None:
             return self._fail("payload", 400, body=body)
         percent, angles, sequence = body.get("percent"), body.get("angles"), body["sequence"]
-        if (type(percent) is not int or not 1 <= abs(percent) <= 100 or
+        if (type(percent) is not int or not 0 <= abs(percent) <= 100 or
                 not isinstance(angles, dict) or set(angles) != set(MODULES) or
                 not all(self._number(angles[m]) and abs(angles[m]) <= 100 for m in MODULES) or
                 sequence >= 0x7FFFFFFF):
@@ -372,6 +385,8 @@ class KeyboardControl:
             # Браузер уже ограничивает ползунок, но предел обязан жить на
             # борту: устаревшая вкладка или ручной запрос не должны дать больше.
             return self._fail("speed_limit", 400, body=body)
+        if percent == 0:
+            return self._stop_motion(now)
         if pattern == "spin":
             error = self._spin_error(angles)
             if error:
@@ -493,22 +508,17 @@ class KeyboardControl:
             if action in {"stop", "end"}:
                 if set(body) != {"action", "session", "sequence"}:
                     return self._fail("payload", 400, body=body)
-                self._running = False
-                self._angles = None
-                self._permit = None
-                self._wheels = {}
-                self._direction = self._percent = 0
-                self._live = False
-                self._live_pending = []
-                self._live_latest_seq = 0
-                self._live_angles_since = None
-                self._pattern = None
-                self._wheel_percents = {}
-                self._last_activity = now
-                result, status = self._brake()
-                if action == "end" or not result.get("ok"):
-                    self._clear()
-                return result, status
+                return self._stop_motion(now, clear=action == "end")
+
+            # 0 % — нижняя граница ползунка WASD: это STOP, а не «назад».
+            # Остановка разрешена даже без свежей телеметрии и при E-STOP.
+            if (action in {"drive", "live"} and type(body.get("percent")) is int
+                    and body["percent"] == 0):
+                keys = {"action", "session", "sequence", "percent", "angles", "permit"}
+                if set(body) != keys and not (set(body) == keys | {"pattern"}
+                                              and body.get("pattern") == "spin"):
+                    return self._fail("payload", 400, body=body)
+                return self._stop_motion(now)
 
             if self._estop():
                 return self._fail("estop", body=body)
@@ -616,12 +626,14 @@ class KeyboardControl:
             if set(body) != {"action", "session", "sequence", "percent", "angles", "permit"}:
                 return self._fail("payload", 400, body=body)
             percent, angles = body.get("percent"), body.get("angles")
-            if type(percent) is not int or not 1 <= abs(percent) <= 100 or not isinstance(angles, dict) or set(angles) != set(MODULES):
+            if type(percent) is not int or not 0 <= abs(percent) <= 100 or not isinstance(angles, dict) or set(angles) != set(MODULES):
                 return self._fail("invalid_drive", 400, body=body)
             if abs(percent) > self.max_percent:
                 return self._fail("speed_limit", 400, body=body)
             if not all(self._number(angles[m]) and abs(angles[m]) <= 100 for m in MODULES):
                 return self._fail("invalid_angle", 400, body=body)
+            if percent == 0:
+                return self._stop_motion(now)
             direction = 1 if percent > 0 else -1
             if self._running and (direction != self._direction or angles != self._angles):
                 return self._fail("module_busy", body=body)

@@ -66,7 +66,7 @@ global.fetch = async (_url, init) => {
   if (body.action === 'begin') {
     brake();
     if (incompleteFirstAck) motors[3].brakeId = 0;
-    result = {ok: true, session: 'session-' + (++session), brakeId, spin};
+    result = {ok: true, session: 'session-' + (++session), brakeId, spin, maxPercent: 100};
     if (holdBegin) { const gate = holdBegin; holdBegin = null; await gate.promise; }
   } else if (body.action === 'stop' || body.action === 'end') {
     if (body.action === 'stop' && holdStop) { const gate = holdStop; holdStop = null; await gate.promise; }
@@ -246,6 +246,30 @@ const count = action => calls.filter(call => call.action === action).length;
   await until(() => button.getAttribute('aria-pressed') === 'false', 'trim: WASD disabled');
   trimToggle.checked = false;
   motors[0].potOffset = 0; motors[0].potAngle = motors[0].angle;
+
+  // Full 0…100 % range: zero holds the brakes while the drive arrow is down,
+  // and leaving zero re-arms traction at the full servo scale.
+  slider.value = '0';
+  button.emit('click');
+  await until(() => button.getAttribute('aria-pressed') === 'true', 'full range: WASD enabled');
+  assert.equal(slider.max, '100', 'begin advertises the full 100 % ceiling');
+  const livesBeforeZero = count('live');
+  down('ArrowDown');
+  await sleep(250);
+  assert.equal(count('live'), livesBeforeZero, '0 % must not send a live traction command');
+  assert.equal(telemetry.drive.active, false, '0 % must hold the wheels stopped');
+  slider.value = '100';
+  slider.emit('input');
+  await until(() => telemetry.drive.active && motors.every(m => m.drivePercent === 100),
+    '100 % traction after leaving zero');
+  const liveCalls = calls.filter(c => c.action === 'live');
+  const fullLive = liveCalls[liveCalls.length - 1];
+  assert.equal(fullLive.percent, 100, 'full scale reaches the onboard protocol');
+  up('ArrowDown');
+  await until(() => !telemetry.drive.active, 'full scale released');
+  button.emit('click');
+  await until(() => button.getAttribute('aria-pressed') === 'false', 'full range: WASD disabled');
+  slider.value = '20'; slider.emit('input');
 
   // A caller reserving the hardware must be able to drain a BEGIN that was
   // cancelled while its reply was still in flight, including its late END.
