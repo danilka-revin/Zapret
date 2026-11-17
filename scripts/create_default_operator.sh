@@ -15,14 +15,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 USER_NAME="${RC_OPERATOR:-${RC_OPERATOR_USER:-${1:-admin}}}"
-PASS="${RC_OPERATOR_PASSWORD:-1234}"
+PASS="${RC_OPERATOR_PASSWORD:-7232}"
 
 # Случайный пароль — если явно попросили.
 if [[ "$PASS" == "random" ]]; then
   PASS="$(python3 -c '
-import secrets, string
-abc = string.ascii_letters + string.digits
-print("".join(secrets.choice(abc) for _ in range(12)))
+import secrets
+alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*"
+print("".join(secrets.choice(alphabet) for _ in range(12)))
 ')"
 fi
 
