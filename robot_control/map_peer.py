@@ -354,18 +354,36 @@ def proxy_camera_json(origin: str, operation: str):
     return _forward_json(origin, path, methods=methods, limit=MAX_NAV_REPLY_BYTES, timeout=5.0)
 
 
-def _camera_frame(origin: str, cam_id: int) -> bytes | None:
+def _camera_frame(origin: str, cam_id: int, *, path: str | None = None) -> bytes | None:
     if cam_id not in range(4):
         return None
+    url = origin + (path or f'/api/camera/{cam_id}/frame')
     try:
-        with urlopen(Request(origin + f'/api/camera/{cam_id}/frame',
-                             headers={'Accept': 'image/jpeg'}), timeout=2.0) as reply:
+        with urlopen(Request(url, headers={'Accept': 'image/jpeg'}), timeout=2.0) as reply:
             if reply.code != 200 or not str(reply.headers.get('Content-Type', '')).lower().startswith('image/jpeg'):
                 return None
             raw = reply.read(MAX_LANDMARK_BYTES + 1)
             return raw if raw and len(raw) <= MAX_LANDMARK_BYTES else None
     except (OSError, URLError, ValueError, HTTPException):
         return None
+
+
+def proxy_vision_json(origin: str, operation: str):
+    """Состояние YOLO/светофора и отметки поля живут на борту, не в пульте."""
+    routes = {'state': '/api/vision/state', 'field': '/api/vision/field'}
+    if operation not in routes:
+        return jsonify(ok=False, error='Неизвестная операция распознавания'), 404
+    return _forward_json(origin, routes[operation], methods={'GET'},
+                         limit=MAX_NAV_REPLY_BYTES, timeout=2.0)
+
+
+def proxy_vision_frame(origin: str, cam_id: int):
+    """Кадр с уже нарисованными рамками: проксируется как обычный JPEG."""
+    if cam_id not in range(4):
+        return Response(status=404)
+    frame = _camera_frame(origin, cam_id, path=f'/api/vision/camera/{cam_id}/frame')
+    return (Response(frame, mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
+            if frame else Response(status=404, headers={'Cache-Control': 'no-store'}))
 
 
 def proxy_camera_frame(origin: str, cam_id: int):

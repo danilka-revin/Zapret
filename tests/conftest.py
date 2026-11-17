@@ -43,6 +43,17 @@ def idle_lidar_singleton_for_tests():
 
 
 @pytest.fixture(autouse=True)
+def vision_quiet_in_tests(monkeypatch):
+    """Фоновый разбор кадров не должен стартовать из HTTP-тестов.
+
+    Тесты самого распознавания создают VisionService с явным ``enabled=True``
+    и поддельным источником кадров, а остальным тестам USB-камеры не нужны.
+    """
+    monkeypatch.setenv("RC_VISION_ENABLED", "0")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def isolated_estop_latch(tmp_path, monkeypatch):
     """Защёлка E-STOP — файл; тесты не должны трогать реальный data/estop.json."""
     monkeypatch.setenv("RC_ESTOP_FILE", str(tmp_path / "estop.json"))

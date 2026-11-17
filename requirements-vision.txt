@@ -1,0 +1,22 @@
+# Необязательные зависимости распознавания знаков и светофора.
+# НЕ подключены к requirements.txt: робот работает и без них (встроенный
+# детектор по цвету/форме), а PyTorch не должен ставиться на борт просто
+# ради телеметрии. Устанавливать в отдельное .venv на машине с GPU/памятью:
+#
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements-vision.txt
+#   # ultralytics тянет opencv-python с libGL; на безголовом роботе:
+#   .venv/bin/pip uninstall -y opencv-python
+#   .venv/bin/pip install "opencv-python-headless<5"
+#
+# Обучение:  .venv/bin/python scripts/train_vision.py --epochs 150 --imgsz 416
+# Проверка (pytest из requirements-dev.txt):
+#   .venv/bin/python -m pytest tests/test_vision.py
+
+numpy>=1.24,<3
+opencv-python-headless>=4.8,<5
+ultralytics>=8.3,<9
+# torch ставится сам как зависимость ultralytics. На машине без CUDA лучше
+# отдельно поставить CPU-сборку с https://download.pytorch.org/whl/cpu,
+# чтобы не качать ~3 ГБ библиотек CUDA.
+torch>=2.2

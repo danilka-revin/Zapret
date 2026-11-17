@@ -1,0 +1,30 @@
+{
+  "source": "https://github.com/p25543770-lang/yolo-stop",
+  "archive": "yolo-20261117T081703Z-1-001.zip",
+  "archiveSha256": "26a699adab4cd770d356b82df193e53f328fb6747262c955527a86c205a5d8db",
+  "images": 54,
+  "train": 41,
+  "val": 13,
+  "valFraction": 0.2,
+  "classes": [
+    "stop_sign",
+    "pedestrian_crossing",
+    "speed_bump",
+    "traffic_light",
+    "cone"
+  ],
+  "counts": {
+    "cone": 42,
+    "speed_bump": 18,
+    "traffic_light": 14,
+    "stop_sign": 32,
+    "pedestrian_crossing": 16
+  },
+  "trafficLightSignals": {
+    "yellow": 8,
+    "red": 5,
+    "green": 1
+  },
+  "autoLabel": "robot_control.vision.detector.HeuristicDetector",
+  "minConfidence": 0.5
+}

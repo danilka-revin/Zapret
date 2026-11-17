@@ -1,0 +1,44 @@
+{
+  "model": "yolo-stop.pt",
+  "base": "yolov8n.yaml",
+  "ultralytics": "8.4.215",
+  "classes": [
+    "stop_sign",
+    "pedestrian_crossing",
+    "speed_bump",
+    "traffic_light",
+    "cone"
+  ],
+  "epochs": 150,
+  "imgsz": 416,
+  "batch": 4,
+  "durationS": 1311.1,
+  "metrics": {
+    "metrics/precision(B)": 0.4505,
+    "metrics/recall(B)": 0.7777,
+    "metrics/mAP50(B)": 0.7609,
+    "metrics/mAP50-95(B)": 0.5864,
+    "bestEpoch": 118,
+    "bestMAP50": 0.7703,
+    "bestMAP50-95": 0.5952
+  },
+  "dataset": {
+    "images": 54,
+    "counts": {
+      "cone": 42,
+      "speed_bump": 18,
+      "traffic_light": 14,
+      "stop_sign": 32,
+      "pedestrian_crossing": 16
+    },
+    "sha256": "26a699adab4cd770d356b82df193e53f328fb6747262c955527a86c205a5d8db"
+  },
+  "trafficLight": "цвет определяется отдельно: robot_control/vision/traffic.py",
+  "validation": {
+    "precision": 0.51,
+    "recall": 0.7441,
+    "mAP50": 0.7703,
+    "mAP50-95": 0.5952
+  },
+  "note": "метрики обучения — из runs/vision/train/results.csv; validation — отдельный прогон model.val() на val-выборке"
+}

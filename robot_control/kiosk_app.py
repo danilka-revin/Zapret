@@ -491,6 +491,14 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         SESSION_COOKIE_SECURE=config.cookie_secure,
     )
 
+    # Знаки, светофор и отметки на поле: один сервис на процесс. В тестах
+    # фоновый поток не поднимаем, чтобы не трогать USB-камеры.
+    from .vision.api import register_vision_routes
+    # autostart=True лениво поднимает поток на первом GET /api/vision/state:
+    # тяжёлый импорт torch не задерживает старт самого киоска.
+    vision_service = register_vision_routes(app, autostart=not config.testing)
+    app.extensions["rc_vision"] = vision_service
+
     # Панель «Логи» показывает настоящий журнал процесса: записи логирования
     # robot_control.* и явные события маршрутов. Подключаем его первым делом,
     # чтобы в журнал попало всё, включая неудачный старт источника данных.

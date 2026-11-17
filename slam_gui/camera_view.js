@@ -126,8 +126,14 @@
     image.onerror = () => finish(false);
     camera.timeout = setTimeout(() => { finish(false); image.src = ''; }, 5000);
     // IDs are fixed: rear camera still works when it is the only connected one.
-    const url = 'api/camera/' + (camera.n - 1) + '/frame?t=' + Date.now();
-    image.src = window.RCSessionUrl ? window.RCSessionUrl(url) : url;
+    // При включённой разметке берём кадр с рамками: зум/панорама применяются
+    // браузером уже к размеченному изображению, поэтому рамки не съезжают.
+    const camId = camera.n - 1;
+    const plain = 'api/camera/' + camId + '/frame?t=' + Date.now();
+    const url = window.RCVision && window.RCVision.frameUrl
+      ? window.RCVision.frameUrl(camId)
+      : (window.RCSessionUrl ? window.RCSessionUrl(plain) : plain);
+    image.src = url;
   }
 
   function stop(camera) {
