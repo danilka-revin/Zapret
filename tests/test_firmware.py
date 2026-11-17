@@ -60,6 +60,16 @@ def test_sketch_compiles_for_avr_headers_only():
     assert "NODE_ADDRESS" not in text     # адреса шины больше нет
 
 
+def test_startup_disables_bldc_before_initializing_serial():
+    text = _text(WHEEL)
+    setup = text[text.index("void setup() {"):text.index("\n}\n", text.index("void setup() {"))]
+    assert setup.index("steeringSetup();") < setup.index("Serial.begin(115200);")
+    steering = text[text.index("void steeringSetup() {"):text.index("\n}\n", text.index("void steeringSetup() {"))]
+    assert steering.index("digitalWrite(BLDC_STOP_PIN, BLDC_STOP_DISABLE_LEVEL);") < steering.index("pinMode(BLDC_STOP_PIN, OUTPUT);")
+    assert steering.index("digitalWrite(BLDC_BRAKE_PIN, BLDC_BRAKE_ACTIVE_LEVEL);") < steering.index("pinMode(BLDC_BRAKE_PIN, OUTPUT);")
+    assert steering.index("setupDriveServo();") > steering.index("pinMode(BLDC_STOP_PIN, OUTPUT);")
+
+
 def test_pins_levels_and_speeds_match_the_tested_sketch():
     reference = _text(REFERENCE)
     core = _core(WHEEL)

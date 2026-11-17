@@ -2663,8 +2663,11 @@ void readSerialLines() {
 }
 
 void setup() {
-  Serial.begin(115200);
+  // Assert safe BLDC input levels before initializing USB serial. During the
+  // bootloader/reset window the MCU pins are high impedance; hardware biasing
+  // is still required to keep STOP disabled until this code starts.
   steeringSetup();
+  Serial.begin(115200);
   last_telemetry_ms = last_fast_telemetry_ms = millis();
   note(PSTR("--- КОЛЕСО %s: руль v%u, USB 115200; ноль не задан — k или z ---"),
        MODULE_ID, (unsigned)FIRMWARE_PROTOCOL);
