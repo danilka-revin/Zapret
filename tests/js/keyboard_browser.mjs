@@ -71,6 +71,8 @@ try {
   assert.equal(await page.locator('#keyboard-enable').getAttribute('aria-pressed'), 'true');
   fastMode = 'normal';
   assert.equal(await page.locator('#keyboard-speed').inputValue(), '20');
+  assert.equal(await page.locator('#keyboard-speed').getAttribute('min'), '0');
+  assert.equal(await page.locator('#keyboard-speed').getAttribute('max'), '100');
 
   // WASD without an arrow only positions steering. Arrow is hold-to-run.
   await page.keyboard.down('w');

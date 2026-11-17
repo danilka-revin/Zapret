@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import threading
 import time
+from pathlib import Path
 
 from robot_control.keyboard import KeyboardControl, MODULES
 from robot_control import maneuvers, slam
@@ -260,6 +261,32 @@ def test_kiosk_manual_stop_revokes_keyboard_lease(kiosk_client):
     assert kiosk_client.post("/api/kiosk_drive", json={"percent": 0}, headers=headers).json["ok"]
     drive["sequence"] = 3
     assert kiosk_client.post("/api/kiosk_keyboard", json=drive, headers=headers).json["reason"] == "keyboard_session"
+    assert source.commanded == 0
+
+
+def test_kiosk_keyboard_route_accepts_full_scale_and_zero(kiosk_client):
+    """HTTP-путь WASD пропускает 100 % и трактует 0 % как STOP."""
+    source = Wheels()
+    kiosk_client.application.extensions["rc_slam"].source = source
+    headers = {"X-Robot-Control": "drive",
+               "X-Robot-Command-Deadline": str(time.time() + 0.5)}
+    begin_reply = kiosk_client.post("/api/kiosk_keyboard",
+                                    json={"action": "begin"}, headers=headers)
+    assert begin_reply.json["maxPercent"] == 100
+    token = begin_reply.json["session"]
+    arm = {"action": "arm", "session": token, "sequence": 1,
+           "direction": 1, "angles": straight()}
+    permit = kiosk_client.post("/api/kiosk_keyboard", json=arm,
+                               headers=headers).json["permit"]
+    drive = {"action": "drive", "session": token, "sequence": 2,
+             "percent": 100, "angles": straight(), "permit": permit}
+    assert kiosk_client.post("/api/kiosk_keyboard", json=drive,
+                             headers=headers).json["ok"]
+    assert source.commanded == 100
+    zero = {"action": "live", "session": token, "sequence": 3,
+            "percent": 0, "angles": straight(), "permit": ""}
+    assert kiosk_client.post("/api/kiosk_keyboard", json=zero,
+                             headers=headers).json["ok"]
     assert source.commanded == 0
 
 
@@ -926,24 +953,50 @@ def test_stop_registration_is_atomic_with_newer_sequence_acceptance():
             ctl.finish_preempted_stop(stop)
 
 
-def test_keyboard_traction_is_capped_at_thirty_percent():
-    """Предел WASD проверяется на борту, а не только ползунком в браузере."""
+def test_keyboard_traction_uses_full_zero_to_hundred_range():
+    """По умолчанию WASD отдаёт 0…100 %, а 0 % — это STOP без потери сессии."""
     clock, source = Clock(), Wheels()
     ctl = controller(source, clock)
-    assert ctl.max_percent == 30
+    assert ctl.max_percent == 100
     result, status = ctl.handle({"action": "begin"})
-    assert status == 200 and result["maxPercent"] == 30
+    assert status == 200 and result["maxPercent"] == 100
     token = result["session"]
     armed, status = send(ctl, token, 1, "arm", direction=1, angles=straight())
     assert status == 200 and armed["ok"]
-    above, status = send(ctl, token, 2, "drive", percent=31, angles=straight(),
+    full, status = send(ctl, token, 2, "drive", percent=100, angles=straight(),
+                        permit=armed["permit"])
+    assert status == 200 and full["ok"] and source.commanded == 100
+    # 0 % останавливает тягу через общий тормоз, сессия остаётся активной.
+    stopped, status = send(ctl, token, 3, "live", percent=0,
+                           angles=straight(), permit="")
+    assert status == 200 and stopped["ok"] and source.commanded == 0
+    assert send(ctl, token, 4, "ping")[0]["ok"]
+    # И после нуля доступна полная тяга в обе стороны.
+    armed, status = send(ctl, token, 5, "arm", direction=-1, angles=straight())
+    assert status == 200 and armed["ok"]
+    reverse, status = send(ctl, token, 6, "drive", percent=-100, angles=straight(),
+                           permit=armed["permit"])
+    assert status == 200 and reverse["ok"] and source.commanded == -100
+
+
+def test_keyboard_configurable_cap_is_still_enforced(monkeypatch):
+    """Оператор может сузить диапазон; проверка остаётся на борту."""
+    monkeypatch.setenv("RC_KEYBOARD_MAX_PERCENT", "50")
+    clock, source = Clock(), Wheels()
+    ctl = controller(source, clock)
+    assert ctl.max_percent == 50
+    result, status = ctl.handle({"action": "begin"})
+    assert status == 200 and result["maxPercent"] == 50
+    token = result["session"]
+    armed, _ = send(ctl, token, 1, "arm", direction=1, angles=straight())
+    above, status = send(ctl, token, 2, "drive", percent=51, angles=straight(),
                          permit=armed["permit"])
     assert status == 400 and above["reason"] == "speed_limit"
     assert source.commanded == 0
     # Отказ снимает сессию; предел одинаков и для живой тяги на ходу.
-    token = ctl.handle({"action": "begin"})[0]["session"]
+    token = begin(ctl)
     armed, _ = send(ctl, token, 1, "arm", direction=1, angles=straight())
-    above, status = send(ctl, token, 2, "live", percent=31,
+    above, status = send(ctl, token, 2, "live", percent=51,
                          angles=straight(), permit=armed["permit"])
     assert status == 400 and above["reason"] == "speed_limit"
     assert source.commanded == 0
@@ -955,6 +1008,14 @@ def test_keyboard_limit_follows_environment(monkeypatch):
     ctl = controller(source, clock)
     assert ctl.max_percent == 12
     assert ctl.handle({"action": "begin"})[0]["maxPercent"] == 12
-    # Некорректное значение не снимает ограничение и не роняет борт.
+    monkeypatch.setenv("RC_KEYBOARD_MAX_PERCENT", "0")
+    assert controller(source, clock).max_percent == 0
+    # Некорректное значение возвращает полный диапазон и не роняет борт.
     monkeypatch.setenv("RC_KEYBOARD_MAX_PERCENT", "не число")
-    assert controller(source, clock).max_percent == 30
+    assert controller(source, clock).max_percent == 100
+
+
+def test_wasd_slider_has_full_percent_range():
+    html = (Path(__file__).resolve().parents[1] / "slam_gui/robot.html").read_text()
+    assert 'id="keyboard-speed" type="range" min="0" max="100" step="1" value="20"' in html
+    assert 'id="keyboard-speed-max">100<' in html
