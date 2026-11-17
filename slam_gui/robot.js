@@ -1121,6 +1121,20 @@
     }
 
     // ---------- events ----------
+    // Выход к стартовому экрану: режим закрывается на сервере, и следующий
+    // вход снова спросит PIN (7232 — киоск, 5656 — монитор).
+    const exitBtn = $('k-exit-btn');
+    if (exitBtn) exitBtn.addEventListener('click', async () => {
+      exitBtn.disabled = true;
+      try {
+        await fetch('api/kiosk_mode/lock', {
+          method: 'POST', cache: 'no-store', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', 'X-Robot-Control': 'kiosk-lock' },
+          body: '{}',
+        });
+      } catch (error) { /* всё равно уходим к PIN */ }
+      window.location.assign('/?choose=1');
+    });
     openBtn.addEventListener('click', openOverlay);
     if (backdrop) backdrop.addEventListener('click', closeOverlay);
     if (closeBtn) closeBtn.addEventListener('click', closeOverlay);

@@ -1,8 +1,21 @@
 """Отдельное приложение для дисплея на борту робота.
 
-Корень / и /main.html сразу отдают экран киоска с АКБ, шасси и лидаром.
-Телеметрия и функции бортового киоска доступны без PIN; PIN запрашивается
-только при открытии грузового отсека. Руление и управление BLDC доступны
+Корень / показывает стартовый экран с вводом PIN — на нём выбирается, что
+именно открыть:
+
+* PIN **7232** (``RC_KIOSK_PIN_MAIN``) — обычный бортовой киоск: телеметрия,
+  настройки, руление, карта, журнал. PIN кейса по-прежнему спрашивается только
+  при открытии грузового отсека;
+* PIN **5656** (``RC_KIOSK_PIN_MONITOR``) — гостевой «бортовой монитор» для
+  конечных пользователей: общая информация (АКБ, шасси, лидар, журнал) и
+  открытие кейса по PIN. Настройка, руление, тяга, закрытие кейса и остановка
+  робота из этого режима недоступны — их закрывает сам сервер, а не только
+  экран.
+
+Стартовый экран живёт в ``slam_gui/start.html``, монитор — ``monitor.html``.
+/kiosk, /main.html и /robot.html по-прежнему отдают обычный экран киоска (его
+открывает браузер робота и на него ссылаются старые ярлыки и тесты), но после
+PIN 5656 браузер сам переходит на монитор. Руление и управление BLDC доступны
 источнику MasterSource. На борту направление включается нажатием до СТОП, а
 ползунок задаёт прямое Servo.write(0…150); обороты SC выводятся без обратной связи.
 Аппаратный watchdog включает тормоз, если heartbeat не приходит 650 мс.
@@ -47,6 +60,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import replace
+from urllib.parse import quote
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -473,6 +487,181 @@ def browser_command(exe: str, url: str, profile_dir: Path | str | None = None) -
     ]
 
 
+# --------------------------------------------------------- режимы экрана --- #
+#: Cookie с подписанным режимом окна: «main» (обычный киоск) или «monitor».
+KIOSK_MODE_COOKIE = "rc_kiosk_mode"
+#: Тот же режим в адресе (``?m=<подписанный токен>``). Нужен там, где cookie не
+#: сохраняется: встроенный предпросмотр — iframe на другом домене, и браузер
+#: отбрасывает SameSite=Lax. Ссылку с токеном никто не подделает: подпись.
+KIOSK_MODE_PARAM = "m"
+#: Стартовый экран с PIN и гостевой «бортовой монитор».
+START_PAGE = "start.html"
+MONITOR_PAGE = "monitor.html"
+MONITOR_URL_PATH = "/monitor"
+#: Сколько живёт выбранный режим: смена на дисплее робота возвращает стартовый
+#: экран с PIN, чтобы монитор не оставался включённым навсегда.
+KIOSK_MODE_TTL_S = 8 * 60 * 60
+KIOSK_MODE_MAIN = "main"
+KIOSK_MODE_MONITOR = "monitor"
+
+
+class KioskSessionModes:
+    """Режим окна бортового экрана: выбор PIN-кодом и подписанная cookie.
+
+    Режим хранится в cookie ``rc_kiosk_mode`` с подписью секретным ключом
+    приложения: браузер не может подменить его в адресной строке, а сервер
+    проверяет значение на каждом запросе. Это не замена PIN кейса: сам кейс
+    по-прежнему открывается только своим кодом (``RC_SLAM_PIN``).
+    """
+
+    def __init__(self, config: Config, *, clock=time.time):
+        self.main_pin = str(config.kiosk_pin_main or "7232")
+        self.monitor_pin = str(config.kiosk_pin_monitor or "5656")
+        self.max_attempts = max(1, int(config.kiosk_mode_max_attempts))
+        self.lock_seconds = max(0, int(config.kiosk_mode_lock_seconds))
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._fails = 0
+        self._locked_until = 0.0
+        self._signer = None
+        #: Метка этого запуска сервера. Пишется в соль подписи, поэтому режим,
+        #: выбранный до перезапуска, после него не принимается: «при запуске
+        #: ярлыка на бортовом экране будет ввод PIN-кода» — так и происходит.
+        self.boot_id = secrets.token_hex(8)
+
+    # --- подпись cookie: ключ приложения известен только после создания Flask ---
+    def attach(self, app: Flask) -> None:
+        from itsdangerous import URLSafeTimedSerializer
+        self._signer = URLSafeTimedSerializer(
+            app.config["SECRET_KEY"], salt="rc-kiosk-mode:" + self.boot_id)
+
+    def dump(self, mode: str) -> str:
+        """Подписанное значение cookie для записи режима."""
+        return self._signer.dumps(mode) if self._signer is not None else ""
+
+    def _load(self, token: str | None) -> str | None:
+        """Разобрать подписанный токен режима; ``None`` — токена нет или он чужой."""
+        if not token or self._signer is None:
+            return None
+        try:
+            mode = self._signer.loads(token, max_age=KIOSK_MODE_TTL_S)
+        except Exception:  # noqa: BLE001 — испорченный/просроченный токен = нет режима
+            return None
+        return mode if mode in {KIOSK_MODE_MAIN, KIOSK_MODE_MONITOR} else None
+
+    def current(self, cookie_value: str | None) -> str | None:
+        """Режим из cookie или ``None`` (тогда экран начинается с PIN)."""
+        return self._load(cookie_value)
+
+    def request_mode(self) -> str | None:
+        """Режим текущего запроса: cookie, а если её нет — подписанный параметр.
+
+        Параметр ``?m=`` появился из-за встроенного предпросмотра: в iframe на
+        другом домене браузер не сохраняет cookie SameSite=Lax, и без него
+        выбор режима терялся сразу после ввода PIN. Токен подписан секретным
+        ключом сервера, поэтому «открыть монитор» в адресной строке нельзя.
+        """
+        mode = self._load(request.cookies.get(KIOSK_MODE_COOKIE))
+        if mode is not None:
+            return mode
+        return self._load(request.args.get(KIOSK_MODE_PARAM))
+
+    def remaining_lock_ms(self) -> int:
+        return max(0, int((self._locked_until - self.clock()) * 1000))
+
+    def status(self, cookie_value: str | None) -> dict:
+        mode = self.current(cookie_value)
+        return {
+            "mode": mode,
+            "page": {KIOSK_MODE_MAIN: KIOSK_URL_PATH, KIOSK_MODE_MONITOR: MONITOR_URL_PATH}.get(mode),
+            "locked": self.remaining_lock_ms() > 0,
+            "remainingMs": self.remaining_lock_ms(),
+            "attemptsLeft": max(0, self.max_attempts - self._fails),
+            "monitorReadOnly": mode == KIOSK_MODE_MONITOR,
+        }
+
+    def verify(self, pin: str) -> dict:
+        """Сверить PIN стартового экрана и вернуть выбранный режим."""
+        with self._lock:
+            remaining = self.remaining_lock_ms()
+            if remaining > 0:
+                return {"ok": False, "reason": "blocked", "remainingMs": remaining,
+                        "attemptsLeft": 0, "mode": None}
+            digits = re.sub(r"\D", "", str(pin or ""))
+            mode = None
+            if len(digits) < 4:
+                return {"ok": False, "reason": "format", "mode": None,
+                        "attemptsLeft": self.max_attempts - self._fails}
+            if digits == re.sub(r"\D", "", self.main_pin):
+                mode = KIOSK_MODE_MAIN
+            elif digits == re.sub(r"\D", "", self.monitor_pin):
+                mode = KIOSK_MODE_MONITOR
+            if mode is None:
+                self._fails += 1
+                if self._fails >= self.max_attempts:
+                    self._fails = 0
+                    self._locked_until = self.clock() + self.lock_seconds
+                    return {"ok": False, "reason": "blocked",
+                            "remainingMs": self.lock_seconds * 1000,
+                            "attemptsLeft": 0, "mode": None}
+                return {"ok": False, "reason": "wrong",
+                        "attemptsLeft": self.max_attempts - self._fails, "mode": None}
+            self._fails = 0
+            self._locked_until = 0.0
+            return {"ok": True, "reason": "ok", "mode": mode,
+                    "attemptsLeft": self.max_attempts}
+
+
+def kiosk_mode_gate(modes: KioskSessionModes):
+    """Отказ монитору в настройке, рулении, тяге и остановке (``None`` — можно).
+
+    Экран монитора и так не показывает эти кнопки, но режим — это cookie, а не
+    «честное слово» браузера: API обязан закрывать их сам.
+    """
+    path = request.path
+    if not path.startswith("/api/"):
+        return None
+    mode = modes.request_mode()
+    if mode != KIOSK_MODE_MONITOR:
+        return None
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        allowed = _path_allowed(path, _MONITOR_GET_ALLOW)
+    else:
+        allowed = _path_allowed(path, _MONITOR_WRITE_ALLOW)
+    if allowed:
+        return None
+    return jsonify({
+        "ok": False,
+        "reason": "monitor_mode",
+        "error": "Бортовой монитор: настройка и управление недоступны. "
+                 "Обычный бортовой экран открывается PIN 7232.",
+    }), 403
+
+
+#: Что монитор читает: общая информация о роботе. Всё остальное (настройка
+#: портов, калибровка, карта, навигация) закрыто — монитору это не нужно.
+_MONITOR_GET_ALLOW = (
+    "/api/kiosk_mode", "/api/kiosk_state", "/api/kiosk_lock", "/api/battery",
+    "/api/lidar", "/api/lidar/logs", "/api/kiosk_logs", "/api/pc_state",
+    "/api/connections", "/api/cameras", "/api/kinect/status", "/healthz",
+    # потоки кадров камер по id: «/api/camera/» — префикс
+    "/api/camera/",
+)
+#: Что монитор пишет: вход PIN стартового экрана, открытие кейса по PIN и
+#: E-STOP (остановить робота должен уметь каждый). Ни руления, ни тяги, ни
+#: закрытия кейса, ни остановки системы здесь нет.
+_MONITOR_WRITE_ALLOW = (
+    "/api/kiosk_mode", "/api/kiosk_mode/exit", "/api/kiosk_mode/lock",
+    "/api/kiosk_lock/open", "/api/estop",
+)
+
+
+def _path_allowed(path: str, rules) -> bool:
+    """Точное совпадение или разрешённый префикс вида «/api/camera/»."""
+    return any(path == rule or (rule.endswith("/") and path.startswith(rule))
+               for rule in rules)
+
+
 # ------------------------------------------------------------------- сервер -- #
 def create_kiosk_app(config: Config | None = None) -> Flask:
     config = config or Config.from_env()
@@ -490,6 +679,19 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         SESSION_COOKIE_SAMESITE=config.cookie_samesite,
         SESSION_COOKIE_SECURE=config.cookie_secure,
     )
+
+    # ------------------- Режим экрана: киоск или монитор ------------------ #
+    # Стартовый экран / спрашивает PIN и открывает один из двух режимов.
+    # Режим живёт в подписанной cookie этого процесса: переименовать его в
+    # адресной строке нельзя, а сервер сам отказывает монитору в настройке,
+    # рулении, тяге и остановке — одного скрытия кнопок на странице мало.
+    session_modes = KioskSessionModes(config)
+    session_modes.attach(app)
+    app.extensions["rc_kiosk_modes"] = session_modes
+
+    @app.before_request
+    def _kiosk_mode_gate():
+        return kiosk_mode_gate(session_modes)
 
     # Знаки, светофор и отметки на поле: один сервис на процесс. В тестах
     # фоновый поток не поднимаем, чтобы не трогать USB-камеры.
@@ -966,9 +1168,120 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         return response
 
     # ---------- маршруты ----------
+    def _set_mode_cookie(response, mode: str | None):
+        """Записать (или снять) выбранный режим экрана в подписанной cookie."""
+        if mode is None:
+            response.delete_cookie(KIOSK_MODE_COOKIE, path="/", samesite=config.cookie_samesite)
+        else:
+            response.set_cookie(
+                KIOSK_MODE_COOKIE, session_modes.dump(mode), path="/",
+                max_age=KIOSK_MODE_TTL_S, httponly=True,
+                samesite=config.cookie_samesite, secure=config.cookie_secure,
+            )
+        return response
+
+    def _page_for(mode: str | None) -> str | None:
+        """Адрес экрана режима вместе с его токеном (cookie может не сохраниться)."""
+        if mode == KIOSK_MODE_MONITOR:
+            return "%s?%s=%s" % (MONITOR_URL_PATH, KIOSK_MODE_PARAM,
+                                 quote(session_modes.dump(mode), safe=""))
+        if mode == KIOSK_MODE_MAIN:
+            return KIOSK_URL_PATH
+        return None
+
+    # ---------- стартовый экран: PIN выбирает киоск или монитор ---------- #
     @app.get("/")
     def root():
-        return redirect(KIOSK_URL_PATH)
+        """Стартовый экран с PIN. Уже выбранный режим сразу его и открывает."""
+        if request.args.get("choose"):
+            return _send(START_PAGE)
+        page = _page_for(session_modes.request_mode())
+        if page:
+            return redirect(page)
+        return _send(START_PAGE)
+
+    @app.get("/start")
+    @app.get("/start.html")
+    def start_page():
+        return _send(START_PAGE)
+
+    @app.get(MONITOR_URL_PATH)
+    @app.get("/monitor.html")
+    def monitor_page():
+        """Гостевой «бортовой монитор»: общая информация и кейс.
+
+        Без выбранного режима страница не открывается: иначе монитор был бы
+        доступен по прямой ссылке в обход PIN. Сначала — стартовый экран.
+        """
+        token = request.args.get(KIOSK_MODE_PARAM)
+        if session_modes.request_mode() != KIOSK_MODE_MONITOR:
+            return redirect("/?choose=1")
+        response = _send(MONITOR_PAGE)
+        if token:
+            # Дальше страница сама передаёт токен в запросах (в iframe-предпросмотре
+            # cookie не сохраняется). Адрес не переписываем: он и есть ключ входа.
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/api/kiosk_mode")
+    def api_kiosk_mode():
+        mode = session_modes.request_mode()
+        payload = session_modes.status(None)
+        payload["mode"] = mode
+        payload["page"] = _page_for(mode)
+        payload["monitorReadOnly"] = mode == KIOSK_MODE_MONITOR
+        return jsonify({"ok": True, **payload}), 200, {"Cache-Control": "no-store"}
+
+    @app.post("/api/kiosk_mode")
+    def api_kiosk_mode_set():
+        """PIN стартового экрана: 7232 — киоск, 5656 — монитор."""
+        if request.headers.get(STEERING_COMMAND_HEADER) != "kiosk-mode":
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"ok": False, "reason": "payload"}), 400
+        result = session_modes.verify(str(body.get("pin", "")))
+        if result.get("ok"):
+            eventlog.record("info", "стартовый экран: открыт режим «%s»" %
+                            ("бортовой монитор" if result["mode"] == KIOSK_MODE_MONITOR
+                             else "обычный киоск"), source="экран")
+            response = jsonify({"ok": True, "mode": result["mode"],
+                                # Ссылка с токеном: работает и там, где cookie не
+                                # сохраняется (встроенный предпросмотр).
+                                "page": _page_for(result["mode"]),
+                                "token": session_modes.dump(result["mode"]),
+                                "param": KIOSK_MODE_PARAM,
+                                "attemptsLeft": result["attemptsLeft"]})
+            return _set_mode_cookie(response, result["mode"]), 200
+        eventlog.record("warn", "стартовый экран: PIN не принят (%s)" %
+                        {"blocked": "ввод заблокирован", "wrong": "неверный PIN",
+                         "format": "нужен PIN из 4…8 цифр"}.get(result.get("reason"), "ошибка"),
+                        source="экран")
+        return jsonify(result), 403
+
+    @app.delete("/api/kiosk_mode")
+    @app.post("/api/kiosk_mode/exit")
+    def api_kiosk_mode_exit():
+        """Вернуться к стартовому экрану: снять выбранный режим."""
+        eventlog.record("info", "стартовый экран: режим закрыт — снова нужен PIN",
+                        source="экран")
+        response = jsonify({"ok": True, "mode": None, "page": "/"})
+        return _set_mode_cookie(response, None), 200
+
+    @app.post("/api/kiosk_mode/lock")
+    def api_kiosk_mode_lock():
+        """«Выход» на обычном экране: кнопка, открытая PIN 7232, гасит режим.
+
+        Отдельный путь нужен, чтобы страница не могла случайно закрыть чужие
+        сессии: сюда приходит только запрос кнопки «Выход» — с заголовком
+        экрана, как у команд руления и тяги.
+        """
+        if request.headers.get(STEERING_COMMAND_HEADER) != "kiosk-lock":
+            return jsonify({"ok": False, "reason": "request_header_required"}), 400
+        eventlog.record("info", "обычный бортовой экран: режим закрыт — снова нужен PIN",
+                        source="экран")
+        response = jsonify({"ok": True, "mode": None, "page": "/?choose=1"})
+        return _set_mode_cookie(response, None), 200
 
     @app.get(KIOSK_URL_PATH)
     def kiosk():
@@ -2371,7 +2684,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                      "lidar_settings.js", "lidar_view.js", "kinect_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
                      "explore.js", "scan_mode.js", "scan.css", "navigation_screen.js", "navigation.css",
                      "delivery.js", "delivery.css", "delivery_reference.png", "map.css", "viewport.js", "camera_view.js", "camera_stitch.js", "camera_frames.js", "slam_auth.js",
-                     "steer_presets.js", "power.css", "power.js"):
+                     "steer_presets.js", "power.css", "power.js",
+                     "start.js", "start.css", "monitor.js", "monitor.css"):
         # нужен closure, чтобы цикл не переиспользовал последнее значение
         def _view(name=filename):
             return _send(name)
@@ -2392,8 +2706,13 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
 
 # ------------------------------------------------------------ открытие экрана -- #
 def kiosk_url(port: int | None = None, host: str = "127.0.0.1") -> str:
-    """Адрес бортового экрана (для браузера на самом роботе — 127.0.0.1)."""
-    return f"http://{host}:{port or kiosk_port()}{KIOSK_URL_PATH}"
+    """Адрес бортового экрана для браузера на самом роботе (127.0.0.1).
+
+    Открывается корень: сначала стартовый экран с PIN, а выбранный режим
+    (обычный киоск или монитор) он откроет сам — подписанная cookie помнит
+    выбор, пока робот работает.
+    """
+    return f"http://{host}:{port or kiosk_port()}/"
 
 
 def port_in_use(port: int, host: str = "127.0.0.1", timeout: float = 0.5) -> bool:
@@ -2933,7 +3252,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     _write_pid_file()
     log.info("экран робота (киоск) слушает http://%s:%s/ · источник: %s",
              host, port, cfg.slam_source)
-    log.info("на роботе: http://127.0.0.1:%s%s · без авторизации", port, KIOSK_URL_PATH)
+    log.info("на роботе: http://127.0.0.1:%s/ · стартовый экран с PIN "
+             "(7232 — бортовой экран, 5656 — монитор)", port)
     log.info("Ctrl+C — остановить сервер")
     try:
         server.serve_forever()

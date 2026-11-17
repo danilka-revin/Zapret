@@ -68,8 +68,20 @@ def kiosk_client(kiosk_app):
 
 
 # ------------------------------- страница и API ------------------------------ #
-def test_root_opens_the_screen_itself(kiosk_client):
-    """Корень без запроса — сразу на экран: браузер робота открывает /."""
+def test_root_asks_for_pin_before_opening_the_screen(kiosk_client):
+    """Корень — стартовый экран с PIN: браузер робота открывает /."""
+    response = kiosk_client.get("/")
+    assert response.status_code == 200
+    text = response.get_data(as_text=True)
+    assert "start.js" in text and "start.css" in text
+    assert 'id="keypad"' in text
+    assert "PIN-код" in text
+
+
+def test_chosen_mode_skips_the_pin_screen(kiosk_client):
+    """Режим уже выбран — корень сразу открывает нужный экран."""
+    kiosk_client.post("/api/kiosk_mode", json={"pin": "7232"},
+                      headers={"X-Robot-Control": "kiosk-mode"})
     response = kiosk_client.get("/")
     assert response.status_code == 302
     assert response.headers["Location"] == "/kiosk"
@@ -530,13 +542,13 @@ def test_screen_lives_on_port_8090(monkeypatch):
     monkeypatch.delenv("RC_KIOSK_PORT", raising=False)
     assert DEFAULT_PORT == 8090
     assert kiosk_port() == 8090
-    assert kiosk_url() == "http://127.0.0.1:8090/kiosk"
+    assert kiosk_url() == "http://127.0.0.1:8090/"
 
 
 def test_port_comes_from_environment(monkeypatch):
     monkeypatch.setenv("RC_KIOSK_PORT", "8091")
     assert kiosk_port() == 8091
-    assert kiosk_url(port=8091) == "http://127.0.0.1:8091/kiosk"
+    assert kiosk_url(port=8091) == "http://127.0.0.1:8091/"
 
 
 def test_broken_port_value_falls_back_to_default(monkeypatch):
@@ -876,7 +888,9 @@ def test_screen_opens_itself_when_server_starts(config, fake_browser, monkeypatc
         server.server_close()
         thread.join(timeout=5)
     assert opened, "экран не открылся в браузере"
-    assert "/kiosk" in opened[0]
+    # Открывается корень: сначала стартовый экран с PIN, он сам ведёт в киоск
+    # или в монитор — режим запоминается в cookie на время работы робота.
+    assert f"--app=http://127.0.0.1:{port}/" in opened[0]
 
 
 def test_screen_reopens_if_browser_was_closed(config, fake_browser, monkeypatch):

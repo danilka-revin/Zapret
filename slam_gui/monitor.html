@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#000000" />
+  <title>Бортовой монитор</title>
+  <link rel="stylesheet" href="monitor.css" />
+</head>
+<body class="monitor-body">
+  <!--
+    «Бортовой монитор» — экран для конечных пользователей (PIN 5656 на
+    стартовом экране). Только общая информация о роботе и грузовой кейс по PIN:
+
+      • заряд, напряжение, ток и температура АКБ;
+      • состояние четырёх колёсных модулей (без калибровки);
+      • обзор лидара и последние строки журнала;
+      • открытие кейса по PIN.
+
+    Настройки, руление, тяга и остановка робота сюда не выводятся, а сервер
+    отвечает на них отказом monitor_mode — страница не единственная защита.
+  -->
+  <main class="mon">
+    <header class="mon-head">
+      <div class="mon-brand">
+        <span class="mon-mark" aria-hidden="true">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M4 14h16M7 10h10M9 6h6" />
+            <circle cx="7" cy="18" r="2.2" fill="currentColor" stroke="none" />
+            <circle cx="17" cy="18" r="2.2" fill="currentColor" stroke="none" />
+          </svg>
+        </span>
+        <div>
+          <b>BULKA_v1 · Бортовой монитор</b>
+          <small>общая информация · кейс по PIN</small>
+        </div>
+      </div>
+      <div class="mon-head-right">
+        <span class="chip" id="mon-link" data-tone="warn">связь —</span>
+        <span class="chip" id="mon-source">источник —</span>
+        <time class="mon-clock" id="mon-clock">--:--</time>
+        <button type="button" class="mon-exit" id="mon-exit" title="Вернуться к стартовому экрану (снова нужен PIN)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" /><path d="M10 8l-4 4 4 4M6 12h9" />
+          </svg>
+          Выход
+        </button>
+      </div>
+    </header>
+
+    <div class="mon-main">
+      <div class="mon-col">
+        <section class="card" aria-labelledby="mon-batt-title">
+          <header class="card-head">
+            <h2 id="mon-batt-title">Аккумулятор</h2>
+            <span id="mon-batt-note">нет данных</span>
+          </header>
+          <div class="soc-row">
+            <div class="soc-value"><span id="mon-soc">—</span><small>%</small></div>
+            <div class="soc-bar"><i id="mon-soc-bar"></i></div>
+          </div>
+          <p class="soc-note" id="mon-soc-note">—</p>
+          <div class="kpi-grid">
+            <div class="kpi"><span>Напряжение</span><b id="mon-volts">—<small>В</small></b></div>
+            <div class="kpi"><span>Ток</span><b id="mon-amps">—<small>А</small></b></div>
+            <div class="kpi"><span>Температура</span><b id="mon-temp">—<small>°C</small></b></div>
+            <div class="kpi"><span>Скорость</span><b id="mon-speed">—<small>м/с</small></b></div>
+          </div>
+        </section>
+
+        <section class="card" aria-labelledby="mon-chassis-title">
+          <header class="card-head">
+            <h2 id="mon-chassis-title">Колёсные модули</h2>
+            <span id="mon-chassis-meta">—</span>
+          </header>
+          <div class="wheels">
+            <article class="wheel" id="mon-wheel-FL" data-tone="idle">
+              <div class="wheel-head"><b>FL</b><span class="wheel-state">—</span></div>
+              <div class="wheel-angle">
+                <div class="wheel-dial"><i></i></div>
+                <div><div class="wheel-num">—</div><div class="wheel-sub">угол</div></div>
+              </div>
+            </article>
+            <article class="wheel" id="mon-wheel-FR" data-tone="idle">
+              <div class="wheel-head"><b>FR</b><span class="wheel-state">—</span></div>
+              <div class="wheel-angle">
+                <div class="wheel-dial"><i></i></div>
+                <div><div class="wheel-num">—</div><div class="wheel-sub">угол</div></div>
+              </div>
+            </article>
+            <article class="wheel" id="mon-wheel-RL" data-tone="idle">
+              <div class="wheel-head"><b>RL</b><span class="wheel-state">—</span></div>
+              <div class="wheel-angle">
+                <div class="wheel-dial"><i></i></div>
+                <div><div class="wheel-num">—</div><div class="wheel-sub">угол</div></div>
+              </div>
+            </article>
+            <article class="wheel" id="mon-wheel-RR" data-tone="idle">
+              <div class="wheel-head"><b>RR</b><span class="wheel-state">—</span></div>
+              <div class="wheel-angle">
+                <div class="wheel-dial"><i></i></div>
+                <div><div class="wheel-num">—</div><div class="wheel-sub">угол</div></div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="card" aria-labelledby="mon-lidar-title">
+          <header class="card-head">
+            <h2 id="mon-lidar-title">Обзор вокруг робота</h2>
+            <span id="mon-lidar-meta">нет скана</span>
+          </header>
+          <div class="lidar-body">
+            <div class="lidar-wrap">
+              <canvas id="mon-lidar-canvas" aria-label="Обзор лидара: то, что робот видит вокруг себя"></canvas>
+              <p class="lidar-empty" id="mon-lidar-empty">скана лидара нет</p>
+            </div>
+            <div class="lidar-stats">
+              <div class="lidar-stat"><span>точек</span><b id="mon-lidar-count">—</b></div>
+              <div class="lidar-stat"><span>ближайшее</span><b id="mon-lidar-near">—</b></div>
+              <div class="lidar-stat"><span>дальность</span><b>10 м</b></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="mon-col">
+        <section class="card case-card" aria-labelledby="mon-case-title">
+          <header class="card-head">
+            <h2 id="mon-case-title">Грузовой кейс</h2>
+            <span id="mon-case-chip">—</span>
+          </header>
+          <div class="case-state">
+            <span class="case-icon" id="mon-case-icon" data-open="0" aria-hidden="true">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="10" width="16" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /><path d="M12 14v2" />
+              </svg>
+            </span>
+            <div class="case-text">
+              <b id="mon-case-state">Закрыт</b>
+              <small id="mon-case-detail">введите PIN, чтобы открыть</small>
+            </div>
+          </div>
+          <p class="case-note" id="mon-case-note">Кейс открывается только PIN-кодом. Закрывается крышкой
+            или с обычного бортового экрана — на мониторе этой команды нет.</p>
+
+          <div class="case-pin" id="mon-case-pin">
+            <div class="case-dots" id="mon-case-dots" aria-hidden="true"></div>
+            <p class="case-msg" id="mon-case-msg" role="status" aria-live="polite">Введите PIN кейса</p>
+            <div class="case-pad" role="group" aria-label="Клавиатура PIN кейса">
+              <button type="button" class="case-key" data-digit="1">1</button>
+              <button type="button" class="case-key" data-digit="2">2</button>
+              <button type="button" class="case-key" data-digit="3">3</button>
+              <button type="button" class="case-key" data-digit="4">4</button>
+              <button type="button" class="case-key" data-digit="5">5</button>
+              <button type="button" class="case-key" data-digit="6">6</button>
+              <button type="button" class="case-key" data-digit="7">7</button>
+              <button type="button" class="case-key" data-digit="8">8</button>
+              <button type="button" class="case-key" data-digit="9">9</button>
+              <button type="button" class="case-key" data-action="erase" aria-label="Стереть последнюю цифру">Стереть</button>
+              <button type="button" class="case-key" data-digit="0">0</button>
+              <button type="button" class="case-key" data-action="open" id="mon-case-open">Открыть</button>
+            </div>
+            <p class="case-hint">Enter — открыть · Backspace — стереть · Esc — очистить</p>
+          </div>
+        </section>
+
+        <section class="card log-card" aria-labelledby="mon-log-title">
+          <header class="card-head">
+            <h2 id="mon-log-title">Последние события</h2>
+            <span id="mon-log-meta">журнал робота</span>
+          </header>
+          <div class="log-pages" id="mon-log"><p class="log-empty">Пока событий нет</p></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script src="monitor.js"></script>
+</body>
+</html>

@@ -70,6 +70,12 @@
                 aria-controls="swipe-cameras-view" title="Камеры и логи" aria-label="Камеры и логи">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6.5" width="13" height="11" rx="2.5"/><path d="m15.5 11 5-3v8l-5-3z"/><circle cx="7" cy="12" r="2.2"/></svg>
         </button>
+        <!-- Возврат к стартовому экрану: режим бортового экрана закрывается, и
+             для следующего входа снова нужен PIN (7232 — киоск, 5656 — монитор). -->
+        <button id="k-exit-btn" class="k-ctrl-btn k-ctrl-btn--icon" type="button"
+                title="Выход к стартовому экрану (снова нужен PIN)" aria-label="Выход к стартовому экрану">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 8l-4 4 4 4M6 12h9"/></svg>
+        </button>
         <time class="clock" id="clock">--:--</time>
       </div>
     </header>

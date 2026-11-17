@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#000000" />
+  <title>Бортовой дисплей · вход по PIN</title>
+  <link rel="stylesheet" href="start.css" />
+</head>
+<body class="start-body">
+  <!--
+    Стартовый экран робота. Введённый PIN открывает один из двух режимов:
+    обычный бортовой экран или «бортовой монитор» для конечных пользователей.
+    PIN проверяет сервер (/api/kiosk_mode), режим запоминается в подписанной
+    cookie, а если cookie не сохраняется (встроенный предпросмотр) — в
+    подписанной ссылке. Какие коды что открывают, экран не подсказывает:
+    коды задаются в .env (RC_KIOSK_PIN_MAIN, RC_KIOSK_PIN_MONITOR).
+  -->
+  <main class="start">
+    <section class="start-hero">
+      <header class="hero-top">
+        <div class="brand">
+          <span class="brandmark" aria-hidden="true">
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M4 14h16M7 10h10M9 6h6" />
+              <circle cx="7" cy="18" r="2.2" fill="currentColor" stroke="none" />
+              <circle cx="17" cy="18" r="2.2" fill="currentColor" stroke="none" />
+            </svg>
+          </span>
+          <div class="brand-text">
+            <b>BULKA_v1</b>
+            <span>Бортовой дисплей</span>
+          </div>
+        </div>
+        <div>
+          <time class="hero-clock" id="start-clock">--:--</time>
+          <span class="hero-date" id="start-date">—</span>
+        </div>
+      </header>
+
+      <div class="hero-copy">
+        <h1>Введите PIN, чтобы открыть экран</h1>
+        <p>Код определяет, что откроется на дисплее. После работы закройте режим
+          кнопкой «Выход» — тогда снова понадобится PIN.</p>
+      </div>
+
+      <div class="mode-cards" aria-label="Режимы бортового дисплея">
+        <article class="mode-card" data-mode="main">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4" />
+            <path d="M6.5 8.5h5M6.5 12h8" />
+          </svg>
+          <div>
+            <b>Бортовой экран</b>
+            <small>Телеметрия, карта, журнал и управление роботом.</small>
+          </div>
+        </article>
+        <article class="mode-card" data-mode="monitor">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 13h4l2-6 3 12 2.5-7H21" />
+          </svg>
+          <div>
+            <b>Бортовой монитор</b>
+            <small>Общая информация о роботе и грузовой отсек.</small>
+          </div>
+        </article>
+      </div>
+
+      <footer class="hero-foot">
+        <span class="dot" id="start-link-dot" data-tone="idle"></span>
+        <span id="start-link-text">Проверяю связь с бортом…</span>
+      </footer>
+    </section>
+
+    <section class="pin-card" id="pin-card" aria-labelledby="pin-title">
+      <div class="pin-head">
+        <b id="pin-title">PIN-код</b>
+        <span id="pin-attempts">4…8 цифр</span>
+      </div>
+
+      <div class="pin-display">
+        <div class="pin-dots" id="pin-dots" aria-hidden="true"></div>
+        <span class="pin-count" id="pin-count">0 цифр</span>
+      </div>
+
+      <p class="pin-message" id="pin-message" role="status" aria-live="polite">
+        Введите код с клавиатуры, цифрами на экране или обычной клавиатурой.
+      </p>
+
+      <div class="keypad" id="keypad" role="group" aria-label="Цифровая клавиатура">
+        <button type="button" class="key" data-digit="1">1</button>
+        <button type="button" class="key" data-digit="2">2</button>
+        <button type="button" class="key" data-digit="3">3</button>
+        <button type="button" class="key" data-digit="4">4</button>
+        <button type="button" class="key" data-digit="5">5</button>
+        <button type="button" class="key" data-digit="6">6</button>
+        <button type="button" class="key" data-digit="7">7</button>
+        <button type="button" class="key" data-digit="8">8</button>
+        <button type="button" class="key" data-digit="9">9</button>
+        <button type="button" class="key" data-action="erase" aria-label="Стереть последнюю цифру">Стереть</button>
+        <button type="button" class="key" data-digit="0">0</button>
+        <button type="button" class="key" data-action="submit">Открыть</button>
+      </div>
+
+      <div class="pin-foot">
+        <span>Enter — открыть · Backspace — стереть · Esc — очистить</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="start.js"></script>
+</body>
+</html>
