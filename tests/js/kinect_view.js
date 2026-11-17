@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
-const {decodeFrame, transformLidar, transformKinect, robotParts, orbitCoordinates} = require('../../slam_gui/kinect_view.js');
+const {decodeFrame, transformLidar, transformKinect, robotParts, orbitCoordinates,
+  visionSignGeometry, signLocalShape, signPoint, visionSignFaces} = require('../../slam_gui/kinect_view.js');
 const payload = {available: true, oneFrameOnly: true, notForNavigation: true,
   width: 2, height: 2, stride: 2, fx: 2, fy: 2, cx: 1, cy: 1,
   data: Buffer.from([0xe8, 3, 0, 0, 0xd0, 7, 0xb8, 0x0b]).toString('base64')};
@@ -19,6 +20,21 @@ assert.ok(Math.abs(kinectPoint[2] - 1.41) < 1e-9);
 assert.equal(kinectPoint[3], 'kinect');
 assert.deepEqual(orbitCoordinates([0, 0, 0], .4, -.2), [0, 0, 0], 'robot origin is the orbit pivot');
 assert.deepEqual(orbitCoordinates([0, 0, 2], 0, 0), [0, 0, 2], 'no fixed forward offset moves the pivot');
+// 3D-знак 1:1: карта (X вперёд, Y влево) → вид (X вправо, Y вверх, Z вперёд).
+const signMarker = {x_m: 1.5, y_m: .5, z_m: .9, width_m: .30, height_m: .30,
+  thickness_m: .02, shape: 'octagon', class: 'stop_sign', headingDeg: 18.4,
+  scale1to1: true, sizeScale: 1, signal: 'red', positionSource: 'camera-estimate'};
+const signGeom = visionSignGeometry(signMarker);
+assert.deepEqual(signGeom.center, [-.5, .9, 1.5]);
+assert.equal(signGeom.width, .30);
+assert.equal(signGeom.height, .30);
+assert.equal(signGeom.thickness, .02);
+assert.equal(signLocalShape(signGeom).length, 8, 'STOP — восьмиугольник');
+assert.equal(visionSignFaces(signMarker).faces.length, 10, '8 рёбер + 2 стороны');
+const left = signPoint(signGeom, -signGeom.width / 2, 0, 0);
+const right = signPoint(signGeom, signGeom.width / 2, 0, 0);
+assert.ok(Math.abs(Math.hypot(right[0] - left[0], right[2] - left[2]) - .30) < 1e-9,
+  'ширина таблички в 3D равна ровно 0,30 м');
 const articulated = robotParts({fresh: true, wheels: [
   {id: 'FL', angle: 30}, {id: 'FR', angle: -15}, {id: 'RL', angle: 5}, {id: 'RR', angle: null}
 ]}, {wheelbase: .6, track: .4}, .3).filter(part => part.kind === 'wheel');
@@ -55,7 +71,9 @@ class Element {
   getBoundingClientRect() { return {width: 600, height: 400}; }
   setPointerCapture() {}
   getContext() { return {clearRect() { rectangles = []; polygons = 0; }, beginPath() {}, closePath() { polygons++; }, fill() {}, moveTo() {}, lineTo() {}, stroke() {},
-    fillRect(x, y, w, h) { rectangles.push([x, y, w, h]); }, set fillStyle(v) {}, set strokeStyle(v) {}, set lineWidth(v) {}}; }
+    arc() {}, fillText() {}, fillRect(x, y, w, h) { rectangles.push([x, y, w, h]); },
+    set fillStyle(v) {}, set strokeStyle(v) {}, set lineWidth(v) {}, set font(v) {},
+    set textAlign(v) {}, set textBaseline(v) {}}; }
 }
 const ids = ['sensor-lidar', 'sensor-kinect', 'sensor-combined', 'sensor-lidar-view', 'sensor-kinect-view', 'lidar-meta',
   'kinect-3d-status', 'kinect-3d-mode-note', 'kinect-3d-empty', 'kinect-3d-canvas', 'kinect-zoom-in', 'kinect-zoom-out', 'kinect-reset-view'];
@@ -107,5 +125,14 @@ vm.runInNewContext(source, context);
   assert.match(elements['kinect-3d-mode-note'].textContent, /Модель робота · фактические углы колёс \(при свежей телеметрии\) · Лидар z=550 мм · Kinect \+130 мм вперёд, z=450 мм/);
   assert.ok(rectangles.length > 0, 'combined view renders the live sensor cloud');
   assert.ok(polygons >= 30, 'combined view renders the 3D robot chassis, sensors, and wheels');
-  console.log('Kinect/LiDAR combined 3D interactions: OK');
+  const beforeSigns = polygons;
+  window.RCKinectView.setVisionMarkers([signMarker]);
+  assert.ok(polygons > beforeSigns, '3D-знак добавляет объёмные грани в общий обзор');
+  assert.match(elements['kinect-3d-mode-note'].textContent, /знаков: 1 \(1:1\)/);
+  window.RCKinectView.setVisionMarkers([{...signMarker, scale1to1: false, sizeScale: 1.2,
+    width_m: .36, height_m: .36}]);
+  assert.match(elements['kinect-3d-mode-note'].textContent, /знаков: 1 \(масштаб ×1\.20\)/);
+  assert.equal(visionSignGeometry({...signMarker, width_m: .36}).width, .36,
+    'RC_VISION_SIGN_SCALE меняет физический размер в 3D');
+  console.log('Kinect/LiDAR combined 3D interactions and 1:1 signs: OK');
 })().catch(err => { console.error(err); process.exitCode = 1; });

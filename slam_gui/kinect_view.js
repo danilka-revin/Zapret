@@ -58,6 +58,80 @@
     const rx = x * cy + z * sy, rz = -x * sy + z * cy;
     return [rx, y * cp - rz * sp, y * sp + rz * cp];
   }
+  const SIGN_FACE_COLORS = {
+    stop_sign: '#c81e3a', pedestrian_crossing: '#1565c0', speed_bump: '#1565c0',
+    traffic_light: '#111827', cone: '#f97316'
+  };
+  const SIGNAL_COLORS = {red: '#ff4d5e', yellow: '#ffd23f', green: '#3ddc84'};
+  const SIGN_ASCII = {stop_sign: 'STOP', pedestrian_crossing: 'PED', speed_bump: 'BUMP',
+    traffic_light: 'LIGHT', cone: 'CONE'};
+  const SIGN_SHAPES = {stop_sign: 'octagon', pedestrian_crossing: 'square',
+    speed_bump: 'square', traffic_light: 'panel', cone: 'cone'};
+  function finiteNumber(value, fallback) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+  function visionSignGeometry(marker) {
+    const data = marker || {};
+    const x = finiteNumber(data.x_m, 0), y = finiteNumber(data.y_m, 0);
+    const z = finiteNumber(data.z_m, finiteNumber(data.centerZ_m, 0.9));
+    // Карта: X вперёд, Y влево. 3D-вид: X вправо, Y вверх, Z вперёд.
+    const center = [-y, z, x];
+    const headingDeg = finiteNumber(data.headingDeg,
+      finiteNumber(data.bearingDeg, Math.atan2(y, x) * 180 / Math.PI));
+    const h = headingDeg * Math.PI / 180;
+    const dir = [-Math.sin(h), 0, Math.cos(h)];       // от робота к знаку
+    const normal = [-dir[0], 0, -dir[2]];             // лицевая сторона — к роботу
+    const right = [normal[2], 0, -normal[0]];
+    return {
+      center, right, up: [0, 1, 0], normal,
+      width: Math.max(.05, finiteNumber(data.width_m, .30)),
+      height: Math.max(.05, finiteNumber(data.height_m, .30)),
+      thickness: Math.max(.005, finiteNumber(data.thickness_m, .02)),
+      shape: String(data.shape || SIGN_SHAPES[data.class || data.className] || 'square'),
+      className: String(data.class || data.className || ''),
+      color: String(data.color || '#94a3b8'),
+      short: String(data.short || ''), label: String(data.label || ''),
+      signal: String(data.signal || 'unknown'),
+      sizeScale: finiteNumber(data.sizeScale, 1),
+      scale1to1: data.scale1to1 !== false,
+      positionSource: String(data.positionSource || 'camera-estimate')
+    };
+  }
+  function signLocalShape(geom) {
+    const hw = geom.width / 2, hh = geom.height / 2;
+    if (geom.shape === 'octagon') {
+      const cut = Math.min(hw, hh) * .30;
+      return [[-hw + cut, -hh], [hw - cut, -hh], [hw, -hh + cut], [hw, hh - cut],
+        [hw - cut, hh], [-hw + cut, hh], [-hw, hh - cut], [-hw, -hh + cut]];
+    }
+    if (geom.shape === 'triangle' || geom.shape === 'cone') {
+      return [[-hw, -hh], [hw, -hh], [0, hh]];
+    }
+    return [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+  }
+  function signPoint(geom, u, v, offset) {
+    return [geom.center[0] + geom.right[0] * u + geom.normal[0] * offset,
+      geom.center[1] + geom.up[1] * v,
+      geom.center[2] + geom.right[2] * u + geom.normal[2] * offset];
+  }
+  function visionSignFaces(marker) {
+    const geom = visionSignGeometry(marker);
+    const shape = signLocalShape(geom);
+    const front = shape.map(([u, v]) => signPoint(geom, u, v, geom.thickness / 2));
+    const back = shape.map(([u, v]) => signPoint(geom, u, v, -geom.thickness / 2));
+    const fill = SIGN_FACE_COLORS[geom.className] || geom.color;
+    const faces = [
+      {vertices: front, color: fill, kind: 'front'},
+      {vertices: back, color: fill, kind: 'back'}
+    ];
+    for (let i = 0; i < shape.length; i++) {
+      const j = (i + 1) % shape.length;
+      faces.push({vertices: [front[i], front[j], back[j], back[i]],
+        color: '#1e293b', kind: 'side'});
+    }
+    return {geom, shape, faces};
+  }
   function robotParts(live, geometry = {}, lidarOffsetM = DEFAULT_LIDAR_OFFSET_M) {
     const wheelbase = Number.isFinite(Number(geometry.wheelbase)) ? Number(geometry.wheelbase) : 0.50;
     const track = Number.isFinite(Number(geometry.track)) ? Number(geometry.track) : 0.38;
@@ -106,12 +180,14 @@
     return parts;
   }
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { decodeFrame, transformLidar, transformKinect, robotParts, orbitCoordinates };
+    module.exports = { decodeFrame, transformLidar, transformKinect, robotParts, orbitCoordinates,
+      visionSignGeometry, signLocalShape, signPoint, visionSignFaces };
   }
   if (!root.document) return;
 
   const $ = (id) => root.document.getElementById(id);
   let mode = 'lidar', kinectPoints = [], lidarCloud = [], yaw = 0.25, pitch = -0.15, zoom = 1;
+  let signMarkers = [], signDeadline = 0;
   let deadline = 0, lidarDeadline = 0, lidarOffsetM = DEFAULT_LIDAR_OFFSET_M;
   let kinectMount = {z_m: 0.45, yaw_deg: 0, pitch_deg: 0};
   let running = false, generation = 0, lastFrameId = null, lastDeadline = 0;
@@ -138,8 +214,14 @@
     setMessage('Лидар: ' + lText + ' · Kinect: ' + kText + ' · live, без сохранения');
     const note = $('kinect-3d-mode-note');
     const kinectZ = Number.isFinite(Number(kinectMount.z_m)) ? Number(kinectMount.z_m) : 0.45;
+    const signsFresh = now < signDeadline && signMarkers.length > 0;
+    const scaled = signsFresh && signMarkers.find(marker => marker.scale1to1 === false);
+    const scaleNote = scaled
+      ? ' (масштаб ×' + Number(scaled.sizeScale || 1).toFixed(2) + ')'
+      : ' (1:1)';
+    const signNote = signsFresh ? ' · знаков: ' + signMarkers.length + scaleNote : '';
     if (note) note.textContent = 'Модель робота · фактические углы колёс (при свежей телеметрии) · Лидар z=550 мм · Kinect +130 мм вперёд, z=' +
-      Math.round(kinectZ * 1000) + ' мм';
+      Math.round(kinectZ * 1000) + ' мм' + signNote;
   }
   function draw() {
     const canvas = $('kinect-3d-canvas');
@@ -208,6 +290,71 @@
           ctx.fillStyle = face.color; ctx.fill(); ctx.strokeStyle = edge;
           ctx.lineWidth = Math.max(1, ratio); ctx.stroke();
         });
+    };
+    /* Знак в масштабе 1:1: тонкая объёмная табличка, стойка до пола и symbol
+     * на ближайшей к наблюдателю стороне. Все размеры — метры из CLASS_INFO. */
+    const drawVisionSign = (marker) => {
+      const built = visionSignFaces(marker), geom = built.geom;
+      const ground = [geom.center[0], 0, geom.center[2]];
+      const bottom = [geom.center[0], Math.max(0, geom.center[1] - geom.height / 2), geom.center[2]];
+      const pg = project(ground), pb = project(bottom);
+      if (pg && pb) {
+        ctx.beginPath(); ctx.moveTo(pg.x, pg.y); ctx.lineTo(pb.x, pb.y);
+        ctx.strokeStyle = 'rgba(148, 163, 184, .55)';
+        ctx.lineWidth = Math.max(1, ratio); ctx.stroke();
+        ctx.beginPath(); ctx.arc(pg.x, pg.y, 3 * ratio, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(148, 163, 184, .4)'; ctx.fill();
+      }
+      drawFaces(built.faces, 'rgba(8, 10, 13, .9)');
+      const frontCenter = project(signPoint(geom, 0, 0, geom.thickness / 2 + .002));
+      const backCenter = project(signPoint(geom, 0, 0, -geom.thickness / 2 - .002));
+      const nearFront = !!(frontCenter && backCenter && frontCenter.depth < backCenter.depth);
+      const near = nearFront ? frontCenter : (backCenter || frontCenter);
+      if (!near) return;
+      const offset = nearFront ? geom.thickness / 2 + .004 : -geom.thickness / 2 - .004;
+      const edge = project(signPoint(geom, geom.width / 2, 0, offset));
+      const pixelWidth = edge ? Math.max(6, Math.abs(edge.x - near.x) * 2) : 24;
+      const fontPx = clamp(pixelWidth * .26, 8, 18) * ratio;
+      if (geom.shape === 'octagon') {
+        const inner = signLocalShape(geom).map(([u, v]) => [u * .78, v * .78]);
+        const points = inner.map(([u, v]) => project(signPoint(geom, u, v, offset + .001)));
+        if (points.every(Boolean)) {
+          ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
+          points.slice(1).forEach(p => ctx.lineTo(p.x, p.y)); ctx.closePath();
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(1.5, ratio * 1.5); ctx.stroke();
+        }
+      }
+      if (geom.shape === 'square' &&
+          (geom.className === 'pedestrian_crossing' || geom.className === 'speed_bump')) {
+        const tri = [[-geom.width * .31, -geom.height * .29],
+          [geom.width * .31, -geom.height * .29], [0, geom.height * .31]];
+        const points = tri.map(([u, v]) => project(signPoint(geom, u, v, offset + .001)));
+        if (points.every(Boolean)) {
+          ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
+          points.slice(1).forEach(p => ctx.lineTo(p.x, p.y)); ctx.closePath();
+          ctx.fillStyle = '#fff'; ctx.fill();
+        }
+      }
+      if (geom.shape === 'panel') {
+        const names = ['red', 'yellow', 'green'];
+        const levels = [geom.height * .28, 0, -geom.height * .28];
+        const radius = Math.min(geom.width, geom.height) * .17;
+        names.forEach((name, index) => {
+          const center = project(signPoint(geom, 0, levels[index], offset + .002));
+          const rim = project(signPoint(geom, radius, levels[index], offset + .002));
+          if (!center || !rim) return;
+          const r = Math.max(2 * ratio, Math.abs(rim.x - center.x));
+          ctx.beginPath(); ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = geom.signal === name ? SIGNAL_COLORS[name] : 'rgba(255, 255, 255, .16)';
+          ctx.fill(); ctx.strokeStyle = 'rgba(0, 0, 0, .7)';
+          ctx.lineWidth = Math.max(1, ratio); ctx.stroke();
+        });
+      } else {
+        ctx.fillStyle = '#fff';
+        ctx.font = '700 ' + fontPx + 'px ui-monospace, monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(SIGN_ASCII[geom.className] || geom.short || '•', near.x, near.y);
+      }
     };
     const drawHull = (part, palette) => {
       const low = part.footprint.map(([x, z]) => [x, part.yMin, z]);
@@ -278,6 +425,19 @@
       }
       ctx.fillRect(screen.x, screen.y, size, size);
     }
+    // Дальние знаки — ДО модели робота, близкие к наблюдателю — ПОСЛЕ:
+    // простоеDepth-сортировка относительно центра робота без общего z-буфера.
+    const signLayer = mode === 'combined' && now < signDeadline
+      ? signMarkers.map(marker => {
+          const screen = project(visionSignGeometry(marker).center);
+          return screen ? {marker, depth: screen.depth} : null;
+        }).filter(Boolean).sort((a, b) => b.depth - a.depth)
+      : [];
+    const robotDepth = project([0, 0, 0]);
+    const drawSignLayer = (near) => signLayer
+      .filter(item => robotDepth && item.depth < robotDepth.depth === near)
+      .forEach(item => drawVisionSign(item.marker));
+    if (signLayer.length) drawSignLayer(false);
     if (mode === 'combined') {
       const live = root.RCRobotModel && typeof root.RCRobotModel.state === 'function'
         ? root.RCRobotModel.state() : null;
@@ -313,6 +473,7 @@
           drawBox(part, palette);
         }
       });
+      if (signLayer.length) drawSignLayer(true);
     }
   }
   function expire(message) {
@@ -371,6 +532,26 @@
     lidarDeadline = fresh ? performance.now() + Math.max(0, (1.5 - ageS) * 1000) : 0;
     if (mode === 'combined') draw();
   }
+  function setVisionMarkers(markers) {
+    signMarkers = Array.isArray(markers)
+      ? markers.filter(marker => marker && Number.isFinite(Number(marker.x_m)) &&
+          Number.isFinite(Number(marker.y_m))).slice(0, 32)
+      : [];
+    signDeadline = signMarkers.length ? performance.now() + 1500 : 0;
+    if (mode !== 'lidar') draw();
+  }
+  function bindVision() {
+    // vision_panel.js уже опрашивает /api/vision/state; карта и 3D-обзор
+    // просто подписываются на его событие, не открывая второй polling.
+    root.addEventListener('rc-vision-state', (event) => {
+      const payload = event && event.detail;
+      setVisionMarkers(payload && payload.field);
+    });
+    const vision = root.RCVision;
+    if (vision && typeof vision.onState === 'function') {
+      vision.onState((payload) => setVisionMarkers(payload && payload.field));
+    }
+  }
   function setMode(next) {
     if (!['lidar', 'kinect', 'combined'].includes(next)) return;
     mode = next; generation++;
@@ -394,6 +575,7 @@
     }
   }
   function bind() {
+    bindVision();
     const canvas = $('kinect-3d-canvas');
     if (!canvas) return;
     const lidarButton = $('sensor-lidar'), kinectButton = $('sensor-kinect'), combinedButton = $('sensor-combined');
@@ -448,7 +630,8 @@
       void poll();
     }, 500);
   }
-  root.RCKinectView = {active: () => mode !== 'lidar', mode: () => mode, setMode, draw, setLidarScan};
+  root.RCKinectView = {active: () => mode !== 'lidar', mode: () => mode, setMode, draw,
+    setLidarScan, setVisionMarkers};
   if (root.document.readyState === 'loading') root.document.addEventListener('DOMContentLoaded', bind);
   else bind();
 })(typeof window !== 'undefined' ? window : globalThis);

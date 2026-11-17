@@ -6,6 +6,7 @@
   <title>Экран робота</title>
   <meta name="theme-color" content="#000000" />
   <link rel="stylesheet" href="robot.css" />
+  <link rel="stylesheet" href="vision_panel.css" />
   <link rel="stylesheet" href="calibration.css" />
   <link rel="stylesheet" href="receipt.css" />
   <link rel="stylesheet" href="map.css" />
@@ -361,6 +362,26 @@
           <a href="/devices">«Устройства» →</a></p>
         <button id="cam-stitch-toggle" class="cam-stitch-toggle" type="button"
                 aria-pressed="false" aria-controls="cam-stitch-panel">Сшить 2 камеры</button>
+      </div>
+      <!-- YOLO: рамки знаков на кадрах, сигнал светофора и отметки на поле -->
+      <div class="rcv-panel" id="vision-panel" aria-label="Распознавание знаков и светофора">
+        <header class="rcv-head">
+          <div><b>Знаки и светофор</b><span class="rcv-backend" id="vision-backend">ожидание…</span></div>
+          <label class="rcv-toggle"><input type="checkbox" id="vision-annot" checked> рамки на кадрах</label>
+        </header>
+        <div class="rcv-body">
+          <div>
+            <div class="rcv-lights" id="vision-lights" role="group" aria-label="Сигналы светофора">
+              <div class="rcv-lamp" data-signal="red"><i></i><span>КРАСНЫЙ</span></div>
+              <div class="rcv-lamp" data-signal="yellow"><i></i><span>ЖЁЛТЫЙ</span></div>
+              <div class="rcv-lamp" data-signal="green"><i></i><span>ЗЕЛЁНЫЙ</span></div>
+            </div>
+            <p class="rcv-signal" id="vision-signal" data-state="unknown">Сигнал не определён</p>
+          </div>
+          <canvas id="vision-field" class="rcv-field" aria-label="Поле: обнаруженные знаки"></canvas>
+          <div class="rcv-signs" id="vision-signs"></div>
+        </div>
+        <footer class="rcv-foot"><span id="vision-cameras">камеры: —</span><span id="vision-fps">—</span></footer>
       </div>
       <section id="cam-stitch-panel" class="cam-stitch-panel" aria-label="Склейка двух камер" hidden>
         <header class="cam-stitch-head">
@@ -1264,6 +1285,7 @@
   <script src="wheel_ports.js"></script>
   <script src="steer_presets.js"></script>
   <script src="viewport.js"></script>
+  <script src="vision_panel.js"></script>
   <script src="camera_view.js"></script>
   <script src="camera_stitch.js"></script>
   <script src="map_view.js"></script>

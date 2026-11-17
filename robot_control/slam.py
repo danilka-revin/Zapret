@@ -1975,6 +1975,16 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     def camera_origin():
         return peer_kiosk_url().removesuffix("/api/kiosk_state")
 
+    # Распознавание знаков и цвет светофора доступны и в веб-пульте. В режиме
+    # master-peer состояние проксируется с борта, свои камеры не открываются.
+    from .vision.api import register_vision_routes
+    register_vision_routes(
+        bp,
+        guard=guard,
+        csrf_header_ok=csrf_header_ok,
+        peer_origin=lambda: camera_origin() if camera_peer() else None,
+    )
+
     @bp.get("/api/cameras")
     @guard
     def api_cameras():

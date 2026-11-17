@@ -13,5 +13,17 @@ data/
 var/
 *.log
 
+# --- Обучение YOLO: веса и метки в Git, тяжёлые кадры/логи — нет ---
+.cache/
+runs/
+models/vision/*-smoke.pt
+models/vision/*-smoke.json
+models/vision/*.onnx
+datasets/yolo-stop/images/
+datasets/yolo-stop/raw/
+datasets/yolo-stop/labels/*.cache
+datasets/yolo-stop/*.zip
+datasets/yolo-stop/source-repo.zip
+
 # --- Состояние интерфейса RUS SLAM (PIN ячейки пульта, журнал) ---
 slam_gui/state/

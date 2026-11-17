@@ -43,8 +43,14 @@
         image.onload = () => finish(true, false);
         image.onerror = () => finish(false, false);
         camera.timeout = setTimeout(() => finish(false, true), 1500);
-        const url = 'api/camera/' + camera.id + '/frame?t=' + Date.now();
-        image.src = window.RCSessionUrl ? window.RCSessionUrl(url) : url;
+        // RCVision подменяет путь на кадр с рамками YOLO, когда разметка
+        // включена; без сервиса остаётся обычный /api/camera/<id>/frame.
+        const url = window.RCVision && window.RCVision.frameUrl
+          ? window.RCVision.frameUrl(camera.id)
+          : (window.RCSessionUrl
+            ? window.RCSessionUrl('api/camera/' + camera.id + '/frame?t=' + Date.now())
+            : 'api/camera/' + camera.id + '/frame?t=' + Date.now());
+        image.src = url;
       }
     }
 

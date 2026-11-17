@@ -1,0 +1,2236 @@
+{
+  "1794903271152.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.0236,
+        "y": 0.8192,
+        "w": 0.0472,
+        "h": 0.1808
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.0167,
+        "y": 0.6513,
+        "w": 0.0444,
+        "h": 0.1642
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.0792,
+        "y": 0.4815,
+        "w": 0.1097,
+        "h": 0.5184
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.7,
+      "box": {
+        "x": 0.1556,
+        "y": 0.393,
+        "w": 0.1306,
+        "h": 0.1974
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.4,
+        "y": 0.2878,
+        "w": 0.1986,
+        "h": 0.4686
+      },
+      "signal": "yellow",
+      "signalCounts": {
+        "red": 11,
+        "yellow": 208,
+        "green": 0
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271159.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.1194,
+        "y": 0.6753,
+        "w": 0.0958,
+        "h": 0.3247
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.2,
+        "y": 0.4502,
+        "w": 0.0875,
+        "h": 0.5498
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.699,
+      "box": {
+        "x": 0.2347,
+        "y": 0.3506,
+        "w": 0.1306,
+        "h": 0.1863
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.769,
+      "box": {
+        "x": 0.5903,
+        "y": 0.4299,
+        "w": 0.1208,
+        "h": 0.1882
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.3847,
+        "y": 0.3838,
+        "w": 0.2167,
+        "h": 0.4871
+      },
+      "signal": "red",
+      "signalCounts": {
+        "red": 211,
+        "yellow": 17,
+        "green": 168
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271167.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.0931,
+        "y": 0.5996,
+        "w": 0.0986,
+        "h": 0.2509
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.696,
+      "box": {
+        "x": 0.1556,
+        "y": 0.1882,
+        "w": 0.1708,
+        "h": 0.2417
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.4069,
+        "y": 0.0074,
+        "w": 0.2986,
+        "h": 0.6292
+      },
+      "signal": "yellow",
+      "signalCounts": {
+        "red": 469,
+        "yellow": 543,
+        "green": 88
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271177.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.1694,
+        "y": 0.5627,
+        "w": 0.1597,
+        "h": 0.4373
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.706,
+      "box": {
+        "x": 0.2819,
+        "y": 0.3708,
+        "w": 0.1222,
+        "h": 0.179
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.827,
+      "box": {
+        "x": 0.0,
+        "y": 0.3653,
+        "w": 0.1403,
+        "h": 0.2103
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.4333,
+        "y": 0.2712,
+        "w": 0.2056,
+        "h": 0.4613
+      },
+      "signal": "yellow",
+      "signalCounts": {
+        "red": 196,
+        "yellow": 221,
+        "green": 0
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271185.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.1292,
+        "y": 0.7565,
+        "w": 0.0958,
+        "h": 0.2435
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.2264,
+        "y": 0.5793,
+        "w": 0.0819,
+        "h": 0.4207
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.709,
+      "box": {
+        "x": 0.2486,
+        "y": 0.3524,
+        "w": 0.1319,
+        "h": 0.1919
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.723,
+      "box": {
+        "x": 0.5958,
+        "y": 0.4336,
+        "w": 0.1486,
+        "h": 0.2048
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.3694,
+        "y": 0.0,
+        "w": 0.2444,
+        "h": 1.0
+      },
+      "signal": "yellow",
+      "signalCounts": {
+        "red": 113,
+        "yellow": 646,
+        "green": 116
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271194.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.3139,
+        "y": 0.6328,
+        "w": 0.0778,
+        "h": 0.3672
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.858,
+      "box": {
+        "x": 0.1139,
+        "y": 0.262,
+        "w": 0.1458,
+        "h": 0.1845
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271202.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.1333,
+        "y": 0.714,
+        "w": 0.0625,
+        "h": 0.286
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.2069,
+        "y": 0.2989,
+        "w": 0.0792,
+        "h": 0.7011
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.808,
+      "box": {
+        "x": 0.0,
+        "y": 0.4446,
+        "w": 0.1222,
+        "h": 0.2232
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.4347,
+        "y": 0.369,
+        "w": 0.2319,
+        "h": 0.631
+      },
+      "signal": "red",
+      "signalCounts": {
+        "red": 1822,
+        "yellow": 12,
+        "green": 286
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271212.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.3958,
+        "y": 0.6052,
+        "w": 0.1847,
+        "h": 0.3948
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.859,
+      "box": {
+        "x": 0.2181,
+        "y": 0.297,
+        "w": 0.1292,
+        "h": 0.1679
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.4903,
+        "y": 0.2066,
+        "w": 0.1986,
+        "h": 0.4815
+      },
+      "signal": "yellow",
+      "signalCounts": {
+        "red": 0,
+        "yellow": 252,
+        "green": 0
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271219.jpg": [
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.705,
+      "box": {
+        "x": 0.1917,
+        "y": 0.5111,
+        "w": 0.1181,
+        "h": 0.1937
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271226.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.858,
+      "box": {
+        "x": 0.3694,
+        "y": 0.0904,
+        "w": 0.3806,
+        "h": 0.4945
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271234.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.0,
+        "y": 0.4982,
+        "w": 0.0875,
+        "h": 0.5018
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.705,
+      "box": {
+        "x": 0.0944,
+        "y": 0.4096,
+        "w": 0.1458,
+        "h": 0.2214
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.4208,
+        "y": 0.4613,
+        "w": 0.2181,
+        "h": 0.441
+      },
+      "signal": "green",
+      "signalCounts": {
+        "red": 0,
+        "yellow": 0,
+        "green": 148
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271242.jpg": [
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.83,
+      "box": {
+        "x": 0.3708,
+        "y": 0.345,
+        "w": 0.3,
+        "h": 0.3782
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271251.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.0,
+        "y": 0.5941,
+        "w": 0.1139,
+        "h": 0.4059
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.699,
+      "box": {
+        "x": 0.0708,
+        "y": 0.3727,
+        "w": 0.1431,
+        "h": 0.2066
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.3875,
+        "y": 0.0055,
+        "w": 0.1917,
+        "h": 0.821
+      },
+      "signal": "yellow",
+      "signalCounts": {
+        "red": 95,
+        "yellow": 262,
+        "green": 0
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271259.jpg": [
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.708,
+      "box": {
+        "x": 0.3417,
+        "y": 0.1771,
+        "w": 0.1194,
+        "h": 0.19
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.848,
+      "box": {
+        "x": 0.0444,
+        "y": 0.1863,
+        "w": 0.1653,
+        "h": 0.2159
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.747,
+      "box": {
+        "x": 0.7361,
+        "y": 0.2472,
+        "w": 0.0417,
+        "h": 0.0978
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.5292,
+        "y": 0.155,
+        "w": 0.2111,
+        "h": 0.4686
+      },
+      "signal": "yellow",
+      "signalCounts": {
+        "red": 16,
+        "yellow": 285,
+        "green": 3
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271267.jpg": [
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.86,
+      "box": {
+        "x": 0.1722,
+        "y": 0.2435,
+        "w": 0.1403,
+        "h": 0.179
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.775,
+      "box": {
+        "x": 0.6528,
+        "y": 0.1421,
+        "w": 0.0625,
+        "h": 0.0701
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271275.jpg": [
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.7,
+      "box": {
+        "x": 0.3167,
+        "y": 0.1273,
+        "w": 0.4792,
+        "h": 0.5221
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271283.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.5847,
+        "y": 0.8487,
+        "w": 0.075,
+        "h": 0.1513
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271290.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.5319,
+        "y": 0.6255,
+        "w": 0.1014,
+        "h": 0.3745
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.866,
+      "box": {
+        "x": 0.1944,
+        "y": 0.2712,
+        "w": 0.2528,
+        "h": 0.3708
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.812,
+      "box": {
+        "x": 0.5042,
+        "y": 0.4483,
+        "w": 0.1083,
+        "h": 0.2177
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.725,
+      "box": {
+        "x": 0.7722,
+        "y": 0.5572,
+        "w": 0.2278,
+        "h": 0.2841
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271298.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.9542,
+        "y": 0.7546,
+        "w": 0.0458,
+        "h": 0.155
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.862,
+      "box": {
+        "x": 0.1556,
+        "y": 0.0,
+        "w": 0.4681,
+        "h": 0.4723
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.782,
+      "box": {
+        "x": 0.8194,
+        "y": 0.1162,
+        "w": 0.1806,
+        "h": 0.4244
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271306.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.856,
+      "box": {
+        "x": 0.4667,
+        "y": 0.2196,
+        "w": 0.1903,
+        "h": 0.2989
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.786,
+      "box": {
+        "x": 0.7792,
+        "y": 0.3118,
+        "w": 0.2208,
+        "h": 0.3413
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271314.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.85,
+        "y": 0.4815,
+        "w": 0.0264,
+        "h": 0.1144
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.812,
+      "box": {
+        "x": 0.3153,
+        "y": 0.4151,
+        "w": 0.1306,
+        "h": 0.2343
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271321.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.7083,
+        "y": 0.5517,
+        "w": 0.1167,
+        "h": 0.2712
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.849,
+      "box": {
+        "x": 0.2431,
+        "y": 0.0738,
+        "w": 0.3236,
+        "h": 0.3985
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271329.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.4014,
+        "y": 0.572,
+        "w": 0.0931,
+        "h": 0.428
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.4819,
+        "y": 0.559,
+        "w": 0.0931,
+        "h": 0.441
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.855,
+      "box": {
+        "x": 0.1722,
+        "y": 0.393,
+        "w": 0.1444,
+        "h": 0.1808
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.729,
+      "box": {
+        "x": 0.6583,
+        "y": 0.4391,
+        "w": 0.3417,
+        "h": 0.3339
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.4431,
+        "y": 0.0,
+        "w": 0.2667,
+        "h": 0.7934
+      },
+      "signal": "red",
+      "signalCounts": {
+        "red": 2361,
+        "yellow": 386,
+        "green": 74
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271337.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.7653,
+        "y": 0.8727,
+        "w": 0.0625,
+        "h": 0.1273
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.975,
+        "y": 0.8137,
+        "w": 0.025,
+        "h": 0.0886
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.5444,
+        "y": 0.0,
+        "w": 0.05,
+        "h": 0.1808
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.708,
+      "box": {
+        "x": 0.6014,
+        "y": 0.2454,
+        "w": 0.3403,
+        "h": 0.5
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.849,
+      "box": {
+        "x": 0.2931,
+        "y": 0.2934,
+        "w": 0.1292,
+        "h": 0.2417
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271344.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.5431,
+        "y": 0.0,
+        "w": 0.1653,
+        "h": 1.0
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.859,
+      "box": {
+        "x": 0.0319,
+        "y": 0.2288,
+        "w": 0.2986,
+        "h": 0.3487
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.695,
+      "box": {
+        "x": 0.7292,
+        "y": 0.3081,
+        "w": 0.1389,
+        "h": 0.2232
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.854,
+      "box": {
+        "x": 0.4347,
+        "y": 0.3229,
+        "w": 0.1486,
+        "h": 0.2325
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271357.jpg": [
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.79,
+      "box": {
+        "x": 0.6639,
+        "y": 0.0,
+        "w": 0.1583,
+        "h": 0.1292
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271363.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.859,
+      "box": {
+        "x": 0.5833,
+        "y": 0.107,
+        "w": 0.1236,
+        "h": 0.1697
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271382.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.862,
+      "box": {
+        "x": 0.1778,
+        "y": 0.2768,
+        "w": 0.2403,
+        "h": 0.2897
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.859,
+      "box": {
+        "x": 0.5167,
+        "y": 0.3653,
+        "w": 0.1556,
+        "h": 0.2214
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271388.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.4153,
+        "y": 0.5646,
+        "w": 0.0736,
+        "h": 0.4354
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.4083,
+        "y": 0.0,
+        "w": 0.0306,
+        "h": 0.2325
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.857,
+      "box": {
+        "x": 0.1583,
+        "y": 0.3985,
+        "w": 0.1375,
+        "h": 0.1808
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.5083,
+        "y": 0.083,
+        "w": 0.2236,
+        "h": 0.5148
+      },
+      "signal": "yellow",
+      "signalCounts": {
+        "red": 245,
+        "yellow": 255,
+        "green": 0
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271397.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.5319,
+        "y": 0.0,
+        "w": 0.025,
+        "h": 0.2196
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.86,
+      "box": {
+        "x": 0.2347,
+        "y": 0.3745,
+        "w": 0.1222,
+        "h": 0.1587
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.4361,
+        "y": 0.0756,
+        "w": 0.1903,
+        "h": 0.5018
+      },
+      "signal": "red",
+      "signalCounts": {
+        "red": 307,
+        "yellow": 7,
+        "green": 0
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271405.jpg": [
+    {
+      "class": "traffic_light",
+      "label": "Светофор",
+      "short": "СВЕТОФОР",
+      "action": "signal",
+      "color": "#a78bfa",
+      "confidence": 0.62,
+      "box": {
+        "x": 0.3319,
+        "y": 0.2657,
+        "w": 0.1903,
+        "h": 0.4889
+      },
+      "signal": "red",
+      "signalCounts": {
+        "red": 224,
+        "yellow": 46,
+        "green": 0
+      },
+      "source": "heuristic"
+    }
+  ],
+  "1794903271415.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.6056,
+        "y": 0.7306,
+        "w": 0.0958,
+        "h": 0.2694
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.852,
+      "box": {
+        "x": 0.5958,
+        "y": 0.2306,
+        "w": 0.1375,
+        "h": 0.1882
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271423.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.851,
+      "box": {
+        "x": 0.6292,
+        "y": 0.2731,
+        "w": 0.1708,
+        "h": 0.2306
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271433.jpg": [
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.766,
+      "box": {
+        "x": 0.5042,
+        "y": 0.6199,
+        "w": 0.3028,
+        "h": 0.2878
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271445.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.6333,
+        "y": 0.6808,
+        "w": 0.0431,
+        "h": 0.3192
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.6208,
+        "y": 0.5203,
+        "w": 0.0319,
+        "h": 0.1531
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.863,
+      "box": {
+        "x": 0.6194,
+        "y": 0.2528,
+        "w": 0.1944,
+        "h": 0.262
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271455.jpg": [],
+  "1794903271464.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.4556,
+        "y": 0.4742,
+        "w": 0.1153,
+        "h": 0.3081
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.7625,
+        "y": 0.428,
+        "w": 0.0875,
+        "h": 0.2085
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271474.jpg": [],
+  "1794903271484.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.6069,
+        "y": 0.5978,
+        "w": 0.1167,
+        "h": 0.4022
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.4,
+        "y": 0.0,
+        "w": 0.0167,
+        "h": 0.2841
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.875,
+      "box": {
+        "x": 0.5736,
+        "y": 0.2472,
+        "w": 0.3444,
+        "h": 0.3708
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.7,
+      "box": {
+        "x": 0.0222,
+        "y": 0.2934,
+        "w": 0.2778,
+        "h": 0.4041
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271496.jpg": [],
+  "1794903271510.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.2903,
+        "y": 0.7048,
+        "w": 0.0417,
+        "h": 0.0867
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.8181,
+        "y": 0.5314,
+        "w": 0.1819,
+        "h": 0.4686
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.873,
+      "box": {
+        "x": 0.7181,
+        "y": 0.0295,
+        "w": 0.2333,
+        "h": 0.3524
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.691,
+      "box": {
+        "x": 0.1625,
+        "y": 0.0,
+        "w": 0.3764,
+        "h": 0.5406
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271520.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.6222,
+        "y": 0.5111,
+        "w": 0.0611,
+        "h": 0.4889
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.864,
+      "box": {
+        "x": 0.6167,
+        "y": 0.1937,
+        "w": 0.2264,
+        "h": 0.31
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271530.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.857,
+      "box": {
+        "x": 0.6069,
+        "y": 0.2491,
+        "w": 0.1472,
+        "h": 0.2011
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271544.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.5361,
+        "y": 0.5867,
+        "w": 0.1972,
+        "h": 0.4133
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.849,
+      "box": {
+        "x": 0.6431,
+        "y": 0.2749,
+        "w": 0.3569,
+        "h": 0.3266
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.699,
+      "box": {
+        "x": 0.0486,
+        "y": 0.3727,
+        "w": 0.3194,
+        "h": 0.3653
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271551.jpg": [
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.855,
+      "box": {
+        "x": 0.4069,
+        "y": 0.1661,
+        "w": 0.2403,
+        "h": 0.3229
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271559.jpg": [
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.807,
+      "box": {
+        "x": 0.3028,
+        "y": 0.2934,
+        "w": 0.4792,
+        "h": 0.4576
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271567.jpg": [
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.839,
+      "box": {
+        "x": 0.9014,
+        "y": 0.7472,
+        "w": 0.0986,
+        "h": 0.2159
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271574.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.3361,
+        "y": 0.0166,
+        "w": 0.0417,
+        "h": 0.2159
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.854,
+      "box": {
+        "x": 0.3778,
+        "y": 0.2343,
+        "w": 0.2931,
+        "h": 0.4336
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271579.jpg": [],
+  "1794903271585.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "label": "Пешеходный переход",
+      "short": "ПЕШ",
+      "action": "slow",
+      "color": "#2f9bff",
+      "confidence": 0.86,
+      "box": {
+        "x": 0.5597,
+        "y": 0.203,
+        "w": 0.2472,
+        "h": 0.3616
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.705,
+      "box": {
+        "x": 0.2694,
+        "y": 0.321,
+        "w": 0.1306,
+        "h": 0.262
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271593.jpg": [
+    {
+      "class": "cone",
+      "label": "Конус / столбик",
+      "short": "КОНУС",
+      "action": "avoid",
+      "color": "#ff7a29",
+      "confidence": 0.55,
+      "box": {
+        "x": 0.1625,
+        "y": 0.5517,
+        "w": 0.0361,
+        "h": 0.1494
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    },
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.707,
+      "box": {
+        "x": 0.4556,
+        "y": 0.3948,
+        "w": 0.1389,
+        "h": 0.1827
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271601.jpg": [
+    {
+      "class": "speed_bump",
+      "label": "Искусственная неровность",
+      "short": "НЕРОВН",
+      "action": "slow",
+      "color": "#ffb020",
+      "confidence": 0.7,
+      "box": {
+        "x": 0.2556,
+        "y": 0.214,
+        "w": 0.4597,
+        "h": 0.6236
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271610.jpg": [
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.852,
+      "box": {
+        "x": 0.4958,
+        "y": 0.1771,
+        "w": 0.1333,
+        "h": 0.1642
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ],
+  "1794903271618.jpg": [
+    {
+      "class": "stop_sign",
+      "label": "Знак «Стоп»",
+      "short": "STOP",
+      "action": "stop",
+      "color": "#ff3d71",
+      "confidence": 0.852,
+      "box": {
+        "x": 0.2972,
+        "y": 0.1587,
+        "w": 0.3333,
+        "h": 0.476
+      },
+      "signal": null,
+      "signalCounts": {},
+      "source": "heuristic"
+    }
+  ]
+}

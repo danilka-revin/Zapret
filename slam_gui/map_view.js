@@ -99,6 +99,7 @@
     renderedKey: '',
     theme: 'dark',
     scan: [],
+    visionField: [],   // знаки/светофор с камер: отметки на поле карты
     follow: false,
     zoom: 1,
     panX: 0,
@@ -606,6 +607,39 @@
     if (style) ctx.globalAlpha = 1;
   }
 
+  /* Отметки знаков с четырёх камер. Координаты приходят относительно корпуса
+   * (ось X вперёд, Y влево), поэтому перед отрисовкой поворачиваем их на курс
+   * робота так же, как точки лидара в drawScan(). */
+  function drawVisionMarkers(ctx, view, pose) {
+    if (!state.visionField.length) return;
+    const cos = Math.cos(pose.yaw || 0);
+    const sin = Math.sin(pose.yaw || 0);
+    state.visionField.forEach((marker) => {
+      const lx = Number(marker.x_m), ly = Number(marker.y_m);
+      if (!Number.isFinite(lx) || !Number.isFinite(ly)) return;
+      const mx = (pose.x || 0) + lx * cos - ly * sin;
+      const my = (pose.y || 0) + lx * sin + ly * cos;
+      const p = worldToCanvas(mx, my, view);
+      const color = marker.class === 'traffic_light' && marker.signal &&
+        {red: '#ff4d5e', yellow: '#ffd23f', green: '#3ddc84'}[marker.signal] || marker.color || '#fff';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = palStroke();
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = '700 9px ui-monospace, monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(String(marker.short || '•').slice(0, 5), p.x + 10, p.y + 3);
+    });
+  }
+
+  function palStroke() {
+    return state.theme === 'light' ? 'rgba(0,0,0,.65)' : 'rgba(255,255,255,.85)';
+  }
+
   function draw() {
     const canvas = $('map-canvas');
     if (!canvas) return;
@@ -644,6 +678,7 @@
     drawGrid(ctx, view, width, height, pal);
     drawNavigation(ctx, view);
     drawScan(ctx, view, effectiveSnap.pose || { x: 0, y: 0, yaw: 0 }, width, height, pal);
+    drawVisionMarkers(ctx, view, effectiveSnap.pose || { x: 0, y: 0, yaw: 0 });
     drawRobot(ctx, view, effectiveSnap.pose || { x: 0, y: 0, yaw: 0 }, pal);
     if (window.RCRobotModel) window.RCRobotModel.drawStatus(ctx, width, height, { light: state.theme === 'light', bottom: 32 });
     ctx.fillStyle = pal.text;
@@ -2233,6 +2268,19 @@
     }
 
     window.addEventListener('resize', () => { draw(); drawRouteWindow(); });
+    // vision_panel.js опрашивает /api/vision/state на всех экранах; карта
+    // только подписывается и рисует отметки знаков на своём поле.
+    window.addEventListener('rc-vision-state', (event) => {
+      const payload = event && event.detail;
+      state.visionField = payload && Array.isArray(payload.field) ? payload.field : [];
+      draw();
+    });
+    if (window.RCVision && window.RCVision.onState) {
+      window.RCVision.onState((payload) => {
+        state.visionField = payload && Array.isArray(payload.field) ? payload.field : [];
+        draw();
+      });
+    }
     if (window.RCRobotModel) {
       window.RCRobotModel.bindColors('map-wheel-target-color', 'map-wheel-actual-color', 'map-wheel-colors-reset');
       window.RCRobotModel.subscribe(() => { draw(); drawRouteWindow(); });
