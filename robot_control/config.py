@@ -58,6 +58,14 @@ class Config:
     slam_pin: str = ""                 # пусто → заводской PIN из backend.py
     slam_max_attempts: int = 5
     slam_lock_seconds: int = 30
+    # --- выбор режима бортового экрана по PIN на стартовом экране ---
+    #: PIN, открывающий обычный бортовой киоск (все функции, настройка, руление).
+    kiosk_pin_main: str = "7232"
+    #: PIN, открывающий гостевой «бортовой монитор»: общая информация и кейс.
+    kiosk_pin_monitor: str = "5656"
+    #: Сколько неверных вводов стартового PIN допускается и пауза после них, с.
+    kiosk_mode_max_attempts: int = 5
+    kiosk_mode_lock_seconds: int = 30
     # --- камеры: раздельные V4L2-порты для передней и задней камер ---
     camera_front: str = ""             # RC_CAMERA_FRONT или RC_CAMERA_FRONT_PORT
     camera_rear: str = ""              # RC_CAMERA_REAR  или RC_CAMERA_REAR_PORT (пусто → авто /dev/video0/1)
@@ -103,6 +111,10 @@ class Config:
             slam_pin=(os.environ.get("RC_SLAM_PIN") or "").strip(),
             slam_max_attempts=int(os.environ.get("RC_SLAM_MAX_ATTEMPTS", "5")),
             slam_lock_seconds=int(os.environ.get("RC_SLAM_LOCK_SEC", "30")),
+            kiosk_pin_main=(os.environ.get("RC_KIOSK_PIN_MAIN") or "7232").strip(),
+            kiosk_pin_monitor=(os.environ.get("RC_KIOSK_PIN_MONITOR") or "5656").strip(),
+            kiosk_mode_max_attempts=max(1, int(os.environ.get("RC_KIOSK_MODE_MAX_ATTEMPTS", "5"))),
+            kiosk_mode_lock_seconds=max(0, int(os.environ.get("RC_KIOSK_MODE_LOCK_SEC", "30"))),
             camera_front=(
                 (os.environ.get("RC_CAMERA_FRONT") or os.environ.get("RC_CAMERA_FRONT_PORT") or "").strip()
             ),
