@@ -115,6 +115,40 @@ def test_buzzer_check_command_is_short_and_touches_nothing_else():
     assert sm.command_buzz() == "buzz"
 
 
+def test_lock_open_warning_is_about_the_bolt_not_the_door_switch():
+    """Напоминание про открытый замок: время от открытия, концевик не в счёте."""
+    text = _text()
+    assert _const("LOCK_OPEN_WARN_MS") == "10000"
+    check = text[text.index("bool lockOpenTooLong("):text.index("void lockApply(")]
+    # Решение смотрит только на lock_open и время открытия, не на door_closed.
+    assert "lock_open" in check and "lock_opened_ms" in check
+    assert "door_closed" not in check and "DOOR_SWITCH_PIN" not in check
+    # Новое открытие начинает отсчёт заново, а закрытие сбрасывает флаги.
+    opened = text[text.index("void lockOpened("):text.index("void lockSet(")]
+    assert "lock_opened_ms = now" in opened and "lock_warn_done = false" in opened
+    # Рисунок: три коротких гудка с паузой — не одиночный писк карты.
+    assert _const("LOCK_WARN_BEEPS") == "3"
+    assert int(_const("LOCK_WARN_ON_MS")) < int(_const("LOCK_WARN_PAUSE_MS"))
+    # Тик зуммера вызывается в loop и не задваивается в doorTick.
+    loop = text[text.index("void loop()"):]
+    assert "buzzerTick(now);" in loop
+    door = text[text.index("void doorTick("):text.index("//: Замок открыт дольше")]
+    assert "BUZZER_PIN" not in door
+
+
+def test_lock_warning_parser_accepts_old_firmware_without_warn_field():
+    """Старый кадр без warn= — это не ошибка и не выдуманное предупреждение."""
+    fields = dict(fw=5, hdg=0, pitch=0, roll=0, gz=0, press=69964, temp=150, alt=301674,
+                  lock=1, doorclosed=1, light=0, dim=80, strip=1, nleds=73,
+                  cargo=0, rfid=0, cards=0, link=1, err=0, t=100)
+    plain = frame("@S " + " ".join("%s=%s" % item for item in fields.items()))
+    parsed = sm.parse_telemetry(plain)
+    assert parsed["warnMask"] == 0 and parsed["warnings"] == []
+    fields["warn"] = 1
+    warned = sm.parse_telemetry(frame("@S " + " ".join("%s=%s" % item for item in fields.items())))
+    assert warned["warnMask"] == 1 and warned["warnings"] == ["замок открыт слишком долго"]
+
+
 def test_relays_and_strip_are_off_after_reset_and_watchdog_runs():
     """После сброса свет выключен, замок закрыт; watchdog включён и кормится."""
     text = _text()

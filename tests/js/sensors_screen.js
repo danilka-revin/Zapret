@@ -195,6 +195,7 @@ function status() {
     port: byId('sm-port').textContent,
     age: byId('sm-age').textContent,
     errors: byId('sm-errors').textContent,
+    warnings: byId('sm-warnings').textContent,
   };
 }
 

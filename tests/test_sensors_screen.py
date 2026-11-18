@@ -181,6 +181,7 @@ def test_telemetry_frame_fills_the_whole_screen(tmp_path):
         "tone": "live", "title": "на связи",
         "sub": "Плата отвечает и присылает кадры",
         "port": "/dev/ttyUSB0", "age": "0.4 с назад", "errors": "нет",
+        "warnings": "нет",
     }
     assert out["compass"]["heading"] == "123°"
     assert out["compass"]["cardinal"] == "ЮВ"
@@ -306,6 +307,18 @@ def test_lights_go_to_the_api_the_operator_pressed(tmp_path):
     assert out["afterToggle"]["head"]["pressed"] == "false"
     assert "передний свет" in out["afterToggleMsg"]["text"]
     assert out["afterToggleMsg"]["tone"] == "ok"
+
+
+def test_open_lock_warning_is_shown_apart_from_sensor_errors(tmp_path):
+    """«Замок открыт слишком долго» — предупреждение, а не отказ датчика."""
+    payload = screen()
+    payload["snapshot"]["data"].update(warnMask=1, warnings=["замок открыт слишком долго"],
+                                       lockOpen=True, errors=[])
+    out = run_screen(payload, tmp_path)
+    assert out["status"]["warnings"] == "замок открыт слишком долго"
+    assert out["status"]["errors"] == "нет"
+    clean = run_screen(screen(), tmp_path)
+    assert clean["status"]["warnings"] == "нет"
 
 
 def test_automatic_brake_and_near_obstacle_are_shown_with_their_reason(tmp_path):

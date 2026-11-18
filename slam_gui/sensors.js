@@ -119,6 +119,12 @@
     setText($('sm-age'), Number.isFinite(age) ? (age / 1000).toFixed(1) + ' с назад' : '—');
     const errors = Array.isArray(data.errors) ? data.errors : [];
     setText($('sm-errors'), errors.length ? errors.join(', ') : (ok ? 'нет' : '—'));
+    // Предупреждения не равны ошибкам датчиков: сейчас это «замок открыт
+    // слишком долго» — по нему пищит зуммер, и оператор должен видеть причину.
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    const warnBox = $('sm-warnings');
+    setText(warnBox, warnings.length ? warnings.join(', ') : (ok ? 'нет' : '—'));
+    if (warnBox) warnBox.dataset.tone = warnings.length ? 'warn' : '';
   }
 
   // Не выводить состояние двери из команды засову или из устаревшей телеметрии.

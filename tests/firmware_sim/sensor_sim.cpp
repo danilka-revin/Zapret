@@ -588,6 +588,84 @@ static void scenario_buzzer_check() {
   CHECK(board.level[44] == LOW, "повторные нажатия не оставляют зуммер включённым");
 }
 
+// Забытый открытый замок: дольше 10 с по состоянию серво (не по концевику
+// D42) звучит рисунок из трёх коротких гудков с паузой, а не одиночный писк.
+static void scenario_lock_open_warning() {
+  boot();
+  // Концевик закрыт всё время: предупреждение не про дверь, а про засов.
+  board.level[42] = HIGH;
+  run(60);
+  size_t mark = board.serial.output.size();
+  CHECK(field(telemetry(mark), "warn") == 0, "при закрытом замке предупреждения нет");
+  send("lock hold");
+  CHECK(wait_until([]() { return board.servo_value == sensors::LOCK_OPEN_ANGLE; }, 200),
+        "замок открыт");
+  run(500);
+  CHECK(field(telemetry(mark), "warn") == 0, "первые 10 секунд тишина");
+  // До истечения 10 с зуммер молчит, пока не подошло время напоминания.
+  int low_steps = 0;
+  uint8_t previous = board.level[44];
+  const int64_t until_warn = sim::now_us + 9800 * 1000;
+  while (sim::now_us < until_warn) {
+    sim::run_for_ms(10);
+    if (board.level[44] != previous) { previous = board.level[44]; ++low_steps; }
+  }
+  CHECK(low_steps <= 2, "до 10 с зуммер не мигает (переходов: %d)", low_steps);
+  // После порога: три коротких гудка с паузой, затем пауза между рисунками.
+  const int64_t end = sim::now_us + 6000 * 1000;
+  int beeps = 0;
+  bool was_high = board.level[44] == HIGH;
+  bool saw_quiet_pause = false;
+  uint32_t quiet_since = 0;
+  while (sim::now_us < end) {
+    sim::run_for_ms(5);
+    const bool now_high = board.level[44] == HIGH;
+    if (now_high && !was_high) ++beeps;
+    if (!now_high && board.level[44] == LOW) {
+      if (!quiet_since) quiet_since = (uint32_t)(sim::now_us / 1000);
+      if ((uint32_t)(sim::now_us / 1000) - quiet_since >= 1000) saw_quiet_pause = true;
+    } else {
+      quiet_since = 0;
+    }
+    was_high = now_high;
+  }
+  // Один рисунок ≈ 3×120 + 2×110 + 1600 мс, поэтому за 6 с их два-три.
+  CHECK(beeps >= 5, "рисунок повторяется: гудков за 6 с — %d", beeps);
+  CHECK(saw_quiet_pause, "между рисунками есть пауза больше секунды");
+  CHECK(field(telemetry(mark), "warn") == 1,
+        "телеметрия сообщает warn=1, пока замок открыт слишком долго");
+  // Закрыли — рисунок прекращается сразу, а не доигрывает.
+  send("lock close");
+  run(300);
+  CHECK(board.level[44] == LOW, "после закрытия зуммер молчит");
+  CHECK(field(telemetry(mark), "warn") == 0, "после закрытия warn=0");
+  // Повторное открытие снова начинает отсчёт: напоминание не «сгорело».
+  send("lock hold");
+  run(10300);
+  bool again = false;
+  for (int i = 0; i < 400; ++i) {
+    sim::run_for_ms(5);
+    if (board.level[44] == HIGH) { again = true; break; }
+  }
+  CHECK(again, "после повторного открытия напоминание снова звучит");
+  send("lock close");
+  run(100);
+}
+
+static void scenario_lock_open_warning_off_for_short_open() {
+  boot();
+  // Штатное открытие по таймеру (<= 10 с) не должно пищать напоминанием.
+  send("lock open 2");
+  int transitions = 0;
+  uint8_t previous = board.level[44];
+  const int64_t end = sim::now_us + 9000 * 1000;
+  while (sim::now_us < end) {
+    sim::run_for_ms(5);
+    if (board.level[44] != previous) { previous = board.level[44]; ++transitions; }
+  }
+  CHECK(transitions == 0, "короткое открытие не пищит (переходов: %d)", transitions);
+}
+
 static void scenario_turn_blink() {
   boot();
   send("light left on");
@@ -1283,6 +1361,8 @@ static const Scenario SCENARIOS[] = {
     {"tilt_compensation", scenario_tilt_compensation},
     {"lights", scenario_lights},
     {"turn_blink", scenario_turn_blink},
+    {"lock_open_warning", scenario_lock_open_warning},
+    {"lock_open_warning_short", scenario_lock_open_warning_off_for_short_open},
     {"buzzer_check", scenario_buzzer_check},
     {"dim_strip", scenario_dim_strip},
     {"strip_effects", scenario_strip_effects},

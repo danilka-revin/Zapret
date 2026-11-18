@@ -106,7 +106,9 @@ TELEMETRY_FIELDS = (
 )
 #: Поля, которые появились позже и потому необязательны: старую прошивку не
 #: прошивают одновременно с обновлением сервера, и кадр без них — норма.
-OPTIONAL_TELEMETRY_FIELDS = ("nleds",)
+OPTIONAL_TELEMETRY_FIELDS = ("nleds", "warn")
+#: Биты необязательного поля warn= (не ошибки датчиков, а предупреждения).
+WARNING_BITS = ((1 << 0, "замок открыт слишком долго"),)
 #: Сколько диодов ждём в ленте внизу рамы. Прошивка сообщает своё число, а
 #: расхождение с этим значением — повод показать предупреждение, а не молчать.
 STRIP_LEDS_EXPECTED = 73
@@ -249,6 +251,10 @@ def parse_telemetry(line: str) -> dict[str, Any]:
         "linkOk": _int(fields, "link") == 1,
         "errorsMask": _int(fields, "err"),
         "errors": [name for bit, name in ERROR_BITS if _int(fields, "err") & bit],
+        # Предупреждения: «замок открыт дольше 10 с». Старая прошивка поля не
+        # шлёт — тогда warnMask=0, а не выдуманное предупреждение.
+        "warnMask": _int_optional(fields, "warn") or 0,
+        "warnings": [name for bit, name in WARNING_BITS if (_int_optional(fields, "warn") or 0) & bit],
         "uptimeMs": _int(fields, "t"),
     }
 
@@ -714,7 +720,7 @@ class SensorModule:
                     "stripEnabled": False, "stripLeds": None,
                     "windowKind": "none", "windowActive": False,
                     "rfid": "none", "cards": 0, "linkOk": False, "errors": [],
-                    "errorsMask": 0, "uptimeMs": None,
+                    "errorsMask": 0, "warnMask": 0, "warnings": [], "uptimeMs": None,
                 })
             else:
                 snapshot.update({key: value for key, value in frame.items() if key != "kind"})
@@ -738,6 +744,7 @@ class SensorModule:
             "stripLeds": state.get("stripLeds"),
             "windowKind": state["windowKind"],
             "errors": state["errors"],
+            "warnings": state["warnings"],
         }
 
 
