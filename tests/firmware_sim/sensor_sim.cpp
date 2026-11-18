@@ -549,16 +549,43 @@ static void scenario_lights() {
         "в телеметрии горит только передний свет");
 
   send("light stop on");
-  CHECK(wait_until([]() { return board.level[3] == LOW; }, 100), "стоп включает реле 2 (D3)");
+  // Разводка: реле 2 (D3) — правый поворотник, реле 4 (D5) — стопы. Биты
+  // протокола при этом семантические: stop=2, right=8.
+  CHECK(wait_until([]() { return board.level[5] == LOW; }, 100),
+        "стоп включает реле 4 (D5)");
   send("light right on");
-  CHECK(wait_until([]() { return board.level[5] == LOW; }, 400),
-        "правый поворотник включает реле 4 (D5)");
+  CHECK(wait_until([]() { return board.level[3] == LOW; }, 400),
+        "правый поворотник включает реле 2 (D3)");
 
   mark = board.serial.output.size();
   send("light all off");
   CHECK(wait_until([]() { return countLows(RELAYS, 4) == 0; }, 200), "всё выключено");
   fresh = take_output(mark);
   CHECK(field(lastFrame(fresh, "@S "), "light") == 0, "в телеметрии light=0");
+}
+
+// Кнопка «Проверить сигнал» на экране: та же команда buzz, что и с терминала.
+// Короткий тон не трогает ни свет, ни замок, а повторное нажатие его продлевает,
+// но не оставляет включённым навсегда.
+static void scenario_buzzer_check() {
+  boot();
+  CHECK(board.mode[44] == OUTPUT && board.level[44] == LOW, "после сброса зуммер молчит");
+  size_t mark = board.serial.output.size();
+  send("buzz");
+  CHECK(wait_until([]() { return board.level[44] == HIGH; }, 100),
+        "команда buzz включает зуммер D44");
+  const std::string fresh = take_output(mark);
+  CHECK(field(lastFrame(fresh, "@ACK "), "ok") == 1, "проверка зуммера подтверждена");
+  CHECK(countLows(RELAYS, 4) == 0, "проверка зуммера не включает свет");
+  CHECK(board.servo_value == sensors::LOCK_CLOSED_ANGLE, "проверка зуммера не трогает замок");
+  run(400);
+  CHECK(board.level[44] == LOW, "тон заканчивается сам, без команды");
+  // Повторное нажатие во время тона не должно оставить его включённым.
+  send("buzz");
+  CHECK(wait_until([]() { return board.level[44] == HIGH; }, 100), "повторный buzz звучит");
+  send("buzz");
+  run(500);
+  CHECK(board.level[44] == LOW, "повторные нажатия не оставляют зуммер включённым");
 }
 
 static void scenario_turn_blink() {
@@ -1208,7 +1235,7 @@ static void scenario_strip_effects() {
   CHECK(board.pixels.empty() || board.pixels.front() == floor_color,
         "floor: стоп не перекрашивает подсветку пола (он на реле)");
   // Реле активны низким уровнем: «включено» — это LOW на пине.
-  CHECK(board.level[3] == LOW, "floor: при этом реле стопа включилось (реле 2, D3)");
+  CHECK(board.level[5] == LOW, "floor: при этом реле стопа включилось (реле 4, D5)");
   send("light stop off");
   send("strip auto");
   run(150);
@@ -1256,6 +1283,7 @@ static const Scenario SCENARIOS[] = {
     {"tilt_compensation", scenario_tilt_compensation},
     {"lights", scenario_lights},
     {"turn_blink", scenario_turn_blink},
+    {"buzzer_check", scenario_buzzer_check},
     {"dim_strip", scenario_dim_strip},
     {"strip_effects", scenario_strip_effects},
     {"lock_servo", scenario_lock_servo},

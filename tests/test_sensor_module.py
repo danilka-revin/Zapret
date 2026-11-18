@@ -97,11 +97,22 @@ def test_relay_order_matches_vehicle_wiring_without_changing_protocol_bits():
     text = _text()
     apply = text[text.index("void applyRelays("):text.index("//: Насколько далеко", text.index("void applyRelays("))]
     assert re.search(r"relayWrite\(0,\s*\(mask & LIGHT_HEAD\)", apply)
-    assert re.search(r"relayWrite\(1,\s*\(mask & LIGHT_STOP\)", apply)
+    # Каналы 2 и 4 переставлены по разводке: D3 — правый поворотник, D5 — стопы.
+    assert re.search(r"relayWrite\(1,\s*\(mask & LIGHT_RIGHT\)", apply)
     assert re.search(r"relayWrite\(2,\s*\(mask & LIGHT_LEFT\)", apply)
-    assert re.search(r"relayWrite\(3,\s*\(mask & LIGHT_RIGHT\)", apply)
+    assert re.search(r"relayWrite\(3,\s*\(mask & LIGHT_STOP\)", apply)
     assert re.search(r"LIGHT_HEAD\s*=\s*1\s*<<\s*0", text)
     assert re.search(r"LIGHT_STOP\s*=\s*1\s*<<\s*1", text)
+
+
+def test_buzzer_check_command_is_short_and_touches_nothing_else():
+    """Кнопка проверки зуммера: команда buzz, короткий тон, без света и замка."""
+    text = _text()
+    command = text[text.index('strcmp_P(word, PSTR("buzz"))'):text.index('strcmp_P(word, PSTR("lock"))')]
+    assert "buzz(BUZZ_TEST_MS)" in command
+    assert "emitAck(\"buzz\", true)" in command
+    assert "light_state" not in command and "lockSet" not in command
+    assert sm.command_buzz() == "buzz"
 
 
 def test_relays_and_strip_are_off_after_reset_and_watchdog_runs():
@@ -705,6 +716,10 @@ class FakeModule:
     def lights_all(self, on):
         self.calls.append(("lights_all", on))
 
+    def buzz(self):
+        sm.command_buzz()
+        self.calls.append(("buzz",))
+
     def set_dim(self, level):
         sm.command_dim(level)
         self.calls.append(("dim", level))
@@ -765,6 +780,16 @@ def test_lights_take_bool_and_reject_unknown_names(kiosk_app):
     bad = client.post("/api/sensor_module/lights", json={"light": "brake", "on": True})
     assert bad.status_code == 400 and "свет" in bad.get_json()["error"]
     assert client.post("/api/sensor_module/lights", json={"dim": 999}).status_code == 400
+
+
+def test_buzz_endpoint_is_a_plain_check_without_pin(kiosk_app):
+    """Кнопка «Проверить сигнал»: короткий тон без PIN и без побочных действий."""
+    module = FakeModule()
+    kiosk_app.extensions["rc_sensor_module"] = module
+    client = kiosk_app.test_client()
+    reply = client.post("/api/sensor_module/buzz", json={})
+    assert reply.status_code == 200 and reply.get_json()["ok"] is True
+    assert module.calls == [("buzz",)]
 
 
 def test_strip_mode_endpoint_covers_all_four_modes(kiosk_app):

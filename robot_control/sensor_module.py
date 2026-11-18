@@ -399,6 +399,11 @@ def command_strip_mode(mode: str) -> str:
     return "strip %s" % key
 
 
+def command_buzz() -> str:
+    """``buzz``: короткий сигнал зуммера для проверки кнопкой на экране."""
+    return "buzz"
+
+
 def command_dim(level: int) -> str:
     value = int(level)
     if not 0 <= value <= 255:
@@ -638,6 +643,9 @@ class SensorModule:
 
     def lights_all(self, on: bool) -> None:
         self.send(command_lights_all(on))
+
+    def buzz(self) -> None:
+        self.send(command_buzz())
 
     def set_dim(self, level: int) -> None:
         self.send(command_dim(level))

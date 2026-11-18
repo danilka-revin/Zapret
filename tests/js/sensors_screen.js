@@ -274,6 +274,12 @@ function logItems() {
       byId('sm-lights-off').click();
       await sleep(20);
     }
+    if (acts.buzz) {
+      byId('sm-buzz').click();
+      await sleep(20);
+      result.afterBuzz = { text: byId('sm-msg').textContent,
+                           tone: byId('sm-msg').dataset.tone || '' };
+    }
     if (acts.dim !== undefined) {
       byId('sm-dim').value = String(acts.dim);
       (byId('sm-dim').events.change || []).forEach((listener) => listener({ target: byId('sm-dim') }));

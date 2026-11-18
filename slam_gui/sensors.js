@@ -417,6 +417,11 @@
     if (off) off.addEventListener('click', () => act('свет', 'api/sensor_module/lights',
                                                      { all: true, on: false }));
 
+    // Проверка зуммера: только короткий тон. Свет, замок и карты не трогаются,
+    // поэтому PIN не нужен — это динамик, а не доступ.
+    const buzz = $('sm-buzz');
+    if (buzz) buzz.addEventListener('click', () => act('сигнал зуммера', 'api/sensor_module/buzz', {}));
+
     const stripModes = document.querySelectorAll ? document.querySelectorAll('[data-strip-mode]') : [];
     Array.prototype.forEach.call(stripModes, (button) => {
       button.addEventListener('click', () => {

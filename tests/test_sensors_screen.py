@@ -308,6 +308,20 @@ def test_lights_go_to_the_api_the_operator_pressed(tmp_path):
     assert out["afterToggleMsg"]["tone"] == "ok"
 
 
+def test_buzzer_check_button_sends_buzz_without_pin(tmp_path):
+    """Кнопка «Проверить сигнал» — короткий тон зуммера, не доступ к отсеку."""
+    payload = screen()
+    payload["actions"] = {"buzz": True}
+    out = run_screen(payload, tmp_path)
+    posts = [call for call in out["callsAfter"] if call["method"] == "POST"]
+    assert posts == [{"url": "api/sensor_module/buzz", "method": "POST", "body": {}}]
+    assert out["afterBuzz"]["tone"] == "ok"
+    assert "сигнал зуммера" in out["afterBuzz"]["text"]
+    # Кнопка есть на странице и ничего не включает: только звук.
+    page = (ROOT / "slam_gui" / "sensors.html").read_text(encoding="utf-8")
+    assert 'id="sm-buzz"' in page and "Проверить сигнал" in page
+
+
 def test_empty_rfid_list_is_distinguished_from_not_loaded(tmp_path):
     out = run_screen(screen(cardList=[], cardListKnown=True), tmp_path)
     assert out["cards"]["empty"] == ["карт нет"]

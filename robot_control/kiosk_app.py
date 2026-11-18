@@ -2478,6 +2478,13 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                 module.light(str(body["light"]), bool(body.get("on", True)))
         return sensor_command(act)
 
+    @app.post("/api/sensor_module/buzz")
+    def api_sensor_module_buzz():
+        """Проверить зуммер: короткий тон D44. Свет и замок не трогаются."""
+        def act(module, body):
+            module.buzz()
+        return sensor_command(act)
+
     @app.post("/api/sensor_module/strip")
     def api_sensor_module_strip():
         """Режим адресной ленты: {"mode": "auto"|"off"|"floor"|"wave"}.
