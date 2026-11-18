@@ -24,7 +24,9 @@
     conesVisible: 'конусы видны', corridorOk: 'коридор распознан',
     geometryCalibrated: 'геометрия камер откалибрована',
     driveReady: 'шасси готово к тяге', steerReady: 'адресное руление доступно',
-    depthFresh: 'свежий кадр Kinect 360', imuFresh: 'свежий гироскоп / наклон',
+    chassisLink: 'связь с платами колёс (@TLM)', wheelsOnline: 'все 4 колеса онлайн',
+    depthFresh: 'свежий навигационный кадр Kinect 360',
+    imuFresh: 'свежий гироскоп / наклон',
     rivalsIdle: 'другие режимы тяги выключены',
     blindZone: 'ближняя зона осмотрена', standstill: 'робот стоит',
   };

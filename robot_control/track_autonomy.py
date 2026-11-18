@@ -854,6 +854,9 @@ class TrackAutonomyService:
         except Exception:  # noqa: BLE001
             rivals = []
         telemetry = self._odometer.telemetry_snapshot()
+        online_wheels = int(telemetry.get("onlineWheels") or 0)
+        checks["chassisLink"] = bool(telemetry.get("linkOk"))
+        checks["wheelsOnline"] = online_wheels >= len(MODULES)
         checks["standstill"] = not (float(telemetry.get("wheelSpeedMps") or 0) > 0.05)
 
         if not checks["enabled"]:
@@ -879,9 +882,14 @@ class TrackAutonomyService:
             blockers.append("Нет свежего гироскопа/наклона: подъём на кочке не контролируется")
         if not self.cfg.simulation:
             if not checks["driveReady"]:
-                blockers.append("Шасси не готово к тяге (RC_SLAM_SOURCE=master, четыре платы онлайн)")
+                blockers.append("Шасси не готово к тяге: нужен RC_SLAM_SOURCE=master")
             if not checks["steerReady"]:
                 blockers.append("Шасси не умеет адресное руление: поворот по конусам недоступен")
+            if not checks["chassisLink"]:
+                blockers.append("Нет свежей связи с платами колёс (@TLM): проверьте USB и питание")
+            if not checks["wheelsOnline"]:
+                blockers.append("Не все четыре колеса онлайн: %d из %d" %
+                                (online_wheels, len(MODULES)))
         # Галочка осмотра — действие оператора в конкретном пуске, а не свойство
         # робота: status() не должен из-за неё вечно показывать canStart=False.
         if self.cfg.require_blind_check and not checks["blindZone"]:

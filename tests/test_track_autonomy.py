@@ -354,6 +354,42 @@ def test_preflight_lists_all_blockers_and_allows_clean_start():
                for item in service.preflight(blind_zone_checked=True)["blockers"])
 
 
+def test_preflight_requires_four_wheels_and_live_link_for_real_drive():
+    cones = {0: [detection("cone", 0.15, 0.2), detection("cone", 0.15, 0.12)],
+             2: [detection("cone", 0.85, 0.2), detection("cone", 0.85, 0.12)]}
+    fake_vision = vision(detections=cones)
+
+    def service_with_motors(motors, link_ok=True):
+        return TrackAutonomyService(
+            config=replace(cfg(enabled=True), simulation=False, require_depth=False,
+                           require_imu=False, require_blind_check=False),
+            vision_provider=lambda: fake_vision, layout_provider=layout,
+            kinect_provider=lambda: FakeKinect(nav_fresh=False),
+            imu_provider=lambda: {"ok": True, "stale": False},
+            source_provider=lambda: FakeSource(),
+            telemetry_provider=lambda: {"motors": motors, "wheelSpeedMps": 0.0,
+                                        "linkOk": link_ok},
+            estop=lambda: None, log_events=False)
+
+    two = [{"id": name, "online": True, "scCount": 0, "scPpr": 90}
+           for name in ("FL", "FR")]
+    blocked = service_with_motors(two).preflight()
+    assert blocked["checks"]["chassisLink"] is True
+    assert blocked["checks"]["wheelsOnline"] is False
+    assert any("Не все четыре колеса онлайн: 2 из 4" in item
+               for item in blocked["blockers"])
+    no_link = service_with_motors(two * 2, link_ok=False).preflight()
+    assert any("связи с платами колёс" in item for item in no_link["blockers"])
+
+    four = [{"id": name, "online": True, "scCount": 0, "scPpr": 90}
+            for name in ("FL", "FR", "RL", "RR")]
+    clean = service_with_motors(four).preflight()
+    assert clean["checks"]["chassisLink"] is True
+    assert clean["checks"]["wheelsOnline"] is True
+    assert not any("колеса онлайн" in item or "связи с платами" in item
+                   for item in clean["blockers"])
+
+
 def test_start_requires_blind_check_and_enabled(monkeypatch):
     fake_vision = vision(detections={0: [detection("cone", 0.15, 0.2)],
                                      2: [detection("cone", 0.85, 0.2)]})

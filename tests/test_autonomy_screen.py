@@ -17,7 +17,8 @@ def status_payload() -> dict:
     checks = {key: True for key in (
         "enabled", "estopClear", "visionOk", "visionRunning", "camerasFresh",
         "conesVisible", "corridorOk", "geometryCalibrated", "driveReady",
-        "steerReady", "depthFresh", "imuFresh", "rivalsIdle", "standstill")}
+        "steerReady", "chassisLink", "wheelsOnline", "depthFresh", "imuFresh",
+        "rivalsIdle", "standstill")}
     checks["blindZone"] = False
     return {
         "ok": True, "active": False, "enabled": True, "simulation": False,
