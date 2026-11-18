@@ -67,7 +67,8 @@
       generation: 0, keys: new Set(), timer: null, running: null, planning: false,
       drivePending: null, pingPending: false, lastTick: 0, lastDrive: 0, lastPing: 0,
       brake: null, pendingPlan: null, beginning: Promise.resolve(), retirement: Promise.resolve(),
-      spin: null, arrowConflict: false, zeroSpeed: false, trim: trimState()};
+      spin: null, arrowConflict: false, zeroSpeed: false, trim: trimState(),
+      boardMax: 100, guardMax: 100};
     // Firmware accepts a fresh tagged brake for up to 6 s. Use a smaller
     // browser-side bound to leave time for the permit and serial delivery.
     const BRAKE_REUSE_MS = 4000;
@@ -95,9 +96,46 @@
       estop: 'Включён E-STOP.',
       manual_override: 'Другая команда остановила WASD.',
       navigation_stopping: 'Дождитесь остановки навигации.',
+      red_light_block: 'Красный светофор: тяга заблокирована до зелёного.',
       command_failed: 'Нет подтверждения команды; тяга остановлена.'
     };
     function show(text) { if (status) status.textContent = text; }
+    // Ограничения по знакам приходят из телеметрии борта (поле driveGuard):
+    // красный светофор блокирует тягу, «кочка» снижает потолок скорости.
+    // Это решение борта — экран лишь показывает его и не даёт ползунку
+    // обещать больше разрешённого.
+    function guardState() {
+      const data = options.getState && options.getState();
+      const guard = data && typeof data === 'object' ? data.driveGuard : null;
+      return guard && typeof guard === 'object' ? guard : null;
+    }
+    function guardText(guard) {
+      if (!guard) return '';
+      if (guard.blocked === true) {
+        return 'Красный светофор: управление заблокировано до зелёного' +
+          (Number.isFinite(guard.blockedS) ? ' (' + Math.round(guard.blockedS) + ' с)' : '') + '.';
+      }
+      if (guard.bump === true) {
+        return 'Знак «неровность»: потолок тяги ' + guard.speedCapPercent + ' % (снижено на ' +
+          Math.round((Number(guard.slowdown) || 0) * 100) + ' %).';
+      }
+      return '';
+    }
+    function applyGuard(guard) {
+      if (!guard || typeof guard !== 'object') return;
+      if (guard.blocked === true && state.running) {
+        // Тяга запрещена, но управление не выключаем: руль и STOP работают,
+        // а экран объясняет причину. Любая попытка тяги будет остановлена.
+        state.running = null;
+      }
+      const cap = Number(guard.speedCapPercent);
+      if (!Number.isFinite(cap)) return;
+      // Потолок борта (RC_KEYBOARD_MAX_PERCENT, пришёл в begin) запоминаем
+      // отдельно: снижение у «кочки» временное и не должно обрезать его
+      // навсегда. Применяется меньшее из двух.
+      state.guardMax = Math.max(0, Math.min(100, Math.min(Math.round(cap), state.boardMax)));
+      applySpeedMax(state.guardMax);
+    }
     function showGeometry(geometry) {
       if (!spinInfo) return;
       spinInfo.textContent = geometry
@@ -214,6 +252,13 @@
       const reason = error && error.message || 'command_failed';
       if (reason === 'speed_limit') {
         disable('Предел тяги WASD — ' + speedMax() + ' %: установите ползунок не выше и включите заново.');
+        return;
+      }
+      if (reason === 'red_light_block') {
+        // Блокировка по красному — не повод закрывать сессию WASD: оператор
+        // ждёт зелёный в этой же сессии и видит причину в статусе.
+        state.running = null;
+        show(reasons[reason]);
         return;
       }
       disable(reasons[reason] || 'Нет подтверждения команды; тяга остановлена.');
@@ -373,6 +418,8 @@
       state.lastTick = now;
       const data = options.getState(), error = snapshotError(data);
       if (error) { fail(new Error(error)); return; }
+      // Ограничение борта применяем и без тяги: оператор видит потолок заранее.
+      applyGuard(guardState());
       if (state.running) {
         // The onboard lease checks each board's sequence and steering progress;
         // being between the old and new target is expected during a live turn.
@@ -410,7 +457,13 @@
           if (gen !== state.generation) { await retire(result.session, 1, false); return; }
           state.token = result.session;
           // Борт сообщает реальный предел тяги: ползунок подстраивается под него.
-          applySpeedMax(result.maxPercent);
+          state.boardMax = Number.isFinite(Number(result.maxPercent))
+            ? Math.max(0, Math.min(100, Math.round(Number(result.maxPercent)))) : 100;
+          state.guardMax = state.boardMax;
+          applySpeedMax(state.guardMax);
+          // Ограничение могло измениться, пока шёл BEGIN: берём самую свежую
+          // телеметрию, а ответ begin — резерв, если телеметрии ещё нет.
+          applyGuard(guardState() || result.guard);
           state.spin = validGeometry(result.spin) ? result.spin : null;
           showGeometry(state.spin);
           state.sequence = 0;
@@ -422,7 +475,8 @@
           state.lastTick = state.lastPing = Date.now();
           state.timer = setInterval(tick, 40);
           updateButton();
-          show('WASD включено · удерживайте клавиши.');
+          const guard = guardText(guardState());
+          show(guard || 'WASD включено · удерживайте клавиши.');
           if (state.keys.size) replan();
         } catch (error) {
           if (gen === state.generation) fail(error);
@@ -527,9 +581,14 @@
         state.planning = false;
         state.lastTick = Date.now();
         await heartbeat(gen, running, arm.permit);
-        if (valid(gen) && state.running) show(desired.pattern === 'spin'
-          ? 'Разворот · удерживайте стрелку; отпускание остановит тягу.'
-          : 'Движение · удерживайте клавиши.');
+        if (valid(gen) && state.running) {
+          // Предупреждение борта (красный / «кочка») важнее подсказки о клавишах:
+          // оператор должен видеть, почему тяга меньше или её нет.
+          const guard = guardText(guardState());
+          show(guard || (desired.pattern === 'spin'
+            ? 'Разворот · удерживайте стрелку; отпускание остановит тягу.'
+            : 'Движение · удерживайте клавиши.'));
+        }
       })().catch((error) => { if (valid(gen)) fail(error); });
     }
     function keyCode(event) {

@@ -1019,3 +1019,139 @@ def test_wasd_slider_has_full_percent_range():
     html = (Path(__file__).resolve().parents[1] / "slam_gui/robot.html").read_text()
     assert 'id="keyboard-speed" type="range" min="0" max="100" step="1" value="20"' in html
     assert 'id="keyboard-speed-max">100<' in html
+
+
+# --------------------------------------------------------------- ограничения
+class Guard:
+    """Подставной ограничитель: состояние задаёт тест, как это делает борт."""
+
+    def __init__(self, **state):
+        self.state = {"blocked": False, "blockedReason": None, "bump": False,
+                      "speedCapPercent": 100, "slowdown": 0.0, **state}
+
+    def snapshot(self, **_):
+        return dict(self.state)
+
+
+def guarded(source, clock, guard):
+    def drive(src, payload):
+        return src.drive(payload["percent"]), 200
+
+    def steer(src, payload):
+        return src.steer_module(payload["module"], payload["angle"]), 200
+
+    return KeyboardControl(lambda: source, drive, steer, lambda: None, clock, guard=guard)
+
+
+def test_red_light_blocks_traction_but_not_braking_or_steering():
+    clock, source = Clock(), Wheels()
+    guard = Guard()
+    ctl = guarded(source, clock, guard)
+    token = begin(ctl)
+    assert start_drive(ctl, token, 1, 8, straight())[0]["ok"]
+    assert source.commanded == 8
+
+    # Красный подтвердился на ходу: тяга снимается, сессия остаётся живой.
+    guard.state = {"blocked": True, "blockedReason": "красный (CAM 0)", "bump": False,
+                   "speedCapPercent": 100, "slowdown": 0.0}
+    result, status = send(ctl, token, 3, "drive", percent=8, angles=straight())
+    assert status == 409 and result["reason"] == "red_light_block"
+    assert source.commanded == 0
+
+    # Повторная попытка и новое разрешение тоже не дают тяги.
+    result, _ = send(ctl, token, 4, "arm", direction=1, angles=straight())
+    assert result["reason"] == "red_light_block"
+    result, _ = send(ctl, token, 5, "live", percent=8, angles=straight())
+    assert result["reason"] == "red_light_block"
+    assert source.commanded == 0
+    # Руль и STOP остаются доступны: стоящий робот должен уметь тормозить и
+    # выставлять колёса, чтобы уехать сразу по зелёному.
+    assert send(ctl, token, 6, "stop")[0]["ok"]
+    result, _ = send(ctl, token, 7, "steer", module="FR", angle=10)
+    assert result["ok"] and source.motors["FR"]["angle"] == 10
+    assert send(ctl, token, 8, "steer", module="FR", angle=0)[0]["ok"]
+
+    # Зелёный снял блокировку — тяга снова разрешена без перезапуска.
+    guard.state["blocked"] = False
+    token = begin(ctl)
+    assert start_drive(ctl, token, 1, 8, straight())[0]["ok"]
+    assert source.commanded == 8
+
+
+def test_broken_guard_fails_closed_instead_of_allowing_drive():
+    clock, source = Clock(), Wheels()
+
+    class Broken:
+        def snapshot(self, **_):
+            raise RuntimeError("камера отвалилась")
+
+    ctl = guarded(source, clock, Broken())
+    token = begin(ctl)
+    result, _ = send(ctl, token, 1, "arm", direction=1, angles=straight())
+    assert result["reason"] == "red_light_block" and source.commanded == 0
+    assert ctl.guard_state()["blocked"] is True
+
+
+def test_bump_sign_caps_keyboard_traction_by_twenty_percent():
+    clock, source = Clock(), LiveWheels()
+    guard = Guard()
+    ctl = guarded(source, clock, guard)
+    token = begin(ctl)
+    assert start_live(ctl, token, percent=40)[0]["ok"]
+    assert source.commanded == 40
+
+    # «Кочка» в кадре: потолок 80 % — запрошенные 40 % не урезаются.
+    guard.state.update(bump=True, speedCapPercent=80, slowdown=0.2)
+    clock.now += 0.2
+    source.pulses()
+    assert send(ctl, token, 3, "live", percent=40, angles=straight())[0]["ok"]
+    assert source.commanded == 40
+
+    # Полная шкала урезается до 80 %: снижение на 20 % делает борт, а не экран.
+    clock.now += 0.2
+    source.pulses()
+    result, status = send(ctl, token, 4, "live", percent=100, angles=straight())
+    assert status == 200 and result["ok"]
+    assert source.commanded == 80
+    assert send(ctl, token, 5, "live", percent=0, angles=straight())[0]["ok"]
+    assert source.commanded == 0
+
+    # Реверс урезается по модулю, знак сохраняется.
+    for motor in source.motors.values():
+        motor.update(scRpm=0.0, moving=False)
+    token = begin(ctl)
+    result, _ = send(ctl, token, 1, "arm", direction=-1, angles=straight())
+    assert result["ok"]
+    assert send(ctl, token, 2, "drive", percent=-90, angles=straight(),
+                permit=result["permit"])[0]["ok"]
+    assert source.commanded == -80
+
+
+def test_guard_state_is_reported_on_begin_and_in_snapshot():
+    clock, source = Clock(), Wheels()
+    guard = Guard()
+    ctl = guarded(source, clock, guard)
+    result, status = ctl.handle({"action": "begin"})
+    assert status == 200 and result["guard"]["blocked"] is False
+    assert result["guard"]["speedCapPercent"] == 100
+    assert "blocked" in ctl.guard_state()
+    # Без ограничителя (стенд, плата без камер) тяга не ограничена.
+    plain = controller(Wheels(), Clock())
+    assert plain.guard_state() == {"blocked": False, "speedCapPercent": 100,
+                                   "bump": False, "reason": "ограничения по знакам не подключены"}
+
+
+def test_sign_appearing_between_permit_and_first_packet_still_caps_speed():
+    """«Кочка» между ARM и первым пакетом: разрешение не даёт полную тягу."""
+    clock, source = Clock(), LiveWheels()
+    guard = Guard()
+    ctl = guarded(source, clock, guard)
+    token = begin(ctl)
+    arm, status = send(ctl, token, 1, "arm", direction=1, angles=straight())
+    assert status == 200 and arm["ok"]
+    guard.state.update(bump=True, speedCapPercent=80, slowdown=0.2)
+    # Пакет урезается ещё до сверки с разрешением: предел действует на любую
+    # команду тяги, а не только на продолжение уже начатого хода.
+    assert send(ctl, token, 2, "live", percent=100, angles=straight(),
+                permit=arm["permit"])[0]["ok"]
+    assert source.commanded == 80

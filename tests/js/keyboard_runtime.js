@@ -42,7 +42,9 @@ function setAngle(motor, angle) {
   motor.angle = angle;
   motor.potAngle = motor.potOffset == null ? null : angle + motor.potOffset;
 }
-const telemetry = {linkOk: true, steeringControl: {available: true}, drive: {available: true, active: false}, motors};
+const telemetry = {linkOk: true, steeringControl: {available: true}, drive: {available: true, active: false}, motors,
+  // Ограничения по знакам приходят в телеметрии борта (driveGuard).
+  driveGuard: {blocked: false, bump: false, speedCapPercent: 100, reason: 'нет ограничений'}};
 const calls = [];
 const pivot = Math.atan2(500, 380) * 180 / Math.PI;
 const spin = {angleDeg: pivot, wheelbaseMm: 500, trackMm: 380,
@@ -66,7 +68,8 @@ global.fetch = async (_url, init) => {
   if (body.action === 'begin') {
     brake();
     if (incompleteFirstAck) motors[3].brakeId = 0;
-    result = {ok: true, session: 'session-' + (++session), brakeId, spin, maxPercent: 100};
+    result = {ok: true, session: 'session-' + (++session), brakeId, spin, maxPercent: 100,
+      guard: {...telemetry.driveGuard}};
     if (holdBegin) { const gate = holdBegin; holdBegin = null; await gate.promise; }
   } else if (body.action === 'stop' || body.action === 'end') {
     if (body.action === 'stop' && holdStop) { const gate = holdStop; holdStop = null; await gate.promise; }
@@ -77,6 +80,11 @@ global.fetch = async (_url, init) => {
     if (holdArm) { const gate = holdArm; holdArm = null; await gate.promise; }
     result.permit = 'permit';
   } else if (body.action === 'live') {
+    // Настоящий борт отклоняет и снимает тягу при подтверждённом красном.
+    if (telemetry.driveGuard.blocked) {
+      brake();
+      return {ok: false, json: async () => ({ok: false, reason: 'red_light_block'})};
+    }
     telemetry.drive.active = true;
     for (const motor of motors) {
       setAngle(motor, body.angles[motor.id]);
@@ -284,5 +292,52 @@ const count = action => calls.filter(call => call.action === action).length;
   beginGate.resolve();
   await drain;
   assert.equal(count('end'), endBefore + 1, 'late BEGIN was not retired before drain');
+  // Красный светофор, подтверждённый бортом, блокирует тягу; управление при
+  // этом не закрывается, и повторная стрелка тоже не даёт движения.
+  telemetry.driveGuard = {blocked: true, blockedS: 4.2, bump: false,
+    speedCapPercent: 100, reason: 'красный подтверждён 2 кадрами подряд (CAM 0)'};
+  button.emit('click');
+  await until(() => button.getAttribute('aria-pressed') === 'true', 'red: WASD enabled');
+  const liveBeforeRed = count('live');
+  down('ArrowUp');
+  await sleep(300);
+  // Попытка тяги уходит на борт и там отклоняется: колеса стоят, а экран
+  // показывает причину. Повторов нет — иначе был бы шквал команд.
+  assert.ok(count('live') - liveBeforeRed <= 1,
+    'red light must not repeat traction: ' + (count('live') - liveBeforeRed));
+  assert.equal(telemetry.drive.active, false, 'red light keeps the wheels stopped');
+  assert.match(status.textContent, /Красный светофор/);
+  assert.equal(button.getAttribute('aria-pressed'), 'true', 'block must not close the session');
+  up('ArrowUp');
+
+  // Зелёный на борту — управление снова разрешено без перезапуска WASD.
+  telemetry.driveGuard = {blocked: false, bump: false, speedCapPercent: 100};
+  down('ArrowUp');
+  await until(() => telemetry.drive.active, 'green releases the block');
+  up('ArrowUp');
+  await until(() => !telemetry.drive.active, 'green: released');
+
+  // «Кочка»: потолок тяги 80 %, ползунок не обещает больше, а после знака
+  // возвращается полный диапазон.
+  telemetry.driveGuard = {blocked: false, bump: true, speedCapPercent: 80, slowdown: 0.2};
+  slider.value = '100';
+  slider.emit('input');
+  down('ArrowUp');
+  await until(() => telemetry.drive.active, 'bump: driving');
+  await sleep(150);
+  const bumpLive = calls.filter(c => c.action === 'live').at(-1);
+  assert.ok(Math.abs(bumpLive.percent) <= 80,
+    'bump sign caps traction at 80 %: ' + bumpLive.percent);
+  assert.equal(slider.max, '80', 'slider must not promise more than the board allows');
+  assert.match(status.textContent, /неровность|80/);
+  up('ArrowUp');
+  await until(() => !telemetry.drive.active, 'bump: released');
+  telemetry.driveGuard = {blocked: false, bump: false, speedCapPercent: 100};
+  await sleep(150);
+  assert.equal(slider.max, '100', 'after the bump the full range is back');
+  slider.value = '20'; slider.emit('input');
+  button.emit('click');
+  await until(() => button.getAttribute('aria-pressed') === 'false', 'guard: WASD disabled');
+
   console.log('keyboard runtime races OK');
 })().catch(error => { console.error(error); process.exit(1); });

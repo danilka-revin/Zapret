@@ -145,6 +145,9 @@ def test_telemetry_api_returns_only_public_values(kiosk_client):
             # Автосигналы: стоп-сигнал, тревога у препятствия и её причина.
             # В тестовом приложении нить не поднимается и сервиса нет.
             "signals",
+            # Ограничения по знакам: красный блокирует управление, «кочка»
+            # снижает потолок тяги. Хватит и самого флага: подробности не секрет.
+            "driveGuard",
         }
         cameras = body["data"]["cameras"]
         assert isinstance(cameras, list)
