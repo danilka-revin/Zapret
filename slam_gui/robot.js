@@ -499,6 +499,11 @@
       const r = event.detail && event.detail.radius;
       setText($('lidar-range'), Number.isFinite(+r) ? fmtRange(+r) + ' м' : '—');
     });
+    if (window.addEventListener) {
+      window.addEventListener('rc-sensor-layout', () => {
+        step('lidar', () => renderLidar(lastData || {}));
+      });
+    }
   }
   function fmtRange(m) {
     return m < 1 ? m.toFixed(2) : (m < 10 ? m.toFixed(1) : String(Math.round(m)));
@@ -1626,9 +1631,20 @@
       finishSwipe(type, view, type === 'open' ? completed : !completed);
     }
 
+    function isSensorFullscreen() {
+      return !!(document.body && document.body.classList &&
+        typeof document.body.classList.contains === 'function' &&
+        document.body.classList.contains('sensor-fullscreen'));
+    }
+    function isSensorInteractTarget(target) {
+      return !!(target && typeof target.closest === 'function' &&
+        target.closest('.kinect-view, .lidar-map, .sensor-switch, [data-sensor-fullscreen]'));
+    }
+
     // Touch gestures on the base screen and on the open panel.
     kiosk.addEventListener('touchstart', (event) => {
       if (event.touches.length !== 1) return;
+      if (isSensorFullscreen() || isSensorInteractTarget(event.target)) return;
       tStart(event.touches[0].clientX, event.touches[0].clientY);
     }, {passive: true});
     kiosk.addEventListener('touchmove', (event) => {
@@ -1665,6 +1681,7 @@
     }
     kiosk.addEventListener('mousedown', (event) => {
       if (event.button !== 0) return;
+      if (isSensorFullscreen() || isSensorInteractTarget(event.target)) return;
       const overlay = $('ctrl-overlay');
       if (overlay && !overlay.hidden) return;
       mStart(event.clientX, event.clientY, 'kiosk');

@@ -75,30 +75,67 @@ console.log('Kinect/LiDAR transforms and articulated robot geometry: OK');
 const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../../slam_gui/kinect_view.js'), 'utf8');
-let now = 100, interval, fetches = 0, rectangles = [], polygons = 0;
+let now = 100, interval, fetches = 0, lastUrl = '', lastInit = null, rectangles = [], polygons = 0;
+let lidarRedraws = 0;
+const docKeydown = [];
+class ClassList {
+  constructor() { this.set = new Set(); }
+  toggle(name, force) {
+    const on = force === undefined ? !this.set.has(name) : !!force;
+    if (on) this.set.add(name); else this.set.delete(name);
+    return on;
+  }
+  contains(name) { return this.set.has(name); }
+}
 class Element {
-  constructor() { this.listeners = {}; this.hidden = false; this.attrs = {}; this.textContent = ''; }
+  constructor() {
+    this.listeners = {}; this.hidden = false; this.attrs = {}; this.textContent = '';
+    this.title = ''; this.classList = new ClassList(); this.label = null;
+  }
   addEventListener(name, fn) { this.listeners[name] = fn; }
   setAttribute(name, value) { this.attrs[name] = value; }
-  emit(name, event = {}) { if (this.listeners[name]) this.listeners[name]({preventDefault() {}, ...event}); }
-  getBoundingClientRect() { return {width: 600, height: 400}; }
+  querySelector(sel) { return sel === '.sensor-fs-label' ? this.label : null; }
+  focus() {}
+  emit(name, event = {}) {
+    if (this.listeners[name]) {
+      this.listeners[name]({preventDefault() {}, stopPropagation() {}, ...event});
+    }
+  }
+  getBoundingClientRect() {
+    const fs = elements['sensor-overview-panel'] &&
+      elements['sensor-overview-panel'].classList.contains('is-fullscreen');
+    return fs ? {width: 1920, height: 1080} : {width: 600, height: 400};
+  }
   setPointerCapture() {}
   getContext() { return {clearRect() { rectangles = []; polygons = 0; }, beginPath() {}, closePath() { polygons++; }, fill() {}, moveTo() {}, lineTo() {}, stroke() {},
     arc() {}, fillText() {}, fillRect(x, y, w, h) { rectangles.push([x, y, w, h]); },
     set fillStyle(v) {}, set strokeStyle(v) {}, set lineWidth(v) {}, set font(v) {},
     set textAlign(v) {}, set textBaseline(v) {}}; }
 }
-const ids = ['sensor-lidar', 'sensor-kinect', 'sensor-combined', 'sensor-lidar-view', 'sensor-kinect-view', 'lidar-meta',
+const ids = ['sensor-overview-panel', 'sensor-lidar', 'sensor-kinect', 'sensor-combined',
+  'sensor-lidar-view', 'sensor-kinect-view', 'lidar-meta', 'sensor-fullscreen-toggle',
+  'lidar-fullscreen-btn', 'kinect-fullscreen-btn',
   'kinect-3d-status', 'kinect-3d-mode-note', 'kinect-3d-empty', 'kinect-3d-canvas', 'kinect-zoom-in', 'kinect-zoom-out',
   'kinect-reset-view', 'kinect-fov-toggle'];
 const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
+elements['sensor-fullscreen-toggle'].label = {textContent: 'На полный экран'};
+const body = {classList: new ClassList()};
 const window = {
-  document: {readyState: 'complete', hidden: false, getElementById: id => elements[id], addEventListener() {}},
+  location: {search: '?m=guest%2Btoken'},
+  document: {
+    readyState: 'complete', hidden: false, body,
+    getElementById: id => elements[id],
+    addEventListener(name, fn) { if (name === 'keydown') docKeydown.push(fn); },
+  },
+  RCLidarView: {redrawAll() { lidarRedraws++; }},
   atob, devicePixelRatio: 1, addEventListener() {},
 };
-const context = {window, performance: {now: () => now}, AbortController, clearTimeout, setTimeout,
+const context = {window, URLSearchParams, performance: {now: () => now}, AbortController, clearTimeout, setTimeout,
   setInterval: fn => { interval = fn; return 1; },
-  fetch: async () => { fetches++; return {ok: true, json: async () => ({...payload, frameId: 1, ageS: .1, maxAgeS: 1.5})}; },
+  fetch: async (url, init) => {
+    fetches++; lastUrl = url; lastInit = init;
+    return {ok: true, json: async () => ({...payload, frameId: 1, ageS: .1, maxAgeS: 1.5})};
+  },
   console};
 vm.runInNewContext(source, context);
 (async () => {
@@ -157,5 +194,48 @@ vm.runInNewContext(source, context);
   assert.match(elements['kinect-3d-mode-note'].textContent, /знаков: 1 \(масштаб ×1\.20\)/);
   assert.equal(visionSignGeometry({...signMarker, width_m: .36}).width, .36,
     'RC_VISION_SIGN_SCALE меняет физический размер в 3D');
-  console.log('Kinect/LiDAR combined 3D interactions and 1:1 signs: OK');
+
+  // Signed guest monitor query parameter is preserved on Kinect preview polls.
+  assert.equal(lastUrl, '/api/kinect/preview?m=guest%2Btoken');
+  assert.equal(lastInit.credentials, 'same-origin');
+
+  // Fullscreen works for combined 3D, Kinect 3D, and 2D LiDAR.
+  assert.equal(window.RCKinectView.isFullscreen(), false);
+  elements['kinect-fullscreen-btn'].emit('click');
+  assert.equal(window.RCKinectView.isFullscreen(), true);
+  assert.equal(elements['sensor-overview-panel'].classList.contains('is-fullscreen'), true);
+  assert.equal(body.classList.contains('sensor-fullscreen'), true);
+  assert.equal(elements['sensor-fullscreen-toggle'].label.textContent, 'Свернуть');
+  assert.equal(elements['sensor-fullscreen-toggle'].attrs['aria-pressed'], 'true');
+  assert.equal(elements['lidar-fullscreen-btn'].attrs['aria-pressed'], 'true');
+  assert.equal(elements['kinect-fullscreen-btn'].attrs['aria-pressed'], 'true');
+  assert.equal(elements['kinect-3d-canvas'].width, 1920, '3D canvas resizes to fullscreen');
+  assert.equal(elements['kinect-3d-canvas'].height, 1080);
+
+  // Switch to Kinect 3D while staying in fullscreen, then collapse via header button.
+  elements['sensor-kinect'].emit('click');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(window.RCKinectView.mode(), 'kinect');
+  assert.equal(window.RCKinectView.isFullscreen(), true);
+  elements['sensor-fullscreen-toggle'].emit('click');
+  assert.equal(window.RCKinectView.isFullscreen(), false);
+  assert.equal(elements['sensor-fullscreen-toggle'].label.textContent, 'На полный экран');
+  assert.equal(elements['kinect-3d-canvas'].width, 600, '3D canvas returns to panel size');
+
+  // Expand 2D LiDAR via its corner button and exit with Escape.
+  elements['sensor-lidar'].emit('click');
+  const redrawsBefore = lidarRedraws;
+  elements['lidar-fullscreen-btn'].emit('click');
+  assert.equal(window.RCKinectView.mode(), 'lidar');
+  assert.equal(window.RCKinectView.isFullscreen(), true);
+  assert.ok(lidarRedraws > redrawsBefore, '2D LiDAR redraws immediately on fullscreen');
+  let escStopped = false;
+  docKeydown.forEach(fn => fn({
+    key: 'Escape', preventDefault() {},
+    stopImmediatePropagation() { escStopped = true; },
+  }));
+  assert.equal(escStopped, true);
+  assert.equal(window.RCKinectView.isFullscreen(), false);
+  assert.equal(body.classList.contains('sensor-fullscreen'), false);
+  console.log('Kinect/LiDAR combined 3D interactions, signs, and fullscreen: OK');
 })().catch(err => { console.error(err); process.exitCode = 1; });

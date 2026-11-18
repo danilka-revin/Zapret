@@ -645,7 +645,8 @@ def kiosk_mode_gate(modes: KioskSessionModes):
 _MONITOR_GET_ALLOW = (
     "/api/kiosk_mode", "/api/kiosk_state", "/api/kiosk_lock", "/api/battery",
     "/api/lidar", "/api/lidar/logs", "/api/kiosk_logs", "/api/pc_state",
-    "/api/connections", "/api/cameras", "/api/kinect/status", "/healthz",
+    "/api/connections", "/api/cameras", "/api/kinect/status",
+    "/api/kinect/preview", "/api/vision/field", "/healthz",
     # потоки кадров камер по id: «/api/camera/» — префикс
     "/api/camera/",
 )
@@ -2816,7 +2817,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     # статика (robot.css, robot.js, карта лидара и панель настроек лидара)
     for filename in ("steer_dial.js", "steer_dial.css", "calibration.css", "wheel_settings.js", "pot_mode.js",
                      "wheel_angle.js", "pot_hold.js", "devices.css", "devices.js", "sensors.css", "sensors.js", "robot.css", "robot.js", "pc_chip.js", "full_zero.js", "keyboard.js", "brake_recovery.js", "battery.js", "receipt.js", "receipt.css", "lidar_settings.css",
-                     "lidar_settings.js", "lidar_view.js", "kinect_view.js", "robot_model.js", "wheel_ports.js", "map_view.js",
+                     "lidar_settings.js", "lidar_view.js", "kinect_view.js", "vision_panel.js", "vision_panel.css", "robot_model.js", "wheel_ports.js", "map_view.js",
                      "explore.js", "scan_mode.js", "scan.css", "navigation_screen.js", "navigation.css",
                      "delivery.js", "delivery.css", "delivery_reference.png", "map.css", "viewport.js", "camera_view.js", "camera_stitch.js", "camera_frames.js", "slam_auth.js",
                      "autonomy.js", "autonomy.css",

@@ -132,30 +132,61 @@
   }
 
   // ---------------------------------- лидар ----------------------------------
+  function formatRange(meters) {
+    return meters < 1 ? meters.toFixed(2) : (meters < 10 ? meters.toFixed(1) : String(Math.round(meters)));
+  }
+
+  function initLidarView() {
+    const canvas = $('mon-lidar-canvas');
+    if (!canvas || !window.RCLidarView || typeof window.RCLidarView.attach !== 'function') return;
+    window.RCLidarView.attach(canvas);
+    if (typeof canvas.addEventListener === 'function') {
+      canvas.addEventListener('rc-lidar-view', (event) => {
+        const radius = event && event.detail && event.detail.radius;
+        setText($('mon-lidar-range'), Number.isFinite(+radius) ? formatRange(+radius) + ' м' : '10 м');
+      });
+    }
+  }
+
   function renderLidar(data) {
     const points = Array.isArray(data.lidarPoints) ? data.lidarPoints : null;
     const scan = points || [];
+    const status = data.lidarStatus || {};
+    if (window.RCKinectView && typeof window.RCKinectView.setLidarScan === 'function') {
+      window.RCKinectView.setLidarScan(scan, status);
+    }
+    if (window.RCKinectView && typeof window.RCKinectView.active === 'function' && window.RCKinectView.active()) {
+      return;
+    }
     const canvas = $('mon-lidar-canvas');
     const empty = $('mon-lidar-empty');
-    const status = data.lidarStatus || {};
-    setText($('mon-lidar-count'), scan.length ? String(scan.length) : '—');
+    const fresh = !!status.connected && scan.length > 0;
+    setText($('mon-lidar-count'), fresh ? String(scan.length) : '—');
 
     let near = null;
-    scan.forEach((p) => {
-      const r = +p.r;
-      if (Number.isFinite(r) && r >= 0.05 && (near === null || r < near)) near = r;
-    });
+    if (fresh) {
+      scan.forEach((p) => {
+        const r = +p.r;
+        if (Number.isFinite(r) && r >= 0.05 && (near === null || r < near)) near = r;
+      });
+    }
     setText($('mon-lidar-near'), near === null ? '—' : near.toFixed(2) + ' м');
 
-    const fresh = !!status.connected && scan.length > 0;
     setText($('mon-lidar-meta'), fresh
-      ? 'сканирование · ' + (status.source || 'лидар')
+      ? 'сканирование · ' + scan.length + ' точек · ' + (status.source || 'лидар')
       : (status.reason || 'скана лидара нет'));
     if (empty) {
       empty.hidden = fresh;
       empty.textContent = fresh ? '' : (status.reason || 'скана лидара нет');
     }
     if (!canvas) return;
+    if (window.RCLidarView && typeof window.RCLidarView.render === 'function') {
+      window.RCLidarView.render(canvas, fresh ? scan : [], {
+        stamp: status.scan_at != null ? status.scan_at : null,
+        lidarOffsetM: status.lidar_offset_m != null ? status.lidar_offset_m : null,
+      });
+      return;
+    }
     drawLidar(canvas, scan, fresh);
   }
 
@@ -363,8 +394,20 @@
     });
   }
 
+  function isSensorFullscreen() {
+    return !!(window.RCKinectView && typeof window.RCKinectView.isFullscreen === 'function' &&
+      window.RCKinectView.isFullscreen());
+  }
+
   document.addEventListener('keydown', (event) => {
     if (event.ctrlKey || event.altKey || event.metaKey) return;
+    if (isSensorFullscreen()) return;
+    const target = event.target;
+    if (target && target.id === 'kinect-3d-canvas' &&
+        (event.key === 'ArrowLeft' || event.key === 'ArrowRight' ||
+         event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      return;
+    }
     if (/^[0-9]$/.test(event.key)) { addDigit(event.key); event.preventDefault(); }
     else if (event.key === 'Backspace') { eraseDigit(); event.preventDefault(); }
     else if (event.key === 'Enter') { openCase(); event.preventDefault(); }
@@ -387,26 +430,50 @@
   }
 
   // -------------------------------- опрос состояния --------------------------
+  function currentLidarPayload() {
+    const data = lastState || {};
+    return {
+      lidarPoints: Array.isArray(data.lidar) ? data.lidar.map((p) => ({a: p.a, r: p.r})) : null,
+      lidarStatus: data.lidarStatus || {},
+    };
+  }
+
   async function pollState() {
     try {
       const { response, body } = await getJson('api/kiosk_state');
       if (!response.ok || !body.ok) throw new Error((body && body.error) || 'state');
       const data = body.data || {};
       lastState = data;
+      if (window.RCRobotModel && typeof window.RCRobotModel.update === 'function') {
+        window.RCRobotModel.update(data);
+      }
       const speed = Number.isFinite(data.wheelSpeedMps) ? data.wheelSpeedMps : data.speedMps;
       setText($('mon-speed'), num(speed, 2) + ' м/с');
       renderChassis(data);
-      renderLidar({
-        lidarPoints: data.lidar ? data.lidar.map((p) => ({a: p.a, r: p.r})) : null,
-        lidarStatus: data.lidarStatus || {},
-      });
+      renderLidar(currentLidarPayload());
       setText($('mon-source'), 'источник: ' + (data.source || '—'));
       link('ok', '● связь с бортом');
     } catch (error) {
       link('warn', '○ нет связи');
+      if (window.RCKinectView && typeof window.RCKinectView.setLidarScan === 'function') {
+        window.RCKinectView.setLidarScan([], {connected: false, age_s: null});
+      }
       setText($('mon-lidar-meta'), 'нет связи с бортовым сервером');
       setText($('mon-speed'), '— м/с');
     }
+  }
+
+  async function pollVisionField() {
+    if (!window.RCKinectView || typeof window.RCKinectView.mode !== 'function' ||
+        window.RCKinectView.mode() !== 'combined') {
+      return;
+    }
+    try {
+      const { response, body } = await getJson('api/vision/field');
+      if (response.ok && body && body.ok && typeof window.RCKinectView.setVisionMarkers === 'function') {
+        window.RCKinectView.setVisionMarkers(body.field);
+      }
+    } catch (error) { /* знаки в 3D необязательны */ }
   }
 
   async function pollCase() {
@@ -429,6 +496,7 @@
     } catch (error) { /* журнал не критичен для экрана */ }
   }
 
+  initLidarView();
   renderDots();
   renderCase({});
   pollBattery();
@@ -438,10 +506,16 @@
   setInterval(pollState, POLL_MS);
   setInterval(pollCase, 2500);
   setInterval(pollLog, LOG_MS);
-  window.addEventListener('resize', () => {
+  if (window.RCKinectView) setInterval(pollVisionField, 1000);
+  const redrawLidar = () => {
     const canvas = $('mon-lidar-canvas');
-    if (canvas && lastState) renderLidar({
-      lidarPoints: lastState.lidar, lidarStatus: lastState.lidarStatus || {},
-    });
+    if (canvas) renderLidar(currentLidarPayload());
+  };
+  window.addEventListener('resize', redrawLidar);
+  window.addEventListener('rc-sensor-layout', () => {
+    redrawLidar();
+    if (window.RCKinectView && window.RCKinectView.mode && window.RCKinectView.mode() === 'combined') {
+      void pollVisionField();
+    }
   });
 })();

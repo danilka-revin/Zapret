@@ -238,6 +238,7 @@
   let kinectMount = {z_m: 0.45, yaw_deg: 0, pitch_deg: 0};
   let kinectSpec = {hfov_deg: 57, vfov_deg: 43, min_range_m: 0.45, max_range_m: 4.0};
   let showKinectFov = true;
+  let fullscreen = false;
   let running = false, generation = 0, lastFrameId = null, lastDeadline = 0;
   let timer = null;
   const pointers = new Map();
@@ -567,6 +568,111 @@
       if (signLayer.length) drawSignLayer(true);
     }
   }
+  const MODE_FULLSCREEN_TITLES = {
+    lidar: 'Развернуть лидар на полный экран (Esc — свернуть)',
+    kinect: 'Развернуть Kinect 3D на полный экран (Esc — свернуть)',
+    combined: 'Развернуть общий 3D-вид на полный экран (Esc — свернуть)',
+  };
+  function previewUrl() {
+    try {
+      const search = root.location && root.location.search;
+      if (search && typeof URLSearchParams === 'function') {
+        const token = new URLSearchParams(search).get('m');
+        if (token) return '/api/kinect/preview?m=' + encodeURIComponent(token);
+      }
+    } catch (_) { /* тестовое окружение без location */ }
+    return '/api/kinect/preview';
+  }
+  function sensorPanel() {
+    const explicit = $('sensor-overview-panel');
+    if (explicit) return explicit;
+    if (root.document && typeof root.document.querySelector === 'function') {
+      return root.document.querySelector('[data-sensor-panel]');
+    }
+    return null;
+  }
+  function fullscreenButtons() {
+    if (root.document && typeof root.document.querySelectorAll === 'function') {
+      return Array.from(root.document.querySelectorAll('[data-sensor-fullscreen]'));
+    }
+    return ['sensor-fullscreen-toggle', 'lidar-fullscreen-btn', 'kinect-fullscreen-btn']
+      .map($).filter(Boolean);
+  }
+  function syncFullscreenButtons() {
+    const title = fullscreen
+      ? 'Свернуть с полного экрана (Esc)'
+      : (MODE_FULLSCREEN_TITLES[mode] || 'Развернуть на полный экран (Esc — свернуть)');
+    fullscreenButtons().forEach((button) => {
+      button.setAttribute('aria-pressed', String(fullscreen));
+      button.setAttribute('aria-label', title);
+      button.title = title;
+      if (button.classList && typeof button.classList.toggle === 'function') {
+        button.classList.toggle('is-active', fullscreen);
+      }
+      const label = typeof button.querySelector === 'function'
+        ? button.querySelector('.sensor-fs-label') : null;
+      if (label) label.textContent = fullscreen ? 'Свернуть' : 'На полный экран';
+    });
+  }
+  function emitSensorEvent(name, detail) {
+    if (typeof root.dispatchEvent !== 'function' || typeof root.CustomEvent !== 'function') return;
+    try { root.dispatchEvent(new root.CustomEvent(name, {detail})); } catch (_) {}
+  }
+  function redrawActiveView() {
+    if (mode === 'lidar') {
+      if (root.RCLidarView && typeof root.RCLidarView.redrawAll === 'function') {
+        root.RCLidarView.redrawAll();
+      }
+    } else {
+      draw();
+    }
+    emitSensorEvent('rc-sensor-layout', {mode, fullscreen});
+  }
+  function scheduleRedraw() {
+    redrawActiveView();
+    if (typeof root.requestAnimationFrame === 'function') {
+      root.requestAnimationFrame(() => redrawActiveView());
+    }
+  }
+  function focusActiveCanvas() {
+    if (!fullscreen || mode === 'lidar') return;
+    const canvas = $('kinect-3d-canvas');
+    if (canvas && typeof canvas.focus === 'function') {
+      try { canvas.focus({preventScroll: true}); } catch (_) {}
+    }
+  }
+  function setFullscreen(enabled) {
+    const panel = sensorPanel();
+    if (!panel) return false;
+    fullscreen = !!enabled;
+    if (panel.classList && typeof panel.classList.toggle === 'function') {
+      panel.classList.toggle('is-fullscreen', fullscreen);
+    }
+    panel.setAttribute('data-fullscreen', fullscreen ? '1' : '0');
+    const body = root.document && root.document.body;
+    if (body && body.classList && typeof body.classList.toggle === 'function') {
+      body.classList.toggle('sensor-fullscreen', fullscreen);
+    }
+    pointers.clear();
+    syncFullscreenButtons();
+    scheduleRedraw();
+    focusActiveCanvas();
+    emitSensorEvent('rc-sensor-fullscreen', {fullscreen, mode});
+    return fullscreen;
+  }
+  function toggleFullscreen(targetMode) {
+    if (targetMode && ['lidar', 'kinect', 'combined'].includes(targetMode) && targetMode !== mode) {
+      setMode(targetMode);
+      return setFullscreen(true);
+    }
+    return setFullscreen(!fullscreen);
+  }
+  function hasBlockingModal() {
+    return ['rc-lidar-overlay', 'rc-stop-overlay', 'full-zero-modal'].some((id) => {
+      const el = $(id);
+      return !!(el && el.hidden === false);
+    });
+  }
   function expire(message) {
     kinectPoints = []; deadline = 0;
     if (mode !== 'combined') setMessage(message);
@@ -579,7 +685,9 @@
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2500);
     try {
-      const response = await fetch('/api/kinect/preview', {cache: 'no-store', signal: controller.signal});
+      const response = await fetch(previewUrl(), {
+        cache: 'no-store', credentials: 'same-origin', signal: controller.signal,
+      });
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const data = await response.json();
       if (mode === 'lidar' || generation !== current) return;
@@ -672,22 +780,48 @@
     if (lidarButton) lidarButton.setAttribute('aria-pressed', String(mode === 'lidar'));
     if (kinectButton) kinectButton.setAttribute('aria-pressed', String(mode === 'kinect'));
     if (combinedButton) combinedButton.setAttribute('aria-pressed', String(mode === 'combined'));
-    const lidarView = $('sensor-lidar-view'), kinectView = $('sensor-kinect-view'), lidarMeta = $('lidar-meta');
+    const lidarView = $('sensor-lidar-view'), kinectView = $('sensor-kinect-view');
+    const lidarMeta = $('lidar-meta') || $('mon-lidar-meta');
     if (lidarView) lidarView.hidden = active;
     if (kinectView) kinectView.hidden = !active;
     if (lidarMeta) lidarMeta.hidden = active;
     const note = $('kinect-3d-mode-note');
     if (note && mode !== 'combined') note.textContent = 'Один кадр · не для навигации';
     pointers.clear();
+    syncFullscreenButtons();
     if (active) {
       expire(mode === 'combined' ? 'Ожидание свежего скана и кадра' : 'Ожидание кадра Kinect');
-      lastFrameId = null; lastDeadline = 0; void poll();
+      lastFrameId = null; lastDeadline = 0;
+      scheduleRedraw();
+      focusActiveCanvas();
+      void poll();
     } else {
       kinectPoints = []; deadline = 0; draw();
+      scheduleRedraw();
     }
+  }
+  function bindFullscreen() {
+    fullscreenButtons().forEach((button) => {
+      ['touchstart', 'mousedown', 'pointerdown'].forEach((name) => {
+        button.addEventListener(name, (e) => { if (e && e.stopPropagation) e.stopPropagation(); });
+      });
+      button.addEventListener('click', (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        toggleFullscreen();
+      });
+    });
+    syncFullscreenButtons();
+    root.document.addEventListener('keydown', (e) => {
+      if (!fullscreen || !e || e.key !== 'Escape' || hasBlockingModal()) return;
+      if (e.preventDefault) e.preventDefault();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+      else if (e.stopPropagation) e.stopPropagation();
+      setFullscreen(false);
+    }, true);
   }
   function bind() {
     bindVision();
+    bindFullscreen();
     const canvas = $('kinect-3d-canvas');
     if (!canvas) return;
     const lidarButton = $('sensor-lidar'), kinectButton = $('sensor-kinect'), combinedButton = $('sensor-combined');
@@ -704,6 +838,9 @@
     if (zoomIn) zoomIn.addEventListener('click', () => { zoom = clamp(zoom * 1.25, .4, 5); draw(); });
     if (zoomOut) zoomOut.addEventListener('click', () => { zoom = clamp(zoom / 1.25, .4, 5); draw(); });
     if (reset) reset.addEventListener('click', () => { yaw = .25; pitch = -.15; zoom = 1; draw(); });
+    ['touchstart', 'mousedown'].forEach((name) => {
+      canvas.addEventListener(name, (e) => { if (e && e.stopPropagation) e.stopPropagation(); });
+    });
     canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom = clamp(zoom * Math.exp(-e.deltaY * .001), .4, 5); draw(); }, {passive: false});
     canvas.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowLeft') yaw -= .15;
@@ -736,7 +873,10 @@
     canvas.addEventListener('pointerup', release);
     canvas.addEventListener('pointercancel', release);
     canvas.addEventListener('lostpointercapture', release);
-    root.addEventListener('resize', draw);
+    root.addEventListener('resize', () => {
+      if (fullscreen && mode === 'lidar') scheduleRedraw();
+      else draw();
+    });
     root.document.addEventListener('visibilitychange', () => {
       if (root.document.hidden) { generation++; expire('Просмотр приостановлен'); }
       else if (mode !== 'lidar') void poll();
@@ -750,6 +890,7 @@
   }
   root.RCKinectView = {active: () => mode !== 'lidar', mode: () => mode, setMode, draw,
     setKinectFov, kinectFov: () => showKinectFov,
+    isFullscreen: () => fullscreen, setFullscreen, toggleFullscreen,
     setLidarScan, setVisionMarkers};
   if (root.document.readyState === 'loading') root.document.addEventListener('DOMContentLoaded', bind);
   else bind();
