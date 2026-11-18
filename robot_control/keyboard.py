@@ -54,12 +54,15 @@ class KeyboardControl:
     LIVE_STEER_TTL = 6.0
 
     def __init__(self, source, drive, steer, estop, clock=time.monotonic,
-                 max_percent: int | None = None):
+                 max_percent: int | None = None, guard=None):
         self._source = source
         self._drive = drive
         self._steer = steer
         self._estop = estop
         self._clock = clock
+        #: Ограничения по знакам и светофору (``robot_control.drive_guard``).
+        #: ``None`` — ограничений нет (стенд, тесты, плата без камер).
+        self._guard = guard
         self.max_percent = env_max_percent() if max_percent is None else max(0, min(100, int(max_percent)))
         self._lock = threading.RLock()
         # STOP must be advertised without waiting for the motion gate or the
@@ -194,6 +197,20 @@ class KeyboardControl:
         with self._stop_lock:
             return self._preempted_locked(body)
 
+    def _guard_stop(self, reason, body=None):
+        """Отказ по ограничению: тяга снята, но сессия управления жива.
+
+        Красный светофор не должен выбрасывать оператора из WASD: он ждёт
+        зелёный в той же сессии, а допуск на тягу уже погашен. Если тормоз не
+        подтвердился, сессия всё равно закрывается — безопасность важнее.
+        """
+        if self.is_preempted(body):
+            return {"ok": False, "reason": "stale_command"}, 409
+        result, status = self._stop_motion(self._clock())
+        if not result.get("ok"):
+            return {"ok": False, "reason": reason}, 409
+        return {"ok": False, "reason": reason, "retryable": True}, 409
+
     def _fail(self, reason, status=409, *, body=None):
         if self.is_preempted(body):
             return {"ok": False, "reason": "stale_command"}, 409
@@ -254,6 +271,44 @@ class KeyboardControl:
         if angles != self._spin_geometry["angles"]:
             return "invalid_angle"
         return None
+
+    def guard_state(self):
+        """Текущее ограничение: блокировка по красному и потолок тяги.
+
+        Отдельный метод, потому что ограничение нужно и экрану, и каждой
+        команде тяги. Ошибка в ограничителе не должна разрешать движение:
+        непрочитанное состояние считается блокировкой.
+        """
+        guard = self._guard
+        if guard is None:
+            return {"blocked": False, "speedCapPercent": 100, "bump": False,
+                    "reason": "ограничения по знакам не подключены"}
+        try:
+            state = guard.snapshot()
+        except Exception as exc:  # noqa: BLE001 — сломанный ограничитель = стоим
+            return {"blocked": True, "speedCapPercent": 0, "bump": False,
+                    "reason": "ошибка ограничителя: %s" % (exc or type(exc).__name__)}
+        if not isinstance(state, dict):
+            return {"blocked": True, "speedCapPercent": 0, "bump": False,
+                    "reason": "ограничитель не отдал состояние"}
+        return state
+
+    def _guard_error(self):
+        """Причина отказа до выдачи разрешения на тягу или ``None``."""
+        state = self.guard_state()
+        if state.get("blocked"):
+            return "red_light_block"
+        return None
+
+    def _cap_percent(self, percent):
+        """Потолок тяги с учётом знака «неровность»; знак сохраняем."""
+        state = self.guard_state()
+        cap = state.get("speedCapPercent")
+        if type(cap) is not int or not 0 <= cap <= 100:
+            return percent
+        if abs(percent) <= cap:
+            return percent
+        return cap if percent > 0 else -cap
 
     def _snapshot(self):
         try:
@@ -387,6 +442,15 @@ class KeyboardControl:
             return self._fail("speed_limit", 400, body=body)
         if percent == 0:
             return self._stop_motion(now)
+        # Красный светофор блокирует любую тягу, включая уже начатую: тяга
+        # снимается здесь же, до отправки команды платам. Снижение скорости у
+        # «кочки» — потолок процентов, а не новая команда.
+        blocked = self._guard_error()
+        if blocked:
+            return self._guard_stop(blocked, body=body)
+        percent = self._cap_percent(percent)
+        if percent == 0:
+            return self._stop_motion(now)
         if pattern == "spin":
             error = self._spin_error(angles)
             if error:
@@ -487,8 +551,12 @@ class KeyboardControl:
                     spin = {**spin, "angles": dict(spin["angles"])}
                 # ``maxPercent`` — предел тяги WASD с борта: браузер ставит по
                 # нему максимум ползунка, а не угадывает его в разметке.
+                # ``guard`` — блокировка по красному и потолок тяги: экран
+                # показывает причину сразу, а не после первой стрелки. Само
+                # открытие управления разрешено: руль и остановка работают.
                 return {"ok": True, "session": self._token, "brakeId": self._brake_id,
-                        "spin": spin, "maxPercent": self.max_percent}, 200
+                        "spin": spin, "maxPercent": self.max_percent,
+                        "guard": self.guard_state()}, 200
 
             if action not in {"stop", "end", "ping", "steer", "steer_all", "arm", "drive", "live"}:
                 return {"ok": False, "reason": "invalid_action"}, 400
@@ -612,6 +680,11 @@ class KeyboardControl:
                     return {"ok": False, "reason": error, "retryable": True}, 409
                 if error:
                     return self._fail(error, body=body)
+                blocked = self._guard_error()
+                if blocked:
+                    # Допуск на тягу при красном не выдаётся: иначе браузер
+                    # получил бы разрешение, которое борт тут же отклонит.
+                    return self._guard_stop(blocked, body=body)
                 if self.is_preempted(body):
                     return {"ok": False, "reason": "stale_command"}, 409
                 nonce = secrets.token_urlsafe(18)
@@ -632,6 +705,12 @@ class KeyboardControl:
                 return self._fail("speed_limit", 400, body=body)
             if not all(self._number(angles[m]) and abs(angles[m]) <= 100 for m in MODULES):
                 return self._fail("invalid_angle", 400, body=body)
+            if percent == 0:
+                return self._stop_motion(now)
+            blocked = self._guard_error()
+            if blocked:
+                return self._guard_stop(blocked, body=body)
+            percent = self._cap_percent(percent)
             if percent == 0:
                 return self._stop_motion(now)
             direction = 1 if percent > 0 else -1

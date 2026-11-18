@@ -237,3 +237,56 @@ def test_api_routes(tmp_path):
     assert changed.status_code == 200
     assert changed.get_json()["intervalS"] == 0.25
     assert client.post("/api/vision/config", json={"enabled": "да"}).status_code == 400
+
+
+@needs_cv2
+def test_service_feeds_guard_from_raw_frames_per_camera():
+    """Красный блокирует только после двух кадров подряд с одной камеры."""
+    config = VisionConfig(enabled=True, model_path=Path("/definitely-missing.pt"),
+                          traffic_stale_s=5.0)
+    service = VisionService(config=config, camera_provider=lambda: None,
+                            layout_provider=lambda: [{
+                                "id": cid, "role": "front_left", "x_m": 0.3, "y_m": 0.25,
+                                "yaw_deg": -25.0, "hfov_deg": 82.0} for cid in range(4)])
+    service.initialize()
+    detector = _FakeDetector()
+    service._detector = detector
+    frame = np.full((360, 640, 3), (30, 30, 30), dtype=np.uint8)
+    ok, jpeg = cv2.imencode(".jpg", frame)
+    assert ok
+    payload = jpeg.tobytes()
+
+    detector.signal = "red"
+    service.process_frame(0, payload)
+    state = service.state()
+    assert state["guard"]["blocked"] is False, "один кадр красного не блокирует"
+    # Кадр другой камеры не подтверждает красный первой.
+    service.process_frame(1, payload)
+    assert service.state()["guard"]["blocked"] is False
+    # Второй кадр той же камеры — блокировка, и она видна рядом со светофором.
+    service.process_frame(0, payload)
+    state = service.state()
+    assert state["guard"] == state["trafficLight"]["guard"]
+    assert state["guard"]["blocked"] is True and state["guard"]["controlsMotors"] is not True
+    assert state["guard"]["blockedCamera"] == 0
+
+    # Зелёный не снимает блокировку одним кадром.
+    detector.signal = "green"
+    service.process_frame(0, payload)
+    assert service.state()["guard"]["blocked"] is True
+    service.process_frame(0, payload)
+    assert service.state()["guard"]["blocked"] is False
+
+    # Запоздавший кадр (старее уже учтённого) не считается подтверждением:
+    # «два кадра подряд» — это два свежих кадра, а не повтор старого.
+    detector.signal = "red"
+    service.process_frame(0, payload)
+    stale = service._cameras[0].evidence_stamp - 5.0
+    service.process_frame(0, payload, stamp=stale)
+    assert service.state()["guard"]["blocked"] is False
+    service.process_frame(0, payload)
+    assert service.state()["guard"]["blocked"] is True
+
+    # Отключение сервиса снимает наблюдения: ограничивать движение нечем.
+    service.configure(enabled=False)
+    assert service.state()["guard"]["blocked"] is False

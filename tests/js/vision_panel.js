@@ -167,6 +167,23 @@ bootHandlers.forEach((handler) => handler());
   assert.equal(mapPayload.field.length, 0, 'offline does not preserve old field/advice events');
   ctx.fetch = () => Promise.resolve({ok: true, json: () => Promise.resolve(snapshot)});
 
+  // Ограничения движения видны на панели: красный держит тягу запертой,
+  // «неровность» снижает потолок. Цвет светофора при этом не подменяется.
+  snapshot.trafficLight = {state: 'red', label: 'Красный — стоим', cameraId: 0, action: 'stop',
+    counts: {red: 900}, guard: {blocked: true, blockedS: 3.5, bump: false, speedCapPercent: 100,
+      controlsMotors: false}};
+  await vision.refresh();
+  assert.match(elements['vision-signal'].textContent, /Красный — стоим · CAM 0/);
+  assert.match(elements['vision-signal'].textContent, /ТЯГА ЗАБЛОКИРОВАНА/);
+  assert.equal(elements['vision-signal'].dataset.state, 'red');
+  snapshot.trafficLight.guard = {blocked: false, bump: true, speedCapPercent: 80, slowdown: 0.2,
+    controlsMotors: false};
+  await vision.refresh();
+  assert.match(elements['vision-signal'].textContent, /НЕРОВНОСТЬ: потолок 80 %/);
+  snapshot.trafficLight.guard = {blocked: false, bump: false, speedCapPercent: 100};
+  await vision.refresh();
+  assert.doesNotMatch(elements['vision-signal'].textContent, /НЕРОВНОСТЬ|ТЯГА/);
+
   // Выключенный сервис не подменяет кадры: панель остаётся, но рамок нет.
   snapshot.ok = false;
   await vision.refresh();

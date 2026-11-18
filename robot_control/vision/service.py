@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ..drive_guard import DriveGuard, GuardConfig
 from ..opencv_runtime import REPAIR_COMMAND
 from .classes import CLASS_INFO, CLASS_NAMES, TRAFFIC_LIGHT_LABELS
 from .detector import (OPENCV_ERROR, Detection, EnsembleDetector, HeuristicDetector, YoloDetector,
@@ -84,6 +85,8 @@ class VisionConfig:
     traffic_mode: str = "legacy"  # verified is explicit bench opt-in, never a new default
     heuristic_enabled: bool = True  # False reproduces the YOLO-only bench profile, no fallback
     closed_course_unknown_timeout: bool = False  # advisory only, NEVER implicit motor permission
+    #: Ограничения движения по знакам (красный → блокировка, кочка → −20 %).
+    #: Решение принимается на борту, экран только показывает его оператору.
 
     @classmethod
     def from_env(cls) -> "VisionConfig":
@@ -158,7 +161,11 @@ class VisionService:
                                             prefer_red=self.config.prefer_red)
         self._closed_course = ClosedCourseWaitPolicy(
             enabled=self.config.closed_course_unknown_timeout, stale_s=self.config.traffic_stale_s)
+        # Пустое окружение → значения по умолчанию; RC_GUARD_ENABLED=0 в .env
+        # выключает и блокировку, и снижение скорости.
+        self._guard = DriveGuard(GuardConfig.from_env())
         self._stamps: dict[int, float] = {}
+        self._guard_stamps: dict[int, float] = {}
         self._field: list[dict[str, Any]] = []
         self._frames = 0
         self._last_latency_ms = 0.0
@@ -377,6 +384,34 @@ class VisionService:
         return image
 
     # ------------------------------------------------------- светофор и поле
+    @property
+    def guard(self) -> DriveGuard:
+        """Ограничения движения по знакам: блокировка по красному и «кочка»."""
+        return self._guard
+
+    def _update_guard(self, now: float) -> None:
+        """Покормить ограничения наблюдениями по каждому свежему кадру.
+
+        Серии подтверждений считаются по камерам отдельно, поэтому «два кадра
+        подряд» — это два кадра одной камеры, а не любые два кадра с четырёх.
+        Кадр без светофора тоже наблюдение: он обрывает серию красного (но не
+        снимает уже подтверждённую блокировку).
+        """
+        for cam_id in range(4):
+            state = self._cameras[cam_id]
+            if not state.evidence_stamp or state.error:
+                continue
+            if state.evidence_stamp <= self._guard_stamps.get(cam_id, 0.0):
+                continue  # этот кадр уже учтён
+            self._guard_stamps[cam_id] = state.evidence_stamp
+            signal = "unknown"
+            for det in state.detections:
+                if det.cls == "traffic_light" and det.color in ("red", "yellow", "green"):
+                    signal = det.color
+                    break
+            self._guard.observe(signal, camera_id=cam_id, now=now)
+            self._guard.observe_signs({det.cls for det in state.detections}, now=now)
+
     def _update_traffic(self, now: float) -> None:
         best: Optional[tuple[float, int, Detection]] = None
         totals = {name: 0 for name in ("red", "yellow", "green")}
@@ -405,6 +440,7 @@ class VisionService:
             self._traffic.update(det.color or "unknown", confidence, cam_id, stamp=now,
                                  evidence_stamp=self._cameras[cam_id].evidence_stamp or self._cameras[cam_id].stamp)
         self._update_closed_course(now)
+        self._update_guard(now)
 
     def _update_closed_course(self, now: float) -> None:
         if not self._closed_course.enabled:
@@ -517,6 +553,10 @@ class VisionService:
             if not self.config.enabled or self._detector is None:
                 self._closed_course.invalidate("unavailable")
             traffic["closedCourse"] = self._closed_course.snapshot()
+            # Ограничения движения видны там же, где цвет светофора: оператор
+            # должен понимать, почему тяга ограничена или заблокирована.
+            guard = self._guard.snapshot(now=now)
+            traffic["guard"] = guard
             # Отметки поля живут не дольше кадров, на которых они найдены:
             # иначе при потере камеры на карте останутся «призрачные» знаки.
             field = [dict(marker, ageS=round(max(0.0, now - self._cameras[marker["cameraId"]].stamp), 3))
@@ -535,6 +575,7 @@ class VisionService:
                 "cameras": cameras,
                 "counts": counts,
                 "trafficLight": traffic,
+                "guard": guard,
                 "trafficLightLabels": TRAFFIC_LIGHT_LABELS,
                 "field": field,
                 "classes": [{"name": name, **CLASS_INFO[name]} for name in CLASS_NAMES],
@@ -564,6 +605,7 @@ class VisionService:
                         state.detections = []
                     self._field = []
                     self._traffic.reset()
+                    self._guard.reset()
                     self._closed_course.invalidate("disabled")
             if confidence is not None:
                 self._closed_course.invalidate("configuration_changed")
@@ -588,7 +630,10 @@ class VisionService:
             self._stamps.clear()
             self._field = []
             self._frames = 0
+            self._stamps.clear()
+            self._guard_stamps.clear()
             self._traffic.reset()
+            self._guard.reset()
             self._closed_course.reset()
 
 

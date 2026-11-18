@@ -971,8 +971,12 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         landmarks=None,
     )
     app.extensions["rc_exploration"] = exploration
+    # Ограничения по знакам (блокировка по красному, −20 % у «кочки»).
+    # Решение принимает борт по наблюдениям сервиса распознавания: устаревшая
+    # вкладка или ручной запрос блокировку не обходят.
     keyboard = KeyboardControl(lambda: getattr(state, "source", None), dispatch_drive_command,
-                               dispatch_steering_command, estop_latch.latched)
+                               dispatch_steering_command, estop_latch.latched,
+                               guard=getattr(vision_service, "guard", None))
     app.extensions["rc_keyboard"] = keyboard
     # Режим «Скан»: сначала объезд и карта, потом поездки по ней. Управление
     # включается вручную и снимается кнопкой, Esc или молчанием страницы.
@@ -2041,6 +2045,10 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             # Автосигналы: стоп-сигнал, тревога у препятствия и её причина.
             "signals": (app.extensions["rc_drive_signals"].state()
                         if app.extensions.get("rc_drive_signals") is not None else None),
+            # Ограничения движения по знакам: красный светофор блокирует
+            # управление до зелёного, «кочка» снижает потолок тяги. Это решение
+            # борта; экран только показывает его рядом с ползунком WASD.
+            "driveGuard": keyboard.guard_state(),
         }})
 
     @app.get("/api/kiosk_wheel_state")
