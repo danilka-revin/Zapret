@@ -49,6 +49,7 @@ from .lidar_settings import apply_lidar_settings, settings_payload
 from .slam import build_state, create_blueprint, start_lidar
 from .stats import RobotStats, StatsSampler
 from .updater import UpdateManager, schedule_restart
+from .usb_update import SHA_RE as USB_SHA_RE
 
 log = logging.getLogger("robot_control")
 
@@ -161,6 +162,7 @@ def create_app(config: Config | None = None) -> Flask:
         PROJECT_ROOT,
         remote=os.environ.get("RC_UPDATE_REMOTE", "origin"),
         branch=os.environ.get("RC_UPDATE_BRANCH"),
+        usb_mount=os.environ.get("RC_USB_UPDATE_MOUNT"),
         on_restart=lambda: schedule_restart(PROJECT_ROOT),
     )
     app.extensions["rc_updater"] = updater
@@ -383,9 +385,12 @@ def create_app(config: Config | None = None) -> Flask:
     @app.get("/api/update/check")
     @login_required
     def api_update_check():
-        result = updater.check()
+        source = request.args.get("source", "github")
+        if source not in {"github", "usb"}:
+            return jsonify(ok=False, error="Неизвестный источник обновления."), 400
+        result = updater.check_usb() if source == "usb" else updater.check()
         result["csrfToken"] = csrf_signer.dumps("csrf")
-        return jsonify(result), 200 if result.get("ok") else 502
+        return jsonify(result), 200 if result.get("ok") else (422 if source == "usb" else 502)
 
     @app.get("/api/update/status")
     @login_required
@@ -402,8 +407,18 @@ def create_app(config: Config | None = None) -> Flask:
     def api_update_run():
         if not csrf_header_ok():
             return jsonify({"ok": False, "error": "Недействительный CSRF-токен."}), 400
-        if not updater.start():
-            return jsonify({"ok": False, "error": "Обновление уже выполняется.", **updater.get_status()}), 409
+        body = request.get_json() if request.is_json else {}
+        if not isinstance(body, dict) or body.get("source", "github") not in ("github", "usb"):
+            return jsonify(ok=False, error="Неизвестный источник обновления."), 400
+        if body.get("source") == "usb":
+            sha = body.get("expectedSha")
+            if not isinstance(sha, str) or not USB_SHA_RE.fullmatch(sha):
+                return jsonify(ok=False, error="Сначала проверьте версию на флешке."), 400
+            started = updater.start(usb_sha=sha)
+        else:
+            started = updater.start()
+        if not started:
+            return jsonify({**updater.get_status(), "ok": False, "error": "Обновление уже выполняется."}), 409
         return jsonify({"ok": True, "status": "busy"}), 202
 
     @app.get("/api/update/version")
@@ -690,4 +705,6 @@ def create_app(config: Config | None = None) -> Flask:
             500,
         )
 
+    if not config.testing and os.environ.get("RC_USB_UPDATE_AUTO") == "1":
+        updater.watch_usb()
     return app

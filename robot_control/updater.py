@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import signal
@@ -18,6 +19,10 @@ import time
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
+
+from . import estop, usb_update
+
+log = logging.getLogger(__name__)
 
 try:
     import fcntl
@@ -40,10 +45,13 @@ class UpdateManager:
         dependency_installer: Callable[[Path], tuple[int, str]] | None = None,
         build_runner: Callable[[Path], tuple[int, str]] | None = None,
         ros_builder: Callable[[Path], tuple[int, str]] | None = None,
+        usb_mount: str | None = None,
     ) -> None:
         self.root = Path(root).resolve()
         self.remote = remote.strip() or "origin"
         self.branch_override = (branch or "").strip()
+        self.usb_mount = Path(usb_mount) if usb_mount else None
+        self.usb_signers = self.root / usb_update.TRUST_FILE
         self.on_restart = on_restart
         self.dependency_installer = dependency_installer
         self.build_runner = build_runner
@@ -59,9 +67,12 @@ class UpdateManager:
     def _short(sha: str) -> str:
         return sha[:7] if sha else ""
 
-    def _command(self, args: list[str], *, timeout: float = 20) -> subprocess.CompletedProcess[str]:
+    def _command(self, args: list[str], *, timeout: float = 20,
+                 offline: bool = False) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
+        if offline:
+            env["GIT_ALLOW_PROTOCOL"] = "file"
         return subprocess.run(
             ["git", "-C", str(self.root), *args],
             stdin=subprocess.DEVNULL,
@@ -74,8 +85,8 @@ class UpdateManager:
         )
 
     def _require_clone(self) -> None:
-        result = self._command(["rev-parse", "--is-inside-work-tree"])
-        if result.returncode != 0 or result.stdout.strip() != "true":
+        result = self._command(["rev-parse", "--show-toplevel"])
+        if result.returncode != 0 or Path(result.stdout.strip()).resolve() != self.root:
             raise UpdateError("Автообновление доступно только в Git-клоне проекта.")
 
     def _branch(self) -> str:
@@ -125,17 +136,23 @@ class UpdateManager:
             raise UpdateError("Не удалось определить установленную версию.")
         return result.stdout.strip()
 
+    def _working_copy_dirty(self) -> bool:
+        status = self._command(["status", "--porcelain", "--untracked-files=all"])
+        if status.returncode != 0:
+            raise UpdateError("Не удалось проверить рабочую копию Git.")
+        return bool(status.stdout.strip())
+
+    def _require_clean_working_copy(self) -> None:
+        if self._working_copy_dirty():
+            raise UpdateError("Обновление остановлено: в рабочей копии есть изменения. Сначала сохраните их.")
+
     def check(self) -> dict:
         try:
-            self._require_clone()
             branch = self._branch()
             remote_url = self._remote_url()
             local = self.local_revision()
             latest = self._latest_sha(branch)
-            status = self._command(["status", "--porcelain", "--untracked-files=all"])
-            if status.returncode != 0:
-                raise UpdateError("Не удалось проверить рабочую копию Git.")
-            dirty = bool(status.stdout.strip())
+            dirty = self._working_copy_dirty()
             state = self.get_status()
             return {
                 "ok": True,
@@ -156,12 +173,97 @@ class UpdateManager:
         except (OSError, subprocess.TimeoutExpired, UpdateError) as exc:
             return {"ok": False, "error": str(exc)[:500]}
 
+    def _usb_branch(self) -> str:
+        branch = self._branch()
+        actual = self._command(["branch", "--show-current"])
+        if actual.returncode != 0 or actual.stdout.strip() != branch:
+            raise UpdateError(f"Для обновления с флешки на роботе должна быть открыта ветка «{branch}».")
+        return branch
+
+    @staticmethod
+    def _usb_stop_ready() -> bool:
+        latch = estop.latched()
+        return latch is not None and not latch.get("corrupt")
+
+    def _usb_package(self) -> Path:
+        path = usb_update.find_package(self.usb_mount)
+        if path is None:
+            raise UpdateError(f"Вставьте флешку с файлом {usb_update.PACKAGE_NAME} в корне и нажмите «Проверить».")
+        return path
+
+    def _check_usb_manifest(self, manifest: usb_update.UsbManifest, branch: str) -> None:
+        if manifest.branch != branch:
+            raise UpdateError(f"Файл на флешке для ветки «{manifest.branch}», а робот использует «{branch}».")
+
+    def check_usb(self, path: Path | None = None) -> dict:
+        """Show the signed offer; the payload itself is checked again at install time."""
+        try:
+            state = self.get_status()
+            if state["status"] == "busy":
+                return {"ok": True, "busy": True, "repo": state["repo"], "branch": state["branch"],
+                        "local": state["from"], "latest": state["to"], "mode": "usb"}
+            local = self.local_revision()
+            branch = self._usb_branch()
+            with usb_update.verified_package(path or self._usb_package(), self.usb_signers) as (_, manifest):
+                self._check_usb_manifest(manifest, branch)
+            latest = manifest.revision
+            current_or_older = local == latest or self._command(
+                ["merge-base", "--is-ancestor", latest, local]
+            ).returncode == 0
+            dirty = self._working_copy_dirty()
+            needs_stop = not self._usb_stop_ready()
+            return {
+                "ok": True, "repo": usb_update.REPOSITORY, "branch": branch, "mode": "usb", "busy": False,
+                "local": self._short(local), "localSha": local, "latest": self._short(latest), "latestSha": latest,
+                "updateAvailable": not current_or_older, "dirty": dirty, "needsEstop": needs_stop,
+                "canUpdate": not (current_or_older or dirty or needs_stop),
+                "latestMsg": "Версия на флешке не новее установленной.",
+            }
+        except (OSError, subprocess.TimeoutExpired, ValueError, UpdateError) as exc:
+            return {"ok": False, "error": str(exc)[:500]}
+
+    def _poll_usb(self, seen: tuple | None) -> tuple | None:
+        if not self.usb_signers.is_file():
+            return None
+        path = usb_update.find_package(self.usb_mount)
+        if path is None:
+            return None
+        info = path.lstat()
+        token = (path, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        if token == seen or not self._usb_stop_ready():
+            return seen
+        offer = self.check_usb(path)
+        if offer.get("busy") or offer.get("needsEstop"):
+            return seen
+        if not offer["ok"] or offer.get("dirty"):
+            log.warning("Обновление USB пропущено: %s", offer.get("error") or "рабочая копия изменена")
+        if offer.get("canUpdate") and not self.start(usb_sha=offer["latestSha"]):
+            return seen  # Retry only if the online updater held the lock.
+        return token  # One attempt per connected file; unplug or replace it to retry.
+
+    def watch_usb(self) -> None:
+        def poll() -> None:
+            seen = None
+            last_error = ""
+            while True:
+                try:
+                    seen = self._poll_usb(seen)
+                    last_error = ""
+                except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+                    if last_error != str(exc):
+                        log.warning("Проверка USB: %s", exc)
+                        last_error = str(exc)
+                time.sleep(3)
+
+        threading.Thread(target=poll, daemon=True, name="robot-usb-update").start()
+
     def _default_state(self) -> dict:
         return {
             "status": "idle",
             "phase": "",
             "stage": "",
             "pct": 0,
+            "source": "",
             "from": "",
             "to": "",
             "fromSha": "",
@@ -208,8 +310,9 @@ class UpdateManager:
     def _write_state(self, patch: dict, *, log: str | None = None) -> dict:
         with self._state_lock:
             state = self._read_state_file()
+            rev = int(state.get("rev", 0)) + 1
             state.update(patch)
-            state["rev"] = int(state.get("rev", 0)) + 1
+            state["rev"] = rev
             state["updated"] = time.time()
             if log:
                 lines = list(state.get("output") or [])
@@ -233,6 +336,10 @@ class UpdateManager:
     def get_status(self) -> dict:
         state = self._read_state_file()
         if state.get("status") == "busy" and not self._lock_is_held():
+            # The worker may have finished between reading the state and testing the lock.
+            state = self._read_state_file()
+            if state.get("status") != "busy" or self._lock_is_held():
+                return state
             state = self._write_state({
                 "status": "error",
                 "phase": "Обновление прервалось до завершения.",
@@ -252,7 +359,7 @@ class UpdateManager:
                 return state
             time.sleep(0.2)
 
-    def start(self) -> bool:
+    def start(self, *, usb_sha: str | None = None) -> bool:
         if not self._thread_lock.acquire(blocking=False):
             return False
         lock_file = None
@@ -271,7 +378,13 @@ class UpdateManager:
                     lock_file.close()
                     self._thread_lock.release()
                     return False
-            thread = threading.Thread(target=self._run_update, args=(lock_file,), daemon=True, name="robot-control-update")
+            self._write_state({
+                **self._default_state(), "status": "busy", "phase": "Проверяю версию…",
+                "stage": "check", "pct": 8, "started": time.time(),
+                "source": "usb" if usb_sha is not None else "github",
+            })
+            thread = threading.Thread(target=self._run_update, args=(lock_file, usb_sha),
+                                      daemon=True, name="robot-control-update")
             self._thread = thread
             thread.start()
             return True
@@ -288,14 +401,15 @@ class UpdateManager:
     def _set(self, *, phase: str, stage: str, pct: int, **patch) -> dict:
         return self._write_state({"phase": phase, "stage": stage, "pct": max(0, min(100, int(pct))), **patch})
 
-    def _install_dependencies(self) -> tuple[int, str]:
+    def _install_dependencies(self, *, offline: bool = False) -> tuple[int, str]:
         if self.dependency_installer:
             return self.dependency_installer(self.root)
         script = self.root / "scripts" / "ensure_deps.sh"
         if not script.is_file():
             return 0, "Скрипт установки зависимостей не найден — шаг пропущен."
         result = subprocess.run(["bash", str(script)], cwd=self.root, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, timeout=900, check=False)
+                                stderr=subprocess.STDOUT, text=True, timeout=900, check=False,
+                                env={**os.environ, "RC_DEPS_OFFLINE": "1"} if offline else None)
         return result.returncode, result.stdout[-6000:]
 
     def _build_check(self) -> tuple[int, str]:
@@ -361,70 +475,82 @@ class UpdateManager:
             return 124, "сборка ros2_ws не уложилась в 30 минут — продолжится при следующем запуске робота"
         return result.returncode, result.stdout[-4000:]
 
-    def _run_update(self, lock_file) -> None:
+    def _download_online(self, branch: str) -> str:
+        self._set(phase="Скачиваю обновление…", stage="download", pct=18)
+        git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        fetch = subprocess.Popen(
+            ["git", "-C", str(self.root), "fetch", "--progress", "--no-tags", "--no-recurse-submodules", self.remote, branch],
+            cwd=self.root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            env=git_env,
+        )
+        started = time.monotonic()
+        while fetch.poll() is None:
+            elapsed = time.monotonic() - started
+            self._set(phase="Скачиваю обновление…", stage="download", pct=min(48, 18 + int(elapsed / 2)))
+            if elapsed > 600:
+                fetch.kill()
+                fetch.wait(timeout=5)
+                raise UpdateError("Скачивание обновления превысило 10 минут.")
+            time.sleep(0.5)
+        if fetch.returncode != 0:
+            raise UpdateError("Не удалось скачать коммиты с Git remote.")
+        fetched = self._command(["rev-parse", "FETCH_HEAD"])
+        if fetched.returncode != 0:
+            raise UpdateError("Git не вернул скачанную версию.")
+        return fetched.stdout.strip()
+
+    def _import_usb(self, branch: str, expected_sha: str, old_sha: str) -> str:
+        with usb_update.verified_package(self._usb_package(), self.usb_signers) as (stream, manifest):
+            self._check_usb_manifest(manifest, branch)
+            revision = manifest.revision
+            if revision != expected_sha:
+                raise UpdateError("Файл обновления изменился. Нажмите «Проверить» ещё раз.")
+            if revision == old_sha:
+                return old_sha
+            self._set(phase="Копирую пакет с флешки и проверяю контрольную сумму…", stage="download", pct=18,
+                      to=self._short(revision), toSha=revision)
+            with usb_update.staged_bundle(stream, manifest, self.lock_path.parent) as bundle:
+                verified = self._command(["bundle", "verify", str(bundle)], timeout=60, offline=True)
+                if verified.returncode != 0:
+                    raise UpdateError("Git не принял пакет. Возможно, не хватает базовой версии: подготовьте полный пакет без --base.")
+                fetched = self._command(["fetch", "--no-tags", "--no-recurse-submodules", str(bundle), revision],
+                                        timeout=600, offline=True)
+                if fetched.returncode != 0:
+                    raise UpdateError("Не удалось импортировать подписанный коммит из пакета Git.")
+        kind = self._command(["cat-file", "-t", revision], offline=True)
+        if kind.returncode != 0 or kind.stdout.strip() != "commit":
+            raise UpdateError("Подписанная версия в пакете не является коммитом Git.")
+        return revision
+
+    def _run_update(self, lock_file, usb_sha: str | None = None) -> None:
         old_sha = ""
         merged = False
-        branch = ""
-        repo = ""
+        from_usb = usb_sha is not None
         try:
-            self._require_clone()
-            branch = self._branch()
-            remote_url = self._remote_url()
-            repo = self._repo_label(remote_url)
             old_sha = self.local_revision()
-            dirty = self._command(["status", "--porcelain", "--untracked-files=all"])
-            if dirty.returncode != 0:
-                raise UpdateError("Не удалось проверить рабочую копию.")
-            if dirty.stdout.strip():
-                raise UpdateError("Обновление остановлено: в рабочей копии есть изменения. Сначала сохраните их.")
+            branch = self._usb_branch() if from_usb else self._branch()
+            repo = usb_update.REPOSITORY if from_usb else self._repo_label(self._remote_url())
+            self._require_clean_working_copy()
+            self._write_state({"from": self._short(old_sha), "fromSha": old_sha, "branch": branch, "repo": repo},
+                              log=f"Источник: {'флешка · ' if from_usb else ''}{repo} · ветка {branch}.")
 
-            latest = self._latest_sha(branch)
-            self._write_state({
-                **self._default_state(),
-                "status": "busy", "phase": "Проверяю версию…", "stage": "check", "pct": 8,
-                "from": self._short(old_sha), "fromSha": old_sha, "to": self._short(latest),
-                "toSha": latest, "branch": branch, "repo": repo,
-                "started": time.time(), "restart": False,
-            }, log=f"Источник: {repo} · ветка {branch}.")
-            if latest == old_sha:
-                self._write_state({
-                    "status": "done", "phase": "Уже установлена последняя версия.",
-                    "stage": "done", "pct": 100, "to": self._short(old_sha), "toSha": old_sha,
-                    "changes": 0, "restart": False, "done": time.time(), "error": "",
-                }, log="Изменений нет.")
-                return
+            if usb_sha is not None:
+                if not self._usb_stop_ready():
+                    raise UpdateError("Перед обновлением с флешки остановите робота и включите E-STOP.")
+                new_sha = self._import_usb(branch, usb_sha, old_sha)
+            else:
+                latest = self._latest_sha(branch)
+                self._write_state({"to": self._short(latest), "toSha": latest})
+                new_sha = self._download_online(branch) if latest != old_sha else old_sha
 
-            self._set(phase="Скачиваю обновление…", stage="download", pct=18)
-            git_env = os.environ.copy()
-            git_env["GIT_TERMINAL_PROMPT"] = "0"
-            fetch = subprocess.Popen(
-                ["git", "-C", str(self.root), "fetch", "--progress", "--no-tags", "--no-recurse-submodules", self.remote, branch],
-                cwd=self.root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                env=git_env,
-            )
-            started = time.monotonic()
-            while fetch.poll() is None:
-                elapsed = time.monotonic() - started
-                self._set(phase="Скачиваю обновление…", stage="download", pct=min(48, 18 + int(elapsed / 2)))
-                if elapsed > 600:
-                    fetch.kill()
-                    fetch.wait(timeout=5)
-                    raise UpdateError("Скачивание обновления превысило 10 минут.")
-                time.sleep(0.5)
-            if fetch.returncode != 0:
-                raise UpdateError("Не удалось скачать коммиты с Git remote.")
-
-            fetched = self._command(["rev-parse", "FETCH_HEAD"])
-            if fetched.returncode != 0:
-                raise UpdateError("Git не вернул скачанную версию.")
-            new_sha = fetched.stdout.strip()
             count_result = self._command(["rev-list", "--count", f"{old_sha}..{new_sha}"])
             if count_result.returncode != 0:
                 raise UpdateError("Не удалось сравнить версии.")
             changes = int(count_result.stdout.strip() or "0")
             if changes <= 0:
                 self._write_state({
-                    "status": "done", "phase": "Уже установлена последняя версия.",
+                    "status": "done", "phase": ("Версия на флешке не новее установленной." if from_usb
+                                                else "Уже установлена последняя версия."),
                     "stage": "done", "pct": 100, "to": self._short(old_sha), "toSha": old_sha,
                     "changes": 0, "restart": False, "done": time.time(), "error": "",
                 }, log="Изменений нет.")
@@ -433,8 +559,22 @@ class UpdateManager:
             ancestor = self._command(["merge-base", "--is-ancestor", old_sha, new_sha])
             if ancestor.returncode != 0:
                 raise UpdateError("Обновление не применено: ветки разошлись; автоматически перезаписывать файлы небезопасно.")
-            self._set(phase=f"Применяю {changes} коммит(ов)…", stage="install", pct=55)
-            merge = self._command(["merge", "--ff-only", "--no-edit", new_sha], timeout=60)
+            if self.local_revision() != old_sha:
+                raise UpdateError("Установленная версия изменилась во время загрузки. Проверьте её и повторите обновление.")
+            self._require_clean_working_copy()
+            if from_usb:
+                if self._usb_branch() != branch:
+                    raise UpdateError("Ветка на роботе изменилась во время загрузки. Проверьте её и повторите обновление.")
+                protected = self._command(["ls-tree", "--name-only", new_sha, "--", ".env", "data", "var", ".venv"],
+                                          offline=True)
+                if protected.returncode != 0 or protected.stdout.strip():
+                    raise UpdateError("Пакет затрагивает локальные настройки или данные робота.")
+                if not self._usb_stop_ready():
+                    raise UpdateError("E-STOP снят. Установка с флешки отменена.")
+            self._set(phase=f"Применяю {changes} коммит(ов)…", stage="install", pct=55,
+                      to=self._short(new_sha), toSha=new_sha)
+            merge = self._command(["merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", new_sha],
+                                  timeout=60, offline=from_usb)
             if merge.returncode != 0:
                 raise UpdateError("Git не смог выполнить безопасное fast-forward-обновление.")
             merged = True
@@ -446,7 +586,7 @@ class UpdateManager:
             # оставалось возможным при ручных правках окружения.
             self._set(phase="Переустанавливаю зависимости (ensure_deps.sh)…",
                       stage="dependencies", pct=68)
-            code, output = self._install_dependencies()
+            code, output = self._install_dependencies(offline=from_usb)
             if output.strip():
                 for line in output.splitlines()[-15:]:
                     self._write_state({}, log=line)
@@ -472,16 +612,18 @@ class UpdateManager:
                 if rollback.returncode != 0:
                     raise UpdateError("Новая версия не собралась и откатить код не удалось; требуется ручная проверка. " + detail[:180])
                 raise UpdateError("Новая версия не собралась (проверка кода); исходный код откатан. " + detail[:200])
-            # ROS 2: пакет zapret_lidar и драйверы из исходников компилируются
-            # сами, если их исходники изменились (секунды, если менять нечего).
-            self._set(phase="Компилирую ROS 2 (ros2_ws)…", stage="build", pct=88)
-            ros_code, ros_output = self._build_ros_workspace()
-            for line in ros_output.strip().splitlines()[-10:]:
-                self._write_state({}, log=line)
-            if ros_code not in (0, 75):
-                self._write_state({}, log="ROS 2: ros2_ws не собран (код %s) — приложение работает, "
-                                          "лидар по USB; ярлык «Запустить робот» докачает и "
-                                          "соберёт недостающее сам." % ros_code)
+            if from_usb:
+                self._write_state({}, log="ROS 2: с флешки обновлены исходники, сборка драйверов не запускается.")
+            else:
+                # ROS 2 может докачивать драйверы; этот шаг только для сетевого обновления.
+                self._set(phase="Компилирую ROS 2 (ros2_ws)…", stage="build", pct=88)
+                ros_code, ros_output = self._build_ros_workspace()
+                for line in ros_output.strip().splitlines()[-10:]:
+                    self._write_state({}, log=line)
+                if ros_code not in (0, 75):
+                    self._write_state({}, log="ROS 2: ros2_ws не собран (код %s) — приложение работает, "
+                                              "лидар по USB; ярлык «Запустить робот» докачает и "
+                                              "соберёт недостающее сам." % ros_code)
             # Прошивки колёс — на рабочий стол сразу после обновления: новая
             # версия должна появиться на столе без ожидания следующего запуска
             # ярлыка. Ошибка копирования обновлению не мешает (симлинк на
@@ -501,17 +643,19 @@ class UpdateManager:
                                       "motor_wheel_*.ino с рабочего стола в Arduino IDE "
                                       "и прошейте платы вручную.")
 
-            self._set(phase="Сборка прошла — перезапускаю пульт и экран…",
-                      stage="build", pct=92)
-
             current = self.local_revision()
+            restart = self.on_restart is not None and (not from_usb or self._usb_stop_ready())
+            phase = "Обновление установлено."
+            if restart:
+                phase += " Перезапускаю пульт и экран…"
+            elif from_usb:
+                phase += " Перед ручным перезапуском остановите робота и включите E-STOP."
             self._write_state({
-                "status": "done", "phase": "Обновление установлено. Перезапускаю приложение "
-                                           "и экран — он прошьёт платы колёс…",
+                "status": "done", "phase": phase,
                 "stage": "done", "pct": 100, "to": self._short(current), "toSha": current,
-                "changes": changes, "restart": True, "done": time.time(), "error": "",
+                "changes": changes, "restart": restart, "done": time.time(), "error": "",
             }, log=f"Установлено коммитов: {changes}.")
-            if self.on_restart:
+            if restart and self.on_restart:
                 try:
                     self.on_restart()
                 except Exception as exc:  # restart should not roll back an installed update

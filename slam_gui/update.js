@@ -10,6 +10,8 @@
   let currentCheck = null;
   let opened = false;
   let following = false;
+  let starting = false;
+  let checkId = 0;
 
   async function getJson(url, init, timeout = 30000) {
     const controller = new AbortController();
@@ -30,7 +32,7 @@
     button.className = 'rc-update-launch';
     button.type = 'button';
     button.textContent = 'Обновить с GitHub';
-    button.title = 'Скачать с GitHub, переустановить, собрать и перезапустить сервер и экран';
+    button.title = 'Обновить программу через GitHub или с флешки без интернета';
 
     const overlay = document.createElement('div');
     overlay.id = 'rc-update-overlay';
@@ -38,9 +40,15 @@
     overlay.hidden = true;
     overlay.innerHTML = `
       <section class="rc-update-dialog" role="dialog" aria-modal="true" aria-labelledby="rc-update-title">
-        <header class="rc-update-head"><div><h2 id="rc-update-title">Обновление с GitHub</h2>
-          <p>Скачиваю коммиты с GitHub → ставлю код fast-forward → переустанавливаю зависимости (ensure_deps.sh, офлайн из vendor/) → собираю и проверяю код → кладу прошивки колёс на рабочий стол → перезапускаю пульт и экран. Платы колёс прошиваются <b>сами</b>: после перезапуска экран прошивает их в те USB-порты, что выбраны в настройках (бортовой экран → «Порты колёс»), через <code>arduino-cli</code>. Файлы <code>motor_wheel_*.ino</code> при этом остаются на рабочем столе — можно прошить и вручную из Arduino IDE.</p></div>
+        <header class="rc-update-head"><div><h2 id="rc-update-title">Обновление программы</h2>
+          <p>Обновляются веб-пульт и бортовой экран; локальные настройки сохраняются. Платы Arduino не прошиваются.</p></div>
           <button type="button" class="rc-update-close" aria-label="Закрыть">×</button></header>
+        <label class="rc-update-source">Источник
+          <select id="rc-update-source" class="rc-update-btn">
+            <option value="github">GitHub (через интернет)</option>
+            <option value="usb">С флешки (без интернета)</option>
+          </select>
+        </label>
         <div class="rc-update-facts">
           <div><span>Репозиторий</span><b id="rc-update-repo">—</b></div>
           <div><span>Ветка</span><b id="rc-update-branch">—</b></div>
@@ -72,12 +80,13 @@
     overlay.querySelector('.rc-update-close').addEventListener('click', close);
     $('rc-update-dismiss').addEventListener('click', close);
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+    $('rc-update-source').addEventListener('change', () => void check(true));
     $('rc-update-check').addEventListener('click', () => void check(true));
     $('rc-update-run').addEventListener('click', () => void startUpdate());
     window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && opened) close(); });
 
     // Неблокирующая проверка: подсветить кнопку при появлении новой версии.
-    setTimeout(() => void check(false), 5000);
+    setTimeout(() => { if (!checkId) void check(false); }, 5000);
   }
 
   function close() {
@@ -115,6 +124,11 @@
       $('rc-update-message').textContent = 'Автообновление отключено, чтобы не перезаписать файлы. Сохраните изменения в Git и проверьте снова.';
       $('rc-update-run').disabled = true;
       setButton('Проверить', '');
+    } else if (data.updateAvailable && data.needsEstop) {
+      $('rc-update-phase').textContent = 'Нужен E-STOP';
+      $('rc-update-message').textContent = 'Остановите робота, включите E-STOP и нажмите «Проверить» ещё раз.';
+      $('rc-update-run').disabled = true;
+      setButton('Есть обновление', 'available');
     } else if (data.updateAvailable) {
       $('rc-update-phase').textContent = 'Доступна новая версия';
       $('rc-update-message').textContent = 'После установки сервер и отдельный киоск-процесс перезапустятся; страница обновится автоматически.';
@@ -133,51 +147,55 @@
       opened = true;
       $('rc-update-overlay').hidden = false;
     }
-    if (opened) {
-      $('rc-update-phase').textContent = 'Проверяю Git-ветку…';
-      $('rc-update-message').textContent = 'Сверяю установленную версию с выбранной веткой remote.';
-      $('rc-update-check').disabled = true;
-      $('rc-update-run').disabled = true;
-    }
+    if (following || starting) return;
+    const id = ++checkId;
+    const usb = $('rc-update-source').value === 'usb';
+    const source = usb ? 'С флешки' : 'Обновить с GitHub';
+    currentCheck = null;
+    for (const field of ['repo', 'branch', 'from', 'to']) $('rc-update-' + field).textContent = '—';
+    $('rc-update-log').hidden = true;
+    $('rc-update-percent').textContent = '0%';
+    $('rc-update-progress').style.width = '0%';
+    $('rc-update-phase').textContent = usb ? 'Проверяю файл на флешке…' : 'Проверяю Git-ветку…';
+    $('rc-update-message').textContent = '';
+    $('rc-update-check').disabled = true;
+    $('rc-update-run').disabled = true;
     try {
-      const { response, body } = await getJson('api/update/check', undefined, 40000);
+      const { response, body } = await getJson('api/update/check' + (usb ? '?source=usb' : ''), undefined, 40000);
+      if (id !== checkId) return;
       if (!response.ok || !body || !body.ok) {
-        const message = body && body.error ? body.error : 'Не удалось проверить обновления.';
-        if (opened) {
-          $('rc-update-phase').textContent = 'Проверка не выполнена';
-          $('rc-update-message').textContent = message;
-          setButton('Повторить', 'error');
-        } else {
-          // Фоновая проверка не должна прятать саму кнопку: оператор ищет
-          // именно «Обновить с GitHub», а не «Повторить» после тихого сбоя
-          // сети/ветки. Ошибка видна красным состоянием, текст — по делу.
-          setButton('Обновить с GitHub', 'error');
-        }
+        $('rc-update-phase').textContent = 'Проверка не выполнена';
+        $('rc-update-message').textContent = (body && body.error) || 'Не удалось проверить обновления.';
+        setButton(source, 'error');
         return;
       }
       showCheck(body);
     } catch (error) {
-      if (opened) {
-        $('rc-update-phase').textContent = 'Сервер обновлений недоступен';
-        $('rc-update-message').textContent = 'Проверьте сеть и конфигурацию Git remote.';
-        setButton('Повторить', 'error');
-      } else {
-        setButton('Обновить с GitHub', 'error');
-      }
+      if (id !== checkId) return;
+      $('rc-update-phase').textContent = 'Нет ответа сервера';
+      $('rc-update-message').textContent = 'Не удалось проверить обновление. Попробуйте ещё раз.';
+      setButton(source, 'error');
     } finally {
-      if (opened) $('rc-update-check').disabled = false;
+      if (id === checkId && !following) $('rc-update-check').disabled = false;
     }
   }
 
   async function startUpdate() {
-    if (!currentCheck || !currentCheck.canUpdate || !csrfToken || following) return;
-    if (!window.confirm('Установить новую версию? Обновятся сервер и интерфейс. Во время перезапуска связь пропадёт на несколько секунд.')) return;
+    if (!currentCheck || !currentCheck.canUpdate || !csrfToken || following || starting) return;
+    const usb = currentCheck.mode === 'usb';
+    const prompt = usb
+      ? 'Установить версию с флешки? Не снимайте E-STOP до конца обновления.'
+      : 'Установить новую версию с GitHub? При перезапуске пульта и экрана связь пропадёт на несколько секунд.';
+    if (!window.confirm(prompt)) return;
+    const payload = usb ? { source: 'usb', expectedSha: currentCheck.latestSha } : {};
+    starting = true;
+    $('rc-update-source').disabled = true;
     $('rc-update-run').disabled = true;
     $('rc-update-check').disabled = true;
     $('rc-update-message').textContent = 'Запускаю обновление…';
     try {
       const { response, body } = await getJson('api/update/run', {
-        method: 'POST', headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' }, body: '{}'
+        method: 'POST', headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
       }, 15000);
       if (!response.ok || !body || !body.ok) {
         $('rc-update-phase').textContent = 'Не удалось запустить';
@@ -190,12 +208,17 @@
       $('rc-update-phase').textContent = 'Нет ответа сервера';
       $('rc-update-message').textContent = 'Проверяю статус обновления…';
       await followUpdate();
+    } finally {
+      starting = false;
+      $('rc-update-source').disabled = false;
+      $('rc-update-check').disabled = false;
     }
   }
 
   async function followUpdate() {
     if (following) return;
     following = true;
+    $('rc-update-source').disabled = true;
     let rev = -1;
     let failures = 0;
     try {
@@ -229,7 +252,8 @@
       }
     } finally {
       following = false;
-      $('rc-update-check').disabled = false;
+      $('rc-update-source').disabled = starting;
+      $('rc-update-check').disabled = starting;
     }
   }
 
