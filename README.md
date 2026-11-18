@@ -230,9 +230,10 @@ PyUSB/libusb; после изменения порта перезапустит�
   браузера на веб-камеру не нужно. При отсутствии кадра смотрите причину в
   «Устройствах» на борту. Проверьте OpenCV именно в `.venv` бортового процесса
   (`.venv/bin/python -c 'import cv2'`) и группу `video` у этого процесса.
-  Установщик пробует поставить `opencv-python-headless` без YOLO; для старой
-  установки: `.venv/bin/pip install 'opencv-python-headless>=4.8,<5'`.
-  В офлайн-наборе `vendor/` этого пакета нет. При отсутствии OpenCV или отказе
+  На борту установщик, обновление и ярлык проверяют OpenCV независимо от базовых
+  зависимостей. Если не загружается — `.venv/bin/python scripts/ensure_opencv.py`,
+  затем перезапустите приложение. Это только OpenCV/NumPy, без YOLO и PyTorch.
+  В штатном офлайн-наборе `vendor/` этих колёс нет. При отсутствии OpenCV или отказе
   его режимов работает резервный захват через системный FFmpeg (`sudo apt install ffmpeg`).
   «Порт есть» не равно «есть кадр»: на `/devices` видны режим и счётчик JPEG.
   [Проверка на Ubuntu, если кадров нет](docs/DEPLOY_UBUNTU.md#camera-check).
@@ -646,7 +647,8 @@ ONNX. Новый кандидат **не прошёл формальный VAL-�
   `python scripts/restore_vision_source.py --restore-missing` → переобучение:
   `python scripts/train_vision.py --weights yolov8n.pt --device 0 --epochs 150 --imgsz 640`.
   Без доступа к GitHub release assets базу COCO подготовит
-  `python scripts/fetch_vision_weights.py`. Зависимости — `requirements-vision.txt`
+  `python scripts/fetch_vision_weights.py`. Только камеры и встроенный детектор —
+  `requirements-camera.txt` (`scripts/ensure_opencv.py`); обучение — `requirements-vision.txt`
   (версии выполненного обучения — `requirements-vision-training.txt`),
   переменные — блок `RC_VISION_*` в `.env.example`.
 - Сервис **не даёт команды моторам**: он публикует `action`
@@ -2086,6 +2088,7 @@ ros2_ws/                      рабочее пространство ROS 2 (п�
 vendor/                       колёса Python для установки без интернета
 datasets/yolo-stop/           метки YOLO и манифест (JPEG скачиваются заново)
 models/vision/                обученные веса yolo-stop.pt и метрики
+requirements-camera.txt       OpenCV headless + NumPy для бортовых камер (без PyTorch)
 requirements-vision.txt       опциональные OpenCV / PyTorch / Ultralytics
 docs/VISION.md                знаки, светофор, обучение, API и ограничения
 docs/DEPLOY_UBUNTU.md         установка на борт робота

@@ -87,8 +87,13 @@ def offline_install(tmp_path):
     project = tmp_path / "project"
     (project / "scripts").mkdir(parents=True)
     (project / "vendor").mkdir()
-    shutil.copy(SCRIPTS / "ensure_deps.sh", project / "scripts" / "ensure_deps.sh")
-    shutil.copy(ROOT / "requirements.txt", project / "requirements.txt")
+    for name in ("ensure_deps.sh", "ensure_opencv.py"):
+        shutil.copy(SCRIPTS / name, project / "scripts" / name)
+    for name in ("requirements.txt", "requirements-camera.txt"):
+        shutil.copy(ROOT / name, project / name)
+    (project / "robot_control").mkdir()
+    for name in ("__init__.py", "config.py", "opencv_runtime.py", "sensor_layout.py"):
+        shutil.copy(ROOT / "robot_control" / name, project / "robot_control" / name)
     for wheel in (ROOT / "vendor").glob("*.whl"):
         shutil.copy(wheel, project / "vendor" / wheel.name)
     env = dict(os.environ)

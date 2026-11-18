@@ -56,6 +56,10 @@ ROS_DISTROS = ("lyrical", "kilted", "jazzy", "iron", "humble", "rolling", "galac
 #: Где обычно лежит ROS 2, если он поставлен пакетами Ubuntu.
 DEFAULT_PREFIX = Path("/opt/ros")
 
+#: Fallback for apt-only ROS dependencies. Never prefer system NumPy to the
+#: project wheels or inject this path into a new venv interpreter's PYTHONPATH.
+SYSTEM_DIST_PACKAGES = Path("/usr/lib/python3/dist-packages")
+
 #: Рабочее пространство ROS 2 проекта (пакет ``zapret_lidar``).
 WORKSPACE = Path(__file__).resolve().parent.parent / "ros2_ws"
 
@@ -238,10 +242,6 @@ def python_path_entries(root: Optional[Path] = None) -> list[str]:
             text = str(directory)
             if text not in entries:
                 entries.append(text)
-    # Системные пакеты Ubuntu: часть зависимостей ROS 2 ставится apt-ом в python3.
-    for extra in ("/usr/lib/python3/dist-packages",):
-        if Path(extra).is_dir() and extra not in entries:
-            entries.append(extra)
     return entries
 
 
@@ -288,6 +288,9 @@ def ensure_python_path(root: Optional[Path] = None) -> bool:
         if entry not in sys.path:
             sys.path.insert(0, entry)
             changed = True
+    if SYSTEM_DIST_PACKAGES.is_dir() and str(SYSTEM_DIST_PACKAGES) not in sys.path:
+        sys.path.append(str(SYSTEM_DIST_PACKAGES))
+        changed = True
     _prepend_env("PYTHONPATH", entries)
 
     prefixes: list[str] = []

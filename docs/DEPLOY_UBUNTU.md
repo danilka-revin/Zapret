@@ -39,6 +39,53 @@ ROS 2 для лидара ставится **сам** — флаги не нуж
 перезапустите приложение своим обычным способом (для systemd — `sudo systemctl
 restart robot-kiosk robot-control`). Камеры не требуют перепрошивки Mega.
 
+**Если написано «не загружается OpenCV».** В терминале **бортового компьютера**, в
+том каталоге проекта, из которого работает киоск, выполните:
+
+```bash
+.venv/bin/python -c 'import sys; print(sys.executable, flush=True); import cv2, numpy; print(cv2.__version__, cv2.__file__, numpy.__version__, numpy.__file__)'
+```
+
+Успешный импорт в другом `python3` не проверяет киоск. `ModuleNotFoundError: No
+module named 'cv2'` означает, что в этом окружении нет модуля. `libGL.so…`,
+`numpy.core…`, `dtype size changed` — другая ситуация: модуль найден, но нативная
+библиотека не загрузилась. Сохраните вывод целиком, не переназначайте порты.
+
+```bash
+.venv/bin/python scripts/ensure_opencv.py --check   # только проверка .venv, без сети/USB
+.venv/bin/python scripts/ensure_opencv.py           # при ошибке — переустановка колёс
+```
+
+Команда работает с `.venv` проекта, не с системным Python. Она ставит только
+`requirements-camera.txt` (headless OpenCV и NumPy), затем проверяет импорт в
+новом процессе. **YOLO, torch и `requirements-vision.txt` для этого не нужны.**
+Если на борту ещё старая версия без скрипта и отсутствует `cv2`, используйте
+команду ниже (ограничение NumPy сохраняет совместимость с ROS на Ubuntu 22.04/24.04):
+
+```bash
+.venv/bin/python -m pip install --only-binary=:all: 'opencv-python-headless>=4.8,<5' 'numpy<2; python_version < "3.13"'
+```
+
+Если импорт всё ещё падает, нужны текст ошибки и вывод `.venv/bin/python -m pip show
+numpy opencv-python-headless opencv-python`; не устанавливайте ещё одну GUI-сборку поверх.
+
+На обновлённой версии обычное обновление и ярлык через `ensure_deps.sh` проверяют
+OpenCV даже при неизменном `requirements.txt`, если есть V4L2-узел, назначенный
+порт или задан `RC_CAMERA_BACKEND=opencv`. Установка необязательная: при неудаче
+пульт продолжит работать. При `RC_CAMERA_BACKEND=ffmpeg` автоматическая установка
+пропускается. Для одного лишь видео возможен системный `ffmpeg` (см. ниже);
+для распознавания нужен рабочий OpenCV. При USB-обновлении используются только
+локальные колёса; штатный `vendor/` не содержит OpenCV и NumPy. Для ремонта без
+интернета скачайте на машине **той же архитектуры, ОС и версии Python** колёса
+(`.venv/bin/python -m pip download --only-binary=:all: -r requirements-camera.txt -d /tmp/camera-wheels`),
+перенесите их в `vendor/` на борту и запустите
+`RC_DEPS_OFFLINE=1 .venv/bin/python scripts/ensure_opencv.py`.
+
+После успешного импорта перезапустите киоск и пульт на неподвижном роботе:
+`sudo systemctl restart robot-kiosk robot-control` для служб **или**
+`./scripts/stop.sh && ./scripts/start_robot.sh` для запуска ярлыком. Импорт ещё не
+означает, что с камеры пришло изображение; это проверяется отдельно:
+
 1. На борту откройте `/devices` и посмотрите карточку **уже назначенного**
    видеовхода. Или в терминале борта: `curl -fsS http://127.0.0.1:8090/api/cameras |
    python3 -m json.tool`. Проверьте `device`, `captureMode`, `captureError`.
@@ -53,8 +100,7 @@ restart robot-kiosk robot-control`). Камеры не требуют переп
    не маскируется чёрной картинкой. Проверка сырого JPEG для FL (0):
    `curl -f http://127.0.0.1:8090/api/camera/0/frame -o /tmp/fl.jpg`.
 2. Нет обоих средств захвата? На Ubuntu можно поставить `sudo apt install ffmpeg`
-   (плюс `v4l-utils` для диагностики) **или** установить в окружение бортового
-   процесса `.venv/bin/pip install 'opencv-python-headless>=4.8,<5'`.
+   (плюс `v4l-utils` для диагностики) **или** восстановить OpenCV командой выше.
    После установки перезапустите бортовой процесс. Конфликт доступа проверяется
    командой `fuser -v "$PORT"`, где `PORT` — точный путь этой камеры из `/devices`.
    У владельца должна быть группа `video`; второй экземпляр киоска, Cheese,

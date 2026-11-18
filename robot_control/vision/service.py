@@ -16,8 +16,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ..opencv_runtime import REPAIR_COMMAND
 from .classes import CLASS_INFO, CLASS_NAMES, TRAFFIC_LIGHT_LABELS
-from .detector import (Detection, EnsembleDetector, HeuristicDetector, YoloDetector,
+from .detector import (OPENCV_ERROR, Detection, EnsembleDetector, HeuristicDetector, YoloDetector,
                        cv2_available)
 from .traffic import TrafficLightTracker
 from .closed_course import ClosedCourseWaitPolicy
@@ -166,6 +167,12 @@ class VisionService:
     def initialize(self) -> str:
         """Выбрать YOLO (если есть веса) или встроенный детектор."""
         with self._lock:
+            # Every detector needs JPEG decoding, including the YOLO-only modes.
+            if not cv2_available():
+                self._detector = None
+                self._backend = "unavailable"
+                self._reason = f"Распознавание недоступно: {OPENCV_ERROR}. Восстановить: {REPAIR_COMMAND}"
+                return self._backend
             model = self.config.model_path
             if model.is_file():
                 try:
@@ -177,7 +184,7 @@ class VisionService:
                         self._detector = yolo
                         self._backend = "yolo+" + self.config.traffic_mode
                         self._reason = f"модель {model.name}; режим {self.config.traffic_mode}, без эвристического ансамбля"
-                    elif cv2_available() and self.config.heuristic_enabled:
+                    elif self.config.heuristic_enabled:
                         heuristic = HeuristicDetector(
                             min_confidence=max(0.5, self.config.confidence),
                             prefer_red=self.config.prefer_red)
@@ -200,19 +207,14 @@ class VisionService:
                 self._backend = "unavailable"
                 self._reason = "требуются корректные веса YOLO; резерв отключён; " + self._reason
                 return self._backend
-            if cv2_available():
-                self._detector = HeuristicDetector(
-                    min_confidence=max(0.5, self.config.confidence),
-                    prefer_red=self.config.prefer_red)
-                self._backend = "heuristic"
-                if model.is_file():
-                    log.info("резервный детектор знаков: %s", self._reason)
-                else:
-                    self._reason = "веса YOLO не найдены — работает встроенный детектор"
-                return self._backend
-            self._detector = None
-            self._backend = "unavailable"
-            self._reason = "Не установлены OpenCV/NumPy: см. requirements-vision.txt"
+            self._detector = HeuristicDetector(
+                min_confidence=max(0.5, self.config.confidence),
+                prefer_red=self.config.prefer_red)
+            self._backend = "heuristic"
+            if model.is_file():
+                log.info("резервный детектор знаков: %s", self._reason)
+            else:
+                self._reason = "веса YOLO не найдены — работает встроенный детектор"
             return self._backend
 
     @property

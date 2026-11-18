@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Создаёт .venv и ставит зависимости. Работает БЕЗ интернета: pip и все
-# пакеты лежат в vendor/ (колёса), онлайн-установка — если сеть есть.
+# базовые пакеты лежат в vendor/. Колёса OpenCV/NumPy — необязательные.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -102,3 +102,10 @@ fi
 log "проверка: $(.venv/bin/python -c 'import serial
 from importlib.metadata import version
 print("flask", version("flask"), "· pyserial", serial.VERSION)')"
+
+# Эту точку входа вызывает и УЖЕ запущенная старая версия обновлятора.
+# Хэш базовых пакетов ничего не говорит о загрузке нативных модулей камер.
+if [[ "${1:-}" != "--base-only" ]]; then
+  .venv/bin/python -I scripts/ensure_opencv.py --auto ||
+    log 'OpenCV недоступен. Пульт запускается; резерв для захвата — системный FFmpeg (RC_CAMERA_BACKEND=auto/ffmpeg).'
+fi
