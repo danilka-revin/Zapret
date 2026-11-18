@@ -1,0 +1,176 @@
+{
+  "validationOnly": true,
+  "epoch": 10,
+  "weightsSha256": "3565e19479f60f1224c9c088db5e6b84fc493b58cafad8c23d77cf193ea1c486",
+  "datasetFingerprint": "27c5d2fa565fa1f7480cfa38660fbaa13de861659eecf23fe94ee54a2eadeb55",
+  "score": "Mean fixed-conf F1: stop, bump sign, cone, ground bump, red, yellow, green and traffic light any state. Smaller size wins ties. No TEST used.",
+  "conf": 0.25,
+  "imgszComparison": {
+    "416": {
+      "macroF1": 0.62877,
+      "perClass": {
+        "stop_sign": {
+          "correct": 6,
+          "labelled": 7,
+          "predicted": 8
+        },
+        "pedestrian_crossing": {
+          "correct": 2,
+          "labelled": 2,
+          "predicted": 2
+        },
+        "speed_bump": {
+          "correct": 6,
+          "labelled": 7,
+          "predicted": 11
+        },
+        "traffic_light": {
+          "correct": 6,
+          "labelled": 8,
+          "predicted": 9
+        },
+        "cone": {
+          "correct": 42,
+          "labelled": 63,
+          "predicted": 51
+        },
+        "traffic_light_red": {
+          "correct": 3,
+          "labelled": 11,
+          "predicted": 7
+        },
+        "traffic_light_yellow": {
+          "correct": 1,
+          "labelled": 3,
+          "predicted": 2
+        },
+        "traffic_light_green": {
+          "correct": 4,
+          "labelled": 5,
+          "predicted": 9
+        },
+        "ground_bump": {
+          "correct": 9,
+          "labelled": 12,
+          "predicted": 10
+        }
+      },
+      "lightAnyState": {
+        "correct": 19,
+        "labelled": 27,
+        "predicted": 27
+      }
+    },
+    "640": {
+      "macroF1": 0.557119,
+      "perClass": {
+        "stop_sign": {
+          "correct": 6,
+          "labelled": 7,
+          "predicted": 8
+        },
+        "pedestrian_crossing": {
+          "correct": 2,
+          "labelled": 2,
+          "predicted": 2
+        },
+        "speed_bump": {
+          "correct": 6,
+          "labelled": 7,
+          "predicted": 11
+        },
+        "traffic_light": {
+          "correct": 4,
+          "labelled": 8,
+          "predicted": 10
+        },
+        "cone": {
+          "correct": 42,
+          "labelled": 63,
+          "predicted": 60
+        },
+        "traffic_light_red": {
+          "correct": 2,
+          "labelled": 11,
+          "predicted": 10
+        },
+        "traffic_light_yellow": {
+          "correct": 1,
+          "labelled": 3,
+          "predicted": 3
+        },
+        "traffic_light_green": {
+          "correct": 4,
+          "labelled": 5,
+          "predicted": 14
+        },
+        "ground_bump": {
+          "correct": 10,
+          "labelled": 12,
+          "predicted": 13
+        }
+      },
+      "lightAnyState": {
+        "correct": 18,
+        "labelled": 27,
+        "predicted": 37
+      }
+    },
+    "832": {
+      "macroF1": 0.595742,
+      "perClass": {
+        "stop_sign": {
+          "correct": 6,
+          "labelled": 7,
+          "predicted": 9
+        },
+        "pedestrian_crossing": {
+          "correct": 2,
+          "labelled": 2,
+          "predicted": 3
+        },
+        "speed_bump": {
+          "correct": 5,
+          "labelled": 7,
+          "predicted": 10
+        },
+        "traffic_light": {
+          "correct": 5,
+          "labelled": 8,
+          "predicted": 9
+        },
+        "cone": {
+          "correct": 38,
+          "labelled": 63,
+          "predicted": 60
+        },
+        "traffic_light_red": {
+          "correct": 5,
+          "labelled": 11,
+          "predicted": 9
+        },
+        "traffic_light_yellow": {
+          "correct": 2,
+          "labelled": 3,
+          "predicted": 6
+        },
+        "traffic_light_green": {
+          "correct": 4,
+          "labelled": 5,
+          "predicted": 9
+        },
+        "ground_bump": {
+          "correct": 8,
+          "labelled": 12,
+          "predicted": 10
+        }
+      },
+      "lightAnyState": {
+        "correct": 17,
+        "labelled": 27,
+        "predicted": 33
+      }
+    }
+  },
+  "selectedImgsz": 416
+}

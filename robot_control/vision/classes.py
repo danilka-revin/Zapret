@@ -57,6 +57,10 @@ TRAFFIC_LIGHT_STATES: tuple[str, ...] = ("red", "yellow", "green")
 TRAINING_CLASS_NAMES = CLASS_NAMES + tuple(
     f"traffic_light_{state}" for state in TRAFFIC_LIGHT_STATES
 )
+# Только для офлайн-детектора с Drive. Это предмет на полу, НЕ знак
+# speed_bump и не подтверждение проезда от Kinect. В CLASS_NAMES не входит.
+DRIVE_TRAINING_CLASS_NAMES = TRAINING_CLASS_NAMES + ("ground_bump",)
+
 TRAFFIC_LIGHT_LABELS: dict[str, str] = {
     "red": "Красный — стоим",
     "yellow": "Жёлтый — готовимся",

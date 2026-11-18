@@ -1,0 +1,79 @@
+{
+  "splits": {
+    "train": {
+      "images": 356,
+      "counts": {
+        "cone": 265,
+        "speed_bump": 27,
+        "traffic_light_yellow": 26,
+        "stop_sign": 47,
+        "traffic_light_green": 19,
+        "traffic_light": 34,
+        "pedestrian_crossing": 11,
+        "ground_bump": 87,
+        "traffic_light_red": 48
+      },
+      "missingClasses": []
+    },
+    "val": {
+      "images": 61,
+      "counts": {
+        "cone": 63,
+        "stop_sign": 7,
+        "traffic_light": 8,
+        "pedestrian_crossing": 2,
+        "speed_bump": 7,
+        "traffic_light_red": 11,
+        "traffic_light_yellow": 3,
+        "traffic_light_green": 5,
+        "ground_bump": 12
+      },
+      "missingClasses": []
+    },
+    "test": {
+      "images": 24,
+      "counts": {
+        "stop_sign": 5,
+        "speed_bump": 10,
+        "traffic_light": 6,
+        "cone": 57,
+        "ground_bump": 11,
+        "traffic_light_green": 3,
+        "pedestrian_crossing": 4,
+        "traffic_light_red": 7
+      },
+      "missingClasses": [
+        "traffic_light_yellow"
+      ]
+    }
+  },
+  "classes": [
+    "stop_sign",
+    "pedestrian_crossing",
+    "speed_bump",
+    "traffic_light",
+    "cone",
+    "traffic_light_red",
+    "traffic_light_yellow",
+    "traffic_light_green",
+    "ground_bump"
+  ],
+  "fingerprint": "27c5d2fa565fa1f7480cfa38660fbaa13de861659eecf23fe94ee54a2eadeb55",
+  "parentFingerprint": "0346f1b0d8f18fcb2d0dabf0baeac799947cd16c4971a1b10635961f622803bf",
+  "source": "Google Drive / yolo + pinned parent",
+  "parentMediaRead": {
+    "drivePhoto": 6,
+    "parentSnapshot": 352
+  },
+  "framesPerDriveVideo": {
+    "VID_20261118_115744_254.mp4": 24,
+    "VID_20261118_124149_011.mp4": 12,
+    "VID_20261118_124149_236.mp4": 12
+  },
+  "reviewSha256": {
+    "ground_bumps.csv": "cf5fcb3e3d89010ee474ae3f30bf50701f3f541c6b3a9d4189fa2e50118c13b9",
+    "video_boxes.csv": "24cb5f50e9f5c34b6d724c7cff879574b1d2b44ec93f33d8e6234c41b1b87b66",
+    "source.json": "71f0961ed805cdeff9433093a8f24e24eb58628643b1617e88a14c50cc3a778f"
+  },
+  "warning": "Agent-reviewed boxes and inherited pseudo-labels. Same indoor course; not independent human ground truth."
+}

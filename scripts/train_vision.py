@@ -31,7 +31,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from robot_control.vision.classes import CLASS_NAMES, TRAINING_CLASS_NAMES  # noqa: E402
+from robot_control.vision.classes import CLASS_NAMES, DRIVE_TRAINING_CLASS_NAMES, TRAINING_CLASS_NAMES  # noqa: E402
 
 DATASET = ROOT / 'datasets' / 'yolo-stop'
 MODEL_DIR = ROOT / 'models' / 'vision'
@@ -66,8 +66,8 @@ def inspect_dataset(source: Path) -> tuple[dict, dict]:
     config = yaml.safe_load(source.read_text(encoding='utf-8'))
     names = config['names']
     names = [names[i] for i in range(len(names))] if isinstance(names, dict) else names
-    if tuple(names) not in (CLASS_NAMES, TRAINING_CLASS_NAMES):
-        raise ValueError('data.yaml: ожидаются 5 публичных или 8 цветовых классов в фиксированном порядке')
+    if tuple(names) not in (CLASS_NAMES, TRAINING_CLASS_NAMES, DRIVE_TRAINING_CLASS_NAMES):
+        raise ValueError('data.yaml: ожидаются 5 публичных, 8 цветовых или 9 классов Drive в фиксированном порядке')
     root = Path(config.get('path', source.parent))
     if not root.is_absolute():
         # Внешний YAML с path: . относится к своей папке, а наш сохранённый
@@ -204,6 +204,9 @@ def train(*, epochs: int, imgsz: int, batch: int, weights: str | None,
     import yaml
     source = (data or ensure_dataset(no_download)).resolve()
     config, dataset_summary = inspect_dataset(source)
+    drive_model = tuple(dataset_summary['classes']) == DRIVE_TRAINING_CLASS_NAMES
+    if drive_model and model_file == MODEL_FILE.resolve():
+        raise ValueError('9-классовые веса Drive — только отдельный офлайн-кандидат, без --deploy')
     if device == 'auto':
         device = '0' if torch.cuda.is_available() else 'cpu'
     if device == 'cpu':
@@ -294,11 +297,15 @@ def train(*, epochs: int, imgsz: int, batch: int, weights: str | None,
         'augmentation': {'hsv_h': 0.0, 'hsv_s': 0.15, 'hsv_v': 0.3,
                          'flipud': 0.0, 'fliplr': 0.0, 'mosaic': 0.5, 'close_mosaic': min(10, requested_epochs)},
         'runDirectory': str(save_dir.relative_to(ROOT)),
-        'trafficLight': ('YOLO colour classes + conservative HSV agreement; generic = off/ambiguous'
+        'trafficLight': ('Raw YOLO colour classes (generic = off/ambiguous); no HSV in PT metrics' if drive_model else
+                         'YOLO colour classes + conservative HSV agreement; generic = off/ambiguous'
                          if tuple(actual_names) == TRAINING_CLASS_NAMES else
                          'Unified traffic-light localizer; colour requires separate verified-ROI evaluation'),
         'deployment': 'candidate; validate on robot with wheels lifted and E-STOP available',
     }
+    if drive_model:
+        metadata['deployment'] = 'offline detector; ground_bump is not a depth measurement or a robot command'
+        metadata['dataset'].update({k: manifest[k] for k in ('source', 'parentFingerprint', 'reviewSha256', 'mirrorTrain') if k in manifest})
     _atomic_copy(best, model_file)
     if export_onnx:
         try:
