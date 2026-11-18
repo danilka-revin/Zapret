@@ -11,6 +11,7 @@
   let opened = false;
   let following = false;
   let starting = false;
+  let uploading = false;
   let checkId = 0;
 
   async function getJson(url, init, timeout = 30000) {
@@ -32,7 +33,7 @@
     button.className = 'rc-update-launch';
     button.type = 'button';
     button.textContent = 'Обновить с GitHub';
-    button.title = 'Обновить программу через GitHub или с флешки без интернета';
+    button.title = 'Обновить программу через GitHub, с флешки или с другого ПК';
 
     const overlay = document.createElement('div');
     overlay.id = 'rc-update-overlay';
@@ -47,8 +48,16 @@
           <select id="rc-update-source" class="rc-update-btn">
             <option value="github">GitHub (через интернет)</option>
             <option value="usb">С флешки (без интернета)</option>
+            <option value="upload">Загрузить с ПК</option>
           </select>
         </label>
+        <div class="rc-update-upload" id="rc-update-upload-panel" hidden>
+          <label for="rc-update-file">Подписанный <code>robot-update.zip</code> из Releases или <code>robot-update.bulka</code> (до 512 МиБ).</label>
+          <div class="rc-update-file-actions">
+            <input type="file" id="rc-update-file" accept=".zip,.bulka" />
+            <button type="button" class="rc-update-btn" id="rc-update-send" disabled>Загрузить и проверить</button>
+          </div>
+        </div>
         <div class="rc-update-facts">
           <div><span>Репозиторий</span><b id="rc-update-repo">—</b></div>
           <div><span>Ветка</span><b id="rc-update-branch">—</b></div>
@@ -80,7 +89,15 @@
     overlay.querySelector('.rc-update-close').addEventListener('click', close);
     $('rc-update-dismiss').addEventListener('click', close);
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
-    $('rc-update-source').addEventListener('change', () => void check(true));
+    $('rc-update-source').addEventListener('change', () => {
+      $('rc-update-file').value = '';
+      void check(true);
+    });
+    $('rc-update-file').addEventListener('change', () => {
+      if (currentCheck) showCheck(currentCheck);
+      else syncUpdateControls();
+    });
+    $('rc-update-send').addEventListener('click', () => void uploadUpdate());
     $('rc-update-check').addEventListener('click', () => void check(true));
     $('rc-update-run').addEventListener('click', () => void startUpdate());
     window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && opened) close(); });
@@ -102,6 +119,15 @@
     button.dataset.state = state || '';
   }
 
+  function syncUpdateControls() {
+    const input = $('rc-update-file');
+    const locked = uploading || starting || following;
+    input.disabled = locked;
+    $('rc-update-send').disabled = locked || !input.files.length || !csrfToken;
+    const awaitingUpload = $('rc-update-source').value === 'upload' && input.files.length > 0;
+    $('rc-update-run').disabled = locked || !currentCheck?.canUpdate || !csrfToken || awaitingUpload;
+  }
+
   function showCheck(data) {
     currentCheck = data;
     csrfToken = data.csrfToken || csrfToken;
@@ -111,33 +137,33 @@
     $('rc-update-to').textContent = data.latest || '—';
     $('rc-update-percent').textContent = '0%';
     $('rc-update-progress').style.width = '0%';
+    syncUpdateControls();
     if (data.busy) {
       $('rc-update-phase').textContent = 'Обновление уже выполняется…';
       $('rc-update-message').textContent = 'Подключаюсь к его прогрессу.';
-      $('rc-update-run').disabled = true;
       setButton('Обновление…', 'busy');
       void followUpdate();
       return;
     }
-    if (data.dirty) {
+    if (data.mode === 'upload' && (data.pending === false || $('rc-update-file').files.length)) {
+      $('rc-update-phase').textContent = 'Загрузите файл обновления';
+      $('rc-update-message').textContent = 'Выберите пакет и нажмите «Загрузить и проверить». Робот не установит его без подтверждения.';
+      setButton('Загрузить с ПК', '');
+    } else if (data.dirty) {
       $('rc-update-phase').textContent = 'Есть локальные изменения';
       $('rc-update-message').textContent = 'Автообновление отключено, чтобы не перезаписать файлы. Сохраните изменения в Git и проверьте снова.';
-      $('rc-update-run').disabled = true;
       setButton('Проверить', '');
     } else if (data.updateAvailable && data.needsEstop) {
       $('rc-update-phase').textContent = 'Нужен E-STOP';
       $('rc-update-message').textContent = 'Остановите робота, включите E-STOP и нажмите «Проверить» ещё раз.';
-      $('rc-update-run').disabled = true;
       setButton('Есть обновление', 'available');
     } else if (data.updateAvailable) {
       $('rc-update-phase').textContent = 'Доступна новая версия';
       $('rc-update-message').textContent = 'После установки сервер и отдельный киоск-процесс перезапустятся; страница обновится автоматически.';
-      $('rc-update-run').disabled = !data.canUpdate || following;
       setButton('Есть обновление', 'available');
     } else {
       $('rc-update-phase').textContent = 'Установлена последняя версия';
       $('rc-update-message').textContent = data.latestMsg || 'Обновлений для этой ветки нет.';
-      $('rc-update-run').disabled = true;
       setButton('Актуально', 'current');
     }
   }
@@ -147,22 +173,24 @@
       opened = true;
       $('rc-update-overlay').hidden = false;
     }
-    if (following || starting) return;
+    if (following || starting || uploading) return;
     const id = ++checkId;
-    const usb = $('rc-update-source').value === 'usb';
-    const source = usb ? 'С флешки' : 'Обновить с GitHub';
+    const mode = $('rc-update-source').value;
+    const source = { github: 'Обновить с GitHub', usb: 'С флешки', upload: 'Загрузить с ПК' }[mode];
+    $('rc-update-upload-panel').hidden = mode !== 'upload';
     currentCheck = null;
+    syncUpdateControls();
     for (const field of ['repo', 'branch', 'from', 'to']) $('rc-update-' + field).textContent = '—';
     $('rc-update-log').hidden = true;
     $('rc-update-percent').textContent = '0%';
     $('rc-update-progress').style.width = '0%';
-    $('rc-update-phase').textContent = usb ? 'Проверяю файл на флешке…' : 'Проверяю Git-ветку…';
+    $('rc-update-phase').textContent = mode === 'github' ? 'Проверяю Git-ветку…' : 'Проверяю пакет обновления…';
     $('rc-update-message').textContent = '';
     $('rc-update-check').disabled = true;
-    $('rc-update-run').disabled = true;
     try {
-      const { response, body } = await getJson('api/update/check' + (usb ? '?source=usb' : ''), undefined, 40000);
+      const { response, body } = await getJson('api/update/check?source=' + encodeURIComponent(mode), undefined, 40000);
       if (id !== checkId) return;
+      if (body && body.csrfToken) csrfToken = body.csrfToken;
       if (!response.ok || !body || !body.ok) {
         $('rc-update-phase').textContent = 'Проверка не выполнена';
         $('rc-update-message').textContent = (body && body.error) || 'Не удалось проверить обновления.';
@@ -177,20 +205,80 @@
       setButton(source, 'error');
     } finally {
       if (id === checkId && !following) $('rc-update-check').disabled = false;
+      syncUpdateControls();
+    }
+  }
+
+  function sendPackage(file) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', 'api/update/upload');
+      xhr.responseType = 'json';
+      xhr.timeout = 30 * 60 * 1000;
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) return;
+        const pct = Math.min(100, Math.round(100 * event.loaded / event.total));
+        $('rc-update-percent').textContent = pct + '%';
+        $('rc-update-progress').style.width = pct + '%';
+      };
+      xhr.upload.onload = () => {
+        $('rc-update-phase').textContent = 'Проверяю подпись и контрольную сумму…';
+      };
+      xhr.onload = () => {
+        if (xhr.status === 201 && xhr.response && xhr.response.ok) resolve(xhr.response);
+        else reject(new Error(xhr.response?.error || 'Не удалось загрузить файл. Проверьте вход и соединение с роботом.'));
+      };
+      xhr.onerror = xhr.ontimeout = xhr.onabort = () => reject(new Error('Передача прервана. Загрузите файл ещё раз.'));
+      xhr.send(file);
+    });
+  }
+
+  async function uploadUpdate() {
+    const input = $('rc-update-file');
+    const file = input.files[0];
+    if (!file || !csrfToken || following || starting || uploading) return;
+    ++checkId;  // Ignore any check started before the upload.
+    currentCheck = null;
+    uploading = true;
+    $('rc-update-source').disabled = true;
+    $('rc-update-check').disabled = true;
+    syncUpdateControls();
+    for (const field of ['repo', 'branch', 'from', 'to']) $('rc-update-' + field).textContent = '—';
+    $('rc-update-log').hidden = true;
+    $('rc-update-percent').textContent = '0%';
+    $('rc-update-progress').style.width = '0%';
+    $('rc-update-phase').textContent = 'Загружаю файл на робота…';
+    $('rc-update-message').textContent = 'Не закрывайте страницу до окончания проверки.';
+    try {
+      const offer = await sendPackage(file);
+      input.value = '';
+      showCheck(offer);
+    } catch (error) {
+      $('rc-update-phase').textContent = 'Файл не принят';
+      $('rc-update-message').textContent = error.message;
+    } finally {
+      uploading = false;
+      $('rc-update-source').disabled = following;
+      $('rc-update-check').disabled = following;
+      syncUpdateControls();
     }
   }
 
   async function startUpdate() {
-    if (!currentCheck || !currentCheck.canUpdate || !csrfToken || following || starting) return;
-    const usb = currentCheck.mode === 'usb';
-    const prompt = usb
-      ? 'Установить версию с флешки? Не снимайте E-STOP до конца обновления.'
+    if (!currentCheck || $('rc-update-run').disabled) return;
+    const source = $('rc-update-source').value;
+    const fromFile = source !== 'github';
+    const prompt = fromFile
+      ? `Установить версию ${currentCheck.latest} из проверенного файла? Не снимайте E-STOP до конца обновления.`
       : 'Установить новую версию с GitHub? При перезапуске пульта и экрана связь пропадёт на несколько секунд.';
     if (!window.confirm(prompt)) return;
-    const payload = usb ? { source: 'usb', expectedSha: currentCheck.latestSha } : {};
+    const payload = fromFile ? { source, expectedSha: currentCheck.latestSha } : {};
+    currentCheck = null;
     starting = true;
+    syncUpdateControls();
     $('rc-update-source').disabled = true;
-    $('rc-update-run').disabled = true;
     $('rc-update-check').disabled = true;
     $('rc-update-message').textContent = 'Запускаю обновление…';
     try {
@@ -210,6 +298,7 @@
       await followUpdate();
     } finally {
       starting = false;
+      syncUpdateControls();
       $('rc-update-source').disabled = false;
       $('rc-update-check').disabled = false;
     }
@@ -218,6 +307,7 @@
   async function followUpdate() {
     if (following) return;
     following = true;
+    syncUpdateControls();
     $('rc-update-source').disabled = true;
     let rev = -1;
     let failures = 0;
@@ -252,6 +342,7 @@
       }
     } finally {
       following = false;
+      syncUpdateControls();
       $('rc-update-source').disabled = starting;
       $('rc-update-check').disabled = starting;
     }

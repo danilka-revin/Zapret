@@ -32,6 +32,7 @@ from flask import (
     url_for,
 )
 from itsdangerous import BadSignature, URLSafeSerializer, URLSafeTimedSerializer
+from werkzeug.exceptions import ClientDisconnected, RequestEntityTooLarge
 from werkzeug.routing import BuildError
 
 from . import eventlog
@@ -48,8 +49,8 @@ from .lidar import LidarManager
 from .lidar_settings import apply_lidar_settings, settings_payload
 from .slam import build_state, create_blueprint, start_lidar
 from .stats import RobotStats, StatsSampler
-from .updater import UpdateManager, schedule_restart
-from .usb_update import SHA_RE as USB_SHA_RE
+from .updater import UpdateBusy, UpdateError, UpdateManager, schedule_restart
+from .usb_update import SHA_RE as USB_SHA_RE, UPLOAD_LIMIT
 
 log = logging.getLogger("robot_control")
 
@@ -190,7 +191,11 @@ def create_app(config: Config | None = None) -> Flask:
         g.st_user = None
         if session.get(SESSION_USER):
             return
-        token = request.args.get(ST_PARAM) or request.form.get(ST_PARAM)
+        token = request.args.get(ST_PARAM)
+        # An update upload is a binary body; don't touch it before login, CSRF
+        # and the route-specific size limit have been checked.
+        if not token and request.endpoint != "api_update_upload":
+            token = request.form.get(ST_PARAM)
         user = load_url_session(token)
         if user:
             g.via_st = True
@@ -386,11 +391,39 @@ def create_app(config: Config | None = None) -> Flask:
     @login_required
     def api_update_check():
         source = request.args.get("source", "github")
-        if source not in {"github", "usb"}:
+        checks = {"github": updater.check, "usb": updater.check_usb, "upload": updater.check_upload}
+        if source not in checks:
             return jsonify(ok=False, error="Неизвестный источник обновления."), 400
-        result = updater.check_usb() if source == "usb" else updater.check()
+        result = checks[source]()
         result["csrfToken"] = csrf_signer.dumps("csrf")
-        return jsonify(result), 200 if result.get("ok") else (422 if source == "usb" else 502)
+        return jsonify(result), 200 if result.get("ok") else (502 if source == "github" else 422)
+
+    @app.post("/api/update/upload")
+    @login_required
+    def api_update_upload():
+        if not csrf_header_ok():
+            return jsonify(ok=False, error="Недействительный CSRF-токен."), 400
+        if request.mimetype != "application/octet-stream":
+            return jsonify(ok=False, error="Отправьте один файл обновления."), 415
+        size = request.content_length
+        if size is None:
+            return jsonify(ok=False, error="Не удалось определить размер файла."), 411
+        if size <= 0:
+            return jsonify(ok=False, error="Файл пуст."), 400
+        if size > UPLOAD_LIMIT:
+            return jsonify(ok=False, error="Файл больше 512 МиБ. Используйте флешку."), 413
+        # Keep the default 64 KiB limit on every other route.
+        request.max_content_length = UPLOAD_LIMIT
+        try:
+            return jsonify(updater.stage_upload(request.stream, size)), 201
+        except RequestEntityTooLarge:
+            return jsonify(ok=False, error="Файл больше 512 МиБ. Используйте флешку."), 413
+        except ClientDisconnected:
+            return jsonify(ok=False, error="Передача прервана. Загрузите файл ещё раз."), 400
+        except UpdateBusy as exc:
+            return jsonify(ok=False, error=str(exc)), 409
+        except (OSError, subprocess.TimeoutExpired, UpdateError, ValueError) as exc:
+            return jsonify(ok=False, error=str(exc)[:500]), 422
 
     @app.get("/api/update/status")
     @login_required
@@ -408,17 +441,19 @@ def create_app(config: Config | None = None) -> Flask:
         if not csrf_header_ok():
             return jsonify({"ok": False, "error": "Недействительный CSRF-токен."}), 400
         body = request.get_json() if request.is_json else {}
-        if not isinstance(body, dict) or body.get("source", "github") not in ("github", "usb"):
+        if not isinstance(body, dict) or body.get("source", "github") not in ("github", "usb", "upload"):
             return jsonify(ok=False, error="Неизвестный источник обновления."), 400
-        if body.get("source") == "usb":
+        source = body.get("source", "github")
+        if source != "github":
             sha = body.get("expectedSha")
             if not isinstance(sha, str) or not USB_SHA_RE.fullmatch(sha):
-                return jsonify(ok=False, error="Сначала проверьте версию на флешке."), 400
-            started = updater.start(usb_sha=sha)
+                return jsonify(ok=False, error="Сначала проверьте версию в файле обновления."), 400
+            started = updater.start(usb_sha=sha) if source == "usb" else updater.start(upload_sha=sha)
         else:
             started = updater.start()
         if not started:
-            return jsonify({**updater.get_status(), "ok": False, "error": "Обновление уже выполняется."}), 409
+            return jsonify({**updater.get_status(), "ok": False,
+                            "error": "Уже загружается файл или выполняется обновление."}), 409
         return jsonify({"ok": True, "status": "busy"}), 202
 
     @app.get("/api/update/version")
