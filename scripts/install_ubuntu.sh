@@ -92,7 +92,11 @@ if ! .venv/bin/python -c 'import cv2' 2>/dev/null; then
   log "ставлю OpenCV для USB-камер…"
   if ! .venv/bin/python -m pip install --only-binary=:all: --find-links vendor --retries 1 --timeout 8 'opencv-python-headless>=4.8,<5' ||
      ! .venv/bin/python -c 'import cv2'; then
-    log 'Без OpenCV USB-кадров не будет. При наличии сети: .venv/bin/pip install "opencv-python-headless>=4.8,<5"'
+    if ! command -v ffmpeg >/dev/null && command -v apt-get >/dev/null; then
+      log 'OpenCV недоступен; пробую установить FFmpeg для захвата через V4L2…'
+      $SUDO apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=8 install -y --no-install-recommends ffmpeg ||
+        log 'Для USB-камер установите ffmpeg (sudo apt install ffmpeg) или opencv-python-headless в .venv.'
+    fi
   fi
 fi
 

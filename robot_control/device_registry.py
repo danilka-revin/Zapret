@@ -743,6 +743,11 @@ class DeviceRegistry:
                                       "проверьте кабель и подтвердите после переподключения.")
                 else:
                     item["detail"] = "Совпал уникальный USB-серийный номер; расположение ранее подтвердил оператор."
+                if cam.get("captureMode"):
+                    item["detail"] += (f" Запрос: {cam['captureMode']}. Кадр: {cam['width']}×{cam['height']};"
+                                       f" получено JPEG: {cam.get('framesReceived', 0)}.")
+                if cam.get("darkFrame") is True:
+                    item["detail"] += " Кадр приходит, но тёмный: проверьте объектив, свет и экспозицию."
                 if verified_role:
                     updates[role] = (str(port), item["check"])
             elif cam.get("frameSource") == "external" and frame_age is not None and frame_age < 2:

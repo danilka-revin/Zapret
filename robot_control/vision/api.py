@@ -98,6 +98,14 @@ def register_vision_routes(router, *, service: Optional[VisionService] = None,
         """Включить/выключить разметку и подкрутить порог уверенности."""
         if csrf_header_ok is not None and not csrf_header_ok():
             return jsonify(ok=False, reason="csrf_required"), 400
+        peer = origin()
+        if peer:
+            # configure(enabled=True) starts the capture worker. Never start a
+            # second V4L2 owner on the web process, even via this write route.
+            if csrf_header_ok is None:
+                return jsonify(ok=False, reason="csrf_required"), 400
+            from ..map_peer import proxy_vision_json
+            return proxy_vision_json(peer, "config")
         body = request.get_json(silent=True) or {}
         if not isinstance(body, dict):
             return jsonify(ok=False, reason="bad_json"), 400

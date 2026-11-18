@@ -7,6 +7,8 @@
   Адресная лента:          DIN — 6, 73 диода снизу рамы (светят вниз),
                            питание от внешнего 5 В, GND общий
   Реле 4 канала (5 В):     IN1 — 2, IN2 — 3, IN3 — 4, IN4 — 5
+  Концевик двери:          D42, HIGH — закрыта, внешний pull-down
+  Активный зуммер:         D44, HIGH — звук
   Замок двери (серво):     сигнал — 7  (питание серво — отдельное, не с 5 В Mega)
 
 Свет:
@@ -36,8 +38,8 @@
 Связь с сервером — только USB Serial 115200, строки с CRC-16/Modbus.
 Это не аутентификация и не аппаратный E-STOP: CRC ловит только порчу линии.
 
-  @S fw=3 hdg=12345 pitch=-120 roll=35 gz=12 press=69964 temp=150 alt=301674
-     lock=0 light=5 dim=80 strip=0 nleds=73 cargo=0 rfid=0 cards=2 link=1
+  @S fw=5 hdg=12345 pitch=-120 roll=35 gz=12 press=69964 temp=150 alt=301674
+     lock=0 doorclosed=1 light=5 dim=80 strip=0 nleds=73 cargo=0 rfid=0 cards=2 link=1
      err=0 t=123456 crc=ABCD                          (5 Гц)
   @CARD uid=A1B2C3D4 ok=1 act=open role=admin why=none cards=2 t=1234 crc=ABCD
   @CARDINFO idx=1 uid=A1B2C3D4 role=admin total=2 t=1234 crc=ABCD
@@ -68,8 +70,7 @@
 таймауту. Прошивка не заменяет физический ключ и не является сертифицированной
 СКУД.
 
-Концевик отсека (D8) пока не подключён и из прошивки убран: состояние двери не
-передаётся, запрета движения по ней нет. Вернётся вместе с монтажом концевика.
+Положение двери по D42 не выводится из команды замку и не управляет тягой.
 */
 
 #include <Arduino.h>
@@ -88,7 +89,8 @@
 //:     @CARDINFO со списком карт и их ролями.
 //: 4 — убран концевик отсека (не подключён): нет поля door= и кадра kind=door,
 //:     запрета движения по двери тоже нет.
-const uint8_t SENSOR_PROTOCOL = 4;
+//: 5 — физический концевик D42 (doorclosed=), полные UID 4/7/10 байт.
+const uint8_t SENSOR_PROTOCOL = 5;
 //: Своё π: strict ISO C++ не отдаёт M_PI, а avr-gcc считает float быстрее double.
 static const float PI_F = 3.14159265358979f;
 
@@ -100,6 +102,14 @@ static const uint8_t RELAY_PINS[4] = {2, 3, 4, 5};
 //: при HIGH на IN реле должно молчать. Если наоборот — поставьте false.
 static const bool RELAY_ACTIVE_LOW = true;
 static const uint8_t LOCK_SERVO_PIN = 7;
+static const uint8_t DOOR_SWITCH_PIN = 42;
+static const uint8_t BUZZER_PIN = 44;
+
+static const uint8_t UID_MAX_BYTES = 10;
+struct CardUid {
+  uint8_t size;
+  uint8_t bytes[UID_MAX_BYTES];  // ISO 14443-A: 4, 7 или 10 байт, без cascade tag и BCC
+};
 
 //: Лента светодиодов смонтирована снизу рамы (73 диода, светят вниз).
 //: 1 — лента на D6 подключена, прошивка красит её и заявляет в телеметрии
@@ -116,7 +126,6 @@ static const bool STRIP_ENABLED = SENSOR_STRIP_ENABLED != 0;
 #define SENSOR_STRIP_LEDS 73
 #endif
 static const uint16_t STRIP_LEDS = SENSOR_STRIP_LEDS;
-//: Один кадр телеметрии должен влезать в 192 байта: там появилось поле nleds.
 static_assert(STRIP_LEDS >= 1 && STRIP_LEDS <= 300, "SENSOR_STRIP_LEDS вне 1…300");
 static const uint8_t STRIP_BRIGHTNESS = 96;   // общий предел яркости, 0…255
 //: Бюджет по току. Белый на полной яркости — ~60 мА на диод, то есть
@@ -135,9 +144,9 @@ static uint8_t stripBudgetScale() {
   return (uint8_t)(scale > 255 ? 255 : scale);
 }
 
-//: Углы серво замка: 0 — закрыто, 90 — открыто. Подберите под свой замок.
-static const uint8_t LOCK_CLOSED_ANGLE = 10;
-static const uint8_t LOCK_OPEN_ANGLE = 80;
+//: Углы серво замка: 90 — закрыто, 0 — открыто (реверс). Подберите под свой замок.
+static const uint8_t LOCK_CLOSED_ANGLE = 90;
+static const uint8_t LOCK_OPEN_ANGLE = 0;
 static const uint16_t LOCK_DEFAULT_MS = 3000;
 static const uint16_t LOCK_MAX_MS = 10000;
 //: Если сервер молчит дольше — замок закрывается сам (свет остаётся).
@@ -242,23 +251,25 @@ static const uint16_t CARD_EEPROM_ADDR = 0;
 static const uint8_t CARD_MAGIC0 = 'S';
 static const uint8_t CARD_MAGIC1 = 'N';
 static const uint8_t CARD_MAGIC2 = 'S';
-//: 2 — к UID добавлена роль (битовая маска), блок 58 байт: шапка 6, UID 48,
-//: роли 2, CRC 2. Старый блок 1 (56 байт без ролей) читается и переписывается
-//: в новый формат: все прежние карты становятся администраторами.
-static const uint8_t CARD_VERSION = 2;
-static const uint8_t CARD_VERSION_LEGACY = 1;
-static const uint8_t CARD_SLOTS = 12;         // 12 карт × 4 байта UID
-static const uint16_t CARD_ROLE_OFFSET = 6 + CARD_SLOTS * 4;
-static const uint16_t CARD_BLOCK_BYTES = CARD_ROLE_OFFSET + 2 + 2;
+// v1/v2: блок от адреса 0, 12 четырёхбайтных UID; в v2 добавлена маска ролей.
+// v3: длинные UID хранятся ПОСЛЕ калибровки. Версия в старой шапке меняется
+// последней: оборванный перенос можно повторить, отозванные карты не воскресают.
+static const uint8_t CARD_VERSION = 3;
+static const uint8_t CARD_SLOTS = 12;
 static const uint16_t CARD_BLOCK_BYTES_LEGACY = 6 + CARD_SLOTS * 4 + 2;
+static const uint16_t CARD_DATA_ADDR = 128;
+// count, (size + bytes[10]) × 12, role mask LE, CRC16 LE
+static const uint8_t CARD_ROW_BYTES = 1 + UID_MAX_BYTES;
+static const uint16_t CARD_ROLE_OFFSET = 1 + CARD_SLOTS * CARD_ROW_BYTES;
+static const uint16_t CARD_BLOCK_BYTES = CARD_ROLE_OFFSET + 4;
 
 static const uint16_t MAG_EEPROM_ADDR = 64;
 static const uint8_t MAG_MAGIC0 = 'M';
 static const uint8_t MAG_MAGIC1 = 'G';
 static const uint8_t MAG_VERSION = 1;
 
-//: Блок карт должен остаться до области калибровки компаса.
-static_assert(CARD_BLOCK_BYTES <= MAG_EEPROM_ADDR, "карты залезли в блок компаса");
+static_assert(CARD_BLOCK_BYTES_LEGACY + 2 <= MAG_EEPROM_ADDR, "legacy card overlap");
+static_assert(MAG_EEPROM_ADDR + 12 <= CARD_DATA_ADDR, "card/calibration overlap");
 
 // ------------------------------- буфер вывода -------------------------------
 #define TX_BUFFER_SIZE 512
@@ -268,7 +279,7 @@ static uint16_t tx_position = 0;
 
 // ------------------------------- состояние ----------------------------------
 struct CardSlot {
-  uint8_t uid[4];
+  CardUid uid;
   uint8_t role;                               // CARD_ROLE_ADMIN | CARD_ROLE_USER
 };
 
@@ -297,6 +308,10 @@ static uint8_t strip_mode = STRIP_MODE_AUTO;
 static uint8_t wave_phase = 0;                // 0…STRIP_LEDS-1, сдвиг волны
 static uint32_t last_anim_ms = 0;
 
+static bool door_raw = false, door_closed = false;
+static uint32_t door_changed_ms = 0;
+static bool buzzing = false;
+static uint32_t buzz_started_ms = 0;
 static bool lock_open = false;
 static bool lock_held = false;                // открыт картой, сам не закроется
 static uint32_t lock_deadline = 0;
@@ -327,9 +342,6 @@ static uint32_t last_telemetry_ms = 0;
 static uint32_t last_blink_ms = 0;
 static bool blink_phase = false;
 static uint32_t command_id = 0;
-static uint32_t last_card_seen_ms = 0;
-static uint8_t last_card_uid[4] = {0, 0, 0, 0};
-
 static char line_buf[96];
 static uint8_t line_length = 0;
 
@@ -348,6 +360,11 @@ void txAppend(const char* data, uint16_t length) {
   if (tx_position >= tx_length) {
     tx_position = 0;
     tx_length = 0;
+  }
+  if (tx_position && (uint32_t)tx_length + length > sizeof(tx_buf)) {
+    tx_length -= tx_position;
+    memmove(tx_buf, tx_buf + tx_position, tx_length);
+    tx_position = 0;
   }
   if (length == 0 || (uint32_t)tx_length + length > sizeof(tx_buf)) return;
   memcpy(tx_buf + tx_length, data, length);
@@ -557,11 +574,11 @@ bool rcReset() {
   digitalWrite(RC522_RST_PIN, LOW);
   delay(5);
   digitalWrite(RC522_RST_PIN, HIGH);
-  delay(5);
+  delay(50);  // стабилизация генератора после аппаратного reset, только в setup
   rcWrite(RC_REG_COMMAND, RC_CMD_SOFT_RESET);
-  delay(5);
+  delay(50);
   for (uint8_t i = 0; i < 20; ++i) {
-    if (rcRead(RC_REG_COMMAND) == RC_CMD_IDLE) break;
+    if (!(rcRead(RC_REG_COMMAND) & 0x10)) break;  // PowerDown сброшен
     delay(2);
   }
   // Внутренний таймер RC522: 13.56 МГц / (2·169 + 1) ≈ 40 кГц, 1000 тиков ≈ 25 мс.
@@ -576,140 +593,116 @@ bool rcReset() {
   return rcRead(RC_REG_VERSION) != 0x00 && rcRead(RC_REG_VERSION) != 0xFF;
 }
 
-//: Начать обмен с картой. last_bits = 0 — целые байты; with_crc — дописать CRC_A.
-//: Функция только запускает передачу: ответ читается в rcPoll(), поэтому loop()
-//: не стоит 25 мс и свет/замок продолжают работать.
+// ISO 14443-A CRC (не Modbus, которым защищён USB). Tx/RxCRCEn остаются
+// выключенными: REQA и антиколлизия идут без CRC, SELECT и HLTA — с CRC_A.
+uint16_t piccCrc(const uint8_t* data, uint8_t size) {
+  uint16_t crc = 0x6363;
+  while (size--) {
+    uint8_t b = *data++ ^ (uint8_t)crc;
+    b ^= b << 4;
+    crc = (crc >> 8) ^ ((uint16_t)b << 8) ^ ((uint16_t)b << 3) ^ (b >> 4);
+  }
+  return crc;
+}
+
 void rcStart(const uint8_t* frame, uint8_t length, uint8_t last_bits, bool with_crc) {
   rcWrite(RC_REG_COMMAND, RC_CMD_IDLE);
-  rcWrite(RC_REG_COM_IRQ, 0x7F);          // сбросить флаги прерываний
-  rcWrite(RC_REG_FIFO_LEVEL, 0x80);       // очистить FIFO
+  rcWrite(RC_REG_COM_IRQ, 0x7F);
+  rcWrite(RC_REG_FIFO_LEVEL, 0x80);
   for (uint8_t i = 0; i < length; ++i) rcWrite(RC_REG_FIFO_DATA, frame[i]);
-  // TxCRCEn — старший бит; младшие два включают антенну, их нельзя затирать.
-  rcWrite(RC_REG_TX_CONTROL, (uint8_t)((rcRead(RC_REG_TX_CONTROL) & 0x03) |
-                                       (with_crc ? 0x80 : 0x00)));
+  if (with_crc) {
+    const uint16_t crc = piccCrc(frame, length);
+    rcWrite(RC_REG_FIFO_DATA, (uint8_t)crc);
+    rcWrite(RC_REG_FIFO_DATA, (uint8_t)(crc >> 8));
+  }
+  rcWrite(RC_REG_BIT_FRAMING, last_bits);
   rcWrite(RC_REG_COMMAND, RC_CMD_TRANSCEIVE);
-  rcWrite(RC_REG_BIT_FRAMING, (uint8_t)(0x80 | (last_bits & 0x07)));
+  rcWrite(RC_REG_BIT_FRAMING, (uint8_t)(0x80 | last_bits));
 }
 
 //: 0 — ещё ждём, 1 — ответ в buffer, -1 — таймаут/ошибка линии.
 int8_t rcPoll(uint8_t* buffer, uint8_t capacity, uint8_t* length) {
   const uint8_t irq = rcRead(RC_REG_COM_IRQ);
-  if ((irq & 0x30) == 0) return 0;        // ни RxIRq, ни TimerIRq
-  rcWrite(RC_REG_BIT_FRAMING, 0x00);
-  rcWrite(RC_REG_COMMAND, RC_CMD_IDLE);
+  if ((irq & 0x21) == 0) return 0;        // ни RxIRq, ни TimerIRq
+  // Сначала читаем результат: запуск другой команды может очистить ErrorReg.
   if ((irq & 0x20) == 0) return -1;       // TimerIRq: карта молчит
-  if (rcRead(RC_REG_ERROR) & 0x13) return -1;   // BufferOvfl | ParityErr | ProtocolErr
+  if (rcRead(RC_REG_ERROR) & 0xDF) return -1;  // в т.ч. коллизия: читать по одной карте
   uint8_t level = rcRead(RC_REG_FIFO_LEVEL);
-  if (level > capacity) level = capacity;
+  if (level > capacity || (rcRead(RC_REG_CONTROL) & 0x07)) return -1;
   for (uint8_t i = 0; i < level; ++i) buffer[i] = rcRead(RC_REG_FIFO_DATA);
   *length = level;
   return 1;
 }
 
 // =============================== карточки ====================================
-//: Дребезг: одно и то же чтение не должно давать два события подряд. Карту,
-//: которую не вынимали из поля, прошивка и так не перечитывает (REQA + HALT).
-static const uint32_t CARD_COOLDOWN_MS = 300;
+bool validUidSize(uint8_t size) { return size == 4 || size == 7 || size == 10; }
 
-//: Битовая маска ролей: бит слота = 1 — администратор, 0 — пользователь.
-uint16_t cardRoleBits() {
-  uint16_t bits = 0;
-  for (uint8_t slot = 0; slot < card_count; ++slot) {
-    if (cards[slot].role == CARD_ROLE_ADMIN) bits |= (uint16_t)(1u << slot);
+void uidHex(const CardUid& uid, char* text) {  // вызывающий выделяет 21 байт
+  static const char hex[] = "0123456789ABCDEF";
+  for (uint8_t i = 0; i < uid.size; ++i) {
+    text[2 * i] = hex[uid.bytes[i] >> 4];
+    text[2 * i + 1] = hex[uid.bytes[i] & 15];
   }
-  return bits;
+  text[2 * uid.size] = 0;
 }
 
 void cardWriteBlock() {
-  EEPROM.update(CARD_EEPROM_ADDR + 0, CARD_MAGIC0);
+  uint8_t raw[CARD_BLOCK_BYTES] = {};
+  raw[0] = card_count;
+  for (uint8_t i = 0; i < card_count; ++i) {
+    uint8_t* slot = raw + 1 + i * CARD_ROW_BYTES;
+    slot[0] = cards[i].uid.size;
+    memcpy(slot + 1, cards[i].uid.bytes, slot[0]);
+    if (cards[i].role == CARD_ROLE_ADMIN) raw[CARD_ROLE_OFFSET + i / 8] |= 1u << (i % 8);
+  }
+  const uint16_t crc = frameCrc16((const char*)raw, sizeof(raw) - 2);
+  raw[sizeof(raw) - 2] = (uint8_t)crc;
+  raw[sizeof(raw) - 1] = (uint8_t)(crc >> 8);
+  for (uint16_t i = 0; i < sizeof(raw); ++i) EEPROM.update(CARD_DATA_ADDR + i, raw[i]);
+  EEPROM.update(CARD_EEPROM_ADDR, CARD_MAGIC0);
   EEPROM.update(CARD_EEPROM_ADDR + 1, CARD_MAGIC1);
   EEPROM.update(CARD_EEPROM_ADDR + 2, CARD_MAGIC2);
   EEPROM.update(CARD_EEPROM_ADDR + 3, CARD_VERSION);
-  EEPROM.update(CARD_EEPROM_ADDR + 4, card_count);
-  EEPROM.update(CARD_EEPROM_ADDR + 5, 0);           // резерв
-  for (uint8_t slot = 0; slot < CARD_SLOTS; ++slot) {
-    for (uint8_t byte = 0; byte < 4; ++byte) {
-      const uint8_t value = slot < card_count ? cards[slot].uid[byte] : 0xFF;
-      EEPROM.update(CARD_EEPROM_ADDR + 6 + slot * 4 + byte, value);
-    }
-  }
-  const uint16_t roles = cardRoleBits();
-  EEPROM.update(CARD_EEPROM_ADDR + CARD_ROLE_OFFSET, (uint8_t)roles);
-  EEPROM.update(CARD_EEPROM_ADDR + CARD_ROLE_OFFSET + 1, (uint8_t)(roles >> 8));
-  uint8_t raw[CARD_BLOCK_BYTES];
-  for (uint16_t i = 0; i < CARD_BLOCK_BYTES; ++i) raw[i] = EEPROM.read(CARD_EEPROM_ADDR + i);
-  const uint16_t crc = frameCrc16((const char*)raw, (uint16_t)(CARD_BLOCK_BYTES - 2));
-  EEPROM.update(CARD_EEPROM_ADDR + CARD_BLOCK_BYTES - 2, (uint8_t)crc);
-  EEPROM.update(CARD_EEPROM_ADDR + CARD_BLOCK_BYTES - 1, (uint8_t)(crc >> 8));
-}
-
-//: Старый блок без ролей: карты остаются, но все становятся администраторами,
-//: иначе после обновления прошивки открыть отсек было бы нечем.
-void cardsMigrateLegacy() {
-  uint8_t raw[CARD_BLOCK_BYTES_LEGACY];
-  for (uint16_t i = 0; i < CARD_BLOCK_BYTES_LEGACY; ++i) raw[i] = EEPROM.read(CARD_EEPROM_ADDR + i);
-  const uint16_t expected = frameCrc16((const char*)raw, (uint16_t)(CARD_BLOCK_BYTES_LEGACY - 2));
-  const uint16_t actual = (uint16_t)(raw[CARD_BLOCK_BYTES_LEGACY - 2] |
-                                     (raw[CARD_BLOCK_BYTES_LEGACY - 1] << 8));
-  const uint8_t stored = raw[4];
-  if (expected != actual || stored > CARD_SLOTS) {
-    // Битый старый блок не переносим: пусть лучше не будет карт, чем чужие.
-    error_mask |= ERR_EEPROM;
-    return;
-  }
-  card_count = stored;
-  for (uint8_t slot = 0; slot < card_count; ++slot) {
-    for (uint8_t byte = 0; byte < 4; ++byte) {
-      cards[slot].uid[byte] = raw[6 + slot * 4 + byte];
-    }
-    cards[slot].role = CARD_ROLE_ADMIN;
-  }
-  cardWriteBlock();
-  note(PSTR("карты переведены в новый формат: %u шт., все администраторы"),
-       (unsigned)card_count);
 }
 
 void cardsLoad() {
   card_count = 0;
-  if (EEPROM.read(CARD_EEPROM_ADDR + 0) != CARD_MAGIC0 ||
+  if (EEPROM.read(CARD_EEPROM_ADDR) != CARD_MAGIC0 ||
       EEPROM.read(CARD_EEPROM_ADDR + 1) != CARD_MAGIC1 ||
-      EEPROM.read(CARD_EEPROM_ADDR + 2) != CARD_MAGIC2) {
-    return;
-  }
+      EEPROM.read(CARD_EEPROM_ADDR + 2) != CARD_MAGIC2) return;
   const uint8_t version = EEPROM.read(CARD_EEPROM_ADDR + 3);
-  if (version == CARD_VERSION_LEGACY) {
-    cardsMigrateLegacy();
-    return;
-  }
-  if (version != CARD_VERSION) return;
-  const uint8_t stored = EEPROM.read(CARD_EEPROM_ADDR + 4);
-  if (stored > CARD_SLOTS) return;
+  if (version < 1 || version > CARD_VERSION) { error_mask |= ERR_EEPROM; return; }
+  const bool legacy = version < CARD_VERSION;
+  const uint16_t addr = legacy ? CARD_EEPROM_ADDR : CARD_DATA_ADDR;
+  const uint16_t size = legacy ? CARD_BLOCK_BYTES_LEGACY + (version == 2 ? 2 : 0) : CARD_BLOCK_BYTES;
   uint8_t raw[CARD_BLOCK_BYTES];
-  for (uint16_t i = 0; i < CARD_BLOCK_BYTES; ++i) raw[i] = EEPROM.read(CARD_EEPROM_ADDR + i);
-  const uint16_t expected = frameCrc16((const char*)raw, (uint16_t)(CARD_BLOCK_BYTES - 2));
-  const uint16_t actual = (uint16_t)(raw[CARD_BLOCK_BYTES - 2] | (raw[CARD_BLOCK_BYTES - 1] << 8));
-  if (expected != actual) {
+  for (uint16_t i = 0; i < size; ++i) raw[i] = EEPROM.read(addr + i);
+  const uint8_t count = raw[legacy ? 4 : 0];
+  const uint16_t crc = raw[size - 2] | ((uint16_t)raw[size - 1] << 8);
+  if (count > CARD_SLOTS || frameCrc16((const char*)raw, size - 2) != crc) {
     error_mask |= ERR_EEPROM;
     return;
   }
-  const uint16_t roles = (uint16_t)(raw[CARD_ROLE_OFFSET] | (raw[CARD_ROLE_OFFSET + 1] << 8));
-  card_count = stored;
-  for (uint8_t slot = 0; slot < card_count; ++slot) {
-    for (uint8_t byte = 0; byte < 4; ++byte) {
-      cards[slot].uid[byte] = raw[6 + slot * 4 + byte];
-    }
-    cards[slot].role = (roles & (uint16_t)(1u << slot)) ? CARD_ROLE_ADMIN : CARD_ROLE_USER;
+  for (uint8_t i = 0; i < count; ++i) {
+    CardUid& uid = cards[i].uid;
+    uid.size = legacy ? 4 : raw[1 + i * CARD_ROW_BYTES];
+    if (!validUidSize(uid.size)) { error_mask |= ERR_EEPROM; return; }
+    memcpy(uid.bytes, legacy ? raw + 6 + i * 4 : raw + 2 + i * CARD_ROW_BYTES, uid.size);
+    const bool admin = version == 1 || (raw[size - 4 + i / 8] & (1u << (i % 8)));
+    cards[i].role = admin ? CARD_ROLE_ADMIN : CARD_ROLE_USER;
   }
+  card_count = count;
+  if (legacy) cardWriteBlock();
 }
 
-int cardFind(const uint8_t* uid) {
+int cardFind(const CardUid& uid) {
   for (uint8_t slot = 0; slot < card_count; ++slot) {
-    if (memcmp(cards[slot].uid, uid, 4) == 0) return slot;
+    if (cards[slot].uid.size == uid.size && memcmp(cards[slot].uid.bytes, uid.bytes, uid.size) == 0) return slot;
   }
   return -1;
 }
 
-bool cardAdd(const uint8_t* uid, uint8_t role) {
+bool cardAdd(const CardUid& uid, uint8_t role) {
   const int existing = cardFind(uid);
   if (existing >= 0) {
     // Карта уже в памяти: повторное добавление просто уточняет роль.
@@ -719,14 +712,14 @@ bool cardAdd(const uint8_t* uid, uint8_t role) {
     return true;
   }
   if (card_count >= CARD_SLOTS) return false;
-  memcpy(cards[card_count].uid, uid, 4);
+  cards[card_count].uid = uid;
   cards[card_count].role = role;
   ++card_count;
   cardWriteBlock();
-  return cardFind(uid) >= 0;
+  return true;
 }
 
-bool cardSetRole(const uint8_t* uid, uint8_t role) {
+bool cardSetRole(const CardUid& uid, uint8_t role) {
   const int slot = cardFind(uid);
   if (slot < 0) return false;
   if (cards[slot].role == role) return true;
@@ -735,7 +728,7 @@ bool cardSetRole(const uint8_t* uid, uint8_t role) {
   return true;
 }
 
-bool cardRemove(const uint8_t* uid) {
+bool cardRemove(const CardUid& uid) {
   const int slot = cardFind(uid);
   if (slot < 0) return false;
   for (uint8_t i = (uint8_t)slot; i + 1 < card_count; ++i) cards[i] = cards[i + 1];
@@ -926,6 +919,18 @@ void setLight(uint8_t bit, bool on) {
 }
 
 // ================================== замок ====================================
+// Физический контакт не равен команде серво. HIGH считается закрытой дверью
+// только после 35 мс стабильного уровня; внутренней подтяжки вверх нет.
+void doorTick(uint32_t now) {
+  const bool closed = digitalRead(DOOR_SWITCH_PIN) == HIGH;
+  if (closed != door_raw) { door_raw = closed; door_changed_ms = now; }
+  if (now - door_changed_ms >= 35) door_closed = door_raw;
+  if (buzzing && now - buzz_started_ms >= 80) {
+    digitalWrite(BUZZER_PIN, LOW);
+    buzzing = false;
+  }
+}
+
 void lockApply(uint8_t angle) {
   lock_angle = angle;
   if (!lockServo.attached()) return;
@@ -1011,14 +1016,14 @@ void lockTick(uint32_t now) {
 
 // ================================ телеметрия =================================
 void emitTelemetry() {
-  char line[192];
+  char line[224];
   const int n = snprintf_P(line, sizeof(line),
       PSTR("@S fw=%u hdg=%d pitch=%d roll=%d gz=%d press=%ld temp=%d alt=%ld "
-           "lock=%d light=%u dim=%u strip=%d nleds=%u cargo=%u rfid=%u cards=%u link=%d "
+           "lock=%d doorclosed=%d light=%u dim=%u strip=%d nleds=%u cargo=%u rfid=%u cards=%u link=%d "
            "err=%u t=%lu"),
       (unsigned)SENSOR_PROTOCOL, (int)heading_cd, (int)pitch_cd, (int)roll_cd,
       (int)gyro_z_dps10, (long)baro_pressure_pa, (int)baro_temp_c10, (long)baro_altitude_cm,
-      lock_open ? 1 : 0,
+      lock_open ? 1 : 0, door_closed ? 1 : 0,
       (unsigned)effectiveLights(), (unsigned)dim_level, STRIP_ENABLED ? 1 : 0,
       (unsigned)STRIP_LEDS,
       (unsigned)cargo_kind, (unsigned)rfid_state,
@@ -1034,28 +1039,36 @@ const char* roleName(uint8_t role) {
 }
 
 void emitCard(uint8_t granted, const char* action, uint8_t role, const char* why,
-              const uint8_t* uid) {
+              const char* uid) {
   char line[128];
   const int n = snprintf_P(line, sizeof(line),
-      PSTR("@CARD uid=%02X%02X%02X%02X ok=%u act=%s role=%s why=%s cards=%u t=%lu"),
-      uid[0], uid[1], uid[2], uid[3], (unsigned)granted, action, roleName(role), why,
+      PSTR("@CARD uid=%s ok=%u act=%s role=%s why=%s cards=%u t=%lu"),
+      uid, (unsigned)granted, action, roleName(role), why,
       (unsigned)card_count, (unsigned long)millis());
   appendCheckedFrame(line, sizeof(line), n);
 }
 
 //: Машинный список карт: по кадру на карту и терминатор end=1.
-void emitCardList() {
+// Не втискивать все 12 строк в очередь на 512 байт: по одному кадру
+// после освобождения UART. Изменение списка начинает выдачу с idx=1.
+static int8_t list_cursor = -1;
+void emitCardList() { list_cursor = 0; }
+
+void cardListTick() {
+  if (list_cursor < 0 || tx_position < tx_length) return;
   char line[112];
-  for (uint8_t slot = 0; slot < card_count; ++slot) {
-    const int n = snprintf_P(line, sizeof(line),
-        PSTR("@CARDINFO idx=%u uid=%02X%02X%02X%02X role=%s total=%u t=%lu"),
-        (unsigned)(slot + 1), cards[slot].uid[0], cards[slot].uid[1], cards[slot].uid[2],
-        cards[slot].uid[3], roleName(cards[slot].role), (unsigned)card_count,
-        (unsigned long)millis());
-    appendCheckedFrame(line, sizeof(line), n);
+  int n;
+  if (list_cursor < card_count) {
+    const CardSlot& slot = cards[list_cursor++];
+    char uid[2 * UID_MAX_BYTES + 1];
+    uidHex(slot.uid, uid);
+    n = snprintf_P(line, sizeof(line), PSTR("@CARDINFO idx=%u uid=%s role=%s total=%u t=%lu"),
+        (unsigned)list_cursor, uid, roleName(slot.role), (unsigned)card_count, (unsigned long)millis());
+  } else {
+    list_cursor = -1;
+    n = snprintf_P(line, sizeof(line), PSTR("@CARDINFO end=1 total=%u t=%lu"),
+                   (unsigned)card_count, (unsigned long)millis());
   }
-  const int n = snprintf_P(line, sizeof(line), PSTR("@CARDINFO end=1 total=%u t=%lu"),
-                           (unsigned)card_count, (unsigned long)millis());
   appendCheckedFrame(line, sizeof(line), n);
 }
 
@@ -1155,8 +1168,10 @@ void sensorsTick(uint32_t now) {
 static const uint32_t RFID_POLL_MS = 100;   // как часто пробуем поле
 static const uint32_t RFID_STEP_MS = 40;    // дольше этого ответа не ждём
 
-static uint8_t rfid_phase = 0;              // 0 ждём слот, 1 WUPA, 2 anticoll, 3 SELECT, 4 HALT
-static uint8_t rfid_uid[4] = {0, 0, 0, 0};
+static uint8_t rfid_phase = 0;              // 0 ждём слот, 1 REQA, 2 anticoll, 3 SELECT
+static CardUid rfid_uid;
+static uint8_t rfid_level = 0;  // CL1 .. CL3 = 0x93, 0x95, 0x97
+static bool rfid_more = false;
 static uint8_t rfid_answer[8] = {0};
 static uint8_t rfid_answer_length = 0;
 static uint32_t rfid_started_ms = 0;
@@ -1167,27 +1182,23 @@ void rfidRestart(uint32_t now) {
   rfid_slot_ms = now + RFID_POLL_MS;
 }
 
-//: Карта ушла из поля: то же UID, приложенное заново, снова считается новым.
-void rfidForget() {
-  memset(last_card_uid, 0, 4);
-  last_card_seen_ms = 0;
-}
-
-//: Карта прочитана целиком: пускаем или отказываем, и всё равно гасим её в HALT.
-void rfidCardRead(const uint8_t* uid, uint32_t now) {
-  const bool same = memcmp(uid, last_card_uid, 4) == 0;
-  if (same && (now - last_card_seen_ms) < CARD_COOLDOWN_MS) return;
-  memcpy(last_card_uid, uid, 4);
-  last_card_seen_ms = now;
+// Решение принимается по полностью выбранному UID, независимо от ответа
+// на HALT (по стандарту ответа НЕТ). Сигнал означает чтение, а не допуск.
+void rfidCardRead(const CardUid& card, uint32_t now) {
+  char uid[2 * UID_MAX_BYTES + 1];
+  uidHex(card, uid);
+  digitalWrite(BUZZER_PIN, HIGH);
+  buzzing = true;
+  buzz_started_ms = millis();
   error_mask &= (uint8_t)~ERR_RFID;
 
   if (card_learn) {
     card_learn = false;
-    if (cardAdd(uid, card_learn_role)) {
+    if (cardAdd(card, card_learn_role)) {
       rfid_state = RFID_ENROLLED;
       emitCard(1, "enroll", card_learn_role, "none", uid);
-      note(PSTR("карта %02X%02X%02X%02X записана как %s"), uid[0], uid[1], uid[2], uid[3],
-           roleName(card_learn_role));
+      emitCardList();
+      note(PSTR("карта %s записана как %s"), uid, roleName(card_learn_role));
     } else {
       rfid_state = RFID_DENIED;
       emitCard(0, "deny", CARD_ROLE_USER, "full", uid);
@@ -1197,12 +1208,11 @@ void rfidCardRead(const uint8_t* uid, uint32_t now) {
     return;
   }
 
-  const int slot = cardFind(uid);
+  const int slot = cardFind(card);
   if (slot < 0) {
     rfid_state = RFID_DENIED;
     emitCard(0, "deny", 0, "unknown", uid);
-    note(PSTR("карта %02X%02X%02X%02X не записана: доступа нет"),
-         uid[0], uid[1], uid[2], uid[3]);
+    note(PSTR("карта %s не записана: доступа нет"), uid);
     emitTelemetry();
     return;
   }
@@ -1222,7 +1232,7 @@ void rfidCardRead(const uint8_t* uid, uint32_t now) {
     // Второе прикладывание той же карты закрывает отсек.
     lockClose();
     emitCard(1, "close", role, "none", uid);
-    note(PSTR("карта %02X%02X%02X%02X: отсек закрыт"), uid[0], uid[1], uid[2], uid[3]);
+    note(PSTR("карта %s: отсек закрыт"), uid);
   } else {
     lockHold();
     char line[48];
@@ -1230,10 +1240,17 @@ void rfidCardRead(const uint8_t* uid, uint32_t now) {
                              (unsigned long)now);
     appendCheckedFrame(line, sizeof(line), n);
     emitCard(1, "open", role, "none", uid);
-    note(PSTR("карта %02X%02X%02X%02X: отсек открыт, приложите карту ещё раз, чтобы закрыть"),
-         uid[0], uid[1], uid[2], uid[3]);
+    note(PSTR("карта %s: отсек открыт, приложите карту ещё раз, чтобы закрыть"),
+         uid);
   }
   emitTelemetry();
+}
+
+void rfidAnticoll(uint32_t now) {
+  const uint8_t cmd[] = {(uint8_t)(PICC_SEL_CL1 + 2 * rfid_level), 0x20};
+  rcStart(cmd, sizeof(cmd), 0, false);
+  rfid_phase = 2;
+  rfid_started_ms = now;
 }
 
 void rfidTick(uint32_t now) {
@@ -1252,9 +1269,6 @@ void rfidTick(uint32_t now) {
     return;
   }
   if (result < 0) {
-    // На первом шаге это значит «в поле нет карты»: следующая положенная карта
-    // должна сработать, даже если её UID совпадает с прошлой.
-    if (rfid_phase == 1) rfidForget();
     rfidRestart(now);          // карты нет или ответ битый — это не отказ датчика
     return;
   }
@@ -1262,10 +1276,9 @@ void rfidTick(uint32_t now) {
   switch (rfid_phase) {
     case 1: {                  // REQA: ATQA — два байта
       if (rfid_answer_length != 2) { rfidRestart(now); return; }
-      const uint8_t anticoll[2] = {PICC_SEL_CL1, 0x20};
-      rcStart(anticoll, 2, 0, false);
-      rfid_phase = 2;
-      rfid_started_ms = now;
+      rfid_uid.size = 0;
+      rfid_level = 0;
+      rfidAnticoll(now);
       return;
     }
     case 2: {                  // антиколлизия: UID + BCC
@@ -1275,29 +1288,28 @@ void rfidTick(uint32_t now) {
         rfidRestart(now);
         return;
       }
-      memcpy(rfid_uid, rfid_answer, 4);
-      uint8_t select[7];
-      select[0] = PICC_SEL_CL1;
-      select[1] = 0x70;        // NVB: 7 байт — UID + BCC + CRC_A
-      memcpy(select + 2, rfid_uid, 4);
-      select[6] = rfid_answer[4];
-      rcStart(select, 7, 0, true);
+      rfid_more = rfid_level < 2 && rfid_answer[0] == 0x88;  // Cascade Tag
+      const uint8_t count = rfid_more ? 3 : 4;
+      memcpy(rfid_uid.bytes + rfid_uid.size, rfid_answer + (rfid_more ? 1 : 0), count);
+      rfid_uid.size += count;
+      uint8_t select[7] = {(uint8_t)(PICC_SEL_CL1 + 2 * rfid_level), 0x70};
+      memcpy(select + 2, rfid_answer, 5);
+      rcStart(select, sizeof(select), 0, true);
       rfid_phase = 3;
       rfid_started_ms = now;
       return;
     }
     case 3: {                  // SELECT: SAK + CRC_A
-      if (rfid_answer_length != 3 || (rfid_answer[0] & PICC_SAK_CASCADE) != 0) {
-        rfidRestart(now);      // карты с 7-байтным UID не поддерживаются
+      const uint16_t crc = piccCrc(rfid_answer, 1);
+      if (rfid_answer_length != 3 || rfid_answer[1] != (uint8_t)crc ||
+          rfid_answer[2] != (uint8_t)(crc >> 8) ||
+          ((rfid_answer[0] & PICC_SAK_CASCADE) != 0) != rfid_more) {
+        rfidRestart(now);
         return;
       }
+      if (rfid_more) { ++rfid_level; rfidAnticoll(now); return; }
       const uint8_t halt[2] = {PICC_HALT, 0x00};
-      rcStart(halt, 2, 0, true);
-      rfid_phase = 4;
-      rfid_started_ms = now;
-      return;
-    }
-    default: {                 // HALT отправлен
+      rcStart(halt, sizeof(halt), 0, true);
       rfidCardRead(rfid_uid, now);
       rfidRestart(now);
       return;
@@ -1318,14 +1330,19 @@ bool parseOnOff(const char* value, bool* on) {
   return false;
 }
 
-bool parseUid(const char* text, uint8_t* uid) {
-  if (strlen(text) != 8) return false;
-  for (uint8_t i = 0; i < 4; ++i) {
-    char pair[3] = {text[i * 2], text[i * 2 + 1], 0};
-    char* end = nullptr;
-    const long value = strtol(pair, &end, 16);
-    if (!end || *end != 0 || value < 0 || value > 0xFF) return false;
-    uid[i] = (uint8_t)value;
+bool parseUid(const char* text, CardUid& uid) {
+  const size_t n = strlen(text);
+  if (n != 8 && n != 14 && n != 20) return false;
+  uid.size = n / 2;
+  for (size_t i = 0; i < n; ++i) {
+    const char c = text[i];
+    uint8_t digit;
+    if (c >= '0' && c <= '9') digit = c - '0';
+    else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
+    else return false;
+    if (i % 2 == 0) uid.bytes[i / 2] = digit << 4;
+    else uid.bytes[i / 2] |= digit;
   }
   return true;
 }
@@ -1514,7 +1531,7 @@ void handleCommand(char* line) {
       return;
     }
     char* value = strtok_r(nullptr, " \t", &save);
-    uint8_t uid[4];
+    CardUid uid = {};
     if (!value || !parseUid(value, uid)) { emitAck("card", false); return; }
     if (strcmp_P(action, PSTR("add")) == 0) {
       char* role_text = strtok_r(nullptr, " \t", &save);
@@ -1523,8 +1540,7 @@ void handleCommand(char* line) {
       const bool ok = cardAdd(uid, role);
       if (ok) {
         rfid_state = RFID_ENROLLED;
-        note(PSTR("карта %02X%02X%02X%02X: роль %s"), uid[0], uid[1], uid[2], uid[3],
-             roleName(role));
+        note(PSTR("карта %s: роль %s"), value, roleName(role));
         emitCardList();
       }
       emitTelemetry();
@@ -1537,8 +1553,7 @@ void handleCommand(char* line) {
       if (!role_text || !parseRole(role_text, &role)) { emitAck("card", false); return; }
       const bool ok = cardSetRole(uid, role);
       if (ok) {
-        note(PSTR("карта %02X%02X%02X%02X: роль %s"), uid[0], uid[1], uid[2], uid[3],
-             roleName(role));
+        note(PSTR("карта %s: роль %s"), value, roleName(role));
         emitCardList();
       }
       emitAck("card", ok);
@@ -1630,6 +1645,12 @@ void setup() {
   pinMode(RC522_SS_PIN, OUTPUT);
   digitalWrite(RC522_SS_PIN, HIGH);
 
+  pinMode(DOOR_SWITCH_PIN, INPUT);
+  door_raw = digitalRead(DOOR_SWITCH_PIN) == HIGH;
+  door_closed = false;
+  door_changed_ms = millis();
+  digitalWrite(BUZZER_PIN, LOW);
+  pinMode(BUZZER_PIN, OUTPUT);
   lockServo.attach(LOCK_SERVO_PIN);
   lockSet(false, 0);
 
@@ -1661,7 +1682,7 @@ void setup() {
   note(PSTR("модуль датчиков fw%u: карт %u, ошибки 0x%02X"), (unsigned)SENSOR_PROTOCOL,
        (unsigned)card_count, (unsigned)error_mask);
   emitCardList();
-  note(PSTR("I2C 20/21 · RC522 SS53 RST9 · лента D6 %s · реле D2-D5 · замок D7"),
+  note(PSTR("I2C 20/21 · RC522 SS53 RST9 · лента D6 %s · реле D2-D5 · D7 замок · D42 дверь · D44 звук"),
        STRIP_ENABLED ? "(есть)" : "(не подключена)");
 
   last_sensor_ms = 0;
@@ -1676,6 +1697,7 @@ void loop() {
 
   readSerial();
   sensorsTick(now);
+  doorTick(now);
   lockTick(now);
   cargoTick(now);
 
@@ -1711,5 +1733,6 @@ void loop() {
     emitTelemetry();
   }
 
+  cardListTick();
   txPump();
 }

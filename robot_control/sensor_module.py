@@ -37,11 +37,10 @@ from typing import Any, Callable, Iterable
 #:     машинный список карт ``@CARDINFO``.
 #: 4 — концевик отсека убран (D8 не подключён): нет поля ``door=`` и кадра
 #:     ``kind=door``, запрета движения по двери тоже нет.
-SENSOR_PROTOCOL = 4
-#: Какие версии сервер ещё понимает: плату прошивают вручную, и после
-#: обновления кода старая прошивка (fw3) должна продолжать работать —
-#: лишнее поле door= из её кадров просто игнорируется.
-SENSOR_PROTOCOLS = (3, 4)
+#: 5 — физический концевик D42 (doorclosed=), UID до 10 байт.
+SENSOR_PROTOCOL = 5
+# D8 из fw3 — не датчик D42; для старых плат положение двери неизвестно.
+SENSOR_PROTOCOLS = (3, 4, 5)
 
 TELEMETRY_PREFIX = "@S "
 CARD_PREFIX = "@CARD "
@@ -98,7 +97,7 @@ RFID_STATES: dict[int, str] = {
     4: "deleted",
 }
 
-UID_RE = re.compile(r"^[0-9A-Fa-f]{8}$")
+UID_RE = re.compile(r"(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{14}|[0-9a-fA-F]{20})")
 KEY_RE = re.compile(r"([a-z]+)=(\S+)")
 TELEMETRY_FIELDS = (
     "fw", "hdg", "pitch", "roll", "gz", "press", "temp", "alt",
@@ -193,6 +192,9 @@ def parse_telemetry(line: str) -> dict[str, Any]:
     if protocol not in SENSOR_PROTOCOLS:
         raise SensorFrameError("версия протокола %d, сервер ждёт %s"
                                % (protocol, " или ".join(str(item) for item in SENSOR_PROTOCOLS)))
+    closed = _int(fields, "doorclosed") if protocol >= 5 else None
+    if closed not in (0, 1, None):
+        raise SensorFrameError("doorclosed=%d вне пределов" % closed)
     heading = _int(fields, "hdg")
     pitch = _int(fields, "pitch")
     roll = _int(fields, "roll")
@@ -229,6 +231,7 @@ def parse_telemetry(line: str) -> dict[str, Any]:
         "temperatureC": round(_int(fields, "temp") / 10.0, 1),
         "altitudeM": round(_int(fields, "alt") / 100.0, 2),
         "lockOpen": _int(fields, "lock") == 1,
+        "doorClosed": bool(closed) if closed is not None else None,
         "lightMask": mask,
         "lights": {name: bool(mask & bit) for name, bit in LIGHT_BITS.items()},
         "dim": dim,
@@ -257,8 +260,8 @@ def parse_card(line: str) -> dict[str, Any]:
         raise SensorFrameError("это не событие карты")
     fields = _fields(head[len(CARD_PREFIX):])
     uid = fields.get("uid", "")
-    if not UID_RE.match(uid):
-        raise SensorFrameError("uid не 8 hex-знаков: %r" % uid)
+    if not UID_RE.fullmatch(uid):
+        raise SensorFrameError("UID должен содержать 8, 14 или 20 hex-знаков: %r" % uid)
     verdict = _int(fields, "ok")
     if verdict not in (0, 1):
         raise SensorFrameError("ok=%d вне пределов" % verdict)
@@ -297,13 +300,13 @@ def parse_cardinfo(line: str) -> dict[str, Any]:
         return {"kind": "cardinfo", "end": True, "total": total,
                 "atMs": _int(fields, "t")}
     uid = fields.get("uid", "")
-    if not UID_RE.match(uid):
-        raise SensorFrameError("uid не 8 hex-знаков: %r" % uid)
+    if not UID_RE.fullmatch(uid):
+        raise SensorFrameError("UID должен содержать 8, 14 или 20 hex-знаков: %r" % uid)
     role = fields.get("role", "none")
     if role not in ROLE_TITLES:
         raise SensorFrameError("role=%r неизвестна" % role)
     index = _int(fields, "idx")
-    if not 1 <= index <= 12:
+    if not 1 <= index <= total:
         raise SensorFrameError("idx вне пределов: %d" % index)
     return {
         "kind": "cardinfo", "end": False, "idx": index, "uid": uid.upper(),
@@ -438,8 +441,8 @@ def command_card(action: str, uid: str | None = None, role: str | None = None) -
     if key not in ("add", "del", "role"):
         raise ValueError("неизвестное действие с картами: %r" % action)
     text = str(uid or "").strip()
-    if not UID_RE.match(text):
-        raise ValueError("UID карты — 8 hex-знаков: %r" % uid)
+    if not UID_RE.fullmatch(text):
+        raise ValueError("UID карты — 8, 14 или 20 hex-знаков: %r" % uid)
     if key == "del":
         return "card del %s" % text.upper()
     return "card %s %s %s" % (key, text.upper(), _role(role))
@@ -493,6 +496,7 @@ class SensorModule:
         self._last_ack: dict[str, Any] | None = None
         self._last_ack_at: float | None = None
         self._last_card: dict[str, Any] | None = None
+        self._recent_cards: list[dict[str, Any]] = []  # приложения, а не права доступа
         #: Список карт с ролями: собирается из кадров @CARDINFO на команду list.
         self._card_list: list[dict[str, Any]] = []
         self._card_list_open = False
@@ -544,7 +548,7 @@ class SensorModule:
                     continue
                 line = port.readline()
                 if line:
-                    self.feed(line.decode("ascii", "replace"))
+                    self.feed(line.decode("utf-8", "replace"))
                     continue
                 self._stop.wait(0.01)
             except Exception as exc:  # noqa: BLE001 — обрыв USB не должен ронять экран
@@ -578,21 +582,32 @@ class SensorModule:
                 self._state_at = now
             elif frame["kind"] == "card":
                 self._last_card = frame
+                self._recent_cards.append(frame)
+                del self._recent_cards[:-20]
                 self._push_event(frame)
             elif frame["kind"] == "event":
                 self._push_event(frame)
             elif frame["kind"] == "cardinfo":
+                # Плата сама выдаёт список при загрузке, после записи и по list.
+                # Не выдаём неполную серию (например, потерянный idx) за полный список.
                 if frame.get("end"):
-                    if self._card_list_open:
+                    if frame["total"] == 0:
+                        self._card_list = []
                         self._card_list_known = True
+                    else:
+                        self._card_list_known = (self._card_list_open and
+                                                 len(self._card_list) == frame["total"])
                     self._card_list_open = False
-                elif self._card_list_open:
-                    self._card_list = [item for item in self._card_list
-                                       if item["uid"] != frame["uid"]]
-                    self._card_list.append({"uid": frame["uid"], "role": frame["role"],
-                                            "roleTitle": frame["roleTitle"],
-                                            "idx": frame["idx"]})
-                self._card_list.sort(key=lambda item: item["idx"])
+                else:
+                    if frame["idx"] == 1:
+                        self._card_list = []
+                        self._card_list_open = True
+                    self._card_list_known = False
+                    if self._card_list_open and frame["idx"] == len(self._card_list) + 1:
+                        self._card_list.append({key: frame[key] for key in
+                                                ("uid", "role", "roleTitle", "idx")})
+                    else:
+                        self._card_list_open = False
             elif frame["kind"] == "ack":
                 self._last_ack = frame
                 self._last_ack_at = now
@@ -677,6 +692,7 @@ class SensorModule:
                 "stale": age is not None and age > STALE_AFTER_S,
                 "lastAck": dict(self._last_ack) if self._last_ack else None,
                 "lastCard": dict(self._last_card) if self._last_card else None,
+                "recentCards": [dict(item) for item in self._recent_cards],
                 "cardList": [dict(item) for item in self._card_list],
                 "cardListKnown": self._card_list_known and not self._card_list_open,
                 "events": [dict(item) for item in self._events[-10:]],
@@ -694,6 +710,8 @@ class SensorModule:
                 })
             else:
                 snapshot.update({key: value for key, value in frame.items() if key != "kind"})
+            if not telemetry_ok:
+                snapshot["doorClosed"] = None  # недавний ACK не измеряет концевик
             return snapshot
 
     def compass(self) -> dict[str, Any]:

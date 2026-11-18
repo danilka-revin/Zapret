@@ -408,8 +408,11 @@ def test_web_peer_camera_paths_never_construct_a_second_owner(monkeypatch):
     assert c.get('/api/camera/0/frame').data == b'jpeg'
     assert c.get('/api/camera/8/frame').status_code == 404
     assert c.get('/api/camera/settings').json['ok']
+    from robot_control.vision.service import VisionService
+    monkeypatch.setattr(VisionService, 'configure', lambda *a, **kw: pytest.fail('peer started local vision'))
+    assert c.post('/api/vision/config', json={'enabled': True}).json['ok']
     assert calls == ['http://owner:8090/api/cameras', 'http://owner:8090/api/camera/0/frame',
-                     'http://owner:8090/api/camera/settings']
+                     'http://owner:8090/api/camera/settings', 'http://owner:8090/api/vision/config']
 
 
 @pytest.mark.skipif(not os.environ.get('ZAPRET_BROWSER_NODE_MODULES'), reason='optional Chromium is not installed')

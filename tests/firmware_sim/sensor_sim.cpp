@@ -170,15 +170,12 @@ struct Gy87Model {
 };
 
 // ============================ RC522: SPI ====================================
-// Состояния карты по ISO14443A: WUPA отвечает только в IDLE и HALT, антиколлизия
-// (0x93 0x20) — только в IDLE, SELECT (0x93 0x70) — только в READY, HALT — в
-// ACTIVE. Прошивка обязана пройти всю цепочку, иначе карта «залипнет».
+// Одиночная ISO14443-A карта: таймер выставляет бит 0; HALT по стандарту молчит.
 struct Rc522Model {
-  bool present = true;         // MISO живой (0x00/0xFF = микросхемы нет)
+  bool present = true;
   bool card_present = false;
-  bool halt_ignored = false;   // карта не принимает HALT (проверка терпимости)
-  uint8_t uid[4] = {0xA1, 0xB2, 0xC3, 0xD4};
-  uint8_t sak = 0x08;          // SAK без бита каскада: UID 4 байта
+  bool corrupt_sak = false, corrupt_bcc = false, collision = false;
+  uint8_t uid[10] = {}, uid_size = 0, level = 0;
   enum State { IDLE, READY, ACTIVE, HALT } state = IDLE;
 
   uint8_t command = 0;
@@ -193,9 +190,10 @@ struct Rc522Model {
   long transceives = 0;
   long halts = 0;
 
-  void insert(const uint8_t* new_uid, bool present_now = true) {
-    memcpy(uid, new_uid, 4);
-    card_present = present_now;
+  void insert(const uint8_t* new_uid, uint8_t size = 4) {
+    uid_size = size;
+    memcpy(uid, new_uid, size);
+    card_present = true;
     state = IDLE;
   }
   void remove() {
@@ -247,7 +245,9 @@ struct Rc522Model {
       case 0x01:
         command = value;
         if (value == 0x0F) reset();
-        else if (value == 0x0C) transceive();
+        break;
+      case 0x0D:
+        if (command == 0x0C && (value & 0x80)) transceive(value & 7);
         break;
       case 0x04: com_irq &= (uint8_t)~value; break;   // единица сбрасывает флаг
       case 0x09: if (fifo.size() < 64) fifo.push_back(value); break;
@@ -275,48 +275,63 @@ struct Rc522Model {
 
   void timeout() {
     fifo.clear();
-    com_irq |= 0x10;      // TimerIRq
+    com_irq |= 0x01;      // TimerIRq
     command = 0x00;
   }
 
-  void transceive() {
+  // Независимая побитовая реализация CRC_A для проверки кадров скетча.
+  static uint16_t crcA(const uint8_t* data, size_t size) {
+    uint16_t crc = 0x6363;
+    while (size--) {
+      crc ^= *data++;
+      for (int i = 0; i < 8; ++i) crc = (crc & 1) ? (crc >> 1) ^ 0x8408 : crc >> 1;
+    }
+    return crc;
+  }
+
+  void transceive(uint8_t last_bits) {
+    error = 0;
     ++transceives;
     const std::vector<uint8_t> request = fifo;
     fifo.clear();
-    if (request.empty()) return timeout();
+    if ((tx_control & 3) != 3 || request.empty()) return timeout();
     const uint8_t opcode = request[0];
     if (opcode == 0x52 || opcode == 0x26) {          // WUPA / REQA
       if (!card_present) return timeout();
       const bool wakes = state == IDLE || state == HALT;
       if (opcode == 0x52 && !wakes) return timeout();
       if (opcode == 0x26 && state != IDLE) return timeout();
-      state = IDLE;
+      if (last_bits != 7 || request.size() != 1) return timeout();
+      state = READY;
+      level = 0;
       return answer({0x04, 0x00});
     }
-    if (opcode == 0x93 && request.size() >= 2) {
-      if (!card_present) return timeout();
-      const uint8_t nvb = request[1];
-      if (nvb == 0x20) {                             // антиколлизия
-        if (state != IDLE) return timeout();
-        state = READY;
-        const uint8_t bcc = (uint8_t)(uid[0] ^ uid[1] ^ uid[2] ^ uid[3]);
-        return answer({uid[0], uid[1], uid[2], uid[3], bcc});
+    if (last_bits || !card_present) return timeout();
+    if (opcode == 0x93 + 2 * level && state == READY && request.size() >= 2) {
+      const bool more = 3 * level + 4 < uid_size;
+      std::vector<uint8_t> block;
+      if (more) block.push_back(0x88);
+      block.insert(block.end(), uid + 3 * level, uid + 3 * level + (more ? 3 : 4));
+      block.push_back(block[0] ^ block[1] ^ block[2] ^ block[3]);
+      if (request[1] == 0x20 && request.size() == 2) {
+        if (corrupt_bcc) block.back() ^= 1;
+        if (collision) error = 0x08;
+        return answer(block);
       }
-      if (nvb == 0x70) {                             // SELECT первого уровня
-        if (state != READY) return timeout();
-        if (memcmp(request.data() + 2, uid, 4) != 0) return timeout();
-        state = ACTIVE;
-        return answer({sak, 0x00, 0x00});            // SAK + CRC_A
+      if (request[1] == 0x70 && request.size() == 9 &&
+          std::equal(block.begin(), block.end(), request.begin()+2)) {
+        const uint16_t expected = crcA(request.data(), 7);
+        if (request[7] != (uint8_t)expected || request[8] != expected >> 8) return timeout();
+        uint8_t sak = more ? 0x04 : 0x08;
+        if (more) ++level; else state = ACTIVE;
+        uint16_t crc = crcA(&sak, 1);
+        if (corrupt_sak) crc ^= 1;
+        return answer({sak, (uint8_t)crc, (uint8_t)(crc >> 8)});
       }
-      return timeout();
     }
-    if (opcode == 0x50) {                            // HALT
+    if (request == std::vector<uint8_t>{0x50, 0x00, 0x57, 0xCD} && state == ACTIVE) {
       ++halts;
-      if (!card_present) return timeout();
-      if (halt_ignored) return timeout();
-      if (state != ACTIVE && state != READY) return timeout();
       state = HALT;
-      return answer({});
     }
     return timeout();
   }
@@ -405,8 +420,7 @@ static std::string fieldText(const std::string& frame, const char* key) {
   return frame.substr(start, end == std::string::npos ? std::string::npos : end - start);
 }
 
-//: Приложить карту заново: между чтениями карта должна выйти из поля (HALT) и
-//: пройти паузу CARD_COOLDOWN_MS, иначе прошивка намеренно молчит.
+//: Приложить карту заново: выйдя из поля, PICC больше не в HALT.
 static void presentCard(const uint8_t* uid) {
   rc522.remove();
   run(150);            // прошивка видит пустое поле и ждёт карту заново
@@ -674,17 +688,29 @@ static void scenario_lock_servo() {
         "даже lock open 60 закрывается не позже 10 с, angle=%d", board.servo_value);
 }
 
-static void scenario_no_door_switch() {
-  // Концевик (D8) не подключён и убран из прошивки: ни поля door=, ни кадров
-  // kind=door быть не должно, а свободный вход ничего не запирает.
+static void scenario_door_switch() {
   boot();
-  board.level[8] = LOW;        // «дверь открыта» на старом входе
-  run(300);
   size_t mark = 0;
-  const std::string out = take_output(mark);
-  CHECK(!contains(out, "door="), "в телеметрии нет поля door=");
-  CHECK(!contains(out, "kind=door"), "кадров о двери нет");
-  CHECK(sim::wdt_enabled != 0, "watchdog включён");
+  CHECK(board.mode[42] == INPUT && board.mode[44] == OUTPUT && board.level[44] == LOW,
+        "D42 без pull-up; D44 молчит");
+  CHECK(board.servo_value == 90, "при сбросе закрыто на 90°");
+  board.level[42] = HIGH;
+  run(15);
+  CHECK(!sensors::door_closed, "дребезг отброшен");
+  board.level[42] = LOW;
+  run(40);
+  board.level[42] = HIGH;
+  send("lock hold");
+  run(250);
+  std::string out = lastFrame(take_output(mark), "@S ");
+  CHECK(field(out, "doorclosed") == 1 && field(out, "lock") == 1 && board.servo_value == 0,
+        "закрытая дверь, но открытый засов — ход ровно 90°");
+  board.level[42] = LOW;
+  send("lock close");
+  run(250);
+  out = lastFrame(take_output(mark), "@S ");
+  CHECK(field(out, "doorclosed") == 0 && field(out, "lock") == 0 && board.servo_value == 90,
+        "открытая дверь при закрытом засове");
 }
 
 static void scenario_card_denied() {
@@ -699,7 +725,9 @@ static void scenario_card_denied() {
   CHECK(card.find("uid=11223344") != std::string::npos, "UID в событии: %s", card.c_str());
   CHECK(field(card, "ok") == 0, "чужая карта отклонена: %s", card.c_str());
   CHECK(board.servo_value == sensors::LOCK_CLOSED_ANGLE, "замок не открылся");
+  CHECK(board.level[44] == HIGH, "метка прочитана — короткий сигнал D44");
   run(300);
+  CHECK(board.level[44] == LOW, "зуммер выключен без задержки loop");
   const std::string frame = telemetry(mark);
   CHECK(field(frame, "rfid") == sensors::RFID_DENIED, "в телеметрии отказ: rfid=%ld",
         field(frame, "rfid"));
@@ -837,6 +865,7 @@ static void scenario_card_roles() {
   send("card role A1B2C3D4 admin");
   CHECK(wait_until([&]() { return contains(board.serial.output.substr(mark), "@ACK "); }, 300),
         "роль меняется командой");
+  wait_until([&]() { return contains(board.serial.output.substr(mark), "@CARDINFO end=1"); }, 300);
   const std::string info = lastFrame(board.serial.output.substr(mark), "@CARDINFO idx=1");
   CHECK(fieldText(info, "role") == "admin", "роль в списке обновилась: %s", info.c_str());
 
@@ -893,6 +922,67 @@ static void scenario_card_legacy_migration() {
   CHECK(field(card, "ok") == 1, "перенесённая карта открывает отсек: %s", card.c_str());
 }
 
+static void scenario_card_v2_migration() {
+  uint8_t block[58] = {'S', 'N', 'S', 2, 2, 0, 1, 2, 3, 4, 5, 6, 7, 8};
+  block[54] = 2;  // только вторая карта администратор
+  const uint16_t crc = sensors::frameCrc16((const char*)block, 56);
+  block[56] = (uint8_t)crc;
+  block[57] = (uint8_t)(crc >> 8);
+  memcpy(board.eeprom, block, sizeof(block));
+  sensors::mag_offset_x = 21;
+  sensors::magSaveOffsets();
+  for (int i = 0; i < 2; ++i) {
+    boot();
+    CHECK(sensors::card_count == 2 && sensors::mag_offset_x == 21, "карты и калибровка сохранены");
+    CHECK(sensors::cards[0].role == sensors::CARD_ROLE_USER &&
+          sensors::cards[1].role == sensors::CARD_ROLE_ADMIN, "роли v2 сохранены без повышения прав");
+  }
+}
+
+static void scenario_full_uid() {
+  boot();
+  send("card add 04010203 admin");
+  run(50);
+  const uint8_t uid[] = {4, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+  for (const int size : {7, 10}) {
+    size_t mark = board.serial.output.size();
+    rc522.insert(uid, size);
+    const std::string card = readCard(mark);
+    CHECK(fieldText(card, "uid") == (size == 7 ? "04010203040506" : "04010203040506070809"),
+          "полный UID без cascade tag и BCC");
+    CHECK(fieldText(card, "why") == "unknown" && field(card, "ok") == 0, "совпавший префикс не пускает");
+    CHECK(rc522.state == Rc522Model::HALT, "ридер отправил HLTA с CRC_A");
+  }
+  send("card add 04010203040506070809 admin");
+  run(100);
+  boot();
+  size_t mark = board.serial.output.size();
+  rc522.insert(uid, 10);
+  CHECK(fieldText(readCard(mark), "act") == "open", "выбранный полный UID пережил сброс");
+  for (int bad = 0; bad < 3; ++bad) {
+    rc522.corrupt_sak = bad == 0; rc522.corrupt_bcc = bad == 1; rc522.collision = bad == 2;
+    rc522.insert(uid, 10);
+    mark = board.serial.output.size();
+    run(400);
+    CHECK(!contains(board.serial.output.substr(mark), "@CARD "), "битый ответ не даёт UID/допуска");
+  }
+}
+
+static void scenario_full_list() {
+  boot();
+  for (int i = 0; i < 12; ++i) {
+    char cmd[48];
+    snprintf(cmd, sizeof(cmd), "card add 040102030405060708%02X user", i);
+    send(cmd); run(100);
+  }
+  size_t mark = board.serial.output.size();
+  send("card list"); run(400);
+  const std::string out = take_output(mark);
+  for (int i = 1; i <= 12; ++i)
+    CHECK(contains(out, ("@CARDINFO idx=" + std::to_string(i) + " ").c_str()), "карта %d в выдаче", i);
+  CHECK(contains(out, "@CARDINFO end=1 total=12"), "список целиком, без потерь очереди TX");
+}
+
 static void scenario_card_learn_persists() {
   boot();
   send("card learn admin");
@@ -927,7 +1017,7 @@ static void scenario_eeprom_corrupt() {
   send("card add A1B2C3D4");
   run(50);
   // Портим последний байт блока карт — CRC не сойдётся.
-  board.eeprom[sensors::CARD_EEPROM_ADDR + sensors::CARD_BLOCK_BYTES - 1] ^= 0xFF;
+  board.eeprom[sensors::CARD_DATA_ADDR + sensors::CARD_BLOCK_BYTES - 1] ^= 0xFF;
   boot();
   size_t mark = board.serial.output.size();
   const std::string frame = telemetry(mark);
@@ -1169,12 +1259,15 @@ static const Scenario SCENARIOS[] = {
     {"dim_strip", scenario_dim_strip},
     {"strip_effects", scenario_strip_effects},
     {"lock_servo", scenario_lock_servo},
-    {"no_door_switch", scenario_no_door_switch},
+    {"door_switch", scenario_door_switch},
     {"card_denied", scenario_card_denied},
     {"card_granted", scenario_card_granted},
     {"card_learn_persists", scenario_card_learn_persists},
     {"card_user_needs_cargo", scenario_card_user_needs_cargo},
     {"card_roles", scenario_card_roles},
+    {"full_uid", scenario_full_uid},
+    {"full_list", scenario_full_list},
+    {"card_v2_migration", scenario_card_v2_migration},
     {"card_legacy_migration", scenario_card_legacy_migration},
     {"eeprom_corrupt", scenario_eeprom_corrupt},
     {"link_timeout", scenario_link_timeout},

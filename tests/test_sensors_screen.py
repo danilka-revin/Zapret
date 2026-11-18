@@ -41,7 +41,8 @@ def snapshot(**kwargs) -> dict:
         "ok": True,
         "configured": True,
         "port": "/dev/ttyUSB0",
-        "protocol": 4,
+        "protocol": 5,
+        "doorClosed": True,
         "ageMs": 420,
         "stale": False,
         "error": None,
@@ -192,7 +193,7 @@ def test_telemetry_frame_fills_the_whole_screen(tmp_path):
     assert out["lights"]["head"]["pressed"] == "true"
     assert out["lights"]["right"]["pressed"] == "true"
     assert out["lights"]["stop"]["pressed"] == "false"
-    # Двери (концевика) нет вовсе — на экране только замок.
+    assert out["door"] == "закрыта"
     assert out["lock"] == {"text": "открыт", "state": "open"}
     assert out["cards"]["count"] == "3"
     assert out["log"] == ["SENSORS: карта записана"]
@@ -367,26 +368,31 @@ def test_lock_and_cards_require_the_case_pin(tmp_path):
                         "body": {"action": "start"}}
 
 
-def test_the_compartment_card_shows_only_the_lock(tmp_path):
-    """Концевика отсека нет: карточка замка не обещает ничего про движение."""
-    closed = run_screen(screen(lockOpen=False), tmp_path)
+def test_switch_and_servo_are_shown_independently(tmp_path):
+    closed = run_screen(screen(lockOpen=False, doorClosed=False), tmp_path)
     assert closed["lock"] == {"text": "закрыт", "state": "closed"}
-
-    opened = run_screen(screen(lockOpen=True, windowKind="load"), tmp_path)
+    assert closed["door"] == "открыта"
+    opened = run_screen(screen(lockOpen=True, doorClosed=True), tmp_path)
     assert opened["lock"] == {"text": "открыт", "state": "open"}
-    assert "door" not in opened and "compartment" not in opened
-
-    unknown = run_screen({"snapshot": {"ok": True, "data": {
-        "configured": True, "ok": False, "stale": True, "lockOpen": None}}}, tmp_path)
-    assert unknown["lock"] == {"text": "—", "state": "closed"}
+    assert opened["door"] == "закрыта"
+    for payload in [screen(ok=False, stale=True, doorClosed=True), screen(protocol=4, doorClosed=None)]:
+        assert run_screen(payload, tmp_path)["door"] == "нет данных"
 
 
-def test_the_screen_has_no_door_switch_left(tmp_path):
-    """В разметке не осталось ни поля двери, ни запрета движения по ней."""
-    html = (ROOT / "slam_gui" / "sensors.html").read_text(encoding="utf-8")
-    js = (ROOT / "slam_gui" / "sensors.js").read_text(encoding="utf-8")
-    for token in ("sm-door", "sm-motion", "sm-blocked", "sm-compartment"):
-        assert token not in html and token not in js
+def test_choose_an_unknown_scan_without_granting_rights_to_the_next_card(tmp_path):
+    selected = "04112233445566"
+    other = "04112233445566778899"
+    scans = [{"uid": uid, "role": "none", "reason": "unknown", "granted": False, "atMs": t}
+             for t, uid in enumerate([selected, other])]
+    payload = screen(recentCards=scans, lastCard=scans[-1])
+    payload["actions"] = {"selectScan": selected, "cardRole": "admin", "cardAdd": True}
+    out = run_screen(payload, tmp_path)
+    assert out["scans"][1:] == [f"{other} · не записана", f"{selected} · не записана"]
+    assert [c for c in out["callsAfter"] if c["method"] == "POST"] == []
+    payload["actions"]["pin"] = "1234"
+    out = run_screen(payload, tmp_path)
+    assert [c["body"] for c in out["callsAfter"] if c["method"] == "POST"] == [
+        {"uid": selected, "role": "admin", "pin": "1234", "action": "add"}]
 
 
 def test_cargo_window_is_shown_and_started_with_the_case_pin(tmp_path):
@@ -447,4 +453,4 @@ def test_short_uid_is_reported_before_the_request(tmp_path):
     out = run_screen(dict(screen(), actions={"pin": "1234", "uid": "A1B2",
                                              "cardAdd": True}), tmp_path)
     assert [call for call in out["callsAfter"] if call["method"] == "POST"] == []
-    assert "8 hex" in out["afterCardAdd"]["text"]
+    assert "8, 14 или 20 hex" in out["afterCardAdd"]["text"]
