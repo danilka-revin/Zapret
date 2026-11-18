@@ -542,123 +542,32 @@
     setText($('route-to'), parts[1] || '—');
   }
 
-  /* ------------------------------------------------------------ камеры — 4 × C930e и USB-вебки */
-  const WEBCAM = {
-    frontVideo: null,
-    rearVideo: null,
-    frontReady: false,
-    rearReady: false,
-    backendCams: [null, null, null, null],
-    starting: false,
-    started: false,
-  };
-  // 0 — передняя левая, 1 — задняя левая, 2 — передняя правая, 3 — задняя правая.
-  const backendCameraPoller = window.RCCameraFrames && window.RCCameraFrames.create((id, image) => {
-    WEBCAM.backendCams[id] = image;
-  });
-
-  function checkBackendCameras() {
-    if (backendCameraPoller && !document.hidden) backendCameraPoller.start();
-  }
-
-  async function startBrowserWebcams() {
-    if (WEBCAM.starting || (WEBCAM.frontReady && WEBCAM.rearReady)) return;
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-    WEBCAM.starting = true;
-
-    try {
-      let devices = [];
-      try {
-        const all = await navigator.mediaDevices.enumerateDevices();
-        devices = all.filter((d) => d.kind === 'videoinput');
-      } catch (e) {}
-
-      // Передняя вебка
-      if (!WEBCAM.frontReady) {
-        try {
-          const fConstraints = {
-            video: devices.length > 0
-              ? { deviceId: { ideal: devices[0].deviceId }, width: { ideal: 640 }, height: { ideal: 360 } }
-              : { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 360 } }
-          };
-          const fStream = await navigator.mediaDevices.getUserMedia(fConstraints);
-          if (!WEBCAM.frontVideo) {
-            WEBCAM.frontVideo = document.createElement('video');
-            WEBCAM.frontVideo.autoplay = true;
-            WEBCAM.frontVideo.muted = true;
-            WEBCAM.frontVideo.playsInline = true;
-            WEBCAM.frontVideo.style.display = 'none';
-            document.body.appendChild(WEBCAM.frontVideo);
-          }
-          WEBCAM.frontVideo.srcObject = fStream;
-          await WEBCAM.frontVideo.play().catch(() => {});
-          WEBCAM.frontReady = true;
-        } catch (err) {
-          console.warn('Передняя камера не запущена:', err);
-        }
-      }
-
-      // Задняя вебка
-      if (devices.length > 1 && !WEBCAM.rearReady) {
-        try {
-          const rConstraints = {
-            video: { deviceId: { exact: devices[1].deviceId }, width: { ideal: 640 }, height: { ideal: 360 } }
-          };
-          const rStream = await navigator.mediaDevices.getUserMedia(rConstraints);
-          if (!WEBCAM.rearVideo) {
-            WEBCAM.rearVideo = document.createElement('video');
-            WEBCAM.rearVideo.autoplay = true;
-            WEBCAM.rearVideo.muted = true;
-            WEBCAM.rearVideo.playsInline = true;
-            WEBCAM.rearVideo.style.display = 'none';
-            document.body.appendChild(WEBCAM.rearVideo);
-          }
-          WEBCAM.rearVideo.srcObject = rStream;
-          await WEBCAM.rearVideo.play().catch(() => {});
-          WEBCAM.rearReady = true;
-        } catch (err) {
-          console.warn('Задняя камера не запущена:', err);
-        }
-      }
-      WEBCAM.started = true;
-    } catch (err) {
-      console.warn('Ошибка доступа к вебкам:', err);
-    } finally {
-      WEBCAM.starting = false;
-    }
-  }
-
-  function renderCamera(view, d) {
-    const meta = $('cam-meta');
+  // id 0=FL, 1=RL, 2=FR, 3=RR. Only the onboard process opens USB cameras.
+  function initCameras() {
+    if (!window.RCCameraFrames || !window.RCCameraFrames.whileVisible) return; // keep telemetry working if the asset did not load
     const canvases = ['cam-canvas', 'cam-rear-canvas', 'cam-right-canvas', 'cam-rear-right-canvas'];
     const empties = ['cam-empty', 'cam-rear-empty', 'cam-right-empty', 'cam-rear-right-empty'];
     const badges = ['cam-front-badge', 'cam-rear-badge', 'cam-right-badge', 'cam-rear-right-badge'];
-    const labels = ['CAM 0 · передняя левая', 'CAM 1 · задняя левая',
-      'CAM 2 · передняя правая', 'CAM 3 · задняя правая'];
-    const sources = canvases.map((id, index) => {
-      if (index === 0 && WEBCAM.frontReady && WEBCAM.frontVideo && WEBCAM.frontVideo.videoWidth > 0) {
-        return WEBCAM.frontVideo;
+    const labels = ['Передняя левая', 'Задняя левая', 'Передняя правая', 'Задняя правая'];
+    const live = new Set();
+    window.RCCameraFrames.whileVisible((id, image) => {
+      if (image) live.add(id); else live.delete(id);
+      setText($('cam-meta'), live.size ? live.size + '× LIVE' : 'нет сигнала');
+      const empty = $(empties[id]);
+      if (empty) empty.hidden = !!image;
+      if (!image) {
+        const cameras = link.data && link.data.cameras;
+        const camera = Array.isArray(cameras) && cameras.find(c => c.id === id);
+        setText(empty, labels[id] + ' · ' + ((camera && camera.captureError) || 'нет кадра — проверьте «Устройства»'));
       }
-      if (index === 1 && WEBCAM.rearReady && WEBCAM.rearVideo && WEBCAM.rearVideo.videoWidth > 0) {
-        return WEBCAM.rearVideo;
-      }
-      return WEBCAM.backendCams[index];
-    });
-    const liveCount = sources.filter((src) => src && (src.videoWidth > 0 || src.naturalWidth > 0)).length;
-    if (meta) setText(meta, liveCount ? liveCount + '× LIVE' : 'нет сигнала');
-    sources.forEach((src, index) => {
-      const canvas = $(canvases[index]);
-      const empty = $(empties[index]);
-      const badge = $(badges[index]);
-      const live = !!(src && (src.videoWidth > 0 || src.naturalWidth > 0));
-      if (empty) empty.hidden = live;
-      if (badge) badge.hidden = !live;
-      if (canvas) drawCamera(canvas, d, live, labels[index], src);
+      const badge = $(badges[id]);
+      if (badge) badge.hidden = !image;
+      drawCamera($(canvases[id]), labels[id], image);
     });
   }
 
-  function drawCamera(canvas, d, live, label, videoSource) {
-    const ctx = canvas.getContext && canvas.getContext('2d');
+  function drawCamera(canvas, label, image) {
+    const ctx = canvas && canvas.getContext('2d');
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
@@ -672,47 +581,27 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const cw = w / dpr, ch = h / dpr;
 
-    if (live && videoSource) {
-      try {
-        ctx.drawImage(videoSource, 0, 0, cw, ch);
-      } catch (e) {
-        ctx.fillStyle = '#0a0a0b';
-        ctx.fillRect(0, 0, cw, ch);
-      }
-      ctx.strokeStyle = 'rgba(255,255,255,.2)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(cw * 0.5, ch * 0.3); ctx.lineTo(cw * 0.5, ch * 0.7);
-      ctx.moveTo(cw * 0.3, ch * 0.5); ctx.lineTo(cw * 0.7, ch * 0.5);
-      ctx.stroke();
-
-      ctx.fillStyle = 'rgba(0,0,0,.45)';
-      ctx.fillRect(0, ch - 18, cw, 18);
-      ctx.fillStyle = '#f4f4f6';
-      ctx.font = '700 10px Inter, sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText(label, 8, ch - 5);
-      ctx.textAlign = 'right';
-      ctx.fillStyle = '#f4f4f6';
-      ctx.font = '10px ui-monospace, monospace';
-      const vw = videoSource.videoWidth || videoSource.naturalWidth || 640;
-      const vh = videoSource.videoHeight || videoSource.naturalHeight || 360;
-      ctx.fillText(`${vw}×${vh} · LIVE`, cw - 8, ch - 5);
-      return;
-    }
-
-    ctx.fillStyle = '#0a0a0b';
-    ctx.fillRect(0, 0, cw, ch);
-    ctx.fillStyle = '#8b8b93';
-    ctx.font = '11px Inter, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('кликните для включения вебки', cw / 2, ch / 2);
-    ctx.strokeStyle = 'rgba(255,255,255,.06)';
+    if (!image) { ctx.clearRect(0, 0, cw, ch); return; }
+    ctx.drawImage(image, 0, 0, cw, ch);
+    ctx.strokeStyle = 'rgba(255,255,255,.2)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(cw * 0.5, ch * 0.22); ctx.lineTo(cw * 0.5, ch * 0.78);
-    ctx.moveTo(cw * 0.22, ch * 0.5); ctx.lineTo(cw * 0.78, ch * 0.5);
+    ctx.moveTo(cw * 0.5, ch * 0.3); ctx.lineTo(cw * 0.5, ch * 0.7);
+    ctx.moveTo(cw * 0.3, ch * 0.5); ctx.lineTo(cw * 0.7, ch * 0.5);
     ctx.stroke();
+
+    ctx.fillStyle = 'rgba(0,0,0,.45)';
+    ctx.fillRect(0, ch - 18, cw, 18);
+    ctx.fillStyle = '#f4f4f6';
+    ctx.font = '700 10px Inter, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(label, 8, ch - 5);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#f4f4f6';
+    ctx.font = '10px ui-monospace, monospace';
+    const vw = image.naturalWidth;
+    const vh = image.naturalHeight;
+    ctx.fillText(`${vw}×${vh} · LIVE`, cw - 8, ch - 5);
   }
 
   // Экран рисуется по блокам, и сбой одного не гасит остальные: раньше любое
@@ -745,7 +634,6 @@
     step('kpis', () => renderKpis(d, b));
     step('chassis', () => renderChassis(view, d, motors));
     step('wheels', () => applyDriveToWheels());
-    step('camera', () => renderCamera(view, d));
     step('lidar', () => renderLidar(view, d));
     step('route', () => renderRoute(d));
     step('journal', () => renderEvents());
@@ -879,25 +767,10 @@
     driveTick();
   }
 
-  function initWebcams() {
-    checkBackendCameras();
-    startBrowserWebcams();
-    const frontVp = $('cam-viewport-front');
-    const rearVp = $('cam-viewport-rear');
-    if (frontVp) frontVp.addEventListener('click', () => { startBrowserWebcams(); checkBackendCameras(); });
-    if (rearVp) rearVp.addEventListener('click', () => { startBrowserWebcams(); checkBackendCameras(); });
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) { if (backendCameraPoller) backendCameraPoller.stop(); }
-      else checkBackendCameras();
-    });
-    window.addEventListener('pagehide', () => { if (backendCameraPoller) backendCameraPoller.stop(); });
-    window.addEventListener('pageshow', checkBackendCameras);
-  }
-
   function boot() {
     initLinks();
     syncNav();
-    initWebcams();
+    initCameras();
     window.addEventListener('hashchange', syncNav);
     window.addEventListener('keydown', (e) => { if (!isTyping(e)) driveKey(e, true); });
     window.addEventListener('keyup', (e) => { if (!isTyping(e)) driveKey(e, false); });

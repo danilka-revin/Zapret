@@ -13,6 +13,10 @@ data/
 var/
 *.log
 
+# --- Пакеты обновления для флешки ---
+robot-update.bulka
+.bulka-update-*.tmp
+
 # --- Обучение YOLO: веса и метки в Git, тяжёлые кадры/логи — нет ---
 .cache/
 runs/

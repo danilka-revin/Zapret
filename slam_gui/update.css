@@ -51,6 +51,7 @@
   flex: none; width: 36px; height: 36px; border: 1px solid #3a3035; border-radius: 9px;
   background: #17171a; color: #f4f4f6; font-size: 24px; line-height: 1; cursor: pointer;
 }
+.rc-update-source { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: #c9b8be; font-size: 12px; }
 .rc-update-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .rc-update-facts > div { min-width: 0; display: grid; gap: 4px; padding: 10px 12px; border: 1px solid #2a2428; border-radius: 9px; background: #17171a; }
 .rc-update-facts span { color: #a2949a; font-size: 11px; }

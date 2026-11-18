@@ -9,6 +9,10 @@
 """
 from __future__ import annotations
 
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from robot_control import kiosk_app as kiosk_module
@@ -163,6 +167,13 @@ def test_monitor_keeps_the_common_information(kiosk_client):
         assert kiosk_client.get(path).status_code == 200, path
 
 
+def test_monitor_displays_jbd_independently_of_chassis():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is needed for the monitor screen test")
+    subprocess.run([node, str(Path(__file__).parent / "js/monitor_battery.js")], check=True, timeout=15)
+
+
 def test_monitor_opens_the_case_with_its_pin(kiosk_client):
     open_mode(kiosk_client, "5656")
     wrong = kiosk_client.post("/api/kiosk_lock/open", json={"pin": "0000"})
@@ -225,6 +236,7 @@ def test_signed_link_keeps_monitor_restrictions(kiosk_client):
     client = kiosk_client.application.test_client()
     state = client.get("/api/kiosk_state?m=" + token)
     assert state.status_code == 200
+    assert "battery" in client.get("/api/battery?m=" + token).get_json()
     steer = client.post("/api/kiosk_steer?m=" + token, json={"module": "FL", "angle": 5},
                         headers={"X-Robot-Control": "steering"})
     assert steer.status_code == 403

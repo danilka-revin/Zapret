@@ -45,12 +45,11 @@
         camera.timeout = setTimeout(() => finish(false, true), 1500);
         // RCVision подменяет путь на кадр с рамками YOLO, когда разметка
         // включена; без сервиса остаётся обычный /api/camera/<id>/frame.
-        const url = window.RCVision && window.RCVision.frameUrl
-          ? window.RCVision.frameUrl(camera.id)
-          : (window.RCSessionUrl
-            ? window.RCSessionUrl('api/camera/' + camera.id + '/frame?t=' + Date.now())
-            : 'api/camera/' + camera.id + '/frame?t=' + Date.now());
-        image.src = url;
+        if (window.RCVision && window.RCVision.loadFrame) window.RCVision.loadFrame(image, camera.id);
+        else {
+          const url = 'api/camera/' + camera.id + '/frame?t=' + Date.now();
+          image.src = window.RCSessionUrl ? window.RCSessionUrl(url) : url;
+        }
       }
     }
 
@@ -82,5 +81,15 @@
     return {start, stop};
   }
 
-  window.RCCameraFrames = {create};
+  // Full-page consoles display the robot's JPEGs independently of telemetry.
+  function whileVisible(onFrame) {
+    const poller = create(onFrame);
+    const sync = () => { if (document.hidden) poller.stop(); else poller.start(); };
+    document.addEventListener('visibilitychange', sync);
+    window.addEventListener('pagehide', poller.stop);
+    window.addEventListener('pageshow', sync);
+    sync();
+  }
+
+  window.RCCameraFrames = {create, whileVisible};
 })();

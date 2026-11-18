@@ -76,6 +76,11 @@
     return keys;
   }
   function combinedOptions(kind) {
+    // Video options already represent physical inputs. Never union an older
+    // snapshot's alternate node back in while a camera is being re-enumerated.
+    if (kind === 'video' && portsOptions && Array.isArray(portsOptions.video)) {
+      return portsOptions.video.filter(o => o && o.port);
+    }
     const out = [], seen = new Set();
     for (const source of [portsOptions, snapshotOptions]) {
       for (const option of (source && source[kind]) || []) {
@@ -100,7 +105,8 @@
     const out = [], seen = new Set();
     for (const kind of KIND_ORDER) {
       for (const option of combinedOptions(kind)) {
-        const keys = optionKeys(option);
+        if (kind === 'video' && option.kinect) continue; // depth has its own USB row
+        const keys = kind === 'video' && option.usbPort ? ['video:usb:' + option.usbPort] : optionKeys(option);
         if (!keys.length || keys.some(key => seen.has(key))) continue;
         keys.forEach(key => seen.add(key));
         out.push(Object.assign({}, option, {kind, kindTitle: KIND_TITLES[kind]}));
@@ -122,7 +128,7 @@
       // Для глубины нужен USB-узел NUI Camera; NUI Audio — только микрофон.
       options = options.filter(option => option.kind === 'usb' && option.kinect === true);
     } else if (role.startsWith('camera_')) {
-      options = options.filter(option => option.kinect !== true);
+      options = options.filter(option => option.kind === 'video' && option.kinect !== true);
     }
     return options.sort((a, b) => {
       const rankA = kindRank(a.kind, preferred), rankB = kindRank(b.kind, preferred);
@@ -134,9 +140,10 @@
   // Подпись начинается с реального порта: «1-2.1 · ttyUSB0 · CH340». Длинный
   // by-id остаётся значением для .env и подсказкой, а не текстом строки.
   function optionLabel(option, preferred) {
-    const where = option.usbPort ? option.usbPort + ' · ' : '';
+    const where = option.usbPort ? (option.kind === 'video' ? 'USB ' : '') + option.usbPort + ' · ' : '';
     const node = option.device && option.device !== option.port ? option.device : '';
     const parts = [where + (node || option.port), option.name,
+      option.serial ? 'S/N ' + option.serial : '',
       option.kinect && !/kinect/i.test(String(option.name || '')) ? 'Kinect' : '',
       // Порт, уже занятый другим устройством, виден до нажатия «Сохранить».
       option.ownerTitle ? 'занят: ' + option.ownerTitle : '',
@@ -165,7 +172,7 @@
   }
   function fillPicker(pick, options, preferred) {
     if (!pick) return;
-    const key = JSON.stringify([preferred, options.map(o => [o.port, o.exists])]);
+    const key = JSON.stringify([preferred, options.map(o => [o.port, optionLabel(o, preferred), optionHint(o)])]);
     if (pick.dataset.key === key) return;
     pick.dataset.key = key;
     const previous = pick.value;
@@ -210,7 +217,8 @@
         row.dataset.kind = option.kind;
         row.appendChild(element('span', 'ports-found-port',
           (option.usbPort ? option.usbPort + ' · ' : '') + (option.device || option.port)));
-        row.appendChild(element('span', 'ports-found-name', option.name || option.kindTitle));
+        row.appendChild(element('span', 'ports-found-name', [option.name || option.kindTitle,
+          option.serial && 'S/N ' + option.serial].filter(Boolean).join(' · ')));
         row.appendChild(element('span', 'ports-found-kind', option.kindTitle));
         if (option.ownerTitle) {
           row.appendChild(element('span', 'ports-found-owner', 'назначен: ' + option.ownerTitle));
@@ -224,7 +232,7 @@
     }
     if (!all.length) {
       node.textContent = 'Подключённых портов не найдено. Проверьте USB-кабели, питание и права ' +
-        'dialout; список обновляется каждые 2,5 с и при «Обновить».';
+        'в системе (video для камер, dialout для UART); список обновляется каждые 2,5 с и при «Обновить».';
       node.dataset.tone = 'warn';
       return;
     }
@@ -238,7 +246,7 @@
     node.dataset.tone = 'good';
   }
   function placeholderFor(role) {
-    if (role.startsWith('camera_')) return '/dev/v4l/by-id/…';
+    if (role.startsWith('camera_')) return '/dev/v4l/by-path/…';
     if (role === 'kinect') return 'usb:1-2';
     return '/dev/serial/by-id/…';
   }
@@ -546,13 +554,15 @@
     }
   }
 
-  async function fetchPorts(force) {
-    if (portsRequest && !force) return portsRequest;
-    portsRequest = fetch('/api/devices/ports', {cache: 'no-store'})
+  async function fetchPorts() {
+    if (portsRequest) return portsRequest;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    portsRequest = fetch('/api/devices/ports', {cache: 'no-store', signal: controller.signal})
       .then(response => response.ok ? response.json() : null)
-      .then(data => { renderPorts(data); return data; })
-      .catch(() => null)
-      .finally(() => { portsRequest = null; });
+      .then(data => { if (data && data.ok) renderPorts(data); else portsOptions = null; })
+      .catch(() => { portsOptions = null; })
+      .finally(() => { clearTimeout(timeout); portsRequest = null; });
     return portsRequest;
   }
 
@@ -663,7 +673,7 @@
   async function refresh(force) {
     if (busy) return;
     busy = true; $('devices-refresh').disabled = true;
-    if (force) void fetchPorts(true);
+    void fetchPorts();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     try {
@@ -713,7 +723,6 @@
     else { void refresh(true); if (online && previews && !started) { previews.start(); started = true; } }
   });
   window.addEventListener('pagehide', () => { if (previews) previews.stop(); started = false; });
-  void fetchPorts(true);
   void refresh(true);
   setInterval(() => { if (!document.hidden) void refresh(false); }, 2500);
 })();

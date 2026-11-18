@@ -547,7 +547,7 @@ class VisionService:
     def annotated_frame(self, cam_id: int) -> Optional[bytes]:
         with self._lock:
             state = self._cameras.get(cam_id)
-            if not state or not state.jpeg:
+            if not state or state.error or not state.jpeg or not 0 <= time.time() - state.evidence_stamp < 2.0:
                 return None
             return state.annotated or state.jpeg
 

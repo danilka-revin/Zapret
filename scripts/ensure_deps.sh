@@ -24,7 +24,7 @@ fi
 if [[ ! -x .venv/bin/python ]]; then
   log "создаю .venv на основе $PYTHON3 ($($PYTHON3 --version 2>&1))…"
   if ! "$PYTHON3" -m venv .venv 2>/dev/null && ! "$PYTHON3" -m venv --without-pip .venv 2>/dev/null; then
-    if command -v apt >/dev/null 2>&1; then
+    if [[ "${RC_DEPS_OFFLINE:-0}" != "1" ]] && command -v apt >/dev/null 2>&1; then
       PYTHON_VERSION="$("$PYTHON3" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
       VENV_PACKAGE="python${PYTHON_VERSION}-venv"
       log "ставлю $VENV_PACKAGE через apt…"
@@ -67,7 +67,10 @@ missing_deps() {
 
 install_deps() {
   log "ставлю зависимости…"
-  if ! .venv/bin/pip install -q -r requirements.txt 2>/dev/null; then
+  if [[ "${RC_DEPS_OFFLINE:-0}" == "1" ]]; then
+    log "USB-обновление: ставлю только из vendor (офлайн)…"
+    .venv/bin/pip install -q --no-index --find-links vendor -r requirements.txt
+  elif ! .venv/bin/pip install -q -r requirements.txt 2>/dev/null; then
     log "сети нет — ставлю из vendor (офлайн)…"
     .venv/bin/pip install -q --no-index --find-links vendor -r requirements.txt
   fi

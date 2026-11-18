@@ -115,6 +115,8 @@ async function flush(times = 8) {
   byId('aut-estop').click(); await flush();
 
   const find = (needle) => calls.filter((call) => call.url.indexOf(needle) !== -1);
+  const cam = byId('aut-cam-0'), cameraSrc = cam.src;
+  cam.onerror();  // no fresh annotation for this input
   const result = {
     calls,
     beforeBlind, afterBlind,
@@ -126,7 +128,7 @@ async function flush(times = 8) {
     distance: byId('aut-distance').textContent,
     badge: byId('aut-badge').textContent,
     csrf: global.RCAutonomy._state.csrf,
-    cameraSrc: byId('aut-cam-0').src,
+    cameraSrc, fallbackSrc: cam.src,
     canvasCalls: byId('aut-canvas').getContext().calls.length,
     startCalls: find('/start'),
     stopCalls: find('/stop'),

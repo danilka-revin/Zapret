@@ -98,6 +98,7 @@ def test_autonomy_screen_js_flow(tmp_path):
     assert data["canvasCalls"] > 0
     assert data["csrf"] == "test-token"
     assert "api/vision/camera/0/frame" in data["cameraSrc"]
+    assert "api/camera/0/frame" in data["fallbackSrc"]
     assert data["phase"] == "ЗАЕЗД ПРЕРВАН" and data["badge"] == "ЗАЕЗД ПРЕРВАН"
 
     start = data["startCalls"][0]

@@ -8,7 +8,7 @@
 2. Раздачу MJPEG-видеопотока (/api/camera/<id>/stream) и отдельных кадров (/api/camera/<id>/frame).
 3. Приём кадров от внешних ROS-нод или скриптов (POST /api/camera/<id>/frame).
 4. Список доступных камер (/api/cameras) для фронтенда, с ролью и углом установки.
-5. Генерацию тестового кадра в режиме demo / при отсутствии оборудования.
+5. Проверку свежести и USB-пути: если кадра нет, не подставляем изображение-заглушку.
 """
 
 from __future__ import annotations
@@ -122,8 +122,8 @@ class CameraDevice:
     def _capture_loop(self) -> None:
         try:
             import cv2
-        except ImportError:
-            self.capture_error = "OpenCV (cv2) не установлен в .venv; установите opencv-python-headless"
+        except (ImportError, OSError) as exc:
+            self.capture_error = f"Не загружается OpenCV ({exc}). На борту: .venv/bin/pip install opencv-python-headless"
             log.info("Камера %s: %s", self.cam_id, self.capture_error)
             return
 
@@ -132,6 +132,8 @@ class CameraDevice:
             # The inventory worker refreshes absent paths. Avoid repeatedly
             # traversing all sysfs from four idle capture threads.
             if not dev_target or not os.path.exists(dev_target):
+                self.capture_error = (f"{dev_target}: устройство не подключено" if dev_target else
+                                      "Проверьте назначение видеовхода в разделе «Устройства»")
                 time.sleep(0.5)
                 continue
             # Before each open inspect current sysfs: a replacement at the
@@ -140,6 +142,7 @@ class CameraDevice:
             # Never fall back to the numeric cam_id when a path disappears:
             # /dev/videoN may now be a different camera or even the Kinect.
             if not dev_target or not os.path.exists(dev_target):
+                self.capture_error = "Видеовход не подтверждён. Проверьте устройство и выбранный порт"
                 time.sleep(0.5)
                 continue
             cap = None
@@ -148,16 +151,22 @@ class CameraDevice:
                 if fingerprint is None:
                     continue
                 cap = cv2.VideoCapture(dev_target, cv2.CAP_V4L2 if hasattr(cv2, "CAP_V4L2") else cv2.CAP_ANY)
-                if (not cap.isOpened() or self._fingerprint(dev_target) != fingerprint or
-                        self._target(revalidate=True) != dev_target):
-                    self.capture_error = "Не удалось открыть выбранный видеопорт или USB-устройство изменилось"
+                if not cap.isOpened():
+                    self.capture_error = (f"Нет доступа к {dev_target}: проверьте группу video у бортового процесса"
+                                          if not os.access(dev_target, os.R_OK | os.W_OK) else
+                                          f"Не открыт {dev_target}: проверьте видеовход и не занят ли он другой программой")
                     continue
-                self.capture_error = ""
+                if self._fingerprint(dev_target) != fingerprint or self._target(revalidate=True) != dev_target:
+                    self.capture_error = "USB-устройство изменилось; проверьте назначение камеры"
+                    continue
+                # Four uncompressed C930e streams can exhaust a single USB 2 hub.
+                # Request camera-side MJPEG before streaming; unsupported properties
+                # simply return False and leave the driver's format in use.
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                 cap.set(cv2.CAP_PROP_FPS, self.fps)
                 with self.lock:
-                    self.is_active = True
                     self.opened_path = dev_target
                     self._opened_fingerprint = fingerprint
                 log.info("Камера %s подключена (%s)", self.cam_id, dev_target)
@@ -172,6 +181,7 @@ class CameraDevice:
                     if self._fingerprint(dev_target) != fingerprint:
                         break
                     if not ret or frame is None:
+                        self.capture_error = f"{dev_target} открыт, но нет кадра. Проверьте видеовход, кабель и USB-хаб"
                         failures += 1
                         if failures >= 25:
                             break  # disconnected cameras must be reopened on hotplug
@@ -186,9 +196,14 @@ class CameraDevice:
                             self.latest_jpeg = buf.tobytes()
                             self.latest_time = time.time()
                             self.frame_source = "capture"
+                            self.capture_error = ""
+                            self.is_active = True
+                    else:
+                        self.capture_error = f"{dev_target}: не удалось закодировать кадр JPEG"
                     time.sleep(1.0 / self.fps)
             except Exception as exc:  # noqa: BLE001
-                log.debug("Ошибка захвата камеры %s: %s", self.cam_id, exc)
+                self.capture_error = f"Ошибка захвата с {dev_target}: {exc}"
+                log.debug("Камера %s: %s", self.cam_id, self.capture_error)
             finally:
                 with self.lock:
                     self.is_active = False
@@ -279,17 +294,14 @@ class CameraManager:
 
     @staticmethod
     def _specs() -> list[dict]:
-        """Геометрия и порты из .env; при ошибке — безопасный набор из двух камер."""
+        """Геометрия и ручные назначения; при ошибке не угадывать порт по ID."""
         try:
             from .sensor_layout import camera_specs
             return camera_specs()
         except Exception:  # noqa: BLE001 — настройки не должны ронять экран
-            return [
-                {"id": 0, "role": "front_left", "label": "Камера передняя (CAM 0)",
-                 "port": "/dev/video0", "yaw_deg": 0.0, "hfov_deg": 82.0},
-                {"id": 1, "role": "rear_left", "label": "Камера задняя (CAM 1)",
-                 "port": "/dev/video1", "yaw_deg": 180.0, "hfov_deg": 82.0},
-            ]
+            log.exception("Не удалось прочитать настройки камер")
+            return [{"id": i, "role": role, "port": ""} for i, role in
+                    enumerate(("front_left", "rear_left", "front_right", "rear_right"))]
 
     def _init_devices(self) -> None:
         """Инициализация четырёх камер с учётом портов из .env."""
@@ -373,7 +385,6 @@ class CameraManager:
         result = []
         for cid, dev in sorted(list(self.cameras.items())):
             frame_present = bool(dev.get_frame(max_age_s=2.0))
-            active = dev.is_active or frame_present
             with dev.lock:
                 frame_age = max(0.0, time.time() - dev.latest_time) if frame_present and dev.latest_time else None
                 frame_source = dev.frame_source if frame_present else ""
@@ -388,7 +399,7 @@ class CameraManager:
                     "frameAgeS": round(frame_age, 3) if frame_age is not None else None,
                     "captureError": dev.capture_error or None,
                     "exists": os.path.exists(opened_path or dev.device_path),
-                    "active": active,
+                    "active": frame_present,
                     "width": dev.width,
                     "height": dev.height,
                     "fps": dev.fps,

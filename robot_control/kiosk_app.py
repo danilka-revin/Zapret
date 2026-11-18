@@ -2751,11 +2751,9 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         except OSError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 500
         ports = result["settings"]
-        eventlog.record("ok", "камеры (4): FL %s, FR %s, RL %s, RR %s — сохранено в .env" % (
-            ports.get("front") or "авто /dev/video0",
-            ports.get("front_right") or "авто /dev/video2",
-            ports.get("rear") or "авто /dev/video1",
-            ports.get("rear_right") or "авто /dev/video3"), source="камеры")
+        eventlog.record("ok", "камеры (4): FL %s, FR %s, RL %s, RR %s — настройки сохранены" %
+                        tuple(ports.get(key) or "не назначена" for key in
+                              ("front", "front_right", "rear", "rear_right")), source="камеры")
         return jsonify(result)
 
     @app.post("/api/camera/rescan")

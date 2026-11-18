@@ -20,12 +20,10 @@ from __future__ import annotations
 import math
 import time
 from collections import Counter, deque
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-try:
+if TYPE_CHECKING:
     import numpy as np
-except ImportError:  # tracker and class metadata work without image processing
-    np = None
 
 from .classes import TRAFFIC_LIGHT_LABELS, TRAFFIC_LIGHT_STATES
 
@@ -39,6 +37,7 @@ MIN_PIXELS = 8
 
 def _bgr_to_hsv(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Векторизованный BGR→HSV в шкале OpenCV (H 0…179, S/V 0…255)."""
+    import numpy as np
     rgb = np.asarray(frame, dtype=np.float32) / 255.0
     b, g, r = rgb[..., 0], rgb[..., 1], rgb[..., 2]
     mx = np.maximum(np.maximum(r, g), b)
@@ -60,8 +59,7 @@ def _bgr_to_hsv(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 def color_counts(frame: np.ndarray) -> dict[str, int]:
     """Сколько пикселей каждого сигнального цвета в кадре/рамке."""
-    if np is None:
-        return {name: 0 for name in TRAFFIC_LIGHT_STATES}
+    import numpy as np
     arr = np.asarray(frame)
     if arr.ndim != 3 or arr.shape[-1] < 3 or not arr.size:
         return {state: 0 for state in TRAFFIC_LIGHT_STATES}
@@ -114,11 +112,12 @@ def verify_traffic_light(roi_bgr: Any, *, prefer_red: bool = False) -> dict[str,
     panel stays unknown. These are bench heuristics, not a safety
     certification; the legacy production mode is unchanged.
     """
-    arr = np.asarray(roi_bgr) if np is not None else None
+    import numpy as np
+    arr = np.asarray(roi_bgr)
     result: dict[str, Any] = {"validBody": False, "state": UNKNOWN,
                               "confidence": 0.0, "counts": {s: 0 for s in TRAFFIC_LIGHT_STATES},
                               "pixels": 0, "reason": "invalid-roi"}
-    if arr is None or arr.ndim != 3 or arr.shape[-1] < 3 or arr.size == 0:
+    if arr.ndim != 3 or arr.shape[-1] < 3 or arr.size == 0:
         return result
     height, width = arr.shape[:2]
     if height < 12 or width < 5 or not 1.6 <= height / width <= 5.5:
@@ -309,8 +308,7 @@ class TrafficLightTracker:
 
 def hue_deg(rgb_fraction: tuple[float, float, float]) -> float:
     """Небольшая помощь для тестов/калибровки: тон RGB в градусах OpenCV."""
-    if np is None:
-        raise RuntimeError("NumPy required to calculate HSV")
+    import numpy as np
     arr = np.array([[rgb_fraction[::-1]]], dtype=np.float32)
     h, _, _ = _bgr_to_hsv(arr)
     value = float(h[0, 0])
