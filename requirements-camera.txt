@@ -1,0 +1,6 @@
+# Борт, без GUI/PyTorch. ROS на Ubuntu 22.04/24.04 и штатная CPU-модель
+# собраны для NumPy 1.x. Не поднимать им ABI до 2 при ремонте камер.
+numpy>=1.24,<2; python_version < "3.13"
+# Для Python 3.13+ колёс NumPy 1.x нет.
+numpy>=2.1,<3; python_version >= "3.13"
+opencv-python-headless>=4.8,<5

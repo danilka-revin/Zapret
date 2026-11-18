@@ -16,14 +16,12 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
-try:  # Optional on the offline kiosk; telemetry does not require vision.
-    import numpy as np
-    import cv2
-except (ImportError, OSError):  # pragma: no cover - на роботе без cv2 сервис честно выключен
-    cv2 = None  # type: ignore[assignment]
-
+from ..opencv_runtime import load_opencv
 from .classes import CLASS_INFO, CLASS_NAMES, class_id, normalize_class, signal_from_class
 from .traffic import classify_traffic_light, fuse_signal, verify_traffic_light
+
+
+cv2, np, OPENCV_ERROR = load_opencv()
 
 
 def cv2_available() -> bool:

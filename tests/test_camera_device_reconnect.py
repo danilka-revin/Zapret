@@ -45,7 +45,7 @@ def test_missing_camera_never_falls_back_to_index_and_reconnects_safely(tmp_path
                            VideoWriter_fourcc=lambda *letters: "".join(letters), CAP_PROP_FRAME_WIDTH=1,
                            CAP_PROP_FRAME_HEIGHT=2, CAP_PROP_FPS=3, IMWRITE_JPEG_QUALITY=1,
                            imencode=lambda *args: (True, Bytes()))
-    monkeypatch.setitem(sys.modules, 'cv2', fake)
+    monkeypatch.setattr('robot_control.camera.load_opencv', lambda: (fake, None, ''))
     dev = CameraDevice(3, str(path), role='rear_right', target_provider=lambda: selected['value'])
     dev.start()
     try:
@@ -84,7 +84,7 @@ def test_rechecks_live_usb_before_and_after_open_not_just_cached_path(tmp_path, 
         def isOpened(self): return True
         def release(self): released.append(True)
     fake = SimpleNamespace(VideoCapture=Cap, CAP_V4L2=1, CAP_ANY=0)
-    monkeypatch.setitem(sys.modules, 'cv2', fake)
+    monkeypatch.setattr('robot_control.camera.load_opencv', lambda: (fake, None, ''))
     dev = CameraDevice(0, str(path), target_provider=lambda: str(path),
                        revalidate_provider=lambda: str(path) if identity['live'] else '')
     dev.start()
@@ -128,7 +128,7 @@ def test_open_port_without_a_frame_is_not_live(monkeypatch, tmp_path):
     fake = SimpleNamespace(VideoCapture=EmptyCapture, CAP_V4L2=1, CAP_PROP_FOURCC=6,
                            VideoWriter_fourcc=lambda *args: 0, CAP_PROP_FRAME_WIDTH=3,
                            CAP_PROP_FRAME_HEIGHT=4, CAP_PROP_FPS=5)
-    monkeypatch.setitem(sys.modules, 'cv2', fake)
+    monkeypatch.setattr('robot_control.camera.load_opencv', lambda: (fake, None, ''))
     dev = CameraDevice(0, str(path)); dev.start()
     try:
         assert wait_for(lambda: 'нет кадра' in dev.capture_error)
@@ -223,6 +223,8 @@ def test_ffmpeg_reader_releases_child_on_stop(tmp_path, monkeypatch, backend):
     monkeypatch.setenv('RC_CAMERA_BACKEND', backend)
     if backend == 'auto':
         monkeypatch.setitem(sys.modules, 'cv2', None)
+    else:
+        monkeypatch.setattr('robot_control.camera.load_opencv', lambda: pytest.fail('forced FFmpeg loaded OpenCV'))
     dev = CameraDevice(0, str(path)); dev.start()
     try:
         assert wait_for(lambda: dev.frames_received >= 2, timeout=5), dev.capture_error
