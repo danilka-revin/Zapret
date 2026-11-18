@@ -17,22 +17,21 @@ def status_payload() -> dict:
     checks = {key: True for key in (
         "enabled", "estopClear", "visionOk", "visionRunning", "camerasFresh",
         "conesVisible", "corridorOk", "geometryCalibrated", "driveReady",
-        "steerReady", "chassisLink", "wheelsOnline", "depthFresh", "imuFresh",
+        "steerReady", "cameraPortsDistinct", "chassisLink", "wheelsOnline", "depthFresh", "imuFresh",
         "lidarReady", "lidarClear", "wheelFeedback", "brakeFeedback", "powerLimits",
         "rivalsIdle", "standstill")}
-    checks["blindZone"] = False
+    checks.update(blindZone=False, conesVisible=False, corridorOk=False, geometryCalibrated=False)
     return {
         "ok": True, "active": False, "enabled": True, "simulation": False,
-        "config": {"lookahead_m": 2.5}, "phase": "idle",
+        "navigationMode": "forward",
+        "config": {"robot_length_m": 0.75, "robot_width_m": 0.6, "clearance_m": 0.12,
+                   "stop_clearance_m": 0.8, "lidar_slow_distance_m": 2.0}, "phase": "idle",
         "message": "Автономность не запущена.", "distanceM": 0.0,
         "percent": 0.0, "steerLeftDeg": 0.0, "boostPercent": 0.0,
         "counters": {"stop": 0, "bump": 0, "traffic": 0, "powerBoosts": 0},
-        "cones": [{"x": 1.0, "y": -0.8}, {"x": 1.0, "y": 0.8},
-                  {"x": 2.4, "y": -0.8}, {"x": 2.4, "y": 0.8}],
-        "signs": [], "corridor": {"ok": True, "centerM": 0.05,
-                                  "centerAheadM": 0.1, "widthM": 1.6,
-                                  "leftCount": 2, "rightCount": 2},
-        "lidar": {"ready": True, "blocked": False, "nearestM": None},
+        "cones": [], "signs": [], "corridor": {"ok": False, "required": False, "reason": "not_used"},
+        "lidar": {"ready": True, "blocked": False, "nearestM": None, "points": 61,
+                  "nearestAheadM": 2.5, "nearestPoint": {"x": 2.875, "y": 0.2}},
         "traffic": {"visible": False, "state": "none", "hold": False},
         "ground": {"ok": False, "nearestBumpM": None, "status": "unknown"},
         "imu": {"fresh": True, "pitch": 0.0, "roll": 0.0, "gyroZ": 0.0},
@@ -60,14 +59,26 @@ def test_autonomy_html_links_and_safety_labels():
     assert 'id="btn-autonomy-view"' in robot
     assert 'id="console-autonomy-link"' in index
     env = (ROOT / ".env.example").read_text(encoding="utf-8")
-    for key in ("RC_TRACK_ENABLE=0", "RC_TRACK_STOP_WAIT_S=3.0",
+    for key in ("RC_TRACK_ENABLE=1", "RC_TRACK_LIDAR_SLOW_M=2.0", "RC_TRACK_STOP_WAIT_S=3.0",
                 "RC_TRACK_MAX_DISTANCE_M=200", "RC_TRACK_REQUIRE_DEPTH=1"):
         assert key in env
     docs = (ROOT / "docs" / "TRACK_AUTONOMY.md").read_text(encoding="utf-8")
     assert "navigation_frame()" in docs and "notForNavigation" in docs
     assert "blocked_gate" in docs and "физического E-STOP" in docs
-    assert 'value="gate"' in html and 'value="blocked_gate"' in html
+    assert 'value="gate"' in html and 'value="blocked_gate"' in html and 'value="dead_end"' in html
+    assert "столбики не обязательны" in html and "движение вперёд" in html
+    assert 'id="aut-obstacle-distance"' in html and 'id="aut-lidar-points"' in html
     assert 'id="aut-lidar"' in html
+
+
+def run_screen(tmp_path, status, simulate):
+    payload_file = tmp_path / "payload.json"
+    payload_file.write_text(json.dumps({"status": status, "simulate": simulate}, ensure_ascii=False),
+                            encoding="utf-8")
+    result = subprocess.run([NODE, str(HARNESS), str(payload_file)], cwd=str(ROOT),
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    return json.loads(result.stdout)
 
 
 @pytest.mark.skipif(NODE is None, reason="нет node")
@@ -84,14 +95,13 @@ def test_autonomy_screen_js_flow(tmp_path):
         ],
         "commands": 441, "maxBoostPercent": 9.0,
     }
-    payload_file = tmp_path / "payload.json"
-    payload_file.write_text(json.dumps({"status": status_payload(),
-                                        "simulate": simulate}, ensure_ascii=False),
-                            encoding="utf-8")
-    result = subprocess.run([NODE, str(HARNESS), str(payload_file)], cwd=str(ROOT),
-                            capture_output=True, text=True, timeout=120)
-    assert result.returncode == 0, result.stdout + "\n" + result.stderr
-    data = json.loads(result.stdout)
+    data = run_screen(tmp_path, status_payload(), simulate)
+    assert not data["initial"]["badChecks"]
+    assert data["initial"]["geometryClass"].endswith("is-warn")
+    assert data["initial"]["canvasEmptyHidden"] is True  # a ready LiDAR sector, even with no posts
+    assert data["initial"]["obstacleDistance"] == "2.50" and data["initial"]["lidarPoints"] == "61"
+    assert "передний сектор: есть" in data["initial"]["pathMeta"]
+    assert data["approachPhase"] == "ПРЕПЯТСТВИЕ · МЕДЛЕННО"
     assert data["beforeBlind"] is True and data["afterBlind"] is False
     assert data["checks"] >= 15 and data["warnings"] >= 1
     assert data["events"] >= 1 and data["simEvents"] >= 2
@@ -113,3 +123,24 @@ def test_autonomy_screen_js_flow(tmp_path):
     assert data["estopCalls"][0]["init"]["headers"]["X-Robot-Control"] == "drive"
     assert not any("/api/kiosk_drive" in call["url"] or
                    "/api/navigation/start" in call["url"] for call in data["calls"])
+
+
+@pytest.mark.skipif(NODE is None, reason="нет node")
+@pytest.mark.parametrize("check,label", [("depthFresh", "Kinect"), ("lidarReady", "лидара"),
+                                        ("cameraPortsDistinct", "порты")])
+def test_forward_screen_still_blocks_missing_required_data(tmp_path, check, label):
+    status = status_payload()
+    status["checks"][check] = False
+    status.update(canStart=False, blockers=["Нет необходимых данных"])
+    data = run_screen(tmp_path, status, {"ok": True, "passed": False, "message": "Нет данных"})
+    assert data["afterBlind"] is True and data["startCalls"] == []
+    assert any(label in text for text in data["initial"]["badChecks"])
+
+
+@pytest.mark.skipif(NODE is None, reason="нет node")
+def test_dead_end_summary_describes_stop_after_motion(tmp_path):
+    report = {"ok": True, "passed": True, "expectedStop": True, "scenario": "dead_end",
+              "phase": "blocked", "distanceM": 6.71, "events": []}
+    data = run_screen(tmp_path, status_payload(), report)
+    assert "STOP перед препятствием после 6.71 м" in data["simSummary"]
+    assert json.loads(data["simulateCalls"][0]["init"]["body"])["scenario"] == "dead_end"

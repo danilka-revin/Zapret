@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#000000">
-  <title>Автономность · трасса с конусами</title>
+  <title>Автономность · движение вперёд</title>
   <link rel="stylesheet" href="map.css">
   <link rel="stylesheet" href="autonomy.css">
   <script>
@@ -18,7 +18,7 @@
 <body class="map-page aut-body">
 <header class="map-page-head aut-head">
   <a id="aut-back" href="/">← Бортовой экран</a>
-  <h1>Автономность · трасса с конусами</h1>
+  <h1>Автономность · движение вперёд</h1>
   <span class="aut-mode-badge" id="aut-badge" data-tone="idle">ОЖИДАНИЕ</span>
   <div class="map-page-head-actions">
     <a class="map-btn" id="aut-nav-vision" href="/map">Карта и камеры</a>
@@ -28,15 +28,15 @@
 </header>
 
 <main class="aut-layout">
-  <!-- Схема трассы: конусы, центр коридора, знаки и светофор в координатах робота -->
-  <section class="aut-stage" aria-label="Коридор из конусов и знаки">
+  <!-- Схема направления и контроля препятствий, не карта и не план объезда -->
+  <section class="aut-stage" aria-label="Путь впереди, препятствия и знаки">
     <header class="aut-panel-head">
-      <div><h2>Коридор из конусов</h2><small>вид вперёд · X вперёд, Y влево · оранжевые столбики — границы и препятствия</small></div>
-      <span id="aut-corridor-meta">столбиков: —</span>
+      <div><h2>Путь впереди</h2><small>лидар — препятствия · Kinect — рельеф · столбики не обязательны</small></div>
+      <span id="aut-path-meta">передний сектор: —</span>
     </header>
     <div class="aut-canvas-wrap">
-      <canvas id="aut-canvas" aria-label="Схема коридора: робот внизу, конусы и знаки впереди"></canvas>
-      <span class="aut-canvas-empty" id="aut-canvas-empty">кадров со столбиками пока нет</span>
+      <canvas id="aut-canvas" aria-label="Схема: движение прямо, зона торможения, препятствия и знаки впереди"></canvas>
+      <span class="aut-canvas-empty" id="aut-canvas-empty">нет свежего переднего сектора лидара</span>
     </div>
     <div class="aut-cameras" id="aut-cameras" aria-label="Кадры четырёх камер с разметкой">
       <figure class="aut-cam"><img id="aut-cam-0" alt="Передняя левая камера"><figcaption>ПЕРЕД-Л</figcaption></figure>
@@ -44,7 +44,7 @@
       <figure class="aut-cam"><img id="aut-cam-1" alt="Задняя левая камера (краевая)"><figcaption>КРАЙ-Л</figcaption></figure>
       <figure class="aut-cam"><img id="aut-cam-3" alt="Задняя правая камера (краевая)"><figcaption>КРАЙ-П</figcaption></figure>
     </div>
-    <p class="aut-legend">Оранжевые точки — запрещённые для проезда столбики, пунктир — проверенное направление крабового хода. Схема показывает последние кадры, а не карту местности.</p>
+    <p class="aut-legend">Пунктир — направление прямо, заливка — проверяемая зона торможения. Голубая точка — ближайшее препятствие на пути по лидару; оранжевые — необязательные отметки столбиков с камер. Это схема, не карта и не маршрут объезда.</p>
   </section>
 
   <aside class="aut-side" aria-label="Пуск автономности и состояние">
@@ -59,11 +59,11 @@
     <section class="aut-card" aria-labelledby="aut-start-title">
       <header class="aut-card-head"><span class="aut-step">2</span><b id="aut-start-title">Пуск</b><span id="aut-enable-state">—</span></header>
       <div class="aut-buttons">
-        <button type="button" class="map-btn map-btn--primary" id="aut-start" disabled>Запустить автономность</button>
+        <button type="button" class="map-btn map-btn--primary" id="aut-start" disabled>Запустить автономное движение</button>
         <button type="button" class="map-btn map-btn--danger" id="aut-stop" disabled>Стоп</button>
         <button type="button" class="map-btn map-btn--danger" id="aut-estop">E-STOP</button>
       </div>
-      <p class="aut-note" id="aut-command-note" role="status">Только для закрытой площадки. После ручного пуска робот ведёт заезд сам; держите физический E-STOP под рукой.</p>
+      <p class="aut-note" id="aut-command-note" role="status">Только для закрытой площадки. После ручного пуска робот едет прямо до препятствия или тупика, без автоматического объезда и поворотов. Держите физический E-STOP под рукой.</p>
     </section>
 
     <section class="aut-card" aria-labelledby="aut-live-title">
@@ -73,10 +73,10 @@
       <div class="aut-kpis">
         <div class="aut-kpi"><span>Путь</span><b id="aut-distance">0.0</b><small>м</small></div>
         <div class="aut-kpi"><span>Тяга</span><b id="aut-percent">0</b><small>%</small></div>
-        <div class="aut-kpi"><span>Угол краба</span><b id="aut-steer">0</b><small>°</small></div>
+        <div class="aut-kpi"><span>Угол колёс</span><b id="aut-steer">0</b><small>°</small></div>
         <div class="aut-kpi"><span>Добавка на кочке</span><b id="aut-boost">0</b><small>%</small></div>
-        <div class="aut-kpi"><span>Ширина / минимум</span><b id="aut-corridor">—</b><small>м</small></div>
-        <div class="aut-kpi"><span>Столбиков</span><b id="aut-cones">0</b><small>шт</small></div>
+        <div class="aut-kpi"><span>Ближайшее на пути</span><b id="aut-obstacle-distance">—</b><small>м от переднего края</small></div>
+        <div class="aut-kpi"><span>Передний сектор</span><b id="aut-lidar-points">0</b><small>точек лидара</small></div>
         <div class="aut-kpi" id="aut-kpi-lidar"><span>Контроль лидара</span><b id="aut-lidar">—</b></div>
         <div class="aut-kpi" id="aut-kpi-traffic"><span>Светофор</span><b id="aut-traffic">—</b><small>сигнал</small></div>
         <div class="aut-kpi" id="aut-kpi-stop"><span>СТОП</span><b id="aut-stop-sign">—</b><small>знак</small></div>
@@ -90,10 +90,11 @@
       <header class="aut-card-head"><span class="aut-step">4</span><b id="aut-sim-title">Сухой прогон</b><span>без железа и тяги</span></header>
       <label class="aut-select"><span>Сценарий</span>
         <select id="aut-scenario">
-          <option value="full">Вся трасса: проезд + СТОП + кочка + светофор</option>
-          <option value="gate">Широкий проезд между столбиками</option>
-          <option value="blocked_gate">Узкий проезд: остановка до столбиков</option>
-          <option value="straight">Только конусы и повороты</option>
+          <option value="full">Без столбиков: СТОП + кочка + светофор</option>
+          <option value="gate">Прямо через широкий проезд</option>
+          <option value="blocked_gate">Препятствие у старта: STOP</option>
+          <option value="straight">Прямая без столбиков</option>
+          <option value="dead_end">Движение до стены по лидару</option>
           <option value="stop">Знак СТОП и ожидание 3 с</option>
           <option value="bump">Кочка и добавка мощности</option>
           <option value="light">Красный → зелёный</option>
@@ -109,11 +110,11 @@
     <section class="aut-card aut-rules" aria-labelledby="aut-rules-title">
       <header class="aut-card-head"><b id="aut-rules-title">Правила проезда</b></header>
       <ul>
-        <li>Столбик — препятствие. Едем между двумя видимыми границами, только если корпус проходит с запасом. Лидар отдельно проверяет путь торможения.</li>
+        <li>Едем прямо без обязательной видимости столбиков. Лидар проверяет передний сектор и путь корпуса: перед объектом замедляемся, перед препятствием или тупиком — STOP. Автоматического объезда нет.</li>
         <li>У знака СТОП ждём 3 с после подтверждения полной остановки всех четырёх колёс.</li>
         <li>Кочка: подъезжаем медленно. Переезжаем после подтверждения Kinect и наклона; тягу добавляем только на проверенном подъёме и в пределах лимита.</li>
         <li>Светофор: на красный, жёлтый и неясный сигнал стоим; едем только на зелёный, подтверждённый на двух свежих кадрах.</li>
-        <li>Потеря проезда, свежих данных или связи с шасси снимает тягу. Кнопка «Стоп» завершает заезд; физический аварийный выключатель остаётся обязательным.</li>
+        <li>Точная калибровка геометрии не обязательна, но свежая глубина Kinect нужна. Потеря необходимых данных или связи с шасси снимает тягу. Кнопка «Стоп» завершает заезд; физический аварийный выключатель остаётся обязательным.</li>
       </ul>
     </section>
   </aside>

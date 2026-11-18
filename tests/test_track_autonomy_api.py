@@ -50,10 +50,12 @@ def test_kiosk_autonomy_page_assets_and_status(kiosk_client):
     status = kiosk_client.get("/api/autonomy/status")
     assert status.status_code == 200
     body = status.get_json()
-    assert body["ok"] is True and body["enabled"] is False
+    assert body["ok"] is True and body["enabled"] is True
     assert body["active"] is False and body["canStart"] is False
     assert body["requireBlindCheck"] is True
-    assert "RC_TRACK_ENABLE" in " ".join(body["blockers"])
+    assert "RC_TRACK_ENABLE" not in " ".join(body["blockers"])
+    assert body["navigationMode"] == "forward" and body["corridor"]["required"] is False
+    assert body["drive"]["commands"] == 0 and body["drive"]["percent"] == 0
     assert kiosk_client.application.extensions["rc_track"] is not None
 
 
@@ -74,6 +76,11 @@ def test_kiosk_autonomy_commands_require_marker(kiosk_client):
     assert report["counters"]["traffic"] >= 1 and report["counters"]["powerBoosts"] >= 1
     closed = kiosk_client.post("/api/autonomy/simulate", json={"scenario": "blocked_gate"}, headers=marker)
     assert closed.status_code == 200 and closed.json["passed"] and closed.json["distanceM"] == 0
+    dead_end = kiosk_client.post("/api/autonomy/simulate", json={"scenario": "dead_end"}, headers=marker)
+    assert dead_end.status_code == 200 and dead_end.json["passed"] and dead_end.json["expectedStop"]
+    assert 0 < dead_end.json["distanceM"] < 8 and dead_end.json["finalPercent"] == 0
+    track = kiosk_client.application.extensions["rc_track"]
+    assert not track.active and track.motion.command_count == 0  # simulations never arm the real service
     bad = kiosk_client.post("/api/autonomy/simulate", json={"scenario": "sideways"}, headers=marker)
     assert bad.status_code == 400
 
