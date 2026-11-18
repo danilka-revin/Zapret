@@ -192,6 +192,7 @@ def proxy_sensor_module(origin: str, operation: str):
         "state": ("GET", "/api/sensor_module"),
         "lights": ("POST", "/api/sensor_module/lights"),
         "strip": ("POST", "/api/sensor_module/strip"),
+        "buzz": ("POST", "/api/sensor_module/buzz"),
         "lock": ("POST", "/api/sensor_module/lock"),
         "cards": ("POST", "/api/sensor_module/cards"),
         "cargo": ("POST", "/api/sensor_module/cargo"),

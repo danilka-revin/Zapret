@@ -169,7 +169,34 @@
     setText($('sm-alt'), hasNumber(data.altitudeM) ? fmt(data.altitudeM, 0) : '—');
   }
 
+  // Автосигналы шасси: стоп-сигнал и тревога. Это не кнопки: сервер сам решает
+  // по телеметрии и лидару. Оператор видит причину, а не «почему пищит».
+  function renderSignals(data) {
+    const box = $('sm-signals');
+    if (!box) return;
+    const signals = data.driveSignals;
+    if (!signals || signals.enabled === false) {
+      box.textContent = signals && signals.enabled === false
+        ? 'Автосигналы выключены (RC_SIGNALS_ENABLED=0)'
+        : 'Автосигналы: нет данных';
+      box.dataset.tone = '';
+      return;
+    }
+    const parts = [];
+    if (signals.brakeLight) parts.push('стоп-сигнал');
+    if (signals.alert) {
+      parts.push('тревога: препятствие ' + (hasNumber(signals.distanceM)
+        ? fmt(signals.distanceM, 2) + ' м' : 'близко') + ' по курсу');
+    } else if (hasNumber(signals.distanceM)) {
+      parts.push('по курсу ' + fmt(signals.distanceM, 2) + ' м');
+    }
+    box.textContent = 'Автосигналы: ' + (parts.length ? parts.join(' · ') : (signals.reason || 'ожидание'));
+    box.dataset.tone = signals.alert ? 'err' : (signals.brakeLight ? 'warn' : '');
+    if (signals.error) box.textContent += ' · плата: ' + signals.error;
+  }
+
   function renderLights(data) {
+    renderSignals(data);
     const lights = data.lights || {};
     const buttons = document.querySelectorAll ? document.querySelectorAll('[data-light]') : [];
     Array.prototype.forEach.call(buttons, (button) => {
@@ -416,6 +443,11 @@
     const off = $('sm-lights-off');
     if (off) off.addEventListener('click', () => act('свет', 'api/sensor_module/lights',
                                                      { all: true, on: false }));
+
+    // Проверка зуммера: только короткий тон. Свет, замок и карты не трогаются,
+    // поэтому PIN не нужен — это динамик, а не доступ.
+    const buzz = $('sm-buzz');
+    if (buzz) buzz.addEventListener('click', () => act('сигнал зуммера', 'api/sensor_module/buzz', {}));
 
     const stripModes = document.querySelectorAll ? document.querySelectorAll('[data-strip-mode]') : [];
     Array.prototype.forEach.call(stripModes, (button) => {

@@ -241,6 +241,8 @@ function logItems() {
         (b) => ({ mode: b.getAttribute('data-strip-mode'), disabled: !!b.disabled,
                   title: b.title || '' })),
     },
+    signals: byId('sm-signals').textContent,
+    signalsTone: byId('sm-signals').dataset.tone || '',
     door: byId('sm-door').textContent,
     scans: byId('sm-scans').children.map(opt => opt.textContent),
     lock: { text: byId('sm-lock').textContent,
@@ -273,6 +275,12 @@ function logItems() {
     if (acts.allOff) {
       byId('sm-lights-off').click();
       await sleep(20);
+    }
+    if (acts.buzz) {
+      byId('sm-buzz').click();
+      await sleep(20);
+      result.afterBuzz = { text: byId('sm-msg').textContent,
+                           tone: byId('sm-msg').dataset.tone || '' };
     }
     if (acts.dim !== undefined) {
       byId('sm-dim').value = String(acts.dim);

@@ -104,6 +104,9 @@ static const bool RELAY_ACTIVE_LOW = true;
 static const uint8_t LOCK_SERVO_PIN = 7;
 static const uint8_t DOOR_SWITCH_PIN = 42;
 static const uint8_t BUZZER_PIN = 44;
+//: Сколько звучит зуммер по команде buzz: столько же, сколько по чтению карты.
+//: Сигнал проверки — короткий, чтобы не заглушать площадку и не греть зуммер.
+static const uint16_t BUZZ_TEST_MS = 300;
 
 static const uint8_t UID_MAX_BYTES = 10;
 struct CardUid {
@@ -312,6 +315,7 @@ static bool door_raw = false, door_closed = false;
 static uint32_t door_changed_ms = 0;
 static bool buzzing = false;
 static uint32_t buzz_started_ms = 0;
+static uint16_t buzz_duration_ms = 0;
 static bool lock_open = false;
 static bool lock_held = false;                // открыт картой, сам не закроется
 static uint32_t lock_deadline = 0;
@@ -793,12 +797,15 @@ uint8_t effectiveLights() {
 }
 
 void applyRelays(uint8_t mask) {
-  // Физический порядок реле: 1 передние, 2 стопы, 3 левые, 4 правые.
-  // Биты протокола light= остаются семантическими: head/stop/left/right.
+  // Физический порядок каналов: 1 передние (D2), 2 правый поворотник (D3),
+  // 3 левый поворотник (D4), 4 стопы (D5). Стопы и правый поворотник на этой
+  // разводке поменяны местами относительно первой версии — см. RELAY_PINS.
+  // Биты протокола light= остаются семантическими: head/stop/left/right,
+  // поэтому экран и телеметрия не зависят от физического канала.
   relayWrite(0, (mask & LIGHT_HEAD) != 0);
-  relayWrite(1, (mask & LIGHT_STOP) != 0);
+  relayWrite(1, (mask & LIGHT_RIGHT) != 0);
   relayWrite(2, (mask & LIGHT_LEFT) != 0);
-  relayWrite(3, (mask & LIGHT_RIGHT) != 0);
+  relayWrite(3, (mask & LIGHT_STOP) != 0);
 }
 
 //: Насколько далеко от головы волны пиксель ещё горит (в диодах).
@@ -925,7 +932,7 @@ void doorTick(uint32_t now) {
   const bool closed = digitalRead(DOOR_SWITCH_PIN) == HIGH;
   if (closed != door_raw) { door_raw = closed; door_changed_ms = now; }
   if (now - door_changed_ms >= 35) door_closed = door_raw;
-  if (buzzing && now - buzz_started_ms >= 80) {
+  if (buzzing && (uint32_t)(now - buzz_started_ms) >= buzz_duration_ms) {
     digitalWrite(BUZZER_PIN, LOW);
     buzzing = false;
   }
@@ -1177,6 +1184,15 @@ static uint8_t rfid_answer_length = 0;
 static uint32_t rfid_started_ms = 0;
 static uint32_t rfid_slot_ms = 0;
 
+//: Короткий сигнал зуммера. Повторный вызов не удлиняет тон бесконечно:
+//: отсчёт начинается заново, и он всё равно закончится за заданное время.
+void buzz(uint16_t milliseconds) {
+  digitalWrite(BUZZER_PIN, HIGH);
+  buzzing = true;
+  buzz_started_ms = millis();
+  buzz_duration_ms = milliseconds;
+}
+
 void rfidRestart(uint32_t now) {
   rfid_phase = 0;
   rfid_slot_ms = now + RFID_POLL_MS;
@@ -1187,9 +1203,7 @@ void rfidRestart(uint32_t now) {
 void rfidCardRead(const CardUid& card, uint32_t now) {
   char uid[2 * UID_MAX_BYTES + 1];
   uidHex(card, uid);
-  digitalWrite(BUZZER_PIN, HIGH);
-  buzzing = true;
-  buzz_started_ms = millis();
+  buzz(80);  // короткий сигнал чтения; кнопка проверки на экране — buzz
   error_mask &= (uint8_t)~ERR_RFID;
 
   if (card_learn) {
@@ -1356,7 +1370,7 @@ bool parseRole(const char* text, uint8_t* role) {
 
 void printHelp() {
   note(PSTR("команды: ping, stat, ?, light head|stop|left|right|dim on|off, light all off|on"));
-  note(PSTR("dim 0…255, strip auto|off|floor|wave, lock open [1…10]|hold|close"));
+  note(PSTR("dim 0…255, strip auto|off|floor|wave, buzz, lock open [1…10]|hold|close"));
   note(PSTR("card list|add UID [admin|user]|learn [admin|user]|role UID admin|user|del|clear"));
   note(PSTR("cargo load|unload [1…240]|end, mag cal start|stop|reset"));
   note(PSTR("mag cal start|stop|reset. Пины: I2C 20/21, RC522 SS53 RST9, лента D6, реле D2-D5"));
@@ -1445,6 +1459,13 @@ void handleCommand(char* line) {
     lightsRefresh();
     emitTelemetry();
     emitAck("strip", true);
+    return;
+  }
+  if (strcmp_P(word, PSTR("buzz")) == 0) {
+    // Проверка зуммера кнопкой на экране: только звук, свет и замок не трогаем.
+    buzz(BUZZ_TEST_MS);
+    emitTelemetry();
+    emitAck("buzz", true);
     return;
   }
   if (strcmp_P(word, PSTR("lock")) == 0) {
