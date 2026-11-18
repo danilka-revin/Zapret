@@ -53,15 +53,16 @@ def usb_repo(tmp_path, monkeypatch):
 @pytest.fixture
 def package(usb_repo, monkeypatch, request):
     seed, robot, drive, key, base = usb_repo
-    packaged_base = None if getattr(request, "param", "delta") == "full" else base
-    path, sha = make_usb_update.make_package(seed, drive, key, branch="main", base=packaged_base)
+    variant = getattr(request, "param", "delta")
+    path, sha = make_usb_update.make_package(seed, drive, key, branch="main",
+                                            base=base if variant == "delta" else None, as_zip=variant == "zip")
     monkeypatch.setattr(usb_update, "find_package", lambda _mount: path if path.exists() else None)
-    assert (drive / usb_update.PACKAGE_NAME) == path
+    assert path == drive / (usb_update.ZIP_NAME if variant == "zip" else usb_update.PACKAGE_NAME)
     assert git(seed, "for-each-ref", "refs/bulka-usb/") == ""
     return path, sha, robot, base
 
 
-@pytest.mark.parametrize("package", ["full", "delta"], indirect=True)
+@pytest.mark.parametrize("package", ["full", "delta", "zip"], indirect=True)
 def test_signed_usb_update_applies_offline_and_preserves_data(package):
     path, sha, robot, _base = package
     settings = robot / "data" / "settings.json"
@@ -153,6 +154,7 @@ def test_usb_refuses_an_unsafe_update(package, failure, message):
     assert not list((robot / "var").glob("usb-update-*"))
 
 
+@pytest.mark.parametrize("package", ["delta", "zip"], indirect=True)
 def test_auto_usb_waits_for_stop_and_attempts_the_file_once(package, monkeypatch):
     path, sha, robot, _base = package
     manager = UpdateManager(robot)
@@ -193,7 +195,8 @@ def test_usb_and_online_updates_share_the_lock(package):
 def test_usb_package_is_discovered_only_at_a_matching_mount(tmp_path, monkeypatch):
     flash = tmp_path / "USB with spaces"
     flash.mkdir()
-    (flash / usb_update.PACKAGE_NAME).touch()
+    (flash / "Zapret-main.zip").touch()  # The ordinary GitHub ZIP is not a release asset.
+    package = flash / usb_update.ZIP_NAME
     volumes = []
 
     def findmnt(args, **_kwargs):
@@ -201,10 +204,16 @@ def test_usb_package_is_discovered_only_at_a_matching_mount(tmp_path, monkeypatc
         return subprocess.CompletedProcess(args, 0, json.dumps({"filesystems": volumes}))
 
     monkeypatch.setattr(usb_update.subprocess, "run", findmnt)
-    assert usb_update.find_package(flash) is None  # A leftover directory is not a mount.
     volumes.append({"source": "/dev/sdz1", "target": str(flash)})
-    assert usb_update.find_package(flash) == flash / usb_update.PACKAGE_NAME
+    assert usb_update.find_package(flash) is None  # Ignore the ordinary source archive.
+    package.touch()
+    assert usb_update.find_package(flash) == package
     assert usb_update.find_package() is None  # Nonstandard mount must be configured.
+    (flash / usb_update.PACKAGE_NAME).touch()
+    with pytest.raises(usb_update.UsbUpdateError, match="несколько пакетов"):
+        usb_update.find_package(flash)
+    volumes.clear()
+    assert usb_update.find_package(flash) is None  # A leftover directory is not a mount.
 
 
 def test_usb_update_api_requires_login_csrf_and_checked_revision(client, app, operator, monkeypatch):
