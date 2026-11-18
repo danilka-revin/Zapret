@@ -143,6 +143,24 @@ def test_snapshot_stales_after_at_most_one_second_even_with_long_colour_ttl():
     assert policy.snapshot(now=6.01)['recommendation'] == 'wait'
 
 
+def test_capture_age_consumes_freshness_budget_before_inference_finishes():
+    policy = ClosedCourseWaitPolicy(enabled=True)
+    waiting(policy)
+    assert observe(policy, 5.5, frame_age_s=.75)['recommendation'] == 'proceed_closed_course'
+    assert policy.snapshot(now=5.74)['recommendation'] == 'proceed_closed_course'
+    assert policy.snapshot(now=5.76)['recommendation'] == 'wait'
+
+
+def test_gaps_after_capture_expires_restart_wait_even_without_snapshot_polling():
+    policy = ClosedCourseWaitPolicy(enabled=True)
+    for step in range(13):
+        # Each frame is just fresh enough when inference finishes, but expires
+        # before the next observation. Processing time cannot hide that gap.
+        result = observe(policy, step / 2, frame_age_s=.75)
+        assert result['elapsedS'] == 0
+        assert result['recommendation'] == 'wait'
+
+
 def make_service():
     clock = [time.monotonic() - 5]
     wall_start = time.time() - 5

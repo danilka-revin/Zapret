@@ -33,6 +33,7 @@ class ClosedCourseWaitPolicy:
         self._phase = reason
         self._first: float | None = None
         self._last: float | None = None
+        self._fresh_until: float | None = None
         self._camera: int | None = None
         self._anchor: tuple | None = None
         self._box: tuple | None = None
@@ -85,12 +86,16 @@ class ClosedCourseWaitPolicy:
             self.invalidate('awaiting_signal_confirmation')
             return self.snapshot(now=now)
         continuous = (self._camera == camera_id and self._last is not None and
-                      0 <= now - self._last <= self.stale_s and previous is not None and
-                      0 < frame_stamp - previous <= self.stale_s and
+                      self._fresh_until is not None and self._last <= now <= self._fresh_until and
+                      previous is not None and 0 < frame_stamp - previous <= self.stale_s and
                       self._iou(self._box, box) >= .3 and self._iou(self._anchor, box) >= .3)
         if not continuous:
             self._first, self._anchor = now, box
         self._last, self._camera, self._box = now, camera_id, box
+        # Inference has already consumed part of the capture's freshness. Do
+        # not grant it a new full TTL, nor bridge an expired interval merely
+        # because nobody polled snapshot() during that gap.
+        self._fresh_until = now + max(0., self.stale_s - frame_age_s)
         self._elapsed = max(0., now - self._first)
         self._phase = 'timeout_advisory' if self._elapsed >= self.WAIT_S else 'waiting'
         return self.snapshot(now=now)
@@ -98,7 +103,8 @@ class ClosedCourseWaitPolicy:
     def snapshot(self, *, now: float | None = None) -> dict[str, Any]:
         now = self._clock() if now is None else float(now)
         phase = self._phase if self.enabled else 'disabled'
-        fresh = self._last is not None and math.isfinite(now) and 0 <= now - self._last <= self.stale_s
+        fresh = (self._last is not None and self._fresh_until is not None and
+                 math.isfinite(now) and self._last <= now <= self._fresh_until)
         if phase in ('waiting', 'timeout_advisory') and not fresh:
             phase = 'stale'
         proceed = phase == 'timeout_advisory' and fresh and not self._stop_latched
