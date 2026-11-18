@@ -335,3 +335,72 @@ def test_remote_proxy_requires_csrf_and_scan_header(client, operator):
     body = client.post("/api/scan_mode/drive", json={"percent": 5},
                        headers={"X-CSRF-Token": token})
     assert body.status_code == 400 and body.json["reason"] == "request_header_required"
+
+
+# ------------------------------ умный круиз-контроль: пауза у препятствия ---
+class Hold:
+    """Контроллер паузы: как настоящий, только без лидара."""
+
+    def __init__(self, clock, near=None, hold_s=5.0):
+        self.clock = clock
+        self.near = near
+        self.hold_s = hold_s
+        self.until = 0.0
+
+    def request_hold(self, direction, now=None):
+        now = float(self.clock()) if now is None else float(now)
+        if now < self.until:
+            return {"hold": True, "holdRemainingS": round(self.until - now, 1)}
+        if self.near is not None and direction and self.near <= 0.5:
+            self.until = now + self.hold_s
+            return {"hold": True, "holdRemainingS": self.hold_s, "holdTriggered": True}
+        return {"hold": False, "holdRemainingS": 0.0}
+
+    def snapshot(self, **_):
+        now = float(self.clock())
+        return {"hold": self.until > now,
+                "holdRemainingS": round(max(0.0, self.until - now), 1)}
+
+
+def test_scan_mode_holds_before_driving_into_an_obstacle_then_resumes():
+    clock = Clock(100.0)
+    chassis = FakeChassis()
+    hold = Hold(clock, near=0.4)
+    service = ScanModeService(lambda: object(), chassis.drive, chassis.steer,
+                              lambda: None, clock=clock, max_percent=20,
+                              deadman_s=60.0, safety_provider=lambda: hold)
+    service.enable()
+    # Тяга не уходит на платы: пауза начинается до железа.
+    with pytest.raises(ScanModeError) as excinfo:
+        service.drive({"percent": 8})
+    assert excinfo.value.reason == "obstacle_hold" and excinfo.value.status == 409
+    assert ("drive", {"percent": 8}) not in chassis.calls
+    assert "пауза" in excinfo.value.message
+
+    # Пауза вышла, но препятствие ещё близко — новая попытка снова упирается.
+    clock.now += 6.0
+    with pytest.raises(ScanModeError):
+        service.drive({"percent": 8})
+    # Путь свободен — тяга снова проходит, ноль тоже.
+    hold.near = 2.0
+    clock.now += 6.0
+    result, status = service.drive({"percent": 8})
+    assert status == 200 and result["ok"]
+    assert ("drive", {"percent": 8}) in chassis.calls
+    assert service.drive({"percent": 0})[0]["ok"] is True
+
+
+def test_scan_mode_never_blocks_stop_or_disable_when_paused():
+    clock = Clock(100.0)
+    chassis = FakeChassis()
+    hold = Hold(clock, near=0.3)
+    service = ScanModeService(lambda: object(), chassis.drive, chassis.steer,
+                              lambda: None, clock=clock, deadman_s=60.0,
+                              safety_provider=lambda: hold)
+    service.enable()
+    with pytest.raises(ScanModeError):
+        service.drive({"percent": 8})
+    # Стоять и выключаться можно всегда, даже внутри паузы.
+    assert service.drive({"percent": 0})[0]["ok"] is True
+    service.disable("operator")
+    assert service.status()["enabled"] is False

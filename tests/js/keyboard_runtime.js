@@ -44,7 +44,9 @@ function setAngle(motor, angle) {
 }
 const telemetry = {linkOk: true, steeringControl: {available: true}, drive: {available: true, active: false}, motors,
   // Ограничения по знакам приходят в телеметрии борта (driveGuard).
-  driveGuard: {blocked: false, bump: false, speedCapPercent: 100, reason: 'нет ограничений'}};
+  driveGuard: {blocked: false, bump: false, speedCapPercent: 100, reason: 'нет ограничений'},
+  // Умный круиз-контроль: борт сообщает паузу у препятствия.
+  obstacleHold: {hold: false, holdRemainingS: 0}};
 const calls = [];
 const pivot = Math.atan2(500, 380) * 180 / Math.PI;
 const spin = {angleDeg: pivot, wheelbaseMm: 500, trackMm: 380,
@@ -80,6 +82,11 @@ global.fetch = async (_url, init) => {
     if (holdArm) { const gate = holdArm; holdArm = null; await gate.promise; }
     result.permit = 'permit';
   } else if (body.action === 'live') {
+    // Пауза у препятствия: борт снимает тягу и просит подождать.
+    if (telemetry.obstacleHold.hold) {
+      brake();
+      return {ok: false, json: async () => ({ok: false, reason: 'obstacle_hold'})};
+    }
     // Настоящий борт отклоняет и снимает тягу при подтверждённом красном.
     if (telemetry.driveGuard.blocked) {
       brake();
@@ -338,6 +345,25 @@ const count = action => calls.filter(call => call.action === action).length;
   slider.value = '20'; slider.emit('input');
   button.emit('click');
   await until(() => button.getAttribute('aria-pressed') === 'false', 'guard: WASD disabled');
+
+  // Умный круиз-контроль: пауза у препятствия. Клавиши остаются нажатыми,
+  // экран сам возобновляет ход, когда борт отпустил паузу.
+  button.emit('click');
+  await until(() => button.getAttribute('aria-pressed') === 'true', 'hold: WASD enabled');
+  telemetry.obstacleHold = {hold: true, holdRemainingS: 4.4, holdS: 5};
+  down('ArrowUp');
+  await sleep(300);
+  assert.equal(telemetry.drive.active, false, 'hold keeps the wheels stopped');
+  assert.match(status.textContent, /Препятствие близко/);
+  assert.equal(button.getAttribute('aria-pressed'), 'true', 'hold must not close the session');
+  // Пауза вышла — ход возобновляется без повторного нажатия.
+  telemetry.obstacleHold = {hold: false, holdRemainingS: 0};
+  await until(() => telemetry.drive.active, 'hold released: drive resumes');
+  assert.ok(true, 'ход возобновляется, клавиша так и не отпускалась');
+  up('ArrowUp');
+  await until(() => !telemetry.drive.active, 'hold: released');
+  button.emit('click');
+  await until(() => button.getAttribute('aria-pressed') === 'false', 'hold: WASD disabled');
 
   console.log('keyboard runtime races OK');
 })().catch(error => { console.error(error); process.exit(1); });

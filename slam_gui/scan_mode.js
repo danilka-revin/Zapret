@@ -40,6 +40,8 @@
     keyboardAppliedAngles: null,
     lastStatus: null,
     lidarBusy: false,
+    scan: [],               // последний скан лидара: подсказка о паузе
+    hold: null,             // {until, reason} пауза у препятствия
     robotBusy: false,
     sourceTimer: null,
     view3d: false,
@@ -56,6 +58,7 @@
     module_offline: 'Нет телеметрии колёс.',
     not_homed: 'Сначала откалибруйте руль.',
     control_not_supported: 'Источник не поддерживает команду.',
+    obstacle_hold: 'Препятствие близко: остановка, управление вернётся само.',
     request_header_required: 'Сервер требует заголовок управления.',
   };
 
@@ -167,6 +170,8 @@
   }
 
   async function refresh() {
+    renderHold();
+    resumeAfterHold();
     try {
       const body = await getJson('api/scan_mode');
       if (body && body.slamMode) renderSlamMode(body.slamMode);
@@ -185,6 +190,7 @@
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const body = await response.json();
       const points = body && Array.isArray(body.scan) ? body.scan : [];
+      state.scan = points;
       if (window.RCMapView && typeof window.RCMapView.setScan === 'function') window.RCMapView.setScan(points);
       if (window.RCKinectView && typeof window.RCKinectView.setLidarScan === 'function') {
         window.RCKinectView.setLidarScan(points, body);
@@ -242,9 +248,22 @@
           || error.reason === 'scan_token') {
         await dropControl(error.reason);
       }
+      if (error.reason === 'obstacle_hold') {
+        noteHold(error);
+        return false;
+      }
       message(reasonText(error.reason, error.message), 'err');
       return false;
     }
+  }
+
+  // Пауза вышла, а кнопку/клавишу так и держат — возобновляем ход сами.
+  function resumeAfterHold() {
+    if (!state.hold || holdActive() || !state.enabled) return;
+    state.hold = null;
+    const desired = state.holding;
+    if (desired) { void sendDrive(desired.direction * speed()); }
+    else if (state.keys.size) { void applyKeyboardPlan(); }
   }
 
   async function sendSteer(module, angle) {
@@ -255,6 +274,34 @@
       message(reasonText(error.reason, error.message), 'err');
       return null;
     }
+  }
+
+  function renderHold() {
+    const button = $('scan-hold-clear');
+    if (!button) return;
+    const active = holdActive();
+    button.hidden = !active;
+    if (active) button.textContent = 'продолжить сейчас (' + holdRemaining().toFixed(1) + ' с)';
+  }
+
+  function holdActive() {
+    return Boolean(state.hold && Number(state.hold.until) > Date.now());
+  }
+
+  function holdRemaining() {
+    return holdActive() ? Math.max(0, (state.hold.until - Date.now()) / 1000) : 0;
+  }
+
+  function noteHold(error) {
+    // Борт сам держит паузу ~5 с: запоминаем остаток, чтобы экран не слал
+    // тягу шквалом и возобновил ход сам, когда пауза выйдет.
+    if (!error || error.reason !== 'obstacle_hold') return;
+    const left = Number(error.holdRemainingS);
+    state.hold = {until: Date.now() + (Number.isFinite(left) && left > 0 ? left : 5) * 1000,
+                  reason: error.message || ''};
+    message('Препятствие близко · остановка, ещё ' + holdRemaining().toFixed(1) +
+      ' с. Управление вернётся само.', 'warn');
+    stopDriving();
   }
 
   function stopDriving() {
@@ -583,6 +630,15 @@
     if (enableButton) enableButton.addEventListener('click', () => { void enable(); });
     const disableButton = $('scan-disable');
     if (disableButton) disableButton.addEventListener('click', () => { void dropControl(''); });
+    const holdClear = $('scan-hold-clear');
+    if (holdClear) holdClear.addEventListener('click', async () => {
+      // Оператор решил, что можно ехать: снимаем паузу и на борту, и на экране.
+      try { await postJson('api/scan_mode/hold/clear', {}); } catch (error) { /* покажем ниже */ }
+      state.hold = null;
+      message('Пауза снята оператором.', 'warn');
+      renderHold();
+      resumeAfterHold();
+    });
     const stopButton = $('scan-stop');
     if (stopButton) stopButton.addEventListener('click', () => {
       releaseHolding();

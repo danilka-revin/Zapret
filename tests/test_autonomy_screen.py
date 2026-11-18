@@ -102,6 +102,9 @@ def test_autonomy_screen_js_flow(tmp_path):
     assert data["initial"]["obstacleDistance"] == "2.50" and data["initial"]["lidarPoints"] == "61"
     assert "передний сектор: есть" in data["initial"]["pathMeta"]
     assert data["approachPhase"] == "ПРЕПЯТСТВИЕ · МЕДЛЕННО"
+    # Пауза у препятствия — своя подпись и причина: поездка не завершена.
+    assert data["holdPhase"] == "ПРЕПЯТСТВИЕ · ПАУЗА"
+    assert "стою, ещё 3 с" in data["holdMessage"]
     assert data["beforeBlind"] is True and data["afterBlind"] is False
     assert data["checks"] >= 15 and data["warnings"] >= 1
     assert data["events"] >= 1 and data["simEvents"] >= 2

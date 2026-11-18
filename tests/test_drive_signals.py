@@ -242,3 +242,151 @@ def test_service_survives_broken_providers():
     state = service.step()
     assert state["brakeLight"] is False
     assert "нет порта" in state["error"]
+
+
+# --------------------------------------- остановка у препятствия (круиз-контроль)
+def test_close_obstacle_stops_for_five_seconds_then_returns_control():
+    clock = Clock()
+    ctl = ds.SignalController(ds.SignalConfig(near_m=0.5, hold_s=5.0), clock=clock)
+    moving = ds.facts_from_telemetry(telemetry(6, active=True))
+    state = ctl.update(moving, points=points((0.0, 0.4)), scan_age=0.1)
+    assert state["hold"] is True and state["holdTriggered"] is True
+    assert state["holdRemainingS"] == pytest.approx(5.0, abs=0.05)
+    assert state["alert"] is True, "пищание и моргание остаются при паузе"
+    assert "остановка" in state["reason"]
+
+    # Робот встал (борт снял тягу), пауза продолжается и не продлевается.
+    stopped = ds.facts_from_telemetry(telemetry(0, active=False))
+    clock.tick(2.0)
+    state = ctl.update(stopped, points=points((0.0, 0.4)), scan_age=0.1)
+    assert state["hold"] is True and state["holdRemainingS"] == pytest.approx(3.0, abs=0.1)
+    clock.tick(3.5)
+    state = ctl.update(stopped, points=points((0.0, 0.4)), scan_age=0.1)
+    assert state["hold"] is False, "через 5 с управление возвращается само"
+    assert "вернулось" in state["reason"]
+
+
+def test_new_attempt_into_the_wall_starts_a_new_pause_but_free_path_does_not():
+    clock = Clock()
+    ctl = ds.SignalController(ds.SignalConfig(near_m=0.5, hold_s=5.0), clock=clock)
+    stopped = ds.facts_from_telemetry(telemetry(0, active=False))
+    moving = ds.facts_from_telemetry(telemetry(6, active=True))
+    ctl.update(moving, points=points((0.0, 0.4)), scan_age=0.1)
+    ctl.update(stopped, points=points((0.0, 0.4)), scan_age=0.1)
+    clock.tick(6.0)
+    assert ctl.update(stopped, points=points((0.0, 0.4)), scan_age=0.1)["hold"] is False
+    # Тронуться в стену не даём: пауза начинается до выдачи тяги.
+    state = ctl.request_hold(1)
+    assert state["hold"] is True and state["holdTriggered"] is True
+    # Путь свободен — ход разрешён без паузы.
+    clock.tick(6.0)
+    ctl.update(stopped, points=points((0.0, 3.0)), scan_age=0.1)
+    assert ctl.request_hold(1)["hold"] is False
+
+
+def test_hold_is_not_started_without_a_fresh_scan_or_when_disabled():
+    clock = Clock()
+    ctl = ds.SignalController(ds.SignalConfig(near_m=0.5, hold_s=5.0), clock=clock)
+    moving = ds.facts_from_telemetry(telemetry(6, active=True))
+    assert ctl.update(moving, points=points((0.0, 0.2)), scan_age=None)["hold"] is False
+    assert ctl.update(moving, points=points((0.0, 0.2)), scan_age=3.0)["hold"] is False
+    # Без скана request_hold не выдумывает препятствие: ход разрешён.
+    assert ctl.request_hold(1)["hold"] is False
+    off = ds.SignalController(ds.SignalConfig(hold=False), clock=clock)
+    state = off.update(moving, points=points((0.0, 0.2)), scan_age=0.1)
+    assert state["alert"] is True and state["hold"] is False
+
+
+def test_hold_can_be_cancelled_by_the_operator():
+    clock = Clock()
+    ctl = ds.SignalController(ds.SignalConfig(near_m=0.5, hold_s=5.0), clock=clock)
+    moving = ds.facts_from_telemetry(telemetry(6, active=True))
+    assert ctl.update(moving, points=points((0.0, 0.4)), scan_age=0.1)["hold"] is True
+    ctl.clear_hold("оператор")
+    state = ctl.snapshot()
+    assert state["hold"] is False and state["reason"] == "оператор"
+
+
+def test_hold_only_applies_to_the_direction_of_travel():
+    """Стена сзади не мешает ехать вперёд и наоборот."""
+    clock = Clock()
+    ctl = ds.SignalController(ds.SignalConfig(near_m=0.5, hold_s=5.0), clock=clock)
+    stopped = ds.facts_from_telemetry(telemetry(0, active=False))
+    ctl.update(stopped, points=points((math.pi, 0.3)), scan_age=0.1)
+    assert ctl.request_hold(1)["hold"] is False, "сзади близко — вперёд можно"
+    assert ctl.request_hold(-1)["hold"] is True, "назад — в стену, пауза"
+
+
+def test_warning_blinks_instead_of_a_constant_lamp_and_keeps_chirping():
+    """«Моргание» в постановке: поворотники мигают, а не горят ровно."""
+    clock = Clock()
+    module = FakeModule()
+    ctl = ds.SignalController(ds.SignalConfig(near_m=0.5, hold=False), clock=clock)
+    facts = ds.facts_from_telemetry(telemetry(6, active=True))
+    # Повторяем то, что реально ушло на плату: последняя команда по каждому биту.
+    lamps, phases, buzzes = {}, [], []
+    for _ in range(20):
+        state = ctl.update(facts, points=points((0.0, 0.3)), scan_age=0.1)
+        ctl.apply(module, manual={}, stop_on=state["brakeLight"])
+        for call in module.calls:
+            if call[0] == "light":
+                lamps[call[1]] = call[2]
+        phases.append(bool(lamps.get("left") and lamps.get("right")))
+        buzzes.append(state["buzz"])
+        clock.tick(0.1)
+    # Мигание: и включено, и выключено, без длинных фаз в одну сторону.
+    assert any(phases) and not all(phases)
+    runs = [len(list(run)) for _, run in __import__("itertools").groupby(phases)]
+    assert max(runs) <= 6, "слишком долгая фаза: %d тактов" % max(runs)
+    # Фары при тревоге горят всё время, зуммер пищит короткими импульсами.
+    assert lamps.get("head") is True
+    assert any(buzzes) and not all(buzzes)
+    assert ctl.snapshot()["blink"] is True
+
+
+def test_blinking_can_be_turned_off_for_a_steadier_lamp():
+    clock = Clock()
+    module = FakeModule()
+    ctl = ds.SignalController(ds.SignalConfig(near_m=0.5, hold=False, blink=False), clock=clock)
+    facts = ds.facts_from_telemetry(telemetry(6, active=True))
+    for _ in range(10):
+        ctl.update(facts, points=points((0.0, 0.3)), scan_age=0.1)
+        ctl.apply(module, manual={})
+        assert ("light", "left", True) in module.calls
+        assert ("light", "left", False) not in module.calls
+        assert ("light", "right", False) not in module.calls
+        clock.tick(0.1)
+
+
+def test_warning_survives_the_hold_while_traction_is_already_zero():
+    """Во время паузы тяги нет, но предупреждение не гаснет само."""
+    clock = Clock()
+    module = FakeModule()
+    ctl = ds.SignalController(ds.SignalConfig(near_m=0.5, hold_s=5.0), clock=clock)
+    moving = ds.facts_from_telemetry(telemetry(6, active=True))
+    assert ctl.update(moving, points=points((0.0, 0.4)), scan_age=0.1)["hold"] is True
+    # Тягу снял уже сам борт (или клавиатура): направление хода не сообщается.
+    stopped = ds.facts_from_telemetry(telemetry(0, active=False))
+    seen = 0
+    for _ in range(12):
+        clock.tick(0.25)
+        module.calls.clear()
+        state = ctl.update(stopped, points=points((0.0, 0.4)), scan_age=0.1)
+        ctl.apply(module, manual={}, stop_on=state["brakeLight"])
+        if state["hold"]:
+            seen += 1
+            assert state["lightsOn"] is not None
+            turned_off = [call for call in module.calls
+                          if call[0] == "light" and call[2] is False and call[1] == "head"]
+            assert not turned_off, "предупреждение погасло во время паузы"
+    assert seen >= 8
+    # Пауза кончилась: предупреждение снова включается только движением, а не
+    # стоянкой. Стоящий робот у стены не мигает — иначе аварийка горела бы
+    # постоянно на стоянке.
+    clock.tick(3.0)
+    state = ctl.update(stopped, points=points((0.0, 0.4)), scan_age=0.1)
+    assert state["hold"] is False and state["alert"] is False
+    assert state["lightsOn"] is False
+    # Следующий такт уже объясняет состояние обычным правилом.
+    state = ctl.update(stopped, points=points((0.0, 0.4)), scan_age=0.1)
+    assert state["alert"] is False and "нет тяги" in state["reason"]

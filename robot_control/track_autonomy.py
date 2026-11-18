@@ -131,6 +131,12 @@ class TrackConfig:
     stop_clearance_m: float = 0.8        # проверяемый путь торможения, не измеренный результат
     lidar_scan_age_s: float = 0.75
     lidar_slow_distance_m: float = 2.0   # заранее замедлиться перед объектом в пути
+    #: Ближе этого корпус уже упирается: поездка не продолжается сама, но и не
+    #: заканчивается — робот стоит, предупреждает и ждёт, пока путь освободят.
+    lidar_stop_distance_m: float = 0.5
+    #: Сколько секунд стоять у препятствия, прежде чем разрешить ход снова.
+    #: Освободили путь — поездка продолжится сама, без нового ручного запуска.
+    obstacle_hold_s: float = 5.0
     max_speed_mps: float = 0.35          # отсечка по SC, не уставка регулятора
     bump_max_height_m: float = 0.12
     require_depth: bool = True
@@ -188,6 +194,8 @@ class TrackConfig:
             stop_clearance_m=_env_float("RC_TRACK_STOP_CLEARANCE_M", 0.8, 0.5, 4.0),
             lidar_scan_age_s=_env_float("RC_TRACK_LIDAR_MAX_AGE_S", 0.75, 0.3, 1.0),
             lidar_slow_distance_m=_env_float("RC_TRACK_LIDAR_SLOW_M", 2.0, 0.8, 6.0),
+            lidar_stop_distance_m=_env_float("RC_TRACK_LIDAR_STOP_M", 0.5, 0.2, 3.0),
+            obstacle_hold_s=_env_float("RC_TRACK_OBSTACLE_HOLD_S", 5.0, 0.0, 60.0),
             max_speed_mps=_env_float("RC_TRACK_MAX_SPEED_MPS", 0.35, 0.05, 0.6),
             bump_max_height_m=_env_float("RC_TRACK_BUMP_MAX_HEIGHT_M", 0.12, 0.04, 0.2),
             require_depth=_env_bool("RC_TRACK_REQUIRE_DEPTH", True),
@@ -1162,6 +1170,7 @@ class TrackAutonomyService:
             "bump_cross_since": None, "bump_cross_distance": 0.0,
             "bump_post_until": 0.0, "bump_consumed_until": 0.0, "bump_wait_since": None,
             "boost": 0.0, "max_boost": 0.0, "stall_since": None,
+            "obstacle_since": None, "obstacle_until": 0.0, "obstacle_distance": None,
             "drive_sample": None, "pulse_times": {},
             "events": [],
         }
@@ -1271,6 +1280,60 @@ class TrackAutonomyService:
             if not session["finished"] and not self._cancel.is_set():
                 self.motion.hold()
                 self._set(phase=phase, message=message, percent=0.0, boostPercent=0.0)
+
+    def _obstacle_pause(self, session: dict[str, Any], lidar: dict[str, Any],
+                        now: float) -> bool:
+        """Пауза у препятствия вместо конца поездки. ``True`` — стоим.
+
+        Работает и для «по пути корпуса», и для «ближе полуметра»: поездка не
+        завершается, робот стоит до ``obstacle_hold_s``, а затем продолжает сам,
+        если путь свободен. Пока препятствие на месте, пауза не продлевается и
+        не превращается в вечный STOP: как только его уберут, ход возобновится
+        без ручного перезапуска.
+
+        Без свежего скана препятствие не выдумывается — правило то же, что у
+        сигналов шасси. Удержание, начатое по свежему скану, снимается, если
+        скан пропал: иначе потеря лидара навсегда оставила бы робота стоять.
+        """
+        cfg = self.cfg
+        near_ahead = _number(lidar.get("nearestAheadM"))
+        close_ahead = near_ahead is not None and near_ahead <= cfg.lidar_stop_distance_m
+        occupied = bool(lidar.get("blocked") or close_ahead)
+        if not lidar.get("ready"):
+            self._release_obstacle(session, "Скан лидара пропал — пауза у препятствия снята.")
+            return False
+        if not occupied:
+            return False
+        if session["obstacle_since"] is None:
+            session["obstacle_since"] = now
+            session["obstacle_until"] = now + cfg.obstacle_hold_s
+            session["obstacle_distance"] = near_ahead
+            distance_text = ("%.2f м" % near_ahead) if near_ahead is not None else "корпус"
+            self._event(session, "obstacle_hold",
+                        "Препятствие впереди (%s): стою %.0f с, затем продолжу, если путь "
+                        "свободен." % (distance_text, cfg.obstacle_hold_s), "warn")
+        elif near_ahead is not None:
+            session["obstacle_distance"] = near_ahead
+        if now < session["obstacle_until"]:
+            remaining = max(0.0, session["obstacle_until"] - now)
+            self._hold(session, "obstacle_hold",
+                       "Препятствие впереди: стою, ещё %.0f с. Тяга снята, путь проверяется." %
+                       math.ceil(remaining))
+            return True
+        # Пауза вышла, но путь всё ещё занят — ждём, не продлевая саму паузу.
+        self._hold(session, "obstacle_hold",
+                   "Препятствие впереди: жду, пока путь освободят. Поездка продолжится сама.")
+        return True
+
+    def _release_obstacle(self, session: dict[str, Any], reason: str = "") -> None:
+        """Путь свободен: снять паузу у препятствия, чтобы поездка продолжилась."""
+        if session["obstacle_since"] is None:
+            return
+        session["obstacle_since"] = None
+        session["obstacle_until"] = 0.0
+        session["obstacle_distance"] = None
+        self._event(session, "obstacle_clear",
+                    reason or "Путь свободен — продолжаю поездку.", "ok")
 
     def _count(self, key: str) -> None:
         counters = dict(self._state["counters"])
@@ -1550,10 +1613,9 @@ class TrackAutonomyService:
                   cones=cones[:24], signs=signs[:12], corridor=corridor, lidar=lidar,
                   traffic=traffic, ground={k: ground.get(k) for k in ("ok", "nearestBumpM", "status", "reason")},
                   imu=imu, telemetry={k: feedback.get(k) for k in ("linkOk", "onlineWheels", "wheelSpeedMps")})
-        if lidar["blocked"]:
-            self._finish(session, "blocked", "Тупик или препятствие на пути корпуса по лидару — STOP. "
-                         "Для продолжения нужен новый ручной запуск.", "stop")
+        if self._obstacle_pause(session, lidar, now):
             return
+        self._release_obstacle(session, "Путь свободен — продолжаю поездку.")
         if real and not lidar["ready"]:
             raise TrackAutonomyError("lidar_lost", "Потерян свежий сектор физического лидара перед роботом")
         if (real or cfg.require_depth) and not ground.get("depthFresh"):
@@ -1617,6 +1679,7 @@ class TrackAutonomyService:
                 self._finish(session, "error", "Сбой автономности: %s" % str(exc)[:160], "err")
         finally:
             if session is not None and not session["finished"]:
+                self._release_obstacle(session, "Поездка остановлена оператором.")
                 self._finish(session, "cancelled", "Автономность остановлена оператором.", "warn")
             with self._lock:
                 self._worker = None
@@ -1645,16 +1708,25 @@ class TrackAutonomyService:
         sim._state["phase"] = "starting"
         steps = 0
         max_steps = int(config.max_duration_s / config.tick_s) + 10
+        expects_stop = world.scenario in {"blocked_gate", "dead_end"}
         while steps < max_steps and not sim._session["finished"]:
             sim._step(world.clock())
             world.advance(config.tick_s, sim.motion.percent, -sim.motion.steer_deg)
             steps += 1
+            # Упёрлись в препятствие: пауза уже выдержана, путь не освободили.
+            # Дальше ждать нечего — сухой прогон на этом и заканчивается.
+            if (expects_stop and sim._session["obstacle_since"] is not None and
+                    world.clock() >= sim._session["obstacle_until"] + 1.0):
+                break
         session = sim._session
         counters = dict(sim._state.get("counters") or {})
         phase = sim._state["phase"]
-        expected_stop = world.scenario in {"blocked_gate", "dead_end"}
-        stopped_before_obstacle = (phase == "blocked" and sim.motion.percent == 0 and
-                                   sim._state.get("lidar", {}).get("blocked") is True)
+        expected_stop = expects_stop
+        # Препятствие не завершает поездку, а держит её на паузе: робот стоит,
+        # путь занят, тяга снята — и поездка продолжится сама, когда освободят.
+        stopped_before_obstacle = (phase == "obstacle_hold" and sim.motion.percent == 0 and
+                                   sim._state.get("lidar", {}).get("blocked") is True and
+                                   session["obstacle_since"] is not None)
         if world.scenario == "blocked_gate":
             stopped_before_obstacle = stopped_before_obstacle and sim._odometer.distance == 0.0
         elif world.scenario == "dead_end":

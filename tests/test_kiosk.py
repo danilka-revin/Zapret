@@ -148,6 +148,8 @@ def test_telemetry_api_returns_only_public_values(kiosk_client):
             # Ограничения по знакам: красный блокирует управление, «кочка»
             # снижает потолок тяги. Хватит и самого флага: подробности не секрет.
             "driveGuard",
+            # Умный круиз-контроль: пауза у препятствия (остаток и причина).
+            "obstacleHold",
         }
         cameras = body["data"]["cameras"]
         assert isinstance(cameras, list)

@@ -974,15 +974,25 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     # Ограничения по знакам (блокировка по красному, −20 % у «кочки»).
     # Решение принимает борт по наблюдениям сервиса распознавания: устаревшая
     # вкладка или ручной запрос блокировку не обходят.
+    #
+    # ``safety`` — умный круиз-контроль: пауза у препятствия. Сервис автосигналов
+    # поднимается ниже, поэтому передаём ленивый провайдер, а не сам объект:
+    # клавиатура спрашивает контроллер только в момент команды тяги.
+    def _keyboard_safety():
+        signals = app.extensions.get("rc_drive_signals")
+        return getattr(signals, "controller", None) if signals is not None else None
+
     keyboard = KeyboardControl(lambda: getattr(state, "source", None), dispatch_drive_command,
                                dispatch_steering_command, estop_latch.latched,
-                               guard=getattr(vision_service, "guard", None))
+                               guard=getattr(vision_service, "guard", None),
+                               safety_provider=_keyboard_safety)
     app.extensions["rc_keyboard"] = keyboard
     # Режим «Скан»: сначала объезд и карта, потом поездки по ней. Управление
     # включается вручную и снимается кнопкой, Esc или молчанием страницы.
     scan_mode = ScanModeService(lambda: getattr(state, "source", None),
                                 dispatch_drive_command, dispatch_steering_command,
-                                estop_latch.latched)
+                                estop_latch.latched,
+                                safety_provider=_keyboard_safety)
     app.extensions["rc_scan_mode"] = scan_mode
     # Автосигналы шасси: стоп-сигнал при торможении и тревога у препятствия.
     # Только реле/зуммер платы датчиков; тягу и замок автоматика не трогает.
@@ -2049,6 +2059,8 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             # управление до зелёного, «кочка» снижает потолок тяги. Это решение
             # борта; экран только показывает его рядом с ползунком WASD.
             "driveGuard": keyboard.guard_state(),
+            # Пауза у препятствия (умный круиз-контроль): остаток и причина.
+            "obstacleHold": keyboard.hold_snapshot(),
         }})
 
     @app.get("/api/kiosk_wheel_state")
@@ -2747,6 +2759,21 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             eventlog.record("warn", "скан: управление выключено, но шасси не "
                                     "подтвердило остановку", source="скан")
         return jsonify({**scan_status_payload(), **result})
+
+    @app.post("/api/scan_mode/hold/clear")
+    def api_scan_mode_hold_clear():
+        """Снять паузу у препятствия досрочно: оператор решил, что можно ехать.
+
+        Это не отключает предупреждение и не отменяет E-STOP: следующая попытка
+        тяги вплотную к препятствию снова упрётся в паузу.
+        """
+        service = app.extensions.get("rc_drive_signals")
+        controller = getattr(service, "controller", None)
+        if controller is not None and hasattr(controller, "clear_hold"):
+            controller.clear_hold("оператор снял паузу")
+        keyboard.interrupt()
+        eventlog.record("warn", "пауза у препятствия снята оператором", source="скан")
+        return jsonify({**scan_status_payload()}), 200
 
     @app.post("/api/scan_mode/heartbeat")
     def api_scan_mode_heartbeat():

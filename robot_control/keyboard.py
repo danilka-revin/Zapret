@@ -54,7 +54,8 @@ class KeyboardControl:
     LIVE_STEER_TTL = 6.0
 
     def __init__(self, source, drive, steer, estop, clock=time.monotonic,
-                 max_percent: int | None = None, guard=None):
+                 max_percent: int | None = None, guard=None, safety=None,
+                 safety_provider=None):
         self._source = source
         self._drive = drive
         self._steer = steer
@@ -63,6 +64,18 @@ class KeyboardControl:
         #: Ограничения по знакам и светофору (``robot_control.drive_guard``).
         #: ``None`` — ограничений нет (стенд, тесты, плата без камер).
         self._guard = guard
+        #: Умный круиз-контроль: пауза у препятствия (``SignalController``).
+        #: ``None`` — предупреждения и пауз нет (стенд, плата без лидара).
+        #: Контроллер паузы или ленивый провайдер: сервис автосигналов может
+        #: подняться позже, поэтому допускаем оба варианта.
+        self._safety = safety
+        self._safety_provider = safety_provider
+        # Третий способ — передать сам провайдер в слот ``safety``: так объект
+        # ещё не существует в момент сборки клавиатуры (сервис поднимается ниже).
+        if safety_provider is None and safety is not None and not hasattr(safety, "request_hold"):
+            self._safety, self._safety_provider = None, safety
+        #: Пауза, которую держит сама клавиатура (когда тягу уже сняли).
+        self._hold_until = 0.0
         self.max_percent = env_max_percent() if max_percent is None else max(0, min(100, int(max_percent)))
         self._lock = threading.RLock()
         # STOP must be advertised without waiting for the motion gate or the
@@ -310,6 +323,121 @@ class KeyboardControl:
             return percent
         return cap if percent > 0 else -cap
 
+    # ------------------------------------- умный круиз-контроль (пауза у стены)
+    def _safety_controller(self):
+        """Контроллер паузы: явный объект или ленивый провайдер."""
+        if self._safety is not None:
+            return self._safety
+        provider = self._safety_provider
+        if provider is None:
+            return None
+        try:
+            return provider()
+        except Exception:  # noqa: BLE001 — без контроллера паузы нет, ход разрешён
+            return None
+
+    def _hold_pause(self, now: float) -> float:
+        """Сколько секунд паузы осталось у самого контроллера (0 — нет паузы)."""
+        controller = self._safety_controller()
+        try:
+            state = controller.snapshot() if controller is not None else {}
+        except Exception:  # noqa: BLE001 — сломанный контроллер не разрешает ход
+            return 0.0
+        if state.get("hold") is not True:
+            return 0.0
+        remaining = state.get("holdRemainingS")
+        return float(remaining) if self._number(remaining) and remaining > 0 else 0.0
+
+    def _pause_seconds(self, now: float) -> float:
+        """Остаток паузы у препятствия: от контроллера и от самой клавиатуры."""
+        return max(self._hold_pause(now), max(0.0, self._hold_until - now))
+
+    def _hold_state(self, now: float) -> dict:
+        controller = self._safety_controller()
+        state: dict = {}
+        if controller is not None:
+            reader = getattr(controller, "state", None)
+            try:
+                value = reader() if callable(reader) else controller.snapshot()
+            except Exception:  # noqa: BLE001 — экран не должен падать из-за лидара
+                value = {}
+            if isinstance(value, dict):
+                state = dict(value)
+        remaining = self._pause_seconds(now)
+        if remaining > 0 and state.get("hold") is not True:
+            state.update(hold=True, holdRemainingS=round(remaining, 1),
+                         reason=state.get("reason") or "пауза у препятствия")
+        elif remaining > 0:
+            state["holdRemainingS"] = round(remaining, 1)
+        return state
+
+    def _begin_pause(self, now: float, direction: int) -> bool:
+        """Спросить у контроллера, можно ли тронуться, и запомнить паузу.
+
+        Проверка стоит **до** отправки тяги на платы: рывка в сторону стены не
+        бывает даже на десятые доли секунды. Если препятствие близко, пауза
+        начинается здесь и тяга не уходит; если путь свободен — ничего не
+        меняется.
+        """
+        controller = self._safety_controller()
+        if controller is None or not direction:
+            return False
+        request = getattr(controller, "request_hold", None)
+        if not callable(request):
+            return False
+        try:
+            state = request(direction, now=now)
+        except Exception:  # noqa: BLE001 — проверить не смогли: ход не начинаем
+            self._hold_until = now + 0.2
+            return True
+        if isinstance(state, dict) and state.get("hold") is True:
+            remaining = state.get("holdRemainingS")
+            self._hold_until = now + (float(remaining) if self._number(remaining) else 0.2)
+            return True
+        return False
+
+    def _hold_response(self, now: float) -> tuple[dict, int]:
+        state = self._hold_state(now)
+        remaining = self._pause_seconds(now)
+        return ({"ok": False, "reason": "obstacle_hold",
+                 "holdRemainingS": round(remaining, 1),
+                 "holdS": state.get("holdS"), "retryable": False}, 409)
+
+    def _hold_block(self, now: float, direction: int) -> Optional[tuple[dict, int]]:
+        """Отказ до выдачи тяги, если впереди близко или пауза ещё идёт."""
+        if self._pause_seconds(now) <= 0 and not self._begin_pause(now, direction):
+            return None
+        return self._hold_response(now)
+
+    def _hold_stop(self, now: float, direction: int) -> tuple[dict, int]:
+        """Пауза у препятствия: тяга снята, но сессия управления жива."""
+        response = self._hold_response(now)
+        result, _status = self._stop_motion(now)
+        if not result.get("ok"):
+            return {"ok": False, "reason": "obstacle_hold"}, 409
+        return response
+
+    def clear_hold(self, reason: str = "оператор снял паузу") -> None:
+        """Снять паузу досрочно по решению оператора (E-STOP это не отменяет)."""
+        self._hold_until = 0.0
+        try:
+            controller = self._safety_controller()
+            clear = getattr(controller, "clear_hold", None)
+            if callable(clear):
+                clear(reason)
+        except Exception:  # noqa: BLE001 — паузу снимаем хотя бы у себя
+            pass
+
+    def hold_snapshot(self) -> dict:
+        """Пауза у препятствия для экрана: остаток и причина."""
+        try:
+            state = self._hold_state(self._clock())
+        except Exception as exc:  # noqa: BLE001
+            return {"hold": False, "holdRemainingS": 0.0,
+                    "reason": "ошибка контроллера: %s" % (exc or type(exc).__name__)}
+        return {key: state.get(key) for key in
+                ("hold", "holdRemainingS", "holdS", "holdTriggered", "distanceM", "reason")}
+
     def _snapshot(self):
         try:
             snap = self._source().read()
@@ -451,6 +579,11 @@ class KeyboardControl:
         percent = self._cap_percent(percent)
         if percent == 0:
             return self._stop_motion(now)
+        # Умный круиз-контроль: команда тяги уходит на платы только если впереди
+        # свободно; иначе тяга снимается и начинается пауза.
+        hold = self._hold_block(now, 1 if percent > 0 else -1)
+        if hold:
+            return self._hold_stop(now, 1 if percent > 0 else -1)
         if pattern == "spin":
             error = self._spin_error(angles)
             if error:
@@ -556,7 +689,8 @@ class KeyboardControl:
                 # открытие управления разрешено: руль и остановка работают.
                 return {"ok": True, "session": self._token, "brakeId": self._brake_id,
                         "spin": spin, "maxPercent": self.max_percent,
-                        "guard": self.guard_state()}, 200
+                        "guard": self.guard_state(),
+                        "hold": self.hold_snapshot()}, 200
 
             if action not in {"stop", "end", "ping", "steer", "steer_all", "arm", "drive", "live"}:
                 return {"ok": False, "reason": "invalid_action"}, 400
@@ -685,6 +819,10 @@ class KeyboardControl:
                     # Допуск на тягу при красном не выдаётся: иначе браузер
                     # получил бы разрешение, которое борт тут же отклонит.
                     return self._guard_stop(blocked, body=body)
+                hold = self._hold_block(now, direction)
+                if hold:
+                    # Тяга не понадобится: путь занят или идёт пауза.
+                    return hold
                 if self.is_preempted(body):
                     return {"ok": False, "reason": "stale_command"}, 409
                 nonce = secrets.token_urlsafe(18)
@@ -714,6 +852,11 @@ class KeyboardControl:
             if percent == 0:
                 return self._stop_motion(now)
             direction = 1 if percent > 0 else -1
+            # Умный круиз-контроль: пауза у препятствия и проверка «есть ли
+            # куда ехать» до выдачи разрешения на тягу.
+            hold = self._hold_block(now, direction)
+            if hold:
+                return hold
             if self._running and (direction != self._direction or angles != self._angles):
                 return self._fail("module_busy", body=body)
             if not self._running:

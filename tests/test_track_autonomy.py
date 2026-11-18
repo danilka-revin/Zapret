@@ -789,10 +789,12 @@ def test_real_run_brakes_on_live_failure(failure):
     clock.advance(0.2)
     service._step(clock())
     assert sent == [8.0] and src.brakes == 2
-    assert service.motion.percent == 0 and service._state["phase"] in {"blocked", "error"}
+    # Препятствие впереди — пауза, потеря данных и отказы — конец поездки.
+    expected = {"obstacle_hold"} if failure == "obstacle" else {"blocked", "error"}
+    assert service.motion.percent == 0 and service._state["phase"] in expected
 
 
-def test_real_forward_run_slows_then_stops_before_obstacle_and_does_not_autoresume(monkeypatch):
+def test_real_forward_run_slows_then_pauses_before_obstacle_and_resumes(monkeypatch):
     monkeypatch.setenv("RC_LIDAR_OFFSET_M", "0.28")
     service, clock, src, _feedback, sent = real_service_on_fakes()
     world = ScriptedWorld("straight")
@@ -817,12 +819,20 @@ def test_real_forward_run_slows_then_stops_before_obstacle_and_does_not_autoresu
     obstacle["x"] = 1.1
     clock.advance(0.2)
     service._step(clock())
-    assert service.motion.percent == 0 and service._state["phase"] == "blocked"
+    # Препятствие ближе полуметра: тяга снята, но поездка не завершена.
+    assert service.motion.percent == 0 and service._state["phase"] == "obstacle_hold"
     assert service._state["lidar"]["blocked"] and src.brakes == 2
-    service._lidar = world.scan_ahead  # clearing the object cannot restart a finished run
-    clock.advance(0.2)
+    assert service._session["obstacle_since"] is not None
+    assert not service._session["finished"]
+    assert "Препятствие впереди" in service._state["message"]
+    # Путь освободили, пауза вышла — поездка продолжается сама.
+    service._lidar = world.scan_ahead
+    clock.advance(6.0)
+    _feedback.update(src.read())   # телеметрия опрашивается, а не замирает
     service._step(clock())
-    assert sent == [8.0, 4.0] and service.motion.percent == 0
+    assert service._state["phase"] != "obstacle_hold"
+    assert service.motion.command_count > 2 and service.motion.percent > 0
+    assert any(event["phase"] == "obstacle_clear" for event in service._session["events"])
 
 
 @pytest.mark.parametrize("limit", ["distance", "time"])
@@ -936,14 +946,18 @@ def test_scripted_world_straight_has_no_posts_and_a_front_sector():
     assert world.s > 0 and world.y == 0
 
 
-def test_simulated_dead_end_moves_then_stops_before_wall():
+def test_simulated_dead_end_moves_then_holds_before_wall():
+    """Стена впереди: поездка не «падает», а стоит на паузе у препятствия."""
     report = simulate_track("dead_end")
     assert report["passed"] and report["expectedStop"]
-    assert report["phase"] == "blocked" and 0 < report["distanceM"] < 8.0
-    assert report["finalPercent"] == 0 and "лидару" in report["message"]
+    assert report["phase"] == "obstacle_hold" and 0 < report["distanceM"] < 8.0
+    assert report["finalPercent"] == 0 and "Препятствие впереди" in report["message"]
+    phases = [event["phase"] for event in report["events"]]
+    assert "obstacle_hold" in phases
 
 
 def test_simulated_blocked_gate_never_moves():
     report = simulate_track("blocked_gate")
     assert report["passed"] and report["expectedStop"]
-    assert report["phase"] == "blocked" and report["distanceM"] == 0
+    assert report["phase"] == "obstacle_hold" and report["distanceM"] == 0
+    assert report["finalPercent"] == 0

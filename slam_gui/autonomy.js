@@ -13,6 +13,7 @@
   const PHASES = {
     idle: 'ОЖИДАНИЕ', starting: 'ЗАПУСК', following: 'ЕДУ ВПЕРЁД',
     obstacle_approach: 'ПРЕПЯТСТВИЕ · МЕДЛЕННО',
+    obstacle_hold: 'ПРЕПЯТСТВИЕ · ПАУЗА',
     aligning: 'ПОДТВЕРЖДАЮ УГОЛ КОЛЁС', stop_approach: 'ПОДЪЕЗЖАЮ К СТОП',
     stop_braking: 'СТОП · ТОРМОЖУ', stop_wait: 'СТОП · ВЫДЕРЖКА', traffic_wait: 'ЖДУ ЗЕЛЁНЫЙ',
     bump_wait: 'ЖДУ ПОДТВЕРЖДЕНИЯ КОЧКИ', bump_slow: 'КОЧКА · МЕДЛЕННО', bump_climb: 'ПЕРЕЕЗЖАЮ КОЧКУ',
@@ -119,7 +120,7 @@
     tone('aut-badge', phase === 'following' || phase === 'done' ? 'go' :
       ['stop_wait', 'stop_braking', 'traffic_wait', 'error', 'blocked'].includes(phase) ? 'stop' :
       phase === 'bump_slow' || phase === 'bump_climb' || phase === 'bump_exit' ||
-      ['vision_lost', 'lane_lost', 'obstacle_approach'].includes(phase) ? 'warn' : 'idle');
+      ['vision_lost', 'lane_lost', 'obstacle_approach', 'obstacle_hold'].includes(phase) ? 'warn' : 'idle');
     text('aut-phase', label);
     text('aut-message', status.message || 'Автономность не запущена.');
     text('aut-distance', (Number(status.distanceM) || 0).toFixed(1));
@@ -128,7 +129,8 @@
     text('aut-boost', (Number(status.boostPercent) || 0).toFixed(1));
     const lidar = status.lidar || {};
     text('aut-lidar', lidar.blocked ? 'ПРЕПЯТСТВИЕ' : lidar.ready ? 'СЕКТОР В НОРМЕ' : 'НЕТ СЕКТОРА');
-    tone('aut-kpi-lidar', lidar.blocked ? 'stop' : phase === 'obstacle_approach' ? 'warn' : lidar.ready ? 'go' : 'warn');
+    tone('aut-kpi-lidar', phase === 'obstacle_hold' ? 'stop' : lidar.blocked ? 'stop' :
+      phase === 'obstacle_approach' ? 'warn' : lidar.ready ? 'go' : 'warn');
     text('aut-obstacle-distance', lidar.nearestAheadM == null ? '—' : Number(lidar.nearestAheadM).toFixed(2));
     text('aut-lidar-points', Number(lidar.points) || 0);
     text('aut-path-meta', 'прямо · передний сектор: ' + (lidar.ready ? 'есть' : 'нет') +

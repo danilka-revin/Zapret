@@ -269,6 +269,60 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.ok(imageRequests.every((url) => !/^(https?:|\/\/)/.test(url)),
             'камеры запрашиваются относительным адресом');
 
+  // 10b. Умный круиз-контроль: пауза у препятствия. Борт отклоняет тягу
+  //      (obstacle_hold), экран показывает причину и сам возобновляет ход
+  //      после паузы — кнопку не надо отпускать и нажимать заново.
+  mode = {...mode, enabled: true, token: 'tok-1'};
+  intervals.forEach((fn) => fn());
+  await flush();
+  const driveOk = global.fetch;
+  let holding = true;   // борт держит паузу у препятствия
+  global.fetch = async (url, options) => {
+    const text = String(url);
+    const body = options && options.body ? JSON.parse(options.body) : null;
+    if (/api\/scan_mode\/drive$/.test(text) && body && body.percent !== 0 && holding) {
+      calls.push({url: text, method: 'POST', body, headers: {}});
+      return reply({ok: false, error: 'Препятствие близко: пауза ещё 4.0 с.',
+                    reason: 'obstacle_hold', holdRemainingS: 4}, 409);
+    }
+    return driveOk(url, options);
+  };
+  byId('scan-enable').fire('click');
+  await flush();
+  await flush();
+  const holdButton = byId('scan-forward');
+  holdButton.fire('pointerdown');
+  await flush();
+  await flush();
+  assert.match(byId('scan-msg').textContent, /Препятствие близко/,
+               'пауза объяснена оператору');
+  const holdDrives = calls.filter((c) => /scan_mode\/drive/.test(c.url) && c.body.percent !== 0).length;
+  assert.equal(holdDrives > 0, true, 'попытка тяги была и отклонена бортом');
+  global.fetch = driveOk;
+  holding = false;
+  // Пауза вышла: обычный опрос страницы возвращает ход без нового нажатия.
+  intervals.forEach((fn) => fn());
+  await flush();
+  await flush();
+  assert.ok(calls.filter((c) => /scan_mode\/drive/.test(c.url) && c.body.percent !== 0).length
+            > holdDrives, 'ход возобновлён после паузы самим экраном');
+  holdButton.fire('pointerup');
+  await flush();
+
+  // 10c. Кнопка «продолжить сейчас» снимает паузу и на борту, и на экране.
+  holding = true;
+  holdButton.fire('pointerdown');
+  await flush();
+  await flush();
+  assert.equal(byId('scan-hold-clear').hidden, false, 'кнопка снятия паузы показана');
+  global.fetch = driveOk;
+  holding = false;
+  byId('scan-hold-clear').fire('click');
+  await flush();
+  await flush();
+  assert.ok(lastPost(/scan_mode\/hold\/clear/), 'пауза снята на борту');
+  assert.equal(byId('scan-hold-clear').hidden, true, 'кнопка убрана после снятия');
+
   // 11. Молчание сервера (enabled=false в статусе) гасит управление на экране.
   mode = {...mode, enabled: false, reason: 'deadman'};
   intervals.forEach((fn) => fn());

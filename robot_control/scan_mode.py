@@ -75,7 +75,8 @@ class ScanModeService:
                  estop: Optional[Callable[[], Any]] = None,
                  clock: Callable[[], float] = time.monotonic,
                  max_percent: Optional[int] = None,
-                 deadman_s: float = DEADMAN_S) -> None:
+                 deadman_s: float = DEADMAN_S,
+                 safety_provider: Optional[Callable[[], Any]] = None) -> None:
         self._source = source
         self._drive = drive
         self._steer = steer
@@ -90,6 +91,11 @@ class ScanModeService:
         self._enabled_at = 0.0
         self._reason = ""
         self._commands = 0
+        #: Умный круиз-контроль (``SignalController``): пауза у препятствия.
+        #: Ленивый провайдер — сервис автосигналов поднимается позже режима.
+        self._safety_provider = safety_provider
+        #: Пауза, которую держит сам режим, если контроллер уже отпустил.
+        self._hold_until = 0.0
 
     # -- состояние --------------------------------------------------------- #
     def status(self) -> dict[str, Any]:
@@ -181,6 +187,60 @@ class ScanModeService:
                                 "scan_token", 409)
 
     # -- команды ------------------------------------------------------------ #
+    # -- умный круиз-контроль ----------------------------------------------- #
+    def _safety(self) -> Any:
+        provider = self._safety_provider
+        if provider is None:
+            return None
+        try:
+            return provider()
+        except Exception:  # noqa: BLE001 — без контроллера паузы нет
+            return None
+
+    def _hold_remaining(self) -> float:
+        controller = self._safety()
+        remaining = max(0.0, self._hold_until - self._clock())
+        if controller is None:
+            return remaining
+        try:
+            state = controller.snapshot()
+        except Exception:  # noqa: BLE001
+            return remaining
+        if state.get("hold") is True:
+            value = state.get("holdRemainingS")
+            if isinstance(value, (int, float)) and 0 < value:
+                remaining = max(remaining, float(value))
+        return remaining
+
+    def _hold_error(self, direction: int) -> Optional[ScanModeError]:
+        """Отказ до выдачи тяги: идёт пауза или впереди близко.
+
+        Проверка идёт до отправки команды платам, поэтому рывка в сторону
+        препятствия не бывает. Пауза не блокирует управление: после неё режим
+        снова принимает тягу, а повторная попытка в стену снова упирается.
+        """
+        controller = self._safety()
+        now = self._clock()
+        remaining = self._hold_remaining()
+        if remaining <= 0 and controller is not None and direction:
+            request = getattr(controller, "request_hold", None)
+            if callable(request):
+                try:
+                    state = request(direction, now=now)
+                except Exception:  # noqa: BLE001 — не проверили: не начинаем
+                    self._hold_until = now + 0.2
+                    return ScanModeError("Контроллер препятствий недоступен — ход не начат.",
+                                         "obstacle_hold", 409)
+                if isinstance(state, dict) and state.get("hold") is True:
+                    value = state.get("holdRemainingS")
+                    self._hold_until = now + (float(value) if isinstance(value, (int, float))
+                                              and value > 0 else 0.2)
+                    remaining = max(0.0, self._hold_until - now)
+        if remaining <= 0:
+            return None
+        return ScanModeError("Препятствие близко: пауза ещё %.1f с." % remaining,
+                             "obstacle_hold", 409)
+
     def drive(self, body: dict, token: Optional[str] = None) -> tuple[dict, int]:
         percent = _percent(body)
         if percent == 0:
@@ -191,6 +251,9 @@ class ScanModeService:
         if abs(percent) > self.max_percent:
             raise ScanModeError("Предел тяги режима «Скан» — %d %%." % self.max_percent,
                                 "drive_limit", 400)
+        hold = self._hold_error(1 if percent > 0 else -1)
+        if hold is not None:
+            raise hold
         payload = {"percent": percent}
         module = body.get("module") if isinstance(body, dict) else None
         if module is not None:

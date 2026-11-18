@@ -97,6 +97,7 @@
       manual_override: 'Другая команда остановила WASD.',
       navigation_stopping: 'Дождитесь остановки навигации.',
       red_light_block: 'Красный светофор: тяга заблокирована до зелёного.',
+      obstacle_hold: 'Препятствие близко: остановка, управление вернётся само.',
       command_failed: 'Нет подтверждения команды; тяга остановлена.'
     };
     function show(text) { if (status) status.textContent = text; }
@@ -135,6 +136,21 @@
       // навсегда. Применяется меньшее из двух.
       state.guardMax = Math.max(0, Math.min(100, Math.min(Math.round(cap), state.boardMax)));
       applySpeedMax(state.guardMax);
+    }
+    // Умный круиз-контроль: борт снимает тягу, если впереди ближе 0,5 м, и
+    // держит паузу ~5 с. Экран показывает остаток и сам возвращает управление:
+    // оператор не должен отпускать клавиши и включать WASD заново.
+    function holdState() {
+      const data = options.getState && options.getState();
+      const hold = data && typeof data === 'object' ? data.obstacleHold : null;
+      return hold && typeof hold === 'object' && hold.hold === true ? hold : null;
+    }
+    function holdText(hold) {
+      if (!hold) return '';
+      const left = Number(hold.holdRemainingS);
+      return Number.isFinite(left) && left > 0
+        ? 'Препятствие близко · остановка, ещё ' + left.toFixed(1) + ' с. Колёса стоят, управление вернётся само.'
+        : 'Препятствие близко · остановка. Управление вернётся само.';
     }
     function showGeometry(geometry) {
       if (!spinInfo) return;
@@ -252,6 +268,13 @@
       const reason = error && error.message || 'command_failed';
       if (reason === 'speed_limit') {
         disable('Предел тяги WASD — ' + speedMax() + ' %: установите ползунок не выше и включите заново.');
+        return;
+      }
+      if (reason === 'obstacle_hold') {
+        // Пауза у препятствия: тяги нет, но сессия жива. Экран держит клавиши
+        // и сам возобновит ход, когда борт отпустит паузу.
+        state.running = null;
+        show(holdText(holdState()) || reasons[reason]);
         return;
       }
       if (reason === 'red_light_block') {
@@ -420,7 +443,21 @@
       if (error) { fail(new Error(error)); return; }
       // Ограничение борта применяем и без тяги: оператор видит потолок заранее.
       applyGuard(guardState());
-      if (state.running) {
+      // Пауза у препятствия: клавиши остаются нажатыми, а ход возобновится
+      // сам, как только борт отпустит паузу (и путь будет свободен).
+      const hold = holdState();
+      if (hold && state.running) {
+        state.running = null;
+        show(holdText(hold));
+      }
+      if (!hold && !state.planning && !state.running && state.keys.size &&
+          !state.arrowConflict && guardState() && guardState().blocked !== true) {
+        // Клавиша всё ещё удерживается: перезапускаем ход после паузы.
+        replan();
+      }
+      if (hold) {
+        // Пока пауза идёт, тягу не запрашиваем вовсе.
+      } else if (state.running) {
         // The onboard lease checks each board's sequence and steering progress;
         // being between the old and new target is expected during a live turn.
         // Tighter cadence: still comfortably inside the 600 ms lease and the
