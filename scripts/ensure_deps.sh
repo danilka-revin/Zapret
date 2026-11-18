@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
-# Создаёт .venv и ставит зависимости. Работает БЕЗ интернета: pip и все
-# пакеты лежат в vendor/ (колёса), онлайн-установка — если сеть есть.
+# Создаёт .venv и проверяет зависимости. Базовые колёса лежат в vendor/.
+# OpenCV для USB-камер ставится отдельно и не обязателен для запуска пульта.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 log() { printf '\033[1;32m[deps]\033[0m %s\n' "$*"; }
+
+usage() {
+  echo 'Использование: ./scripts/ensure_deps.sh [--camera]'
+  echo '  --camera: обязательно восстановить и проверить OpenCV для USB-камер.'
+  echo '  RC_DEPS_OFFLINE=1: брать колёса только из vendor/. RC_DEPS_CAMERA=0: пропустить необязательный OpenCV.'
+}
+
+CAMERA_REQUIRED=0
+case "$#:${1:-}" in
+  0:) ;;
+  1:--camera) CAMERA_REQUIRED=1 ;;
+  1:-h|1:--help) usage; exit 0 ;;
+  *) usage >&2; exit 2 ;;
+esac
 
 PYTHON3="${RC_PYTHON3:-$(command -v python3)}"
 if [[ -z "$PYTHON3" ]] || ! "$PYTHON3" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
@@ -102,3 +116,69 @@ fi
 log "проверка: $(.venv/bin/python -c 'import serial
 from importlib.metadata import version
 print("flask", version("flask"), "· pyserial", serial.VERSION)')"
+
+# Probe the same interpreter as robot-kiosk, not only package metadata. A
+# broken cv2 namespace, missing V4L2 backend or NumPy ABI also means no video.
+probe_camera() {
+  .venv/bin/python - <<'PY_CHECK_CAMERA'
+import sys
+import cv2
+import numpy as np
+
+if not callable(getattr(cv2, "VideoCapture", None)):
+    raise RuntimeError("cv2 загружен без VideoCapture")
+if sys.platform.startswith("linux") and not cv2.videoio_registry.hasBackend(cv2.CAP_V4L2):
+    raise RuntimeError("сборка OpenCV не поддерживает V4L2")
+ok, jpeg = cv2.imencode(".jpg", np.zeros((8, 8, 3), dtype=np.uint8))
+if not ok or cv2.imdecode(jpeg, cv2.IMREAD_COLOR) is None:
+    raise RuntimeError("OpenCV не кодирует/не декодирует JPEG")
+print(f"OpenCV {cv2.__version__} · NumPy {np.__version__} · JPEG OK")
+PY_CHECK_CAMERA
+}
+
+install_camera_wheels() {
+  # Reinstall even if there is metadata for the same version: a different
+  # cv2 distribution or an interrupted update may have overwritten its files.
+  local -a opts=(--disable-pip-version-check --no-input --only-binary=:all:
+                 --force-reinstall --no-deps -c requirements-camera.txt)
+  local output
+  if output=$(PIP_CONFIG_FILE=/dev/null PIP_FIND_LINKS= .venv/bin/python -m pip install \
+      "${opts[@]}" --no-index --find-links vendor "$@" 2>&1); then
+    return 0
+  fi
+  if [[ "${RC_DEPS_OFFLINE:-0}" == "1" ]]; then
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+  .venv/bin/python -m pip install "${opts[@]}" --find-links vendor --retries 1 --timeout 8 "$@"
+}
+
+ensure_camera() {
+  local status
+  if status=$(probe_camera 2>&1); then
+    log "$status"
+    return 0
+  fi
+  log "OpenCV в .venv недоступен: $(printf '%s\n' "$status" | tail -n 1)"
+  log "восстанавливаю зависимости USB-камер (без PyTorch и YOLO)…"
+  local -a packages=(opencv-python-headless)
+  # Do not replace a working NumPy: it may be shared by ROS/PyTorch.
+  if ! .venv/bin/python -c 'import numpy' >/dev/null 2>&1; then
+    packages+=(numpy)
+  fi
+  if install_camera_wheels "${packages[@]}" && status=$(probe_camera 2>&1); then
+    log "$status"
+    return 0
+  fi
+  printf '%s\n' 'USB-камеры недоступны, базовый пульт может работать без них.' \
+    "Причина проверки: $(printf '%s\n' "$status" | tail -n 1)" \
+    'На бортовом ПК: ./scripts/ensure_deps.sh --camera, затем перезапустите киоск.' \
+    'Без сети нужны совместимые колёса OpenCV и NumPy (см. docs/DEPLOY_UBUNTU.md).' >&2
+  return 1
+}
+
+if [[ "$CAMERA_REQUIRED" == "1" || "${RC_DEPS_CAMERA:-1}" == "1" ]]; then
+  if ! ensure_camera && [[ "$CAMERA_REQUIRED" == "1" ]]; then
+    exit 1
+  fi
+fi

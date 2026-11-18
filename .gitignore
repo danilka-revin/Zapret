@@ -12,6 +12,9 @@ venv/
 data/
 var/
 *.log
+# Optional offline camera wheels are local; don't block fast-forward updates.
+/vendor/opencv_python_headless-*.whl
+/vendor/numpy-*.whl
 
 # --- Пакеты обновления для флешки ---
 robot-update.bulka

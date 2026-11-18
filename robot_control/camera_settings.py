@@ -3,7 +3,8 @@
 Раньше камеры были жёстко зашиты как /dev/video0 и /dev/video1. Теперь на
 борту (8090) оператор видит все V4L2-устройства, назначает порт каждой из
 четырёх камер (передняя левая, передняя правая, задняя левая, задняя правая),
-сохраняет выбор в `.env` и сразу переподключает камеры без перезапуска.
+сохраняет выбор в `data/camera-ports.env` и сразу переподключает камеры.
+Старые назначения из `.env` используются, пока нет сохранённого выбора.
 Углы установки и положение задаются отдельно в `.env` (см.
 `sensor_layout.py` и `docs/AUTONOMY.md`) — здесь только порты.
 
@@ -15,6 +16,7 @@
 from __future__ import annotations
 
 import glob
+import logging
 import os
 import re
 import secrets
@@ -25,7 +27,9 @@ from typing import Any
 from .config import PROJECT_ROOT
 from .sensor_layout import CAMERA_ENV_KEYS, camera_env_keys, layout_payload
 
-# Четыре роли в порядке id. Основной ключ пишется в .env, остальные — алиасы.
+log = logging.getLogger(__name__)
+
+# Четыре роли в порядке id. Сохраняем основной ключ, остальные — алиасы.
 ENV_KEYS_BY_ROLE: dict[str, tuple[str, ...]] = {
     "front": ("RC_CAMERA_FRONT", "RC_CAMERA_FL_PORT", "RC_CAMERA_FRONT_PORT", "RC_CAM_FRONT"),
     "rear": ("RC_CAMERA_REAR", "RC_CAMERA_RL_PORT", "RC_CAMERA_REAR_PORT", "RC_CAM_REAR"),
@@ -141,7 +145,7 @@ def describe_camera_ports() -> list[dict[str, Any]]:
         path, real, exists = option["port"], option["device"], option["exists"]
         role = assigned.get(path) or assigned.get(real) or ""
         if role:
-            note = f"{ROLE_LABELS[role]} камера (.env)"
+            note = f"{ROLE_LABELS[role]} камера (настроена)"
         elif path in reserved or real in reserved:
             role, note = "busy", "занят другой подсистемой — не использовать для камеры"
         elif exists:
@@ -159,6 +163,20 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "front_right": ("front_right", "frontRight", "front_right_port", "cam2", "camera_front_right", "2"),
     "rear_right": ("rear_right", "rearRight", "rear_right_port", "cam3", "camera_rear_right", "3"),
 }
+
+
+def _validate_port(role: str, value: str) -> None:
+    if not value:
+        return
+    label = ROLE_LABELS[role]
+    if len(value) > 256:
+        raise ValueError(f"порт {label} камеры слишком длинный")
+    if "\n" in value or "\r" in value or any(ch in value for ch in "\"'`$;|&"):
+        raise ValueError(f"недопустимые символы в пути {label} камеры")
+    if ".." in value.split("/") or not _PORT_RE.fullmatch(value):
+        raise ValueError(f"недопустимый путь {label} камеры: {value}")
+    if not value.startswith("/dev/"):
+        raise ValueError(f"порт {label} камеры должен начинаться с /dev/: {value}")
 
 
 def normalize_camera_settings(payload: Any) -> dict[str, str]:
@@ -180,35 +198,68 @@ def normalize_camera_settings(payload: Any) -> dict[str, str]:
 
     values = {role: pick(keys) for role, keys in _ALIASES.items()}
     for role, value in values.items():
-        if not value:
-            continue
-        label = ROLE_LABELS[role]
-        if len(value) > 256:
-            raise ValueError(f"порт {label} камеры слишком длинный")
-        if "\n" in value or "\r" in value or any(ch in value for ch in "\"'`$;|&"):
-            raise ValueError(f"недопустимые символы в пути {label} камеры")
-        if ".." in value.split("/") or not _PORT_RE.fullmatch(value):
-            raise ValueError(f"недопустимый путь {label} камеры: {value}")
-        if not value.startswith("/dev/"):
-            raise ValueError(f"порт {label} камеры должен начинаться с /dev/: {value}")
-        # Разрешаем любой /dev/*: by-id/by-path и нестандартные VideoCapture
-        # индексы проверяет сам драйвер, а UI покажет порт как «настроенный».
+        _validate_port(role, value)
     non_empty = [_real(v) for v in values.values() if v]
     if len(non_empty) != len(set(non_empty)):
         raise ValueError("две камеры не могут использовать один и тот же порт")
     return values
 
 
-def env_file_path() -> Path:
-    """``.env`` проекта; ``RC_CAMERA_ENV_FILE`` — изоляция в тестах/на другом борту."""
+def env_file_path(project_root: Path = PROJECT_ROOT) -> Path:
+    """One writable camera settings file for both systemd and manual launches."""
     override = (os.environ.get("RC_CAMERA_ENV_FILE") or "").strip()
-    if override:
-        return Path(override)
-    return PROJECT_ROOT / ".env"
+    return project_root / (override or "data/camera-ports.env")
+
+
+def _apply_ports(settings: dict[str, str]) -> None:
+    for role, port in settings.items():
+        primary, *aliases = ENV_KEYS_BY_ROLE[role]
+        os.environ[primary] = port
+        # Keep the empty value after a reset, including in a re-exec. A
+        # legacy alias inherited from .env must not bring the old port back.
+        for key in aliases:
+            os.environ[key] = ""
+
+
+def load_camera_ports(project_root: Path = PROJECT_ROOT) -> None:
+    """Load saved ports after .env, without sourcing arbitrary environment keys."""
+    path = env_file_path(project_root)
+    if path == project_root / ".env":
+        return  # Explicit legacy setup: Config has already read that file.
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return  # A new installation may still have assignments in .env.
+    except (OSError, UnicodeError) as exc:
+        log.warning("Не удалось прочитать назначения камер (%s): %s", path, exc)
+        _apply_ports(DEFAULT_PORTS)
+        return
+
+    allowed = {key for keys in ENV_KEYS_BY_ROLE.values() for key in keys}
+    values = {}
+    for line in lines:
+        key, sep, value = line.partition("=")
+        if sep and key.strip() in allowed:
+            values[key.strip()] = value.strip().strip('"').strip("'")
+    ports = {}
+    for role, keys in ENV_KEYS_BY_ROLE.items():
+        for key in keys:
+            if key in values:
+                port = values[key]
+                try:
+                    # Validate the text only: realpaths can briefly collide
+                    # while USB is enumerating. The registry resolves live IDs.
+                    _validate_port(role, port)
+                except ValueError as exc:
+                    log.warning("Не удалось прочитать назначение камеры (%s): %s", path, exc)
+                    port = ""  # Don't fall back to a stale .env alias.
+                ports[role] = port
+                break
+    _apply_ports(ports)
 
 
 def save_camera_settings(settings: dict[str, str], env_path: Path | None = None) -> dict[str, str]:
-    """Пишет порты четырёх камер в .env атомарно, не трогая остальные строки."""
+    """Сохраняет порты четырёх камер атомарно, не трогая остальные строки."""
     normalized = normalize_camera_settings(settings)
     target = Path(env_path) if env_path is not None else env_file_path()
     lines = target.read_text(encoding="utf-8").splitlines() if target.is_file() else []
@@ -220,8 +271,8 @@ def save_camera_settings(settings: dict[str, str], env_path: Path | None = None)
         all_camera_keys.update(keys)
     overlay = env_path is None and target.resolve() != (PROJECT_ROOT / ".env").resolve()
     if overlay:
-        # The kiosk unit loads this writable EnvironmentFile AFTER the base
-        # .env. Mask legacy aliases there too, including on an explicit reset.
+        # Older kiosk units also consume this file as EnvironmentFile. Mask
+        # inherited aliases there too, including on an explicit reset.
         values.update({alias: "" for alias in sorted(all_camera_keys - values.keys())})
     seen: set[str] = set()
     out: list[str] = []
@@ -295,14 +346,10 @@ def settings_payload(manager=None) -> dict[str, Any]:
 
 
 def apply_camera_settings(payload: Any, manager=None, env_path: Path | None = None) -> dict[str, Any]:
-    """Сохраняет четыре порта в .env и сразу применяет к менеджеру камер."""
+    """Сохраняет четыре порта и сразу применяет их к менеджеру камер."""
     inner = payload.get("settings") if isinstance(payload, dict) and "settings" in payload else payload
     normalized = save_camera_settings(inner, env_path=env_path)
-    for role, keys in ENV_KEYS_BY_ROLE.items():
-        for key in keys:
-            os.environ.pop(key, None)
-        if normalized[role]:
-            os.environ[ENV_PRIMARY_KEYS[role]] = normalized[role]
+    _apply_ports(normalized)
     try:
         from .camera import CameraManager
         mgr = manager or CameraManager.get_instance()

@@ -3,7 +3,7 @@
 Обеспечивает:
 1. Захват видеопотоков с четырёх Logitech C930e: передняя левая (id 0),
    задняя левая (id 1), передняя правая (id 2), задняя правая (id 3).
-   Порты и углы установки берутся из .env (см. sensor_layout.py); id 0 и 1
+   Порты берутся из сохранённых назначений, углы — из .env; id 0 и 1
    сохранены за старыми «передняя/задняя» для совместимости экранов и API.
 2. Раздачу MJPEG-видеопотока (/api/camera/<id>/stream) и отдельных кадров (/api/camera/<id>/frame).
 3. Приём кадров от внешних ROS-нод или скриптов (POST /api/camera/<id>/frame).
@@ -28,7 +28,7 @@ class CameraDevice:
 
     def __init__(self, cam_id: int, device_path: str, name: str = "", *,
                  role: str = "", spec: Optional[dict] = None, target_provider=None, role_checker=None,
-                 revalidate_provider=None):
+                 revalidate_provider=None, discovery_provider=None):
         self.cam_id = cam_id
         self.device_path = device_path
         self.name = name or f"Камера {cam_id}"
@@ -42,6 +42,7 @@ class CameraDevice:
         self._opened_fingerprint = None
         self._target_provider = target_provider
         self._revalidate_provider = revalidate_provider
+        self._discovery_provider = discovery_provider
         self._role_checker = role_checker
         self.capture_error = ""
         self.width = 640
@@ -90,8 +91,12 @@ class CameraDevice:
         except Exception:
             return False
 
-    def _target(self, *, revalidate: bool = False) -> str:
-        provider = self._revalidate_provider if revalidate and self._revalidate_provider else self._target_provider
+    def _target(self, *, revalidate: bool = False, discover: bool = False) -> str:
+        provider = self._target_provider
+        if revalidate:
+            provider = self._revalidate_provider or provider
+        elif discover:
+            provider = self._discovery_provider or provider
         if provider is None:
             return self.device_path
         try:
@@ -122,15 +127,18 @@ class CameraDevice:
     def _capture_loop(self) -> None:
         try:
             import cv2
-        except (ImportError, OSError) as exc:
-            self.capture_error = f"Не загружается OpenCV ({exc}). На борту: .venv/bin/pip install opencv-python-headless"
+            if not callable(getattr(cv2, "VideoCapture", None)):
+                raise RuntimeError("cv2 загружен без VideoCapture")
+        except Exception as exc:  # Optional binary module; telemetry must keep running.
+            self.capture_error = (f"Не загружается OpenCV ({exc}). На борту: "
+                                  "./scripts/ensure_deps.sh --camera, затем перезапуск киоска.")
             log.info("Камера %s: %s", self.cam_id, self.capture_error)
             return
 
         while not self._stop:
-            dev_target = self._target()
-            # The inventory worker refreshes absent paths. Avoid repeatedly
-            # traversing all sysfs from four idle capture threads.
+            # USB nodes and stable aliases can appear after the kiosk boots.
+            # Refresh through the shared cache without waiting for an HTTP request.
+            dev_target = self._target(discover=True)
             if not dev_target or not os.path.exists(dev_target):
                 self.capture_error = (f"{dev_target}: устройство не подключено" if dev_target else
                                       "Проверьте назначение видеовхода в разделе «Устройства»")
@@ -261,11 +269,13 @@ class CameraManager:
             return self.registry.camera_target(role, path) if self.registry is not None else path
         def revalidate():
             return self.registry.camera_target(role, path, refresh=True) if self.registry is not None else path
+        def discover():
+            return self.registry.camera_target(role, path, discover=True) if self.registry is not None else path
         def role_checker():
             return self.registry.camera_role_confirmed(role) if self.registry is not None else None
         return CameraDevice(cam_id, path, str(spec.get("label") or f"Камера {cam_id}"),
                             role=role, spec=spec, target_provider=target, role_checker=role_checker,
-                            revalidate_provider=revalidate)
+                            revalidate_provider=revalidate, discovery_provider=discover)
 
     @classmethod
     def reset_instance(cls) -> None:
@@ -304,7 +314,7 @@ class CameraManager:
                     enumerate(("front_left", "rear_left", "front_right", "rear_right"))]
 
     def _init_devices(self) -> None:
-        """Инициализация четырёх камер с учётом портов из .env."""
+        """Инициализация четырёх камер с учётом сохранённых портов."""
         for spec in self._specs():
             dev = self._make_device(spec)
             self.cameras[dev.cam_id] = dev
@@ -328,16 +338,9 @@ class CameraManager:
         тестов), после чего читаем геометрию заново.
         """
         try:
-            from .camera_settings import ENV_KEYS_BY_ROLE
-            for key, value in (settings or {}).items():
-                env_keys = ENV_KEYS_BY_ROLE.get(str(key))
-                if not env_keys:
-                    continue
-                cleaned = str(value or "").strip()
-                if cleaned:
-                    os.environ[env_keys[0]] = cleaned
-                else:
-                    os.environ.pop(env_keys[0], None)
+            from .camera_settings import ENV_KEYS_BY_ROLE, _apply_ports
+            _apply_ports({key: str(value or "").strip() for key, value in (settings or {}).items()
+                          if key in ENV_KEYS_BY_ROLE})
         except Exception:  # noqa: BLE001 — совместимость со старым словарём
             pass
         specs = self._specs()
@@ -415,11 +418,10 @@ class CameraManager:
 
     def generate_mjpeg_stream(self, cam_id: int) -> Generator[bytes, None, None]:
         """Генератор multipart/x-mixed-replace для MJPEG стриминга в тег <img>."""
-        dev = self.get_camera(cam_id)
         boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
 
         while True:
-            frame = dev.get_frame() if dev else None
+            frame = self.get_frame(cam_id)  # refresh() can replace the device under an open stream
             if frame:
                 yield boundary + frame + b"\r\n"
             time.sleep(0.04)  # ~25 fps

@@ -587,21 +587,22 @@ class DeviceRegistry:
         priority = set().union(*(published.get(role, frozenset()) for role in roles))
         return sorted(ports, key=lambda path: 0 if _real(path) in priority else 1)
 
-    def camera_target(self, role: str, default: str, *, refresh: bool = False) -> str:
-        """Resolve a hint; refresh sysfs before opening and fail closed on mismatch."""
+    def camera_target(self, role: str, default: str, *, refresh: bool = False, discover: bool = False) -> str:
+        """Use the published topology by default, TTL for discovery, live sysfs before opening."""
         short = next((key for key, value in CAMERA_ROLES.items() if value == role), None)
         if not short:
             return default
-        topology = self.usb(refresh=True) if refresh else (self._topology_data or {"devices": []})
         hints = self._fast_hints
         own = hints.get("camera_" + short)
+        if isinstance(own, dict) and own.get("disabled"):
+            return ""  # «Сброс» выключает камеру до нового назначения.
+        if not default and not (isinstance(own, dict) and own.get("identity")):
+            return ""  # No USB scan needed for an unassigned slot.
+        topology = self.usb(refresh=refresh) if refresh or discover else (self._topology_data or {"devices": []})
         if isinstance(own, dict):
             device, node, confidence = _resolve_identity(topology, own.get("identity"))
             if device and node and node.get("kind") == "video":
                 return "" if _video_input_error(device, node) else node["path"]
-            # «Сброс» выключает камеру до нового назначения.
-            if own.get("disabled"):
-                return ""
             # Камеру назначили раньше, чем она появилась в sysfs (или by-id ещё
             # не создан): сверять нечего, но если подсказка совпадает с портом
             # из настроек, это решение оператора, а не догадка. Такой путь

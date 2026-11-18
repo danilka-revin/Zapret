@@ -1,6 +1,11 @@
 """Геометрия 4 × C930e + Kinect и настройки портов без железа."""
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from robot_control import camera_settings as cs
@@ -130,27 +135,76 @@ def test_save_camera_settings_writes_four_keys_and_keeps_other_env(tmp_path, mon
     assert result["front_right"].endswith("fr-video-index0")
 
 
-def test_kiosk_unit_persists_camera_selection_and_reset_without_writable_code(tmp_path, monkeypatch):
-    from pathlib import Path
-    service = (Path(__file__).resolve().parents[1] / 'scripts/robot-kiosk.service').read_text()
-    path = '/opt/robot-control/data/camera-ports.env'
-    assert 'Environment=RC_CAMERA_ENV_FILE=' + path in service
-    assert service.index('EnvironmentFile=-/opt/robot-control/.env') < service.index('EnvironmentFile=-' + path)
+def test_kiosk_unit_can_read_video_without_writable_code():
+    root = Path(__file__).resolve().parents[1]
+    service = (root / 'scripts/robot-kiosk.service').read_text()
+    assert 'EnvironmentFile=-/opt/robot-control/.env' in service
+    assert 'ProtectSystem=strict' in service
+    assert 'ReadWritePaths=/opt/robot-control/data /opt/robot-control/var' in service
     assert 'video' in next(s for s in service.splitlines() if s.startswith('SupplementaryGroups=')).split('=')[1].split()
 
-    clean_camera_env(monkeypatch)
-    overlay = tmp_path / 'data/camera-ports.env'
+
+def _read_fresh_camera_config(project, inherited):
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run([sys.executable, '-c', """
+import json
+import sys
+from pathlib import Path
+from robot_control.camera_settings import current_camera_settings
+from robot_control.config import Config
+from robot_control.sensor_layout import camera_specs
+
+cfg = Config.from_env(Path(sys.argv[1]))
+print(json.dumps([current_camera_settings(), camera_specs(), cfg.secret_key]))
+""", str(project)], cwd=root, env=inherited, check=True, capture_output=True, text=True, timeout=10)
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize('launch', ['cold', 'old-service', 'reexec', 'override'])
+def test_saved_camera_ports_and_reset_survive_launch(tmp_path, monkeypatch, launch):
+    base = tmp_path / '.env'
+    base_text = ('RC_CAMERA_FL_PORT=/dev/video0\nRC_CAM_REAR=/dev/video9\n'
+                 'RC_SECRET_KEY=base-value\nRC_CAMERA_FL_YAW_DEG=-39\n')
+    base.write_text(base_text, encoding='utf-8')
+    relative = 'data/alternate.env' if launch == 'override' else 'data/camera-ports.env'
+    overlay = tmp_path / relative
     monkeypatch.setenv('RC_CAMERA_ENV_FILE', str(overlay))
-    cs.save_camera_settings({'rear': '/dev/v4l/by-path/pci-0:12:1.0-video-index0', 'front': ''})
-    # systemd merges both EnvironmentFiles on restart: even old aliases in
-    # the read-only base .env must not revive a reset port or shadow a new one.
-    monkeypatch.setenv('RC_CAMERA_FL_PORT', '/dev/video1')
-    monkeypatch.setenv('RC_CAM_REAR', '/dev/video3')
-    for line in overlay.read_text().splitlines():
-        key, value = line.split('=', 1)
-        assert key.startswith(('RC_CAMERA_', 'RC_CAM_'))  # never replace the session secret
-        monkeypatch.setenv(key, value)
-    assert [s['port'] for s in layout.camera_specs()] == ['', '/dev/v4l/by-path/pci-0:12:1.0-video-index0', '', '']
+    saved = cs.save_camera_settings({'front': '/dev/v4l/by-path/usb-0:2.0-video-index0', 'rear': ''})
+    overlay_text = overlay.read_text(encoding='utf-8')
+    assert not any(line.startswith('RC_SECRET_KEY=') for line in overlay_text.splitlines())
+
+    inherited = {}
+    if launch == 'old-service':  # previous unit injected data/camera-ports.env itself
+        inherited = dict(line.split('=', 1) for line in overlay_text.splitlines())
+        inherited['RC_CAMERA_ENV_FILE'] = str(overlay)
+    elif launch == 'reexec':  # values inherited from the old kiosk after a live reload
+        inherited = {'RC_CAMERA_FL_PORT': '/dev/video0', 'RC_CAM_REAR': '/dev/video9'}
+    elif launch == 'override':
+        inherited = {'RC_CAMERA_ENV_FILE': relative}
+    with overlay.open('a', encoding='utf-8') as handle:
+        handle.write('RC_SECRET_KEY=do-not-load\nRC_CAMERA_FL_YAW_DEG=90\n')
+
+    settings, specs, secret = _read_fresh_camera_config(tmp_path, inherited)
+    assert settings == saved
+    assert [s['port'] for s in specs] == [saved['front'], '', '', '']
+    assert specs[0]['yaw_deg'] == -39
+    assert secret == 'base-value' and base.read_text(encoding='utf-8') == base_text
+
+
+def test_legacy_ports_remain_usable_without_saved_overlay(tmp_path):
+    (tmp_path / '.env').write_text('RC_CAMERA_FR_PORT=/dev/video14\n', encoding='utf-8')
+    settings, specs, _ = _read_fresh_camera_config(tmp_path, {})
+    assert settings['front_right'] == specs[2]['port'] == '/dev/video14'
+
+
+def test_invalid_saved_port_does_not_revive_a_legacy_alias(tmp_path):
+    (tmp_path / '.env').write_text('RC_CAMERA_FL_PORT=/dev/video0\n', encoding='utf-8')
+    (tmp_path / 'data').mkdir()
+    (tmp_path / 'data/camera-ports.env').write_text(
+        'RC_CAMERA_FRONT=/etc/passwd\nRC_CAMERA_REAR=/dev/video8\n', encoding='utf-8')
+    settings, specs, _ = _read_fresh_camera_config(tmp_path, {})
+    assert settings['front'] == specs[0]['port'] == ''
+    assert settings['rear'] == specs[1]['port'] == '/dev/video8'
 
 
 def test_apply_settings_reconfigures_manager_without_hardware(tmp_path, monkeypatch):
