@@ -28,13 +28,28 @@
     } catch (error) { /* старый браузер без CustomEvent — панель всё равно работает */ }
   }
 
-  function frameUrl(camId) {
-    const annotated = state.overlay && state.online && state.snapshot &&
-      state.snapshot.enabled && state.snapshot.ok;
+  function frameUrl(camId, rawOnly) {
+    // An enabled detector may be warming up, slow or analysing only some
+    // cameras. A missing annotation must not hide a perfectly good raw JPEG.
+    const camera = state.snapshot && state.snapshot.cameras && state.snapshot.cameras[camId];
+    const annotated = !rawOnly && state.overlay && state.online && state.snapshot.enabled && camera &&
+      camera.active && !camera.error && Number.isFinite(camera.captureAgeS) && camera.captureAgeS >= 0 &&
+      camera.captureAgeS + (Date.now() - state.receivedAt) / 1000 < 2;
     const path = annotated
       ? 'api/vision/camera/' + camId + '/frame'
       : 'api/camera/' + camId + '/frame';
     return sessionUrl(path + '?t=' + Date.now());
+  }
+
+  // State and JPEG are separate requests: an annotation can expire between
+  // the two. Try raw once on the same image, within the poller's timeout.
+  function loadFrame(image, camId) {
+    const url = frameUrl(camId);
+    if (url.includes('api/vision/camera/')) {
+      const fail = image.onerror;
+      image.onerror = () => { image.onerror = fail; image.src = frameUrl(camId, true); };
+    }
+    image.src = url;
   }
 
   function setOverlay(value) {
@@ -207,6 +222,7 @@
       const snapshot = await response.json();
       if (!snapshot || typeof snapshot !== 'object') throw new Error('bad payload');
       state.snapshot = snapshot;
+      state.receivedAt = Date.now();
       state.online = !!snapshot.ok;
       render(snapshot);
       emit(snapshot);
@@ -238,7 +254,7 @@
   }
 
   window.RCVision = {
-    frameUrl,
+    frameUrl, loadFrame,
     setOverlay,
     getState: () => state.snapshot,
     onState(listener) {

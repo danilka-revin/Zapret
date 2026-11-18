@@ -27,8 +27,8 @@ from robot_control.camera import CameraManager
 HEADERS = {"X-Robot-Control": "devices"}
 
 
-def _node(path, kind, *, interface="1.0", index=""):
-    return {"path": path, "kind": kind, "aliases": [], "interface": interface,
+def _node(path, kind, *, interface="1.0", index="", aliases=()):
+    return {"path": path, "kind": kind, "aliases": list(aliases), "interface": interface,
             "index": index, "name": ""}
 
 
@@ -292,3 +292,66 @@ def test_hint_without_identity_does_not_open_a_guessed_camera(station):
     registry.topology = Topology(replaced)
     registry.usb(refresh=True)
     assert registry.camera_target("front_left", "/dev/video0") == ""
+
+
+def test_four_dual_node_cameras_offer_four_inputs_and_keep_operator_roles(station, monkeypatch):
+    from robot_control import camera_settings
+
+    client, registry, cameras = station
+    for keys in camera_settings.ENV_KEYS_BY_ROLE.values():
+        for key in keys:
+            monkeypatch.setenv(key, '')
+    # Pairs are deliberately out of order. The final camera advertises capture
+    # on its nonzero index; a rule about even /dev/videoN or index0 is wrong.
+    devices, inputs, candidates = [], [], []
+    for i, (video, meta) in enumerate([(5, 2), (6, 0), (3, 4), (1, 7)]):
+        index = int(i == 3)
+        path = f'/dev/v4l/by-path/pci-0000:00:14.0-usb-0:{i + 1}:1.0-video-index'
+        capture = _node(f'/dev/video{video}', 'video', index=str(index), aliases=[path + str(index)])
+        metadata = _node(f'/dev/video{meta}', 'video', index=str(1 - index), aliases=[path + str(1 - index)])
+        # With no udev DB use the local UVC index in the USB group, not parity.
+        if i != 1:
+            capture['capture'], metadata['capture'] = True, False
+        if i == 0:
+            capture['aliases'].append('/dev/v4l/by-id/usb-Logitech_C930e-video-index0')
+        devices.append(_usb(f'1-{i+1}', '046d:0843', 'CLONED', [metadata, capture]))
+        inputs.append(capture)
+        for n in (metadata, capture):
+            candidates.extend([n['path'], *n['aliases']])
+    registry.topology = Topology(devices)
+    registry.usb(refresh=True)
+    monkeypatch.setattr(camera_settings, 'candidate_video_paths', lambda: candidates)
+    for url in ('/api/devices/ports', '/api/devices'):
+        rows = client.get(url).json['options']['video']
+        assert [o['device'] for o in rows] == [n['path'] for n in inputs]
+        assert [o['port'] for o in rows] == [n['aliases'][0] for n in inputs]
+        assert [o['usbPort'] for o in rows] == ['1-1', '1-2', '1-3', '1-4']
+        assert all(o['serial'] == 'CLONED' for o in rows)
+
+    for d in devices:
+        meta = d['nodes'][0]['aliases'][0]
+        assert registry.camera_target('front_left', meta) == ''
+        response = assign(client, 'camera_FL', meta)
+        assert response.status_code == 400 and 'видеовход' in response.json['error']
+    # Nothing is assigned on discovery. The operator chooses a different order
+    # from USB enumeration, with stable socket names rather than numeric nodes.
+    mapping = [('FL', 'front_left', 0, 2), ('FR', 'front_right', 2, 3),
+               ('RL', 'rear_left', 1, 1), ('RR', 'rear_right', 3, 0)]
+    for side, role, cam_id, index in mapping:
+        path, alias = inputs[index]['path'], inputs[index]['aliases'][0]
+        assert registry.camera_target(role, '') == ''
+        saved = assign(client, 'camera_' + side, alias)
+        assert saved.status_code == 200, saved.json
+        assert saved.json['ports']['roles']['camera_' + side]['port'] == alias
+        assert registry.camera_target(role, alias) == path
+        cameras.opened[cam_id] = path
+        confirmed = confirm(client, 'camera_' + side)
+        assert confirmed.status_code == 200 and confirmed.json['confidence'] == 'socket'
+        assert card(client, 'camera_' + side)['port'] == path
+    # One device with the same serial remains: never show its picture in four roles.
+    registry.topology.devices = devices[:1]
+    registry.usb(refresh=True)
+    assert registry.camera_target('rear_right', '') == inputs[0]['path']
+    assert not registry.camera_role_confirmed('rear_right')
+    for _, role, _, _ in mapping[:3]:
+        assert registry.camera_target(role, '') == ''

@@ -84,7 +84,7 @@
     </section>
     <section class="device-section" aria-labelledby="cameras-title">
       <header class="section-heading"><div><p class="section-index">02 / ОБЗОР</p><h2 id="cameras-title">Камеры</h2></div><span class="section-count">04 УСТРОЙСТВА</span></header>
-      <p class="section-description">У каждой камеры свой видеопорт — назначьте его здесь и проверьте изображение рукой перед объективом. Одинаковые камеры нельзя различить по модели; расположение подтверждает оператор.</p>
+      <p class="section-description">Выберите гнездо USB в карточке нужной камеры и нажмите «Сохранить». Для C930e показан видеовход, а не второй, служебный узел Linux. Номер /dev/video не означает «спереди» или «сзади»: прикройте объектив рукой, сверьте кадр и подтвердите расположение. Доступ к веб-камере браузеру не нужен.</p>
       <div class="cards" id="camera-cards"></div>
     </section>
     <section class="device-section" aria-labelledby="other-title">
@@ -95,7 +95,6 @@
     <footer><b>Как это работает</b> · Порты сохраняются в <code>.env</code> (камеры, лидар, BMS, Kinect, модуль датчиков и порты колёс) и в конфигурацию принтера. Модуль датчиков переподключается сразу; остальные драйверы применяют настройку сразу или при следующем запуске. Подтверждение устройства появляется только из данных драйвера: телеметрия с CRC для колеса, свежий кадр для камеры, ответ JBD для BMS. Автопоиска нет.</footer>
   </main>
   <script src="slam_auth.js"></script>
-  <script src="vision_panel.js"></script>
   <script src="camera_frames.js"></script>
   <script src="devices.js"></script>
 </body>

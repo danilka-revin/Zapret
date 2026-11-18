@@ -31,7 +31,6 @@
   let caseOpen = false;
   let submitting = false;
   let lastState = null;
-  let stateAt = 0;
   let logSeq = 0;
   const lidarDots = [];
 
@@ -59,31 +58,47 @@
     return path + join + MODE_PARAM + '=' + encodeURIComponent(MODE_TOKEN);
   }
 
-  async function getJson(path) {
-    const response = await fetch(withMode(path), { cache: 'no-store', credentials: 'same-origin' });
+  async function getJson(path, signal) {
+    const response = await fetch(withMode(path), { cache: 'no-store', credentials: 'same-origin', signal });
     const body = await response.json().catch(() => ({}));
     return { response, body };
   }
 
   // ----------------------------------- АКБ -----------------------------------
-  function renderBattery(data) {
-    const battery = (data && data.battery) || {};
-    const soc = Number.isFinite(+battery.soc) ? Math.max(0, Math.min(100, +battery.soc)) : null;
+  function renderBattery(snapshot) {
+    // The JBD owner marks disconnected/stale snapshots even when they still
+    // contain the last sample. Neither that sample nor chassis estimates are live.
+    const data = (snapshot.connected === true && snapshot.data) || {};
+    const soc = Number.isFinite(data.soc) && data.soc >= 0 && data.soc <= 100 ? data.soc : null;
     setText($('mon-soc'), soc === null ? '—' : String(Math.round(soc)));
     const bar = $('mon-soc-bar');
     if (bar) bar.style.width = soc === null ? '0%' : soc + '%';
-    setText($('mon-volts'), num(battery.volts, 1) + ' В');
-    setText($('mon-amps'), num(battery.amps, 1) + ' А');
-    setText($('mon-temp'), num(battery.tempC, 0) + ' °C');
-    const speed = Number.isFinite(+data.wheelSpeedMps) ? data.wheelSpeedMps : data.speedMps;
-    setText($('mon-speed'), num(speed, 2) + ' м/с');
-    let note = battery.state || 'нет данных BMS';
+    setText($('mon-volts'), num(data.volts, 1) + ' В');
+    setText($('mon-amps'), num(data.amps, 1) + ' А');
+    const temps = Array.isArray(data.temperatures) ? data.temperatures.filter(Number.isFinite) : [];
+    setText($('mon-temp'), num(temps.length ? Math.max(...temps) : null, 0) + ' °C');
+    let note = data.directionText || snapshot.reason || 'Нет данных BMS';
     if (soc !== null) {
       if (soc < 10) note = 'Критический разряд — сообщите оператору';
       else if (soc < 20) note = 'Низкий заряд — поездка может не состояться';
     }
     setText($('mon-soc-note'), note);
-    setText($('mon-batt-note'), soc === null ? 'нет данных' : Math.round(soc) + '% заряда');
+    setText($('mon-batt-note'), soc === null ? 'нет данных о заряде' : Math.round(soc) + '% заряда');
+  }
+
+  async function pollBattery() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2500);
+    try {
+      const { response, body } = await getJson('api/battery', controller.signal);
+      if (!response.ok || !body.ok || !body.battery) throw new Error('battery');
+      renderBattery(body.battery);
+    } catch (error) {
+      renderBattery({reason: 'Нет связи с сервером BMS'});
+    } finally {
+      clearTimeout(timeout);
+      setTimeout(pollBattery, 1000);
+    }
   }
 
   // ---------------------------------- шасси ----------------------------------
@@ -377,10 +392,9 @@
       const { response, body } = await getJson('api/kiosk_state');
       if (!response.ok || !body.ok) throw new Error((body && body.error) || 'state');
       const data = body.data || {};
-      const at = +data.ts ? +data.ts * 1000 : Date.now();
       lastState = data;
-      stateAt = at;
-      renderBattery(data);
+      const speed = Number.isFinite(data.wheelSpeedMps) ? data.wheelSpeedMps : data.speedMps;
+      setText($('mon-speed'), num(speed, 2) + ' м/с');
       renderChassis(data);
       renderLidar({
         lidarPoints: data.lidar ? data.lidar.map((p) => ({a: p.a, r: p.r})) : null,
@@ -391,9 +405,7 @@
     } catch (error) {
       link('warn', '○ нет связи');
       setText($('mon-lidar-meta'), 'нет связи с бортовым сервером');
-      if (lastState && Date.now() - stateAt > 3000) {
-        setText($('mon-soc-note'), 'данные устарели — нет связи с бортом');
-      }
+      setText($('mon-speed'), '— м/с');
     }
   }
 
@@ -419,6 +431,7 @@
 
   renderDots();
   renderCase({});
+  pollBattery();
   pollState();
   pollCase();
   pollLog();

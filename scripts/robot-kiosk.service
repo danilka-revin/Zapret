@@ -32,9 +32,14 @@ User=robotctl
 Group=robotctl
 # USB-лидар и UART-модули живут в /dev/ttyUSB*: без группы dialout служба
 # получает «Permission denied», и бортовой экран остаётся без скана.
-SupplementaryGroups=dialout
+# Четыре камеры /dev/video* открывает этот процесс, не браузер.
+SupplementaryGroups=dialout video
 WorkingDirectory=/opt/robot-control
 EnvironmentFile=-/opt/robot-control/.env
+# ProtectSystem оставляет код и основной .env только для чтения. Выбор камер
+# сохраняется атомарно в data/ и перекрывает прежние порты при старте службы.
+Environment=RC_CAMERA_ENV_FILE=/opt/robot-control/data/camera-ports.env
+EnvironmentFile=-/opt/robot-control/data/camera-ports.env
 # Служба без графической сессии: браузер открывает рабочий стол робота.
 Environment=RC_KIOSK_OPEN=0
 TimeoutStopSec=10

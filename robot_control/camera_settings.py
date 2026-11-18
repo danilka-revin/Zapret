@@ -55,7 +55,7 @@ ENV_REAR = ENV_PRIMARY_KEYS["rear"]
 ENV_FRONT_KEYS = ENV_KEYS_BY_ROLE["front"]
 ENV_REAR_KEYS = ENV_KEYS_BY_ROLE["rear"]
 
-_PORT_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
+_PORT_RE = re.compile(r"^[A-Za-z0-9_./:+-]+$")
 
 
 def _real(path: str) -> str:
@@ -88,9 +88,9 @@ def current_camera_settings() -> dict[str, str]:
 
 
 def candidate_video_paths() -> list[str]:
-    """Все доступные V4L2-порты на машине (by-id сначала)."""
+    """Все V4L2-узлы для запасного списка без sysfs (by-path различает гнёзда)."""
     seen: dict[str, str] = {}
-    for pattern in ("/dev/v4l/by-id/*", "/dev/v4l/by-path/*", "/dev/video*"):
+    for pattern in ("/dev/v4l/by-path/*", "/dev/v4l/by-id/*", "/dev/video*"):
         for path in sorted(glob.glob(pattern)):
             if not os.path.exists(path):
                 continue
@@ -98,23 +98,9 @@ def candidate_video_paths() -> list[str]:
             if real not in seen:
                 seen[real] = path
     for configured in current_camera_settings().values():
-        if configured and configured not in seen.values() and configured not in seen:
-            seen[_real(configured)] = configured
+        if configured:
+            seen.setdefault(_real(configured), configured)
     return sorted(seen.values())
-
-
-def stable_camera_path(path: str) -> str:
-    """Предпочтительный стабильный путь: by-id, иначе by-path, иначе как есть."""
-    if not path:
-        return ""
-    if path.startswith("/dev/v4l/"):
-        return path
-    real = _real(path)
-    for pattern in ("/dev/v4l/by-id/*", "/dev/v4l/by-path/*"):
-        for by_path in sorted(glob.glob(pattern)):
-            if _real(by_path) == real:
-                return by_path
-    return path
 
 
 def describe_camera_ports() -> list[dict[str, Any]]:
@@ -147,11 +133,12 @@ def describe_camera_ports() -> list[dict[str, Any]]:
             assigned[value] = role
             assigned[_real(value)] = role
 
-    ports = sorted(set(candidate_video_paths()) | set(glob.glob("/dev/video*")))
+    from .device_ports import _video_options
     result: list[dict[str, Any]] = []
-    for path in ports:
-        real = _real(path)
-        exists = os.path.exists(path) or os.path.exists(real)
+    for option in _video_options():
+        if option.get("kinect"):
+            continue
+        path, real, exists = option["port"], option["device"], option["exists"]
         role = assigned.get(path) or assigned.get(real) or ""
         if role:
             note = f"{ROLE_LABELS[role]} камера (.env)"
@@ -200,13 +187,13 @@ def normalize_camera_settings(payload: Any) -> dict[str, str]:
             raise ValueError(f"порт {label} камеры слишком длинный")
         if "\n" in value or "\r" in value or any(ch in value for ch in "\"'`$;|&"):
             raise ValueError(f"недопустимые символы в пути {label} камеры")
-        if not _PORT_RE.match(value):
+        if ".." in value.split("/") or not _PORT_RE.fullmatch(value):
             raise ValueError(f"недопустимый путь {label} камеры: {value}")
         if not value.startswith("/dev/"):
             raise ValueError(f"порт {label} камеры должен начинаться с /dev/: {value}")
         # Разрешаем любой /dev/*: by-id/by-path и нестандартные VideoCapture
         # индексы проверяет сам драйвер, а UI покажет порт как «настроенный».
-    non_empty = [v for v in values.values() if v]
+    non_empty = [_real(v) for v in values.values() if v]
     if len(non_empty) != len(set(non_empty)):
         raise ValueError("две камеры не могут использовать один и тот же порт")
     return values
@@ -231,6 +218,11 @@ def save_camera_settings(settings: dict[str, str], env_path: Path | None = None)
         all_camera_keys.update(keys)
     for keys in CAMERA_ENV_KEYS.values():
         all_camera_keys.update(keys)
+    overlay = env_path is None and target.resolve() != (PROJECT_ROOT / ".env").resolve()
+    if overlay:
+        # The kiosk unit loads this writable EnvironmentFile AFTER the base
+        # .env. Mask legacy aliases there too, including on an explicit reset.
+        values.update({alias: "" for alias in sorted(all_camera_keys - values.keys())})
     seen: set[str] = set()
     out: list[str] = []
     for raw in lines:
@@ -251,7 +243,7 @@ def save_camera_settings(settings: dict[str, str], env_path: Path | None = None)
     for key, value in values.items():
         if key not in seen:
             out.append(f"{key}={value}")
-    if not target.is_file() and not any(line.strip().startswith("RC_SECRET_KEY=") for line in out):
+    if not overlay and not target.is_file() and not any(line.strip().startswith("RC_SECRET_KEY=") for line in out):
         out.insert(0, f"RC_SECRET_KEY={secrets.token_urlsafe(48)}")
     target.parent.mkdir(parents=True, exist_ok=True)
     mode = 0o600

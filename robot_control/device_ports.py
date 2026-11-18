@@ -356,8 +356,8 @@ def save_role(role: str, port: str, env_path: Path | None = None) -> str:
 #
 # * источник списка — USB-топология (sysfs): узел tty/video и его физический
 #   порт (``usbPort`` = ``1-2.1``);
-# * ``port`` — стабильный путь для .env (by-id, если он есть), ``device`` —
-#   настоящий узел /dev/ttyUSB0;
+# * ``port`` — стабильный путь для .env (by-id для UART, by-path для камер),
+#   ``device`` — фактический узел в /dev;
 # * by-id/by-path никогда не попадают в список отдельными строками: это
 #   псевдонимы одного и того же порта;
 # * устройства, у которых есть tty/video-узел, не дублируются в списке
@@ -512,52 +512,50 @@ def _serial_options(topology: dict | None = None) -> list[dict[str, Any]]:
     return options
 
 
-def _video_options(topology: dict | None = None) -> list[dict[str, Any]]:
-    """Видеопорты: одна строка на узел камеры, by-id/by-path — псевдонимы."""
-    from .device_registry import KINECT_CAMERA_IDS
+def _video_options(topology: dict | None = None, *, include_unlisted: bool = True) -> list[dict[str, Any]]:
+    """One image input per physical USB camera, not one row per V4L2 node."""
+    from .device_registry import KINECT_CAMERA_IDS, primary_video_node, video_capture_capability
+    from .camera_settings import candidate_video_paths
+
     if topology is None:
         topology = _topology()
-    options: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    def add(option: dict[str, Any]) -> None:
-        names = [option.get(key) for key in ("port", "device", "byId", "byPath")]
-        names = [str(name) for name in names if name]
-        if not names:
-            return
-        keys = set(names) | {_real(name) for name in names}
-        if keys & seen:
-            return
-        seen.update(keys)
-        options.append(option)
-
-    for device, node in _topology_nodes(topology, "video"):
-        real = str(node.get("path") or "")
-        by_id = _alias(node, "/dev/v4l/by-id/")
-        by_path = _alias(node, "/dev/v4l/by-path/")
-        add({"port": by_id or by_path or real, "device": real,
-             "name": _device_name(device), "usbPort": str(device.get("topology") or ""),
-             "vidPid": str(device.get("vidPid") or ""),
-             "index": str(node.get("index") or ""), "byId": by_id, "byPath": by_path,
-             "kinect": str(device.get("vidPid") or "") in KINECT_CAMERA_IDS,
-             "connection": str(device.get("connection") or ""),
-             "exists": os.path.exists(real)})
-
-    # Запасной путь: нет /sys/class/video4linux — берём V4L2-узлы из /dev.
-    try:
-        from .camera_settings import candidate_video_paths, stable_camera_path
+    devices = [d for d in topology.get("devices", []) if not d.get("isHub")]
+    if include_unlisted:
+        # Account for *all* siblings/aliases before the /dev fallback. Otherwise
+        # the metadata node hidden below would come straight back as a new camera.
+        known = {_real(path) for _, node in _topology_nodes(topology, "video")
+                 for path in [node["path"], *node.get("aliases", [])]}
+        unlisted: dict[str, dict] = {}
         for path in candidate_video_paths():
             real = _real(path)
-            if real in seen:
+            if real in known:
                 continue
-            add({"port": stable_camera_path(path) or real, "device": real, "name": "V4L2",
-                 "usbPort": "", "vidPid": "", "index": "", "byId": "",
-                 "byPath": "", "connection": "", "exists": os.path.exists(real)})
-    except Exception:  # noqa: BLE001 — список остаётся тем, что нашли
-        pass
+            # Without USB topology, udev links can still identify sibling indices.
+            # Never pair unrelated raw /dev/videoN nodes based on their numbering.
+            match = re.fullmatch(r"(/dev/v4l/by-(?:id|path)/.+)-video-index(\d+)", path) if os.path.exists(real) else None
+            group = match[1] if match else real
+            device = unlisted.setdefault(group, {"product": "V4L2", "nodes": []})
+            device["nodes"].append({"path": real, "kind": "video", "aliases": [path] if path != real else [],
+                                    "index": match[2] if match else "", "capture": video_capture_capability(real)})
+        devices.extend(unlisted.values())
 
-    options.sort(key=lambda option: (_usb_port_key(option.get("usbPort")),
-                                     str(option.get("device") or "")))
+    options = []
+    for device in devices:
+        node = primary_video_node(device)
+        if not node:
+            continue
+        real = node["path"]
+        by_id = _alias(node, "/dev/v4l/by-id/")
+        by_path = _alias(node, "/dev/v4l/by-path/")
+        # The same model/serial on four cameras can collide in by-id. A socket
+        # path is unambiguous at assignment; the registry separately tracks identity.
+        options.append({"port": by_path or by_id or real, "device": real,
+                        "name": _device_name(device), "usbPort": device.get("topology", ""),
+                        "vidPid": device.get("vidPid", ""), "serial": device.get("serial", ""),
+                        "index": node.get("index", ""), "byId": by_id, "byPath": by_path,
+                        "kinect": device.get("vidPid") in KINECT_CAMERA_IDS,
+                        "connection": device.get("connection", ""), "exists": os.path.exists(real)})
+    options.sort(key=lambda option: (_usb_port_key(option["usbPort"]), option["device"]))
     return options
 
 

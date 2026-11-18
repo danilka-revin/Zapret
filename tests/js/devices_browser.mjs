@@ -27,24 +27,44 @@ const errors = [];
 page.on('pageerror', error => errors.push(String(error)));
 page.on('dialog', dialog => dialog.accept());
 try {
-  const base64 = await page.evaluate(() => {
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 2;
-    canvas.getContext('2d').fillRect(0, 0, 2, 2);
-    return canvas.toDataURL('image/jpeg').split(',')[1];
-  });
-  assert((await page.request.post(board + '/__test/frame', {
-    data: Buffer.from(base64, 'base64'), headers: {'Content-Type': 'image/jpeg'}
-  })).ok());
+  // Distinct JPEGs for FL/RL/FR/RR: verify actual canvas pixels, not just
+  // connection badges. Chromium has no permission to capture a local camera.
+  const colors = [[200, 30, 30], [30, 200, 30], [30, 30, 200], [220, 180, 30]];
+  for (const [id, rgb] of colors.entries()) {
+    const base64 = await page.evaluate(rgb => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 32; canvas.height = 18;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = `rgb(${rgb})`; ctx.fillRect(0, 0, 32, 18);
+      return canvas.toDataURL('image/jpeg').split(',')[1];
+    }, rgb);
+    assert((await page.request.post(board + '/__test/frame/' + id, {
+      data: Buffer.from(base64, 'base64'), headers: {'Content-Type': 'image/jpeg'}
+    })).ok());
+  }
   if (remote) {
     await page.goto(origin + '/login');
     await page.locator('input[name="username"]').fill('operator');
     await page.locator('input[name="password"]').fill('correct-horse-battery');
     await page.locator('form button[type="submit"]').click();
   }
+  const screens = remote ? [
+    ['/', ['cam-canvas', 'cam-rear-canvas', 'cam-right-canvas', 'cam-rear-right-canvas']],
+    ['/console', ['cam', 'cam-rear', 'cam-right', 'cam-rear-right']],
+  ] : [['/kiosk', [1, 2, 3, 4].map(n => `cam${n}-canvas`)]];
+  for (const [route, ids] of screens) {
+    await page.goto(origin + route, {waitUntil: 'domcontentloaded'});
+    if (!remote) await page.locator('#k-cameras-open').click();
+    await page.waitForFunction(({ids, colors}) => ids.every((id, i) => {
+      const c = document.getElementById(id);
+      if (!c) return false;
+      const pixel = c.getContext('2d').getImageData(c.width * .55, c.height * .45, 1, 1).data;
+      return colors[i].every((v, channel) => Math.abs(v - pixel[channel]) < 8);
+    }), {ids, colors}, {timeout: 12000});
+  }
   await page.goto(origin + '/devices', {waitUntil: 'domcontentloaded'});
   await page.waitForSelector('[data-role="camera_FL"] .preview img', {timeout: 12000});
-  assert.equal(await page.locator('.card').count(), 12);
+  assert.equal(await page.locator('#camera-cards .card').count(), 4);
   assert.equal(await page.locator('[data-role="camera_FL"]').getAttribute('data-state'), 'warning');
   assert.equal(await page.locator('.topbar nav .remote-only').isHidden(), !remote);
   await page.waitForFunction(() => document.body.dataset.surface === 'kiosk' || document.body.dataset.surface === 'remote');
@@ -94,7 +114,7 @@ try {
   const wheelPorts = await page.evaluate(() =>
     [...document.querySelectorAll('#wheel-pick-1 option')].map(o => o.value).filter(Boolean));
   assert(cameraPorts.includes('/dev/video0'), 'камера: свой видеопорт в списке: ' + cameraPorts);
-  assert(new Set(cameraPorts).size === cameraPorts.length, 'камера: без повторов: ' + cameraPorts);
+  assert.deepEqual(cameraPorts, ['/dev/video0', '/dev/video2', '/dev/video5', '/dev/video7']);
   assert(lidarPorts.includes('/dev/ttyUSB0'), 'лидар: последовательные порты: ' + lidarPorts);
   assert(wheelPorts.includes('/dev/ttyUSB0'), 'колёса: последовательные порты: ' + wheelPorts);
   assert(new Set(wheelPorts).size === wheelPorts.length, 'колёса: без повторов: ' + wheelPorts);
@@ -107,10 +127,6 @@ try {
   assert.equal(await input.inputValue(), '/dev/video', 'poll must not erase an edit');
   await input.fill('/dev/video0');
   await page.locator('[data-role="camera_FL"] .save').click();
-  await page.waitForTimeout(2500);
-  console.log('DEBUG message:', await page.locator('[data-role="camera_FL"] .hint-message').textContent());
-  console.log('DEBUG assigned:', await page.locator('[data-role="camera_FL"] .fact-value.assigned').textContent());
-  console.log('DEBUG state:', await page.locator('[data-role="camera_FL"]').getAttribute('data-state'));
   await page.waitForSelector('[data-role="camera_FL"] .confirm:visible', {timeout: 12000});
   await page.locator('[data-role="camera_FL"] .confirm').click();
   await page.waitForFunction(() => document.querySelector('[data-role="camera_FL"]')?.dataset.state === 'verified',
@@ -127,6 +143,7 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-role="camera_FL"]')?.dataset.state === 'verified',
                              null, {timeout: 12000});
   await page.locator('[data-role="camera_FL"] .clear').click();
+  await page.getByRole('button', {name: 'Точно сбросить?'}).click();
   await page.waitForFunction(() => document.querySelector('[data-role="camera_FL"] .card-status')
     ?.textContent.includes('Камера отключена'), null, {timeout: 12000});
   await page.reload({waitUntil: 'domcontentloaded'});

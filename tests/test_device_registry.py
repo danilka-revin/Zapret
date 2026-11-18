@@ -423,25 +423,37 @@ def test_camera_devices_page_end_to_end_with_synthetic_v4l2(kiosk_client, fake_t
 
     kiosk = kiosk_client.application
     registry = kiosk.extensions['rc_devices']
+    # Four physical cameras expose eight V4L2 nodes. Two image nodes are odd.
+    devices = fake_topology.devices
+    devices[3]['nodes'].append(node('/dev/video3', 'video', index='1'))
+    for socket, image, meta in [('1-8', 5, 4), ('1-9', 7, 6)]:
+        devices.append(usb(socket, '046d:0843', socket, [node(f'/dev/video{meta}', 'video', index='1'),
+            node(f'/dev/video{image}', 'video', index='0')], product='C930e'))
     registry.topology = fake_topology
     registry.usb(refresh=True)
-    frame = {'data': b''}
+    frames = {}
+    roles = ['front_left', 'rear_left', 'front_right', 'rear_right']
+    paths = [f'/dev/video{n}' for n in (0, 2, 5, 7)]
+    for key, path in zip(['FRONT', 'REAR', 'FRONT_RIGHT', 'REAR_RIGHT'], paths):
+        monkeypatch.setenv('RC_CAMERA_' + key, path)
+
     class Cameras:
         cameras = {}
-        def refresh(self): pass
-        def live(self):
-            return registry.camera_target('front_left', '/dev/video0') == '/dev/video0'
+        def reconfigure(self, settings): pass
+        def live(self, cid):
+            return cid in frames and registry.camera_target(roles[cid], paths[cid]) == paths[cid]
         def list_cameras(self):
-            return [{'id': 0, 'device': '/dev/video0', 'openedPath': '/dev/video0' if self.live() else None,
-                     'frameAgeS': .1 if self.live() else None, 'frameSource': 'capture' if self.live() else ''}]
-        def get_frame(self, cam_id): return frame['data'] if cam_id == 0 and self.live() else None
+            return [{'id': i, 'device': p, 'openedPath': p if self.live(i) else None,
+                     'frameAgeS': .1 if self.live(i) else None, 'frameSource': 'capture' if self.live(i) else ''}
+                    for i, p in enumerate(paths)]
+        def get_frame(self, cam_id): return frames.get(cam_id) if self.live(cam_id) else None
         def current_settings(self): return {}
     previous = CameraManager._instance
     CameraManager._instance = Cameras()
 
-    @kiosk.post('/__test/frame')
-    def synthetic_frame():
-        frame['data'] = request.get_data()
+    @kiosk.post('/__test/frame/<int:cid>')
+    def synthetic_frame(cid):
+        frames[cid] = request.get_data()
         return jsonify(ok=True)
 
     @kiosk.post('/__test/swap-camera')
@@ -467,6 +479,8 @@ def test_camera_devices_page_end_to_end_with_synthetic_v4l2(kiosk_client, fake_t
         origin = board
         if remote:
             monkeypatch.setenv('RC_SLAM_PEER_URL', board + '/api/kiosk_state')
+            from robot_control.slam import make_source
+            monkeypatch.setattr(app.extensions['rc_slam'], 'source', make_source('master', master_role='peer'))
             web_server = make_server('127.0.0.1', 0, app, threaded=True, request_handler=Quiet)
             web_thread = threading.Thread(target=web_server.serve_forever, daemon=True)
             web_thread.start()
@@ -486,3 +500,15 @@ def test_camera_devices_page_end_to_end_with_synthetic_v4l2(kiosk_client, fake_t
         server.server_close()
         thread.join(timeout=3)
         CameraManager._instance = previous
+
+
+def test_v4l_capability_reads_udev_properties_not_the_device(tmp_path):
+    from robot_control.device_registry import video_capture_capability
+    # Only stat the character device to derive the key; use a fixture for udev.
+    dev = '/dev/null'
+    rdev = os.stat(dev).st_rdev
+    key = tmp_path / f'c{os.major(rdev)}:{os.minor(rdev)}'
+    assert video_capture_capability(dev, tmp_path) is None
+    for caps, expected in [(':capture:', True), (':metadata:', False), (':', False)]:
+        key.write_text('E:ID_V4L_CAPABILITIES=' + caps + '\n')
+        assert video_capture_capability(dev, tmp_path) is expected

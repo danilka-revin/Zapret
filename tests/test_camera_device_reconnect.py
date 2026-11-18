@@ -22,18 +22,19 @@ def wait_for(predicate, timeout=3):
 def test_missing_camera_never_falls_back_to_index_and_reconnects_safely(tmp_path, monkeypatch):
     path = tmp_path / 'video-device'
     selected = {'value': str(path)}
-    opened = []
+    opened, properties = [], []
     class Cap:
         def __init__(self, target, backend):
             opened.append(target)
             self.active = True
         def isOpened(self): return self.active
-        def set(self, *args): return True
+        def set(self, *args): properties.append(args); return True
         def read(self): return True, object()
         def release(self): self.active = False
     class Bytes:
         def tobytes(self): return b'jpeg'
-    fake = SimpleNamespace(VideoCapture=Cap, CAP_V4L2=1, CAP_ANY=0, CAP_PROP_FRAME_WIDTH=1,
+    fake = SimpleNamespace(VideoCapture=Cap, CAP_V4L2=1, CAP_ANY=0, CAP_PROP_FOURCC=4,
+                           VideoWriter_fourcc=lambda *letters: "".join(letters), CAP_PROP_FRAME_WIDTH=1,
                            CAP_PROP_FRAME_HEIGHT=2, CAP_PROP_FPS=3, IMWRITE_JPEG_QUALITY=1,
                            imencode=lambda *args: (True, Bytes()))
     monkeypatch.setitem(sys.modules, 'cv2', fake)
@@ -45,6 +46,7 @@ def test_missing_camera_never_falls_back_to_index_and_reconnects_safely(tmp_path
         path.touch()
         assert wait_for(lambda: dev.get_frame() == b'jpeg')
         assert opened == [str(path)]
+        assert properties[0] == (fake.CAP_PROP_FOURCC, "MJPG")
         # Reused pathname/inode replacement must invalidate the old frame
         # before a new camera can be presented as the old role.
         replacement = tmp_path / 'replacement'
@@ -104,3 +106,26 @@ def test_manager_singleton_is_constructed_once_under_concurrent_requests(monkeyp
         assert len(entered) == 1 and len({id(result) for result in results}) == 1
     finally:
         CameraManager.reset_instance()
+
+
+def test_open_port_without_a_frame_is_not_live(monkeypatch, tmp_path):
+    path = tmp_path / 'video'; path.touch()
+    class EmptyCapture:
+        def __init__(self, *args): pass
+        def isOpened(self): return True
+        def set(self, *args): return False
+        def read(self): return False, None
+        def release(self): pass
+    fake = SimpleNamespace(VideoCapture=EmptyCapture, CAP_V4L2=1, CAP_PROP_FOURCC=6,
+                           VideoWriter_fourcc=lambda *args: 0, CAP_PROP_FRAME_WIDTH=3,
+                           CAP_PROP_FRAME_HEIGHT=4, CAP_PROP_FPS=5)
+    monkeypatch.setitem(sys.modules, 'cv2', fake)
+    dev = CameraDevice(0, str(path)); dev.start()
+    try:
+        assert wait_for(lambda: 'нет кадра' in dev.capture_error)
+        item, = CameraManager.list_cameras(SimpleNamespace(cameras={0: dev}))
+        assert item['exists'] and not item['active']
+        assert not item['frameSource'] and item['frameAgeS'] is None
+        assert str(path) in item['captureError']
+    finally:
+        dev.stop(); dev._thread.join(timeout=2)

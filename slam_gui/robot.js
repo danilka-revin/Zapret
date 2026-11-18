@@ -140,6 +140,7 @@
       const j = await r.json();
       if (j && j.ok && j.data) {
         lastData = j.data;
+        if (window.RCCameraView) window.RCCameraView.setSources(j.data.cameras);
         calibrationTelemetryCurrent = true;
         if (window.RCRemoteControls && window.RCRemoteLegacyState) window.RCRemoteLegacyState(j.data);
         // Потеря платы или E-STOP не должны автоматически перезапустить её
