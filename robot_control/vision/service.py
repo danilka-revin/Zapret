@@ -124,6 +124,7 @@ class CameraVision:
             "id": self.cam_id,
             "active": bool(self.jpeg) and now - self.stamp <= 2.0,
             "ageS": round(max(0.0, now - self.stamp), 3) if self.stamp else None,
+            "frameStamp": self.evidence_stamp or None,
             "captureAgeS": round(max(0.0, now - self.evidence_stamp), 3) if self.evidence_stamp else None,
             "width": self.width,
             "height": self.height,
@@ -211,7 +212,7 @@ class VisionService:
                 return self._backend
             self._detector = None
             self._backend = "unavailable"
-            self._reason = "OpenCV (cv2) не установлен: установите requirements-vision.txt"
+            self._reason = "Не установлены OpenCV/NumPy: см. requirements-vision.txt"
             return self._backend
 
     @property
@@ -235,6 +236,8 @@ class VisionService:
         """Запустить фоновый разбор кадров (ничего не делает без детектора)."""
         if not self.config.enabled:
             self._reason = "выключено в .env (RC_VISION_ENABLED=0)"
+            return
+        if self._thread and self._thread.is_alive():
             return
         self.initialize()
         if self._detector is None:

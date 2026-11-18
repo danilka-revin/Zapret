@@ -18,6 +18,7 @@ def status_payload() -> dict:
         "enabled", "estopClear", "visionOk", "visionRunning", "camerasFresh",
         "conesVisible", "corridorOk", "geometryCalibrated", "driveReady",
         "steerReady", "chassisLink", "wheelsOnline", "depthFresh", "imuFresh",
+        "lidarReady", "lidarClear", "wheelFeedback", "brakeFeedback", "powerLimits",
         "rivalsIdle", "standstill")}
     checks["blindZone"] = False
     return {
@@ -31,6 +32,7 @@ def status_payload() -> dict:
         "signs": [], "corridor": {"ok": True, "centerM": 0.05,
                                   "centerAheadM": 0.1, "widthM": 1.6,
                                   "leftCount": 2, "rightCount": 2},
+        "lidar": {"ready": True, "blocked": False, "nearestM": None},
         "traffic": {"visible": False, "state": "none", "hold": False},
         "ground": {"ok": False, "nearestBumpM": None, "status": "unknown"},
         "imu": {"fresh": True, "pitch": 0.0, "roll": 0.0, "gyroZ": 0.0},
@@ -63,10 +65,9 @@ def test_autonomy_html_links_and_safety_labels():
         assert key in env
     docs = (ROOT / "docs" / "TRACK_AUTONOMY.md").read_text(encoding="utf-8")
     assert "navigation_frame()" in docs and "notForNavigation" in docs
-    assert "уже влито в эту ветку" in docs and "PR #158" in docs
-    module_doc = (ROOT / "robot_control" / "track_autonomy.py").read_text(encoding="utf-8")
-    assert "влитого из ``main`` / PR #158" in module_doc
-    assert "дорабатывается на соседней ветке" not in module_doc
+    assert "blocked_gate" in docs and "физического E-STOP" in docs
+    assert 'value="gate"' in html and 'value="blocked_gate"' in html
+    assert 'id="aut-lidar"' in html
 
 
 @pytest.mark.skipif(NODE is None, reason="нет node")
@@ -98,7 +99,7 @@ def test_autonomy_screen_js_flow(tmp_path):
     assert data["csrf"] == "test-token"
     assert "api/vision/camera/0/frame" in data["cameraSrc"]
     assert "api/camera/0/frame" in data["fallbackSrc"]
-    assert data["phase"] == "ОСТАНОВЛЕНО" and data["badge"] == "ОСТАНОВЛЕНО"
+    assert data["phase"] == "ЗАЕЗД ПРЕРВАН" and data["badge"] == "ЗАЕЗД ПРЕРВАН"
 
     start = data["startCalls"][0]
     assert start["init"]["method"] == "POST"

@@ -11,26 +11,31 @@
   const $ = (id) => document.getElementById(id);
   const MARKER = 'autonomy';
   const PHASES = {
-    idle: 'ОЖИДАНИЕ', starting: 'ЗАПУСК', following: 'ЕДУ ПО ЦЕНТРУ',
-    stop_wait: 'СТОП · ЖДУ 3 С', traffic_wait: 'ЖДУ ЗЕЛЁНЫЙ',
-    bump_slow: 'КОЧКА · МЕДЛЕННО', bump_climb: 'КОЧКА · ДОБАВЛЯЮ ТЯГУ',
-    bump_exit: 'ПОСЛЕ КОЧКИ · МЕДЛЕННО', lane_lost: 'КОРИДОР ПОТЕРЯН',
-    done: 'ТРАССА ПРОЙДЕНА', cancelled: 'ОСТАНОВЛЕНО', error: 'ОШИБКА / STOP',
+    idle: 'ОЖИДАНИЕ', starting: 'ЗАПУСК', following: 'ЕДУ ЧЕРЕЗ ПРОЕЗД',
+    aligning: 'ПОДТВЕРЖДАЮ УГОЛ КОЛЁС', stop_approach: 'ПОДЪЕЗЖАЮ К СТОП',
+    stop_braking: 'СТОП · ТОРМОЖУ', stop_wait: 'СТОП · ВЫДЕРЖКА', traffic_wait: 'ЖДУ ЗЕЛЁНЫЙ',
+    bump_wait: 'ЖДУ ПОДТВЕРЖДЕНИЯ КОЧКИ', bump_slow: 'КОЧКА · МЕДЛЕННО', bump_climb: 'ПЕРЕЕЗЖАЮ КОЧКУ',
+    bump_exit: 'ПОСЛЕ КОЧКИ · МЕДЛЕННО', lane_lost: 'ПРОЕЗД НЕ ПОДТВЕРЖДЁН',
+    blocked: 'ПРОЕЗД ЗАБЛОКИРОВАН', done: 'ФИНИШ', cancelled: 'ЗАЕЗД ПРЕРВАН', error: 'ОШИБКА / STOP',
   };
   const CHECK_LABELS = {
     enabled: 'режим включён (RC_TRACK_ENABLE=1)',
     estopClear: 'E-STOP снят', visionOk: 'машинное зрение отвечает',
-    visionRunning: 'поток разбора кадров идёт', camerasFresh: 'свежие кадры камер',
-    conesVisible: 'конусы видны', corridorOk: 'коридор распознан',
-    geometryCalibrated: 'геометрия камер откалибрована',
+    visionRunning: 'поток разбора кадров идёт', camerasFresh: 'свежие кадры обеих передних камер',
+    conesVisible: 'столбики видны', corridorOk: 'проезд вмещает корпус с запасом',
+    lidarReady: 'полный физический скан лидара', lidarClear: 'лидар не видит препятствий на пути',
+    geometryCalibrated: 'геометрия камер и Kinect откалибрована',
     driveReady: 'шасси готово к тяге', steerReady: 'адресное руление доступно',
     chassisLink: 'связь с платами колёс (@TLM)', wheelsOnline: 'все 4 колеса онлайн',
     depthFresh: 'свежий навигационный кадр Kinect 360',
     imuFresh: 'свежий гироскоп / наклон',
+    wheelFeedback: 'свежая телеметрия SC всех колёс', brakeFeedback: 'подтверждаемый STOP',
+    powerLimits: 'согласованные пределы тяги',
     rivalsIdle: 'другие режимы тяги выключены',
     blindZone: 'ближняя зона осмотрена', standstill: 'робот стоит',
   };
-  const OPTIONAL_CHECKS = new Set(['geometryCalibrated', 'depthFresh', 'imuFresh', 'blindZone']);
+  const SIMULATION_CHECKS = new Set(['geometryCalibrated', 'lidarReady', 'lidarClear',
+    'driveReady', 'steerReady', 'chassisLink', 'wheelsOnline', 'wheelFeedback', 'brakeFeedback']);
   const TRAFFIC_NAMES = {red: 'КРАСНЫЙ', yellow: 'ЖЁЛТЫЙ', green: 'ЗЕЛЁНЫЙ',
                          unknown: 'НЕ ОПРЕДЕЛЁН', none: 'НЕ ВИДЕН'};
   const state = {status: null, csrf: '', busy: false, initialized: false, timer: null, camTimer: null};
@@ -73,11 +78,14 @@
     const checks = status.checks || {};
     Object.keys(CHECK_LABELS).forEach((key) => {
       const ok = !!checks[key];
+      const optional = key === 'blindZone' || (key === 'imuFresh' && !(status.config || {}).require_imu) ||
+        (status.simulation && (SIMULATION_CHECKS.has(key) ||
+          (key === 'depthFresh' && !(status.config || {}).require_depth)));
       const line = document.createElement('li');
-      line.className = 'aut-check ' + (ok ? 'is-ok' : OPTIONAL_CHECKS.has(key) ? 'is-warn' : 'is-bad');
+      line.className = 'aut-check ' + (ok ? 'is-ok' : optional ? 'is-warn' : 'is-bad');
       const mark = document.createElement('span');
       mark.className = 'aut-check-mark';
-      mark.textContent = ok ? '✓' : OPTIONAL_CHECKS.has(key) ? '•' : '✗';
+      mark.textContent = ok ? '✓' : optional ? '•' : '✗';
       line.appendChild(mark);
       const label = document.createElement('span');
       label.textContent = CHECK_LABELS[key];
@@ -96,7 +104,7 @@
         warnBox.appendChild(line);
       });
     }
-    text('aut-ready-state', blockers.length ? blockers.length + ' блокировок' : 'можно ехать');
+    text('aut-ready-state', blockers.length ? blockers.length + ' блокировок' : 'проверки пройдены');
     tone('aut-ready-state', blockers.length ? 'err' : 'go');
     text('aut-enable-state', status.enabled ?
       (status.simulation ? 'ВКЛЮЧЁН · БЕЗ ТЯГИ' : 'ВКЛЮЧЁН') : 'ВЫКЛЮЧЕН');
@@ -108,7 +116,7 @@
     const label = PHASES[phase] || String(phase).toUpperCase();
     text('aut-badge', label);
     tone('aut-badge', phase === 'following' || phase === 'done' ? 'go' :
-      phase === 'stop_wait' || phase === 'traffic_wait' || phase === 'error' ? 'stop' :
+      ['stop_wait', 'stop_braking', 'traffic_wait', 'error', 'blocked'].includes(phase) ? 'stop' :
       phase === 'bump_slow' || phase === 'bump_climb' || phase === 'bump_exit' ||
       phase === 'lane_lost' ? 'warn' : 'idle');
     text('aut-phase', label);
@@ -118,11 +126,13 @@
     text('aut-steer', (Number(status.steerLeftDeg) || 0).toFixed(1));
     text('aut-boost', (Number(status.boostPercent) || 0).toFixed(1));
     const corridor = status.corridor || {};
-    text('aut-corridor', corridor.ok ?
-      (Number(corridor.centerM) || 0).toFixed(2) + ' / ' +
-      (corridor.widthM == null ? '?' : Number(corridor.widthM).toFixed(2)) : '—');
+    text('aut-corridor', corridor.widthM == null ? '—' : Number(corridor.widthM).toFixed(2) +
+      ' / ' + (corridor.requiredWidthM == null ? '?' : Number(corridor.requiredWidthM).toFixed(2)));
+    const lidar = status.lidar || {};
+    text('aut-lidar', lidar.blocked ? 'ПРЕПЯТСТВИЕ' : lidar.ready ? 'СКАН В НОРМЕ' : 'НЕТ СКАНА');
+    tone('aut-kpi-lidar', lidar.blocked ? 'stop' : lidar.ready ? 'go' : 'warn');
     text('aut-cones', (status.cones || []).length);
-    text('aut-corridor-meta', 'конусов: ' + (status.cones || []).length +
+    text('aut-corridor-meta', 'столбиков: ' + (status.cones || []).length +
       ' · границы: ' + (corridor.leftCount == null ? '—' : corridor.leftCount) + '/' +
       (corridor.rightCount == null ? '—' : corridor.rightCount));
     const traffic = status.traffic || {};
@@ -130,11 +140,11 @@
     tone('aut-kpi-traffic', traffic.state === 'green' ? 'go' :
       traffic.visible && traffic.hold ? 'stop' : 'idle');
     const stops = (status.signs || []).filter((s) => s.class === 'stop_sign');
-    text('aut-stop-sign', phase === 'stop_wait' ? 'СТОЮ 3 С' :
+    text('aut-stop-sign', phase === 'stop_wait' ? 'ВЫДЕРЖКА' : phase === 'stop_braking' ? 'ТОРМОЖУ' :
       stops.length ? (stops.some((s) => s.side === 'side') ? 'С КРАЮ' : 'ВПЕРЕДИ') : '—');
     const ground = status.ground || {};
     text('aut-bump', ground.nearestBumpM != null ? Number(ground.nearestBumpM).toFixed(2) :
-      (phase.indexOf('bump') === 0 ? 'ПО ЗНАКУ' : '—'));
+      (phase === 'bump_wait' ? 'НЕ ПОДТВЕРЖДЕНА' : '—'));
     const imu = status.imu || {};
     text('aut-imu', imu.fresh ? (Number(imu.pitch) || 0).toFixed(1) : 'нет');
     const progress = $('aut-progress');
@@ -152,7 +162,7 @@
     const blindOk = !status.requireBlindCheck || !!(blind && blind.checked);
     if (startBtn) startBtn.disabled = state.busy || status.active ||
       !status.canStart || !blindOk;
-    if (stopBtn) stopBtn.disabled = state.busy || !status.active;
+    if (stopBtn) stopBtn.disabled = !status.active && !state.busy;
     const empty = $('aut-canvas-empty');
     if (empty) empty.hidden = (status.cones || []).length > 0;
   }
@@ -208,14 +218,14 @@
     // Центр коридора: от текущего смещения до точки прицеливания.
     const corridor = status.corridor || {};
     if (corridor.ok) {
-      const look = Math.max(1, Number((status.config || {}).lookahead_m) || 2.5);
-      const ahead = Number(corridor.centerAheadM == null ? corridor.centerM : corridor.centerAheadM) || 0;
-      const here = Number(corridor.centerM) || 0;
-      ctx.strokeStyle = '#61d68f';
+      const look = Math.max(0.1, Number(corridor.targetXm) || Number((status.config || {}).lookahead_m) || 2.5);
+      const steer = status.active ? status.steerLeftDeg : corridor.steerLeftDeg;
+      const ahead = Math.tan((Number(steer) || 0) * Math.PI / 180) * look;
+      ctx.strokeStyle = status.lidar && status.lidar.blocked ? '#ff5a5a' : '#61d68f';
       ctx.lineWidth = 3;
       ctx.setLineDash([7, 5]);
       ctx.beginPath();
-      ctx.moveTo(px(here), py(0));
+      ctx.moveTo(px(0), py(0));
       ctx.lineTo(px(ahead), py(look));
       ctx.stroke();
       ctx.setLineDash([]);
@@ -290,17 +300,23 @@
       renderLive(status);
       renderCanvas(status);
     } catch (error) {
+      state.status = null;
+      const start = $('aut-start');
+      if (start) start.disabled = true;
       text('aut-message', 'Нет связи с бортом: ' + error.message);
       tone('aut-badge', 'err');
     }
   }
 
   async function command(path, payload, message) {
-    if (state.busy) return;
+    if (state.busy && path !== 'api/autonomy/stop') return;
     state.busy = true;
+    if (state.status) renderLive(state.status);
     note(message || 'Отправляю команду…');
     try {
       await api(path, 'POST', payload || {});
+      const blind = $('aut-blind');
+      if (blind) blind.checked = false;
       note('Команда принята.');
     } catch (error) {
       note('Команда отклонена: ' + error.message, true);
@@ -345,7 +361,9 @@
       try {
         const result = await api('api/autonomy/simulate', 'POST', {scenario});
         renderEvents('aut-sim-events', result.events || []);
-        text('aut-sim-summary', result.phase === 'done'
+        text('aut-sim-summary', result.passed && result.expectedStop
+          ? 'Проверка прошла: проезд заблокирован, робот остался на месте.'
+          : result.passed || (result.passed == null && result.phase === 'done')
           ? 'Готово: ' + result.distanceM + ' м за ' + result.elapsedS + ' с · СТОП ' +
             result.counters.stop + ' · кочек ' + result.counters.bump +
             ' · светофоров ' + result.counters.traffic +
@@ -370,6 +388,8 @@
     // Кадры камер показываем только после первого статуса: по нему известно,
     // включено ли машинное зрение и какой URL разметки использовать.
     refresh().then(updateCameras);
+    // При прямом открытии /autonomy нет другой страницы, запускающей VisionService.
+    api('api/vision/state', 'GET').then(refresh, () => {});
     state.timer = setInterval(refresh, 1000);
     state.camTimer = setInterval(updateCameras, 1400);
   }

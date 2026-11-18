@@ -7,11 +7,12 @@
 ни файлы состояния не открываются; ``RC_TRACK_ENABLE`` не нужен.
 
     ./scripts/track_autonomy_sim.py
-    ./scripts/track_autonomy_sim.py --scenario bump
+    ./scripts/track_autonomy_sim.py --scenario blocked_gate
     ./scripts/track_autonomy_sim.py --scenario full --json
 
-Отчёт ``ok: true`` говорит только об исправности логики, а не о безопасности
-движения: перед реальным пуском см. docs/TRACK_AUTONOMY.md.
+Отчёт ``passed: true`` говорит только о результате сценария, а не о безопасности
+движения. Для blocked_gate ожидается остановка без движения; перед реальным
+пуском см. docs/TRACK_AUTONOMY.md.
 """
 from __future__ import annotations
 
@@ -22,23 +23,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from robot_control.track_autonomy import simulate_track  # noqa: E402
-
-SCENARIOS = ("full", "straight", "stop", "bump", "light")
+from robot_control.track_autonomy import TRACK_SCENARIOS, simulate_track  # noqa: E402
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scenario", choices=SCENARIOS, default="full",
+    parser.add_argument("--scenario", choices=TRACK_SCENARIOS, default="full",
                         help="какие элементы трассы включить")
     parser.add_argument("--json", action="store_true", help="машиночитаемый отчёт")
     args = parser.parse_args(argv)
     report = simulate_track(args.scenario)
     counters = report["counters"]
-    report["ok"] = bool(report["phase"] == "done" and report["distanceM"] >= 40.0 and
-                        (args.scenario != "full" or (
-                            counters["stop"] >= 1 and counters["bump"] >= 1 and
-                            counters["traffic"] >= 1 and counters["powerBoosts"] >= 1)))
+    report["ok"] = report["passed"]
     if args.json:
         print(json.dumps(report, ensure_ascii=False))
     else:
@@ -54,8 +50,8 @@ def main(argv=None) -> int:
         for event in report["events"]:
             print("    %6.1f с  %5.1f м  %-14s %s" %
                   (event["atS"], event["distanceM"], event["phase"], event["message"]))
-        print("  итог:              %s" % ("логика трассы исправна" if report["ok"]
-                                          else "ПРОБЛЕМА: " + str(report["message"])))
+        result = ("проезд заблокирован как ожидалось" if report["expectedStop"] else "сценарий завершён")
+        print("  итог:              %s" % (result if report["ok"] else "ПРОБЛЕМА: " + str(report["message"])))
     return 0 if report["ok"] else 1
 
 

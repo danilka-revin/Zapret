@@ -354,16 +354,18 @@ class KinectDepthService:
         with self._lock:
             return bool(self._points) and (self._clock() - self._received_at) <= limit
 
-    def navigation_fresh(self, max_age_s: Optional[float] = None) -> bool:
+    def navigation_fresh(self, max_age_s: Optional[float] = None, *, allow_demo: bool = True) -> bool:
         """Есть ли свежий ПОЛНЫЙ кадр глубины для рельефа/кочки.
 
         В отличие от ``fresh()``, не считает достаточным ``points``/``ranges``:
         для плоскости пола нужен исходный кадр с оптикой, а не псевдоскан.
+        Режим с тягой также может отклонить явно синтетический кадр.
         """
         limit = float(max_age_s if max_age_s is not None else self._spec["max_age_s"])
         with self._lock:
             return (self._depth_frame is not None and
-                    (self._clock() - self._depth_frame_received_at) <= limit)
+                    (allow_demo or self._capture_source != "demo") and
+                    0 <= self._clock() - self._depth_frame_received_at <= limit)
 
     def navigation_frame(self) -> Optional[dict[str, Any]]:
         """Снимок навигационного кадра: сам кадр, оптика и его номер.
@@ -378,7 +380,7 @@ class KinectDepthService:
                 return None
             return {"ok": True, "frameId": self._depth_frame_id,
                     "frame": frame, "spec": dict(self._spec),
-                    "stamp": frame.stamp,
+                    "stamp": frame.stamp, "captureSource": self._capture_source,
                     "ageS": round(self._clock() - self._depth_frame_received_at, 3),
                     "notForNavigation": False}
 
