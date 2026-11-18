@@ -79,7 +79,10 @@ class Config:
 
     @classmethod
     def from_env(cls, project_root: Path = PROJECT_ROOT) -> "Config":
+        from .camera_settings import load_camera_ports
+
         _load_dotenv(project_root / ".env")
+        load_camera_ports(project_root)
         operators_file = os.environ.get("RC_OPERATORS_FILE") or "data/operators.json"
         path = Path(operators_file)
         if not path.is_absolute():

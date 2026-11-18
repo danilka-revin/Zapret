@@ -5,11 +5,16 @@ import os
 import sys
 import threading
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
+from robot_control import camera_settings, device_registry
 from robot_control.camera import CameraDevice, CameraManager
+from robot_control.config import Config
+from robot_control.kiosk_app import create_kiosk_app
+from test_device_registry import MutableTopology, node, usb
 
 
 def wait_for(predicate, timeout=3):
@@ -21,10 +26,7 @@ def wait_for(predicate, timeout=3):
     return bool(predicate())
 
 
-def test_missing_camera_never_falls_back_to_index_and_reconnects_safely(tmp_path, monkeypatch):
-    path = tmp_path / 'video-device'
-    selected = {'value': str(path)}
-    opened, properties = [], []
+def _fake_cv2(opened, properties):
     class Pixels:
         size, shape = 12, (2, 2, 3)
         def __getitem__(self, key): return self
@@ -41,10 +43,17 @@ def test_missing_camera_never_falls_back_to_index_and_reconnects_safely(tmp_path
     class Bytes:
         size = 4
         def tobytes(self): return b'jpeg'
-    fake = SimpleNamespace(VideoCapture=Cap, CAP_V4L2=1, CAP_ANY=0, CAP_PROP_FOURCC=4,
+    return SimpleNamespace(VideoCapture=Cap, CAP_V4L2=1, CAP_ANY=0, CAP_PROP_FOURCC=4,
                            VideoWriter_fourcc=lambda *letters: "".join(letters), CAP_PROP_FRAME_WIDTH=1,
                            CAP_PROP_FRAME_HEIGHT=2, CAP_PROP_FPS=3, IMWRITE_JPEG_QUALITY=1,
                            imencode=lambda *args: (True, Bytes()))
+
+
+def test_missing_camera_never_falls_back_to_index_and_reconnects_safely(tmp_path, monkeypatch):
+    path = tmp_path / 'video-device'
+    selected = {'value': str(path)}
+    opened, properties = [], []
+    fake = _fake_cv2(opened, properties)
     monkeypatch.setattr('robot_control.camera.load_opencv', lambda: (fake, None, ''))
     dev = CameraDevice(3, str(path), role='rear_right', target_provider=lambda: selected['value'])
     dev.start()
@@ -140,6 +149,94 @@ def test_open_port_without_a_frame_is_not_live(monkeypatch, tmp_path):
         dev.stop(); dev._thread.join(timeout=2)
 
 
+def test_cold_kiosk_waits_for_saved_usb_camera_and_restores_raw_frame(tmp_path, monkeypatch):
+    """A replacement at the old number is not the assigned front camera."""
+    opened = []
+    fake = _fake_cv2(opened, [])
+    monkeypatch.setattr('robot_control.camera.load_opencv', lambda: (fake, None, ''))
+    for keys in camera_settings.ENV_KEYS_BY_ROLE.values():
+        for key in keys:
+            monkeypatch.setenv(key, '')
+    saved_port = '/dev/video0'
+    old_node, new_node = tmp_path / 'video0', tmp_path / 'video8'
+    old_node.touch()
+
+    def camera(socket, serial, path, aliases=()):
+        return usb(socket, '046d:0843', serial, [node(str(path), 'video', index='0', aliases=aliases)])
+
+    previous = device_registry.DeviceRegistry(topology=MutableTopology([
+        camera('1-4', 'CAM-FL', old_node, [saved_port]),
+    ]))
+    previous.set_hint('camera_FL', saved_port)
+    previous.confirm_camera('camera_FL', [{'id': 0, 'openedPath': str(old_node),
+                                          'frameSource': 'capture', 'frameAgeS': 0.1}])
+    previous.set_hint('camera_RL', '')
+    camera_settings.save_camera_settings({'front': saved_port, 'rear': ''})
+
+    # New process state: only the two persistent files survive, not the
+    # capture object, the previous topology, or the live os.environ changes.
+    replacement = camera('1-5', 'OTHER-CAMERA', old_node, [saved_port])
+    boot_usb = MutableTopology([replacement])
+    monkeypatch.setattr(device_registry, 'UsbTopology', lambda: boot_usb)
+    monkeypatch.setenv('RC_CAMERA_RL_PORT', '/dev/video1')  # stale env from an older install
+    cfg = replace(Config.from_env(tmp_path), testing=True, slam_source='none')
+    CameraManager.reset_instance()
+    app = create_kiosk_app(cfg)
+    client = app.test_client()
+    manager = CameraManager.get_instance()
+    try:
+        assert wait_for(lambda: manager.get_camera(0).capture_error)
+        assert client.get('/api/camera/0/frame').status_code == 404
+        assert not opened
+
+        new_node.touch()
+        boot_usb.devices = [replacement, camera('1-4', 'CAM-FL', new_node)]
+        # No inventory API or forced rescan is called after the new USB node
+        # appears. The capture worker must refresh the cached topology itself.
+        assert wait_for(lambda: manager.get_frame(0) == b'jpeg')
+        frame = client.get('/api/camera/front/frame')
+        assert (frame.status_code, frame.mimetype, frame.data) == (200, 'image/jpeg', b'jpeg')
+        front, rear, *_ = client.get('/api/cameras').json['cameras']
+        assert (front['device'], front['openedPath'], front['role']) == (saved_port, str(new_node), 'front_left')
+        assert front['active'] and front['captureError'] is None
+        assert manager.get_camera(0).role_verified()
+        assert not rear['device'] and not rear['active']
+        assert client.get('/api/camera/rear/frame').status_code == 404
+        assert opened == [str(new_node)]
+    finally:
+        CameraManager.reset_instance()
+        for dev in manager.cameras.values():
+            dev._thread.join(timeout=2)
+
+
+@pytest.mark.parametrize('module', [None, SimpleNamespace()])
+def test_missing_or_incomplete_opencv_reports_a_capture_error(monkeypatch, module):
+    monkeypatch.setenv('RC_CAMERA_BACKEND', 'opencv')
+    monkeypatch.setitem(sys.modules, 'cv2', module)
+    dev = CameraDevice(0, '/dev/video0')
+    dev.start()
+    dev._thread.join(timeout=2)
+    assert 'Не установлен модуль cv2' in dev.capture_error or 'OpenCV/NumPy не загрузились' in dev.capture_error
+    assert '.venv/bin/python scripts/ensure_opencv.py' in dev.capture_error
+    assert dev.get_frame() is None
+    dev.feed_frame(b'external-jpeg')
+    assert dev.get_frame() == b'external-jpeg'
+
+
+def test_mjpeg_stream_follows_reconfigured_device():
+    manager = CameraManager.__new__(CameraManager)
+    first = CameraDevice(0, '')
+    second = CameraDevice(0, '')
+    manager.cameras = {0: first}
+    first.feed_frame(b'first')
+    second.feed_frame(b'second')
+    stream = manager.generate_mjpeg_stream(0)
+    assert next(stream).endswith(b'first\r\n')
+    manager.cameras[0] = second
+    assert next(stream).endswith(b'second\r\n')
+    stream.close()
+
+
 def test_capture_negotiates_then_serves_decodable_jpeg(kiosk_client, tmp_path, monkeypatch):
     """Real VideoCapture.read + imencode + HTTP; recorded MJPG replaces only V4L2.
 
@@ -196,8 +293,12 @@ def test_capture_negotiates_then_serves_decodable_jpeg(kiosk_client, tmp_path, m
     assert kiosk_client.get('/api/camera/2/frame').status_code == 404
 
 
-@pytest.mark.parametrize('backend', ['auto', 'ffmpeg'])
-def test_ffmpeg_reader_releases_child_on_stop(tmp_path, monkeypatch, backend):
+@pytest.mark.parametrize('backend, cv2_module', [
+    pytest.param('auto', None, id='missing-opencv'),
+    pytest.param('auto', SimpleNamespace(), id='incomplete-opencv'),
+    pytest.param('ffmpeg', None, id='forced-ffmpeg'),
+])
+def test_ffmpeg_reader_releases_child_on_stop(tmp_path, monkeypatch, backend, cv2_module):
     """Exercise the real FFmpeg pipe/process, substituting a test source for the USB input."""
     import io
     import shutil
@@ -222,7 +323,7 @@ def test_ffmpeg_reader_releases_child_on_stop(tmp_path, monkeypatch, backend):
     monkeypatch.setattr(shutil, 'which', lambda name: binary if name == 'ffmpeg' else None)
     monkeypatch.setenv('RC_CAMERA_BACKEND', backend)
     if backend == 'auto':
-        monkeypatch.setitem(sys.modules, 'cv2', None)
+        monkeypatch.setitem(sys.modules, 'cv2', cv2_module)
     else:
         monkeypatch.setattr('robot_control.camera.load_opencv', lambda: pytest.fail('forced FFmpeg loaded OpenCV'))
     dev = CameraDevice(0, str(path)); dev.start()
@@ -233,7 +334,32 @@ def test_ffmpeg_reader_releases_child_on_stop(tmp_path, monkeypatch, backend):
         assert dev.frame_source == 'capture' and 'FFmpeg' in dev.capture_mode
     finally:
         dev.stop(); dev._thread.join(timeout=2)
-    assert len(children) == 1 and children[0].poll() is not None and not dev.get_frame()
+    assert len(children) in (1, 2) and all(child.poll() is not None for child in children)
+    if len(children) == 2:
+        # Old FFmpeg exits on the unsupported flag; both children are reaped.
+        assert '-fps_mode' in children[0].args and children[0].returncode != 0
+        assert '-vsync' in children[1].args
+    assert not dev.get_frame()
+
+
+def test_legacy_ffmpeg_retries_with_passthrough_without_changing_the_port(monkeypatch):
+    from robot_control import camera_capture as cc
+
+    attempted = []
+    jpeg = cc.Frame(b'jpeg', 640, 480, None, None, None)
+
+    def old_ffmpeg(args, size, current):
+        attempted.append(args)
+        assert args[args.index('-i') + 1] == '/dev/selected'
+        if '-fps_mode' in args:
+            assert args[args.index('-fps_mode') + 1] == 'passthrough'
+            raise OSError("Unrecognized option 'fps_mode'.")
+        assert args[args.index('-vsync') + 1] == '0'
+        yield jpeg
+
+    monkeypatch.setattr(cc, '_ffmpeg_pipe', old_ffmpeg)
+    assert list(cc.ffmpeg_frames('ffmpeg', '/dev/selected', cc.modes(False, True)[0], lambda: True)) == [jpeg]
+    assert len(attempted) == 2
 
 
 def test_silent_ffmpeg_child_has_a_deadline_and_is_reaped(monkeypatch):

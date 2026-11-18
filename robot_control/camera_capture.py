@@ -115,12 +115,27 @@ def ffmpeg_frames(binary, path, mode, current):
     if mode.fourcc:
         fmt = 'mjpeg' if mode.fourcc == 'MJPG' else 'yuyv422'
         args += ['-input_format', fmt, '-video_size', '%dx%d' % size, '-framerate', str(mode.fps)]
-    args += ['-threads', '1', '-i', path, '-an', '-vsync', '0', '-s', '%dx%d' % size, '-c:v', 'mjpeg',
-             '-threads', '1', '-q:v', '5', '-f', 'mpjpeg', '-flush_packets', '1', 'pipe:1']
+    args += ['-threads', '1', '-i', path, '-an']
+    output = ['-s', '%dx%d' % size, '-c:v', 'mjpeg', '-threads', '1', '-q:v', '5',
+              '-f', 'mpjpeg', '-flush_packets', '1', 'pipe:1']
+    # Pass frames through without synthesizing duplicates. New FFmpeg no
+    # longer recognizes -vsync, while older Ubuntu doesn't have -fps_mode.
+    try:
+        yield from _ffmpeg_pipe(args + ['-fps_mode', 'passthrough'] + output, size, current)
+    except OSError as exc:
+        if "Unrecognized option 'fps_mode'" not in str(exc):
+            raise
+        if current():
+            yield from _ffmpeg_pipe(args + ['-vsync', '0'] + output, size, current)
+
+
+def _ffmpeg_pipe(args, size, current):
     proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
     buf = bytearray()
     error = b''
-    pipes = [proc.stdout, proc.stderr]
+    # Read diagnostics before handling simultaneous stdout EOF (e.g. an
+    # unsupported option reported by a version that exited immediately).
+    pipes = [proc.stderr, proc.stdout]
     deadline = time.monotonic() + FFMPEG_FRAME_TIMEOUT_S
     try:
         while current():
