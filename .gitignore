@@ -18,6 +18,7 @@ var/
 
 # --- Пакеты обновления для флешки ---
 robot-update.bulka
+robot-update.zip
 .bulka-update-*.tmp
 
 # --- Обучение YOLO: веса и метки в Git, тяжёлые кадры/логи — нет ---

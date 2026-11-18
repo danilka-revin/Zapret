@@ -54,7 +54,7 @@ def test_missing_camera_never_falls_back_to_index_and_reconnects_safely(tmp_path
     selected = {'value': str(path)}
     opened, properties = [], []
     fake = _fake_cv2(opened, properties)
-    monkeypatch.setitem(sys.modules, 'cv2', fake)
+    monkeypatch.setattr('robot_control.camera.load_opencv', lambda: (fake, None, ''))
     dev = CameraDevice(3, str(path), role='rear_right', target_provider=lambda: selected['value'])
     dev.start()
     try:
@@ -93,7 +93,7 @@ def test_rechecks_live_usb_before_and_after_open_not_just_cached_path(tmp_path, 
         def isOpened(self): return True
         def release(self): released.append(True)
     fake = SimpleNamespace(VideoCapture=Cap, CAP_V4L2=1, CAP_ANY=0)
-    monkeypatch.setitem(sys.modules, 'cv2', fake)
+    monkeypatch.setattr('robot_control.camera.load_opencv', lambda: (fake, None, ''))
     dev = CameraDevice(0, str(path), target_provider=lambda: str(path),
                        revalidate_provider=lambda: str(path) if identity['live'] else '')
     dev.start()
@@ -137,7 +137,7 @@ def test_open_port_without_a_frame_is_not_live(monkeypatch, tmp_path):
     fake = SimpleNamespace(VideoCapture=EmptyCapture, CAP_V4L2=1, CAP_PROP_FOURCC=6,
                            VideoWriter_fourcc=lambda *args: 0, CAP_PROP_FRAME_WIDTH=3,
                            CAP_PROP_FRAME_HEIGHT=4, CAP_PROP_FPS=5)
-    monkeypatch.setitem(sys.modules, 'cv2', fake)
+    monkeypatch.setattr('robot_control.camera.load_opencv', lambda: (fake, None, ''))
     dev = CameraDevice(0, str(path)); dev.start()
     try:
         assert wait_for(lambda: 'нет кадра' in dev.capture_error)
@@ -152,7 +152,8 @@ def test_open_port_without_a_frame_is_not_live(monkeypatch, tmp_path):
 def test_cold_kiosk_waits_for_saved_usb_camera_and_restores_raw_frame(tmp_path, monkeypatch):
     """A replacement at the old number is not the assigned front camera."""
     opened = []
-    monkeypatch.setitem(sys.modules, 'cv2', _fake_cv2(opened, []))
+    fake = _fake_cv2(opened, [])
+    monkeypatch.setattr('robot_control.camera.load_opencv', lambda: (fake, None, ''))
     for keys in camera_settings.ENV_KEYS_BY_ROLE.values():
         for key in keys:
             monkeypatch.setenv(key, '')
@@ -215,8 +216,8 @@ def test_missing_or_incomplete_opencv_reports_a_capture_error(monkeypatch, modul
     dev = CameraDevice(0, '/dev/video0')
     dev.start()
     dev._thread.join(timeout=2)
-    assert 'OpenCV' in dev.capture_error
-    assert './scripts/ensure_deps.sh --camera' in dev.capture_error
+    assert 'Не установлен модуль cv2' in dev.capture_error or 'OpenCV/NumPy не загрузились' in dev.capture_error
+    assert '.venv/bin/python scripts/ensure_opencv.py' in dev.capture_error
     assert dev.get_frame() is None
     dev.feed_frame(b'external-jpeg')
     assert dev.get_frame() == b'external-jpeg'
@@ -323,6 +324,8 @@ def test_ffmpeg_reader_releases_child_on_stop(tmp_path, monkeypatch, backend, cv
     monkeypatch.setenv('RC_CAMERA_BACKEND', backend)
     if backend == 'auto':
         monkeypatch.setitem(sys.modules, 'cv2', cv2_module)
+    else:
+        monkeypatch.setattr('robot_control.camera.load_opencv', lambda: pytest.fail('forced FFmpeg loaded OpenCV'))
     dev = CameraDevice(0, str(path)); dev.start()
     try:
         assert wait_for(lambda: dev.frames_received >= 2, timeout=5), dev.capture_error

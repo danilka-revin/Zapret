@@ -22,6 +22,7 @@ import time
 from typing import Any, Generator, Optional
 
 from .camera_capture import ffmpeg_frames, modes, opencv_frames
+from .opencv_runtime import REPAIR_COMMAND, load_opencv
 
 log = logging.getLogger("robot_control.camera")
 
@@ -136,27 +137,22 @@ class CameraDevice:
         if backend not in ("auto", "opencv", "ffmpeg"):
             self.capture_error = "RC_CAMERA_BACKEND: укажите auto, opencv или ffmpeg"
             return
-        cv2 = None
-        opencv_error = ""
+        cv2, import_error = None, ""
         if backend != "ffmpeg":
-            try:
-                import cv2
-                if not callable(getattr(cv2, "VideoCapture", None)):
-                    raise RuntimeError("cv2 загружен без VideoCapture")
-            except Exception as exc:  # Optional binary module; allow the FFmpeg fallback.
-                cv2 = None
-                opencv_error = str(exc) or type(exc).__name__
+            cv2, _, import_error = load_opencv()
         ffmpeg = shutil.which("ffmpeg") if backend != "opencv" else None
         profiles = modes(cv2 is not None, ffmpeg is not None)
         if not profiles:
-            reason = f"Нет средства захвата на борту (RC_CAMERA_BACKEND={backend})."
-            if opencv_error:
-                reason += f" OpenCV ({opencv_error}): ./scripts/ensure_deps.sh --camera."
+            reasons = [f"Нет средства захвата на борту (RC_CAMERA_BACKEND={backend})."]
+            if import_error:
+                reasons.append(f"{import_error}. Восстановить: {REPAIR_COMMAND}.")
             if backend != "opencv":
-                reason += " Для FFmpeg: sudo apt install ffmpeg."
-            self.capture_error = reason
-            log.info("Камера %s: %s", self.cam_id, reason)
+                reasons.append("FFmpeg не найден: sudo apt install ffmpeg.")
+            self.capture_error = " ".join(reasons)
+            log.warning("Камера %s: %s", self.cam_id, self.capture_error)
             return
+        if import_error:
+            log.info("Камера %s: %s; захват через FFmpeg", self.cam_id, import_error)
         previous = None
         attempt = 0
         while not self._stop:

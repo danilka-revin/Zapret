@@ -39,6 +39,53 @@ ROS 2 для лидара ставится **сам** — флаги не нуж
 перезапустите приложение своим обычным способом (для systemd — `sudo systemctl
 restart robot-kiosk robot-control`). Камеры не требуют перепрошивки Mega.
 
+**Если написано «не загружается OpenCV».** В терминале **бортового компьютера**, в
+том каталоге проекта, из которого работает киоск, выполните:
+
+```bash
+.venv/bin/python -c 'import sys; print(sys.executable, flush=True); import cv2, numpy; print(cv2.__version__, cv2.__file__, numpy.__version__, numpy.__file__)'
+```
+
+Успешный импорт в другом `python3` не проверяет киоск. `ModuleNotFoundError: No
+module named 'cv2'` означает, что в этом окружении нет модуля. `libGL.so…`,
+`numpy.core…`, `dtype size changed` — другая ситуация: модуль найден, но нативная
+библиотека не загрузилась. Сохраните вывод целиком, не переназначайте порты.
+
+```bash
+.venv/bin/python scripts/ensure_opencv.py --check   # только проверка .venv, без сети/USB
+.venv/bin/python scripts/ensure_opencv.py           # при ошибке — переустановка колёс
+```
+
+Команда работает с `.venv` проекта, не с системным Python. Она ставит только
+`requirements-camera.txt` (headless OpenCV и NumPy), затем проверяет импорт в
+новом процессе. **YOLO, torch и `requirements-vision.txt` для этого не нужны.**
+Если на борту ещё старая версия без скрипта и отсутствует `cv2`, используйте
+команду ниже (ограничение NumPy сохраняет совместимость с ROS на Ubuntu 22.04/24.04):
+
+```bash
+.venv/bin/python -m pip install --only-binary=:all: 'opencv-python-headless>=4.8,<5' 'numpy<2; python_version < "3.13"'
+```
+
+Если импорт всё ещё падает, нужны текст ошибки и вывод `.venv/bin/python -m pip show
+numpy opencv-python-headless opencv-python`; не устанавливайте ещё одну GUI-сборку поверх.
+
+На обновлённой версии обычное обновление и ярлык через `ensure_deps.sh` проверяют
+OpenCV даже при неизменном `requirements.txt`, если есть V4L2-узел, назначенный
+порт или задан `RC_CAMERA_BACKEND=opencv`. Установка необязательная: при неудаче
+пульт продолжит работать. При `RC_CAMERA_BACKEND=ffmpeg` автоматическая установка
+пропускается. Для одного лишь видео возможен системный `ffmpeg` (см. ниже);
+для распознавания нужен рабочий OpenCV. При USB-обновлении используются только
+локальные колёса; штатный `vendor/` не содержит OpenCV и NumPy. Для ремонта без
+интернета скачайте на машине **той же архитектуры, ОС и версии Python** колёса
+(`.venv/bin/python -m pip download --only-binary=:all: -r requirements-camera.txt -d /tmp/camera-wheels`),
+перенесите их в `vendor/` на борту и запустите
+`RC_DEPS_OFFLINE=1 .venv/bin/python scripts/ensure_opencv.py`.
+
+После успешного импорта перезапустите киоск и пульт на неподвижном роботе:
+`sudo systemctl restart robot-kiosk robot-control` для служб **или**
+`./scripts/stop.sh && ./scripts/start_robot.sh` для запуска ярлыком. Импорт ещё не
+означает, что с камеры пришло изображение; это проверяется отдельно:
+
 1. На борту откройте `/devices` и посмотрите карточку **уже назначенного**
    видеовхода. Или в терминале борта: `curl -fsS http://127.0.0.1:8090/api/cameras |
    python3 -m json.tool`. Проверьте `device`, `captureMode`, `captureError`.
@@ -53,8 +100,7 @@ restart robot-kiosk robot-control`). Камеры не требуют переп
    не маскируется чёрной картинкой. Проверка сырого JPEG для FL (0):
    `curl -f http://127.0.0.1:8090/api/camera/0/frame -o /tmp/fl.jpg`.
 2. Нет обоих средств захвата? На Ubuntu можно поставить `sudo apt install ffmpeg`
-   (плюс `v4l-utils` для диагностики) **или** восстановить OpenCV в окружении
-   бортового процесса командой `./scripts/ensure_deps.sh --camera` (см. раздел 2).
+   (плюс `v4l-utils` для диагностики) **или** восстановить OpenCV командой выше.
    После установки перезапустите бортовой процесс. Конфликт доступа проверяется
    командой `fuser -v "$PORT"`, где `PORT` — точный путь этой камеры из `/devices`.
    У владельца должна быть группа `video`; второй экземпляр киоска, Cheese,
@@ -131,28 +177,6 @@ sudo ./scripts/ensure_deps.sh          # в каталоге, принадлеж
 ```bash
 .venv/bin/python -c "import flask, serial; print(flask.__version__, serial.VERSION)"
 ```
-
-### USB-камеры без YOLO
-
-`ensure_deps.sh` также проверяет OpenCV в **той же `.venv`, что использует
-киоск**: импорт, поддержку V4L2 и кодирование JPEG. На бортовом ПК при ошибке
-OpenCV запустите `./scripts/ensure_deps.sh --camera` из каталога киоска. После
-успешной проверки перезапустите ярлык «Запустить робот» или службу
-`sudo systemctl restart robot-kiosk`. Служба не переустанавливает пакеты при
-загрузке. При наличии FFmpeg режим `auto` работает и без OpenCV, а
-`RC_DEPS_CAMERA=0` отключает необязательную проверку/установку OpenCV.
-
-Если на борту нет сети, заранее скачайте бинарные колёса на машине с той же
-архитектурой и версией Python, что и `.venv` робота:
-
-```bash
-python3 -m pip download --only-binary=:all: -r requirements-camera.txt -d vendor/
-```
-
-Перенесите эти колёса в `vendor/` на борту и выполните
-`RC_DEPS_OFFLINE=1 ./scripts/ensure_deps.sh --camera`. Не добавляйте колёса
-в Git. Если их нет, в обычном режиме скрипт выдаст предупреждение, но не
-сорвёт запуск пульта или офлайн-обновление.
 
 ## 3. Настройки и учётка оператора
 
@@ -435,7 +459,7 @@ sudo apt install -y python3-certbot-apache   # или сгенерировать
 | Карта лидара пустая, хотя `lidar_check.py` лидар находит | веб-приложение запущено не из `.venv` (нет pyserial) или `.env` не перечитан: `./scripts/ensure_deps.sh`, `.venv/bin/python scripts/lidar_check.py --save-env`, перезапуск; проверка — `.venv/bin/python scripts/lidar_web_check.py` |
 | Экран показывает `демо · N точек (не лидар)` | реального скана нет: причина написана под картой, подробности — `GET /api/lidar` (поля `reason`, `usb_diagnostics`) |
 | Бортовой экран без скана, пульт со сканом | второй процесс берёт скан у первого по HTTP: `source: peer` — норма. Если `peer` не работает, проверьте `RC_LIDAR_PEER_URLS` и что оба приложения на одной машине |
-| После перезапуска нет видео | См. [проверку на борту](#camera-check) и `journalctl -b -u robot-kiosk -n 80 --no-pager` для службы. Если киоск отдаёт `/api/camera/0/frame`, а пульт нет, проверяйте связь пульта с киоском, не переназначайте камеру. |
+| После перезапуска нет видео | См. [проверку на борту](#camera-check) и `journalctl -b -u robot-kiosk -n 80 --no-pager` для службы. Киоск читает роли из `data/camera-ports.env` поверх `.env`; если киоск отдаёт `/api/camera/0/frame`, а пульт нет, проверьте связь пульта с киоском. |
 | `Permission denied` на `/dev/ttyUSB*` у службы | `sudo usermod -aG dialout robotctl` и перезапуск службы; в юнитах `SupplementaryGroups=dialout` уже есть (см. раздел 4b) |
 | Экран пишет «нет связи», хотя Arduino подключена | Убедитесь, что в `.env` выбран `RC_SLAM_SOURCE=master`, и перезапустите оба процесса. На бортовом экране откройте «Руление и тяга»: статус показывает найденные роли, старую прошивку, занятые и нераспознанные USB. Проверьте питание, кабели, права `dialout`, четыре разные роли fw22+ и явные исключения `RC_LIDAR_EXCLUDE`. Снимок без открытия новых портов: `curl http://127.0.0.1:8090/api/kiosk_state` (поля `masterPort` и `motors`). BMS выбирается вручную; неизвестный USB блокирует команды. Ручное назначение портов колёс и автоматическая калибровка здесь не нужны. |
 | После обновления кода пропал pyserial | `./scripts/ensure_deps.sh` — скрипт проверяет импорты в `.venv` и доустанавливает недостающее |

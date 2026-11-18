@@ -24,7 +24,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .config import PROJECT_ROOT
+from .config import PROJECT_ROOT, dotenv_items
 from .sensor_layout import CAMERA_ENV_KEYS, camera_env_keys, layout_payload
 
 log = logging.getLogger(__name__)
@@ -227,20 +227,18 @@ def load_camera_ports(project_root: Path = PROJECT_ROOT) -> None:
     if path == project_root / ".env":
         return  # Explicit legacy setup: Config has already read that file.
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        if path.exists() and not path.is_file():
+            raise OSError("ожидается обычный файл назначений")
+        values = dict(dotenv_items(path))
     except FileNotFoundError:
-        return  # A new installation may still have assignments in .env.
+        return  # The overlay disappeared while opening it.
     except (OSError, UnicodeError) as exc:
         log.warning("Не удалось прочитать назначения камер (%s): %s", path, exc)
         _apply_ports(DEFAULT_PORTS)
         return
 
-    allowed = {key for keys in ENV_KEYS_BY_ROLE.values() for key in keys}
-    values = {}
-    for line in lines:
-        key, sep, value = line.partition("=")
-        if sep and key.strip() in allowed:
-            values[key.strip()] = value.strip().strip('"').strip("'")
+    # Deliberately load only port keys; do not override secrets, geometry or
+    # the capture backend using the writable overlay.
     ports = {}
     for role, keys in ENV_KEYS_BY_ROLE.items():
         for key in keys:

@@ -112,6 +112,29 @@ def test_ensure_python_path_makes_site_packages_importable(ros_prefix, monkeypat
     assert str(ros_prefix) in os.environ.get("PYTHONPATH", "")
 
 
+def test_system_ros_dependencies_do_not_shadow_venv_wheels(tmp_path, ros_prefix, monkeypatch):
+    import importlib
+
+    venv, system = tmp_path / "site-packages", tmp_path / "dist-packages"
+    venv.mkdir(); system.mkdir()
+    # Like NumPy, this module exists in both places. Another is apt-only, as
+    # some rclpy dependencies are: it still has to be importable.
+    (venv / "camera_dep_test.py").write_text("origin = 'venv'")
+    (system / "camera_dep_test.py").write_text("origin = 'system'")
+    (system / "ros_dep_test.py").write_text("origin = 'system'")
+    monkeypatch.syspath_prepend(str(venv))
+    monkeypatch.setattr(ros_env, "SYSTEM_DIST_PACKAGES", system)
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    try:
+        ros_env.ensure_python_path(ros_prefix)
+        assert importlib.import_module("camera_dep_test").origin == "venv"
+        assert importlib.import_module("ros_dep_test").origin == "system"
+        assert str(system) not in os.environ["PYTHONPATH"].split(os.pathsep)
+    finally:
+        sys.modules.pop("camera_dep_test", None)
+        sys.modules.pop("ros_dep_test", None)
+
+
 def test_installed_packages_are_read_from_the_ament_index(ros_prefix):
     packages = ros_env.installed_packages(ros_prefix)
     assert {"rplidar_ros", "sensor_msgs"} <= packages

@@ -11,7 +11,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
+from typing import BinaryIO
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,13 +21,33 @@ sys.path.insert(0, str(ROOT))
 
 from robot_control.usb_update import (  # noqa: E402
     BRANCH_RE, BUNDLE_LIMIT, CHUNK_SIZE, MAGIC, NAMESPACE, PACKAGE_NAME, REPOSITORY, SHA_RE,
-    UsbUpdateError,
+    ZIP_LIMIT, ZIP_NAME, UsbUpdateError,
 )
 
 GITHUB_URL = f"https://github.com/{REPOSITORY}.git"
 
 
-def make_package(repo: Path, output: Path, key: Path, *, branch: str, base: str | None) -> tuple[Path, str]:
+def _write_package(target: BinaryIO, bundle: Path, header: bytes, *, as_zip: bool) -> None:
+    def copy_payload(member: BinaryIO) -> None:
+        with bundle.open("rb") as stream:
+            member.write(header)
+            shutil.copyfileobj(stream, member, CHUNK_SIZE)
+
+    if not as_zip:
+        copy_payload(target)
+        return
+    size = len(header) + bundle.stat().st_size
+    if size + 512 > ZIP_LIMIT:
+        raise UsbUpdateError("Архив больше 2 ГБ. Укажите --base с текущим коммитом робота.")
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_STORED, allowZip64=False) as archive:
+        member = zipfile.ZipInfo(PACKAGE_NAME)
+        member.file_size = size
+        with archive.open(member, "w") as handle:
+            copy_payload(handle)
+
+
+def make_package(repo: Path, output: Path, key: Path, *, branch: str, base: str | None,
+                 as_zip: bool = False, target_revision: str | None = None) -> tuple[Path, str]:
     def git(*args: str) -> str:
         return subprocess.run(["git", "-C", str(repo), *args], check=True,
                               stdout=subprocess.PIPE, text=True).stdout.strip()
@@ -35,6 +57,8 @@ def make_package(repo: Path, output: Path, key: Path, *, branch: str, base: str 
     git("check-ref-format", f"refs/heads/{branch}")
     if base and not SHA_RE.fullmatch(base):
         raise UsbUpdateError("--base: укажите полный хеш коммита робота (git rev-parse HEAD).")
+    if target_revision and not SHA_RE.fullmatch(target_revision):
+        raise UsbUpdateError("--revision: укажите полный хеш коммита GitHub.")
     if not output.is_dir() or not key.is_file():
         raise UsbUpdateError("Укажите существующую папку назначения и закрытый ключ SSH.")
     if git("rev-parse", "--is-shallow-repository") == "true":
@@ -43,10 +67,17 @@ def make_package(repo: Path, output: Path, key: Path, *, branch: str, base: str 
     # Fetch the selected GitHub branch into a private ref. Do not package the
     # current worktree, local edits, or whatever happens to be in FETCH_HEAD.
     ref = f"refs/bulka-usb/{uuid4().hex}"
-    destination = output / PACKAGE_NAME
+    destination = output / (ZIP_NAME if as_zip else PACKAGE_NAME)
     try:
         git("fetch", "--no-tags", "--no-recurse-submodules", GITHUB_URL, f"refs/heads/{branch}:{ref}")
         revision = git("rev-parse", "--verify", f"{ref}^{{commit}}")
+        if target_revision and target_revision != revision:
+            try:
+                git("merge-base", "--is-ancestor", target_revision, revision)
+            except subprocess.CalledProcessError as exc:
+                raise UsbUpdateError("Коммит --revision не входит в историю выбранной ветки GitHub.") from exc
+            git("update-ref", ref, target_revision, revision)
+            revision = target_revision
         if base == revision:
             raise UsbUpdateError("На GitHub тот же коммит: обновлять пока нечего.")
         if base:
@@ -61,6 +92,8 @@ def make_package(repo: Path, output: Path, key: Path, *, branch: str, base: str 
             if size > BUNDLE_LIMIT:
                 raise UsbUpdateError("Пакет больше 4 ГБ. Укажите --base с текущим коммитом робота.")
             digest = hashlib.sha256()
+            if as_zip and size >= ZIP_LIMIT:
+                raise UsbUpdateError("Архив больше 2 ГБ. Укажите --base с текущим коммитом робота.")
             with bundle.open("rb") as stream:
                 for block in iter(lambda: stream.read(CHUNK_SIZE), b""):
                     digest.update(block)
@@ -74,9 +107,9 @@ def make_package(repo: Path, output: Path, key: Path, *, branch: str, base: str 
             temporary = output / f".bulka-update-{uuid4().hex}.tmp"
             target = temporary.open("xb")
             try:
-                with target, bundle.open("rb") as stream:
-                    target.write(MAGIC + raw + base64.b64encode(signature) + b"\n")
-                    shutil.copyfileobj(stream, target, CHUNK_SIZE)
+                with target:
+                    header = MAGIC + raw + base64.b64encode(signature) + b"\n"
+                    _write_package(target, bundle, header, as_zip=as_zip)
                     target.flush()
                     os.fsync(target.fileno())
                 os.replace(temporary, destination)
@@ -93,14 +126,17 @@ def main() -> int:
     parser.add_argument("--key", required=True, type=Path, help="закрытый ключ SSH для подписи")
     parser.add_argument("--branch", default="main", help="ветка на GitHub (по умолчанию main)")
     parser.add_argument("--base", help="полный текущий хеш робота, чтобы собрать пакет только с изменениями")
+    parser.add_argument("--zip", action="store_true", help=f"создать {ZIP_NAME} вместо {PACKAGE_NAME}")
+    parser.add_argument("--revision", help="конкретный коммит из истории ветки (по умолчанию её вершина)")
     args = parser.parse_args()
     try:
         path, revision = make_package(ROOT, args.output.expanduser().resolve(), args.key.expanduser().resolve(),
-                                      branch=args.branch, base=args.base)
+                                      branch=args.branch, base=args.base, as_zip=args.zip,
+                                      target_revision=args.revision)
     except (UsbUpdateError, subprocess.CalledProcessError, OSError) as exc:
         print(f"Не удалось подготовить пакет: {exc}", file=sys.stderr)
         return 1
-    print(f"Готово: {path}\nВерсия: {revision}\nНа робота переносится только {PACKAGE_NAME}, не закрытый ключ.")
+    print(f"Готово: {path}\nВерсия: {revision}\nНа робота переносится только {path.name}, не закрытый ключ.")
     return 0
 
 

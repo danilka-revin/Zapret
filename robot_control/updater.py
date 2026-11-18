@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -17,7 +18,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from typing import BinaryIO, Callable, TextIO
 from urllib.parse import urlparse
 
 from . import estop, usb_update
@@ -32,6 +33,10 @@ except ImportError:  # pragma: no cover - production target is Linux/Ubuntu
 
 class UpdateError(RuntimeError):
     """Update is not safe or could not be completed."""
+
+
+class UpdateBusy(UpdateError):
+    """Another update or upload already holds the shared lock."""
 
 
 class UpdateManager:
@@ -58,10 +63,10 @@ class UpdateManager:
         self.ros_builder = ros_builder
         self.state_path = self.root / "var" / "update-state.json"
         self.lock_path = self.root / "var" / "update.lock"
+        self.upload_path = self.root / "var" / "update-upload.pending"
         self._state_lock = threading.RLock()
         self._thread_lock = threading.Lock()
         self._thread: threading.Thread | None = None
-        self._fallback_lock = threading.Lock()
 
     @staticmethod
     def _short(sha: str) -> str:
@@ -173,54 +178,108 @@ class UpdateManager:
         except (OSError, subprocess.TimeoutExpired, UpdateError) as exc:
             return {"ok": False, "error": str(exc)[:500]}
 
-    def _usb_branch(self) -> str:
+    def _file_branch(self) -> str:
         branch = self._branch()
         actual = self._command(["branch", "--show-current"])
         if actual.returncode != 0 or actual.stdout.strip() != branch:
-            raise UpdateError(f"Для обновления с флешки на роботе должна быть открыта ветка «{branch}».")
+            raise UpdateError(f"Для обновления из файла на роботе должна быть открыта ветка «{branch}».")
         return branch
 
     @staticmethod
-    def _usb_stop_ready() -> bool:
+    def _file_stop_ready() -> bool:
         latch = estop.latched()
         return latch is not None and not latch.get("corrupt")
 
-    def _usb_package(self) -> Path:
+    def _update_file(self, source: str) -> Path:
+        if source == "upload":
+            if not self.upload_path.is_file():
+                raise UpdateError(f"Выберите {usb_update.ZIP_NAME} или {usb_update.PACKAGE_NAME} и нажмите «Загрузить и проверить».")
+            return self.upload_path
         path = usb_update.find_package(self.usb_mount)
         if path is None:
-            raise UpdateError(f"Вставьте флешку с файлом {usb_update.PACKAGE_NAME} в корне и нажмите «Проверить».")
+            raise UpdateError(f"Положите {usb_update.ZIP_NAME} или {usb_update.PACKAGE_NAME} в корень флешки и нажмите «Проверить».")
         return path
 
-    def _check_usb_manifest(self, manifest: usb_update.UsbManifest, branch: str) -> None:
+    @staticmethod
+    def _check_file_branch(manifest: usb_update.UsbManifest, branch: str) -> None:
         if manifest.branch != branch:
-            raise UpdateError(f"Файл на флешке для ветки «{manifest.branch}», а робот использует «{branch}».")
+            raise UpdateError(f"Файл для ветки «{manifest.branch}», а робот использует «{branch}».")
 
-    def check_usb(self, path: Path | None = None) -> dict:
-        """Show the signed offer; the payload itself is checked again at install time."""
+    def _file_offer(self, source: str, path: Path, *, verify_contents: bool = False) -> dict:
+        local = self.local_revision()
+        branch = self._file_branch()
+        with usb_update.verified_package(path, self.usb_signers) as (stream, manifest):
+            self._check_file_branch(manifest, branch)
+            if verify_contents:
+                usb_update.verify_bundle_bytes(stream, manifest)
+        latest = manifest.revision
+        current_or_older = local == latest or self._command(
+            ["merge-base", "--is-ancestor", latest, local], offline=True
+        ).returncode == 0
+        dirty = self._working_copy_dirty()
+        needs_stop = not self._file_stop_ready()
+        return {
+            "ok": True, "repo": usb_update.REPOSITORY, "branch": branch, "mode": source, "busy": False,
+            "local": self._short(local), "localSha": local, "latest": self._short(latest), "latestSha": latest,
+            "updateAvailable": not current_or_older, "dirty": dirty, "needsEstop": needs_stop,
+            "canUpdate": not (current_or_older or dirty or needs_stop),
+            "latestMsg": "Версия в файле не новее установленной.",
+        }
+
+    def _check_file(self, source: str, path: Path | None = None) -> dict:
         try:
             state = self.get_status()
             if state["status"] == "busy":
                 return {"ok": True, "busy": True, "repo": state["repo"], "branch": state["branch"],
-                        "local": state["from"], "latest": state["to"], "mode": "usb"}
-            local = self.local_revision()
-            branch = self._usb_branch()
-            with usb_update.verified_package(path or self._usb_package(), self.usb_signers) as (_, manifest):
-                self._check_usb_manifest(manifest, branch)
-            latest = manifest.revision
-            current_or_older = local == latest or self._command(
-                ["merge-base", "--is-ancestor", latest, local]
-            ).returncode == 0
-            dirty = self._working_copy_dirty()
-            needs_stop = not self._usb_stop_ready()
-            return {
-                "ok": True, "repo": usb_update.REPOSITORY, "branch": branch, "mode": "usb", "busy": False,
-                "local": self._short(local), "localSha": local, "latest": self._short(latest), "latestSha": latest,
-                "updateAvailable": not current_or_older, "dirty": dirty, "needsEstop": needs_stop,
-                "canUpdate": not (current_or_older or dirty or needs_stop),
-                "latestMsg": "Версия на флешке не новее установленной.",
-            }
+                        "local": state["from"], "latest": state["to"], "mode": source}
+            if source == "upload" and not self.upload_path.is_file():
+                return {"ok": True, "mode": source, "pending": False, "canUpdate": False}
+            return self._file_offer(source, path or self._update_file(source))
         except (OSError, subprocess.TimeoutExpired, ValueError, UpdateError) as exc:
             return {"ok": False, "error": str(exc)[:500]}
+
+    def check_usb(self, path: Path | None = None) -> dict:
+        return self._check_file("usb", path)
+
+    def check_upload(self) -> dict:
+        return self._check_file("upload")
+
+    def stage_upload(self, stream: BinaryIO, size: int) -> dict:
+        """Verify an operator upload before publishing it in the single pending slot."""
+        if not 0 < size <= usb_update.UPLOAD_LIMIT:
+            raise UpdateError("Размер файла должен быть не больше 512 МиБ.")
+        if not self.usb_signers.is_file():
+            raise UpdateError(f"На роботе не установлен доверенный ключ ({usb_update.TRUST_FILE}).")
+        lock_file = self._try_update_lock()
+        if lock_file is None:
+            raise UpdateBusy("Уже загружается файл или выполняется обновление.")
+        try:
+            # Remove a partial upload left by a power loss or worker restart.
+            # The update lock makes this safe across all workers.
+            path = self.upload_path.with_suffix(".part")
+            path.unlink(missing_ok=True)
+            # Leave room for the upload and a verified copy of its Git bundle.
+            if shutil.disk_usage(path.parent).free < 2 * size + (32 << 20):
+                raise UpdateError("На диске робота недостаточно места для загрузки и установки.")
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                left = size
+                with os.fdopen(fd, "wb") as target:
+                    while left:
+                        block = stream.read(min(usb_update.CHUNK_SIZE, left))
+                        if not block:
+                            raise UpdateError("Файл передан не полностью. Загрузите его ещё раз.")
+                        target.write(block)
+                        left -= len(block)
+                    target.flush()
+                    offer = self._file_offer("upload", path, verify_contents=True)
+                    os.fsync(target.fileno())
+                os.replace(path, self.upload_path)
+                return offer
+            finally:
+                path.unlink(missing_ok=True)
+        finally:
+            self._release_update_lock(lock_file)
 
     def _poll_usb(self, seen: tuple | None) -> tuple | None:
         if not self.usb_signers.is_file():
@@ -230,7 +289,7 @@ class UpdateManager:
             return None
         info = path.lstat()
         token = (path, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
-        if token == seen or not self._usb_stop_ready():
+        if token == seen or not self._file_stop_ready():
             return seen
         offer = self.check_usb(path)
         if offer.get("busy") or offer.get("needsEstop"):
@@ -359,9 +418,9 @@ class UpdateManager:
                 return state
             time.sleep(0.2)
 
-    def start(self, *, usb_sha: str | None = None) -> bool:
+    def _try_update_lock(self) -> TextIO | None:
         if not self._thread_lock.acquire(blocking=False):
-            return False
+            return None
         lock_file = None
         try:
             self.lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -370,28 +429,46 @@ class UpdateManager:
                 try:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
-                    lock_file.close()
-                    self._thread_lock.release()
-                    return False
-            else:  # pragma: no cover - Windows fallback
-                if not self._fallback_lock.acquire(blocking=False):
-                    lock_file.close()
-                    self._thread_lock.release()
-                    return False
+                    self._release_update_lock(lock_file)
+                    return None
+            return lock_file
+        except Exception:
+            if lock_file is None:
+                self._thread_lock.release()
+            else:
+                self._release_update_lock(lock_file)
+            raise
+
+    def _release_update_lock(self, lock_file: TextIO) -> None:
+        try:
+            lock_file.close()  # releases flock across workers
+        except OSError:
+            log.warning("Не удалось закрыть файл блокировки обновления.")
+        finally:
+            self._thread_lock.release()
+
+    def start(self, *, usb_sha: str | None = None, upload_sha: str | None = None) -> bool:
+        if upload_sha is not None:
+            source, expected_sha = "upload", upload_sha
+        elif usb_sha is not None:
+            source, expected_sha = "usb", usb_sha
+        else:
+            source, expected_sha = "github", None
+        lock_file = self._try_update_lock()
+        if lock_file is None:
+            return False
+        try:
             self._write_state({
                 **self._default_state(), "status": "busy", "phase": "Проверяю версию…",
-                "stage": "check", "pct": 8, "started": time.time(),
-                "source": "usb" if usb_sha is not None else "github",
+                "stage": "check", "pct": 8, "started": time.time(), "source": source,
             })
-            thread = threading.Thread(target=self._run_update, args=(lock_file, usb_sha),
+            thread = threading.Thread(target=self._run_update, args=(lock_file, source, expected_sha),
                                       daemon=True, name="robot-control-update")
             self._thread = thread
             thread.start()
             return True
         except Exception:
-            if lock_file is not None and not lock_file.closed:
-                lock_file.close()
-            self._thread_lock.release()
+            self._release_update_lock(lock_file)
             raise
 
     def _run_process(self, args: list[str], *, timeout: float = 20) -> subprocess.CompletedProcess[str]:
@@ -499,15 +576,15 @@ class UpdateManager:
             raise UpdateError("Git не вернул скачанную версию.")
         return fetched.stdout.strip()
 
-    def _import_usb(self, branch: str, expected_sha: str, old_sha: str) -> str:
-        with usb_update.verified_package(self._usb_package(), self.usb_signers) as (stream, manifest):
-            self._check_usb_manifest(manifest, branch)
+    def _import_file(self, source: str, branch: str, expected_sha: str, old_sha: str) -> str:
+        with usb_update.verified_package(self._update_file(source), self.usb_signers) as (stream, manifest):
+            self._check_file_branch(manifest, branch)
             revision = manifest.revision
             if revision != expected_sha:
                 raise UpdateError("Файл обновления изменился. Нажмите «Проверить» ещё раз.")
             if revision == old_sha:
                 return old_sha
-            self._set(phase="Копирую пакет с флешки и проверяю контрольную сумму…", stage="download", pct=18,
+            self._set(phase="Проверяю пакет и контрольную сумму…", stage="download", pct=18,
                       to=self._short(revision), toSha=revision)
             with usb_update.staged_bundle(stream, manifest, self.lock_path.parent) as bundle:
                 verified = self._command(["bundle", "verify", str(bundle)], timeout=60, offline=True)
@@ -522,22 +599,23 @@ class UpdateManager:
             raise UpdateError("Подписанная версия в пакете не является коммитом Git.")
         return revision
 
-    def _run_update(self, lock_file, usb_sha: str | None = None) -> None:
+    def _run_update(self, lock_file: TextIO, source: str, expected_sha: str | None) -> None:
         old_sha = ""
         merged = False
-        from_usb = usb_sha is not None
+        from_file = expected_sha is not None
         try:
             old_sha = self.local_revision()
-            branch = self._usb_branch() if from_usb else self._branch()
-            repo = usb_update.REPOSITORY if from_usb else self._repo_label(self._remote_url())
+            branch = self._file_branch() if from_file else self._branch()
+            repo = usb_update.REPOSITORY if from_file else self._repo_label(self._remote_url())
             self._require_clean_working_copy()
+            label = {"usb": "флешка · ", "upload": "загрузка с ПК · ", "github": ""}[source]
             self._write_state({"from": self._short(old_sha), "fromSha": old_sha, "branch": branch, "repo": repo},
-                              log=f"Источник: {'флешка · ' if from_usb else ''}{repo} · ветка {branch}.")
+                              log=f"Источник: {label}{repo} · ветка {branch}.")
 
-            if usb_sha is not None:
-                if not self._usb_stop_ready():
-                    raise UpdateError("Перед обновлением с флешки остановите робота и включите E-STOP.")
-                new_sha = self._import_usb(branch, usb_sha, old_sha)
+            if expected_sha is not None:
+                if not self._file_stop_ready():
+                    raise UpdateError("Перед обновлением из файла остановите робота и включите E-STOP.")
+                new_sha = self._import_file(source, branch, expected_sha, old_sha)
             else:
                 latest = self._latest_sha(branch)
                 self._write_state({"to": self._short(latest), "toSha": latest})
@@ -548,8 +626,10 @@ class UpdateManager:
                 raise UpdateError("Не удалось сравнить версии.")
             changes = int(count_result.stdout.strip() or "0")
             if changes <= 0:
+                if source == "upload":
+                    self._clear_upload()
                 self._write_state({
-                    "status": "done", "phase": ("Версия на флешке не новее установленной." if from_usb
+                    "status": "done", "phase": ("Версия в файле не новее установленной." if from_file
                                                 else "Уже установлена последняя версия."),
                     "stage": "done", "pct": 100, "to": self._short(old_sha), "toSha": old_sha,
                     "changes": 0, "restart": False, "done": time.time(), "error": "",
@@ -562,19 +642,19 @@ class UpdateManager:
             if self.local_revision() != old_sha:
                 raise UpdateError("Установленная версия изменилась во время загрузки. Проверьте её и повторите обновление.")
             self._require_clean_working_copy()
-            if from_usb:
-                if self._usb_branch() != branch:
+            if from_file:
+                if self._file_branch() != branch:
                     raise UpdateError("Ветка на роботе изменилась во время загрузки. Проверьте её и повторите обновление.")
                 protected = self._command(["ls-tree", "--name-only", new_sha, "--", ".env", "data", "var", ".venv"],
                                           offline=True)
                 if protected.returncode != 0 or protected.stdout.strip():
                     raise UpdateError("Пакет затрагивает локальные настройки или данные робота.")
-                if not self._usb_stop_ready():
-                    raise UpdateError("E-STOP снят. Установка с флешки отменена.")
+                if not self._file_stop_ready():
+                    raise UpdateError("E-STOP снят. Установка из файла отменена.")
             self._set(phase=f"Применяю {changes} коммит(ов)…", stage="install", pct=55,
                       to=self._short(new_sha), toSha=new_sha)
             merge = self._command(["merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", new_sha],
-                                  timeout=60, offline=from_usb)
+                                  timeout=60, offline=from_file)
             if merge.returncode != 0:
                 raise UpdateError("Git не смог выполнить безопасное fast-forward-обновление.")
             merged = True
@@ -586,7 +666,7 @@ class UpdateManager:
             # оставалось возможным при ручных правках окружения.
             self._set(phase="Переустанавливаю зависимости (ensure_deps.sh)…",
                       stage="dependencies", pct=68)
-            code, output = self._install_dependencies(offline=from_usb)
+            code, output = self._install_dependencies(offline=from_file)
             if output.strip():
                 for line in output.splitlines()[-15:]:
                     self._write_state({}, log=line)
@@ -612,8 +692,8 @@ class UpdateManager:
                 if rollback.returncode != 0:
                     raise UpdateError("Новая версия не собралась и откатить код не удалось; требуется ручная проверка. " + detail[:180])
                 raise UpdateError("Новая версия не собралась (проверка кода); исходный код откатан. " + detail[:200])
-            if from_usb:
-                self._write_state({}, log="ROS 2: с флешки обновлены исходники, сборка драйверов не запускается.")
+            if from_file:
+                self._write_state({}, log="ROS 2: обновлены исходники, офлайн-сборка драйверов не запускается.")
             else:
                 # ROS 2 может докачивать драйверы; этот шаг только для сетевого обновления.
                 self._set(phase="Компилирую ROS 2 (ros2_ws)…", stage="build", pct=88)
@@ -644,12 +724,14 @@ class UpdateManager:
                                       "и прошейте платы вручную.")
 
             current = self.local_revision()
-            restart = self.on_restart is not None and (not from_usb or self._usb_stop_ready())
+            restart = self.on_restart is not None and (not from_file or self._file_stop_ready())
             phase = "Обновление установлено."
             if restart:
                 phase += " Перезапускаю пульт и экран…"
-            elif from_usb:
+            elif from_file:
                 phase += " Перед ручным перезапуском остановите робота и включите E-STOP."
+            if source == "upload":
+                self._clear_upload()
             self._write_state({
                 "status": "done", "phase": phase,
                 "stage": "done", "pct": 100, "to": self._short(current), "toSha": current,
@@ -671,21 +753,13 @@ class UpdateManager:
                 "restart": False, "done": time.time(),
             }, log=str(exc))
         finally:
-            try:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                else:  # pragma: no cover - Windows fallback
-                    self._fallback_lock.release()
-            except OSError:
-                pass
-            try:
-                lock_file.close()
-            except OSError:
-                pass
-            try:
-                self._thread_lock.release()
-            except RuntimeError:
-                pass
+            self._release_update_lock(lock_file)
+
+    def _clear_upload(self) -> None:
+        try:
+            self.upload_path.unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning("Не удалось удалить установленный пакет: %s", exc)
 
 
 def _read_cmdline(pid: int) -> list[str]:

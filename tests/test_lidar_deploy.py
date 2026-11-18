@@ -87,16 +87,18 @@ def offline_install(tmp_path):
     project = tmp_path / "project"
     (project / "scripts").mkdir(parents=True)
     (project / "vendor").mkdir()
-    shutil.copy(SCRIPTS / "ensure_deps.sh", project / "scripts" / "ensure_deps.sh")
-    for req in ("requirements.txt", "requirements-camera.txt"):
-        shutil.copy(ROOT / req, project / req)
+    for name in ("ensure_deps.sh", "ensure_opencv.py"):
+        shutil.copy(SCRIPTS / name, project / "scripts" / name)
+    for name in ("requirements.txt", "requirements-camera.txt"):
+        shutil.copy(ROOT / name, project / name)
+    (project / "robot_control").mkdir()
+    for name in ("__init__.py", "config.py", "opencv_runtime.py", "sensor_layout.py"):
+        shutil.copy(ROOT / "robot_control" / name, project / "robot_control" / name)
     for wheel in (ROOT / "vendor").glob("*.whl"):
         shutil.copy(wheel, project / "vendor" / wheel.name)
     env = dict(os.environ)
     env.update({
         # установка идёт строго из vendor/: тест не зависит от наличия сети
-        "RC_DEPS_OFFLINE": "1",
-        "RC_DEPS_CAMERA": "0",
         "PIP_NO_INDEX": "1",
         "PIP_FIND_LINKS": str(project / "vendor"),
         "PIP_DISABLE_PIP_VERSION_CHECK": "1",
@@ -108,9 +110,9 @@ def offline_install(tmp_path):
     return project, env
 
 
-def run_deps(project: Path, env: dict, *args: str) -> subprocess.CompletedProcess:
+def run_deps(project: Path, env: dict) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["bash", str(project / "scripts" / "ensure_deps.sh"), *args],
+        ["bash", str(project / "scripts" / "ensure_deps.sh")],
         cwd=str(project), env=env, capture_output=True, text=True, timeout=600,
     )
 
@@ -177,21 +179,6 @@ def test_ensure_deps_fails_loudly_when_install_is_impossible(offline_install):
     result = run_deps(project, env)
     assert result.returncode != 0
     assert "pyserial" in (result.stderr + result.stdout) or "serial" in result.stderr
-
-
-def test_opencv_is_optional_offline_but_required_with_camera_flag(offline_install):
-    project, env = offline_install
-    skipped = run_deps(project, env)
-    assert skipped.returncode == 0, skipped.stdout + skipped.stderr
-    assert "OpenCV" not in skipped.stdout + skipped.stderr
-
-    optional = run_deps(project, {**env, "RC_DEPS_CAMERA": "1"})
-    assert optional.returncode == 0, optional.stdout + optional.stderr
-    assert "OpenCV для USB-камер недоступен" in optional.stderr
-
-    required = run_deps(project, env, "--camera")  # explicit flag overrides opt-out
-    assert required.returncode == 1, required.stdout + required.stderr
-    assert "OpenCV для USB-камер недоступен" in required.stderr
 
 
 # ---------------------------------------------------------------------------
