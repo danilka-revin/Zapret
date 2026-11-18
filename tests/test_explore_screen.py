@@ -28,7 +28,9 @@ def test_legacy_screens_show_four_c930e_cameras():
         assert marker in index, marker
     script = (ROOT / "slam_gui" / "main.js").read_text(encoding="utf-8")
     poller = (ROOT / "slam_gui" / "camera_frames.js").read_text(encoding="utf-8")
-    assert "backendCams" in script and "api/camera/' + camera.id + '/frame" in poller
+    assert "RCCameraFrames.whileVisible" in script and "api/camera/' + camera.id + '/frame" in poller
+    assert "getUserMedia" not in script and "enumerateDevices" not in script
+    assert index.index('src="camera_frames.js"') < index.index('src="vision.js"')
     assert main.index('src="camera_frames.js"') < main.index('src="main.js"')
 
 

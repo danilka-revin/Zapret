@@ -273,9 +273,10 @@
     for (let cam = 0; cam < 4; cam += 1) {
       const img = $('aut-cam-' + cam);
       if (!img) continue;
-      const path = (visionOk ? 'api/vision/camera/' : 'api/camera/') + cam +
-        '/frame?t=' + Date.now();
-      img.src = sessionUrl(path);
+      const frame = cam + '/frame?t=' + Date.now();
+      // Vision readiness is global; this camera's annotation may be missing or stale.
+      img.onerror = visionOk ? () => { img.onerror = null; img.src = sessionUrl('api/camera/' + frame); } : null;
+      img.src = sessionUrl((visionOk ? 'api/vision/camera/' : 'api/camera/') + frame);
     }
   }
 

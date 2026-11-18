@@ -19,7 +19,7 @@
    BMS ──USB-UART переходник─────────►│  USB4  колесо RR (Arduino Mega)  │
    принтер ──отдельный USB-UART──────►│                                  │
    лидар 360° ───────────────────────►│  USB5  лидар                     │
-   4 × камера C930e (FL/FR/RL/RR) ──►│  USB6…9  /dev/video0…3 (или by-id)
+   4 × камера C930e (FL/FR/RL/RR) ──►│  USB6…9  /dev/v4l/by-path/…
    Kinect 360 (глубина) ────────────►│  USB10 Kinect: freenect / OpenNI2 / ROS 2
    монитор бортового экрана ─HDMI───►│  HDMI  браузер-киоск  :8090       │
    (клавиатура/мышь — по желанию) ──►│                                  │
@@ -85,13 +85,13 @@ USB-UART принтера показывается только как непо�
 | **Колесо RR** (`motor_wheel_RR.ino`) | свой USB | то же | тот же `RC_WHEEL_PORTS`, роль fw24 `RR` | `/devices` + физическая проверка кабеля |
 | **Лидар 360°** (RPLIDAR A1/A2/A3/S1/C1, LD06/LD19/STL-27L, LDS-01/02) | USB-адаптер лидара | `/dev/rplidar*`, `/dev/serial/by-id/*lidar*`, иначе `/dev/ttyUSB*` | `RC_LIDAR_PORT`, `RC_LIDAR_BAUD`, `RC_LIDAR_PROTOCOL`, `RC_LIDAR_SOURCE` | `.venv/bin/python scripts/lidar_check.py` (для ROS 2 — `--ros`), экран — панель «Лидар» |
 | **BMS аккумулятора** (JBD, диагностический UART) | USB-UART переходник: **TX→RX, RX→TX, GND→GND**, 9600 8N1 | `/dev/serial/by-id/…` (рекомендуется) | `RC_BMS_PORT` (назначается на `/devices`) | `/devices` → карточка «BMS · аккумулятор», затем свежий ответ JBD |
-| **Камера FL** (Logitech C930e, V4L2) | USB | `/dev/v4l/by-id/…` (рекомендуется) | `RC_CAMERA_FRONT` (алиас `RC_CAMERA_FL_PORT`); по умолчанию пусто | `/devices` → карточка камеры; изображение и подтверждение расположения |
-| **Камера FR** | USB | `/dev/v4l/by-id/…` | `RC_CAMERA_FRONT_RIGHT`; по умолчанию пусто | то же |
-| **Камера RL** | USB | `/dev/v4l/by-id/…` | `RC_CAMERA_REAR` (алиас `RC_CAMERA_RL_PORT`); по умолчанию пусто | то же |
-| **Камера RR** | USB | `/dev/v4l/by-id/…` | `RC_CAMERA_REAR_RIGHT`; по умолчанию пусто | то же |
+| **Камера FL** (Logitech C930e, V4L2) | USB | `/dev/v4l/by-path/…` (рекомендуется) | `RC_CAMERA_FRONT` (алиас `RC_CAMERA_FL_PORT`); по умолчанию пусто | `/devices` → карточка камеры; изображение и подтверждение расположения |
+| **Камера FR** | USB | `/dev/v4l/by-path/…` | `RC_CAMERA_FRONT_RIGHT`; по умолчанию пусто | то же |
+| **Камера RL** | USB | `/dev/v4l/by-path/…` | `RC_CAMERA_REAR` (алиас `RC_CAMERA_RL_PORT`); по умолчанию пусто | то же |
+| **Камера RR** | USB | `/dev/v4l/by-path/…` | `RC_CAMERA_REAR_RIGHT`; по умолчанию пусто | то же |
 | **Kinect 360** (глубина) | USB + отдельное питание | libfreenect / OpenNI2 / ROS 2 | `RC_KINECT_*`, `scripts/kinect_depth_publisher.py` | `GET /api/kinect/status`, [AUTONOMY.md](AUTONOMY.md) |
 | **Чековый принтер** | отдельный USB-UART, питание и уровни по модели | `/dev/ttyUSB*` или `/dev/serial/by-id/…` | `RC_PRINTER_PORT` (назначается на `/devices`) | физически подтвердить кабель, затем пробная страница; см. [battery.md](battery.md) |
-| **Список портов на `/devices`** | один пункт на физический USB-порт (sysfs), `/dev/ttyUSB0` и его `by-id`/`by-path` — не отдельные строки | `usb:1-2` (гнездо), `/dev/ttyUSB*`, `/dev/v4l/by-id/…` | в `.env` пишется выбранный путь (обычно `by-id`), в списке видно гнездо и узел | `/api/devices/ports` → `options.serial/video/usb`; `usbPort`, `device`, `byId`, `byPath` |
+| **Список портов на `/devices`** | один пункт на физический USB-порт (sysfs), `/dev/ttyUSB0` и его `by-id`/`by-path` — не отдельные строки | `usb:1-2` (гнездо), `/dev/ttyUSB*`, `/dev/v4l/by-id/…` | сохраняется выбранный путь (для камер предпочтителен `by-path`), в списке видно гнездо и узел | `/api/devices/ports` → `options.serial/video/usb`; `usbPort`, `device`, `byId`, `byPath` |
 | **Модуль датчиков** (свет, замок отсека, карты с ролями, компас) | отдельная Arduino Mega на своём USB, 115200 | `/dev/serial/by-id/…` (рекомендуется) | `RC_SENSOR_PORT` (задаётся вручную; автопоиска нет) | `/api/sensor_module`, отдельный экран `/sensors` и панель «курс» на карте лидара; прошивка `firmware/sensor_module`, протокол fw4 (адресная лента: 73 диода внизу рамы на D6, `nleds=73`, режимы `strip auto\|off\|floor\|wave`) |
 | **Монитор бортового экрана** | HDMI (или встроенный дисплей) | графическая сессия Ubuntu | — (браузер-киоск сам) | открывается `http://127.0.0.1:8090/` |
 | Клавиатура / мышь (по желанию) | USB | — | — | — |
@@ -155,17 +155,19 @@ USB-UART принтера показывается только как непо�
 
 ### Камеры и Kinect 360
 
-- Четыре USB-камеры **Logitech C930e** (V4L2): FL `/dev/video0`, RL
-  `/dev/video1`, FR `/dev/video2`, RR `/dev/video3` — старые значения по
-  умолчанию, которые могут смениться при загрузке. Кадры на бортовом экране
-  доступны и пульту через `/api/camera/<0…3>/frame`; браузер планшета **не**
-  берёт свою веб-камеру и не конкурирует за USB-порты робота.
-- Выберите и физически подтвердите каждую камеру на `/devices`. Если подсказок
-  камер ещё нет, старое меню «Настройка камер» или `RC_CAMERA_FRONT`,
-  `RC_CAMERA_REAR`, `RC_CAMERA_FRONT_RIGHT`, `RC_CAMERA_REAR_RIGHT` остаются
-  доступными для совместимости, но физические роли они не подтверждают.
-  Проверьте питание USB-хаба под суммарной нагрузкой; может потребоваться хаб
-  с внешним питанием. Камеры у пользователя подключены напрямую.
+- У C930e Linux может показать восемь `/dev/video*` на четыре камеры. В
+  `/devices` каждая камера представлена одним **видеовходом**, а не
+  дополнительным служебным узлом. Важны гнездо USB (`by-path`) и изображение;
+  чётность и номер `/dev/videoN` не определяют физическое расположение.
+- Назначьте вход в карточке, сохраните и прикройте объектив — проверьте кадр
+  на этой карточке, затем подтвердите расположение. Неназначенную камеру
+  программа не открывает. На API роли фиксированы: **0 = FL, 1 = RL, 2 = FR,
+  3 = RR**. В штатном режиме бортовой сервер отдаёт `/api/camera/<id>/frame`,
+  веб-пульт передаёт эти кадры оператору; доступ к камере браузера не нужен.
+- Если вход назначен, но кадра нет, проверьте причину на карточке камеры,
+  питание/кабель, доступ бортового процесса к группе `video`, наличие OpenCV в
+  `.venv` и не занял ли камеру другой процесс. Для четырёх C930e захват
+  запрашивает MJPEG, чтобы не перегружать USB несжатыми кадрами.
 - **Kinect 360:** при корректной настройке кадры глубины уходят в общую карту
   `POST /api/kinect/depth`; у Kinect v1 отдельный блок питания. Драйверы
   (`freenect` / `openni2` / `rclpy`) описаны в `requirements-kinect.txt`, а
@@ -252,7 +254,7 @@ picocom, второй скрипт), плата «не видна». Прове�
 | `RC_LIDAR_EXCLUDE` | порты, которые лидару трогать нельзя | пусто |
 | `RC_BMS_PORT` | порт BMS (один, без glob) | пусто — чтение выключено |
 | `RC_PRINTER_CONFIG` | файл настроек принтера; физическое подтверждение не сохраняется | `data/printer.json` |
-| `RC_CAMERA_FRONT` / `RC_CAMERA_REAR` / `RC_CAMERA_FRONT_RIGHT` / `RC_CAMERA_REAR_RIGHT` | порты четырёх C930e | авто: `/dev/video0`…`/dev/video3` |
+| `RC_CAMERA_FRONT` / `RC_CAMERA_REAR` / `RC_CAMERA_FRONT_RIGHT` / `RC_CAMERA_REAR_RIGHT` | порты четырёх C930e | пусто — назначить в «Устройствах» |
 | `RC_CAMERA_*_YAW_DEG`, `RC_KINECT_*`, `RC_EXPLORE_*` | геометрия сенсоров и автообследование | см. `.env.example`, [AUTONOMY.md](AUTONOMY.md) |
 | `RC_PORT` / `RC_BIND_HOST` | веб-пульт | `8080` / `0.0.0.0` |
 | `RC_KIOSK_PORT` | бортовой экран | `8090` |

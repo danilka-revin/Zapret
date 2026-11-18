@@ -130,6 +130,29 @@ def test_save_camera_settings_writes_four_keys_and_keeps_other_env(tmp_path, mon
     assert result["front_right"].endswith("fr-video-index0")
 
 
+def test_kiosk_unit_persists_camera_selection_and_reset_without_writable_code(tmp_path, monkeypatch):
+    from pathlib import Path
+    service = (Path(__file__).resolve().parents[1] / 'scripts/robot-kiosk.service').read_text()
+    path = '/opt/robot-control/data/camera-ports.env'
+    assert 'Environment=RC_CAMERA_ENV_FILE=' + path in service
+    assert service.index('EnvironmentFile=-/opt/robot-control/.env') < service.index('EnvironmentFile=-' + path)
+    assert 'video' in next(s for s in service.splitlines() if s.startswith('SupplementaryGroups=')).split('=')[1].split()
+
+    clean_camera_env(monkeypatch)
+    overlay = tmp_path / 'data/camera-ports.env'
+    monkeypatch.setenv('RC_CAMERA_ENV_FILE', str(overlay))
+    cs.save_camera_settings({'rear': '/dev/v4l/by-path/pci-0:12:1.0-video-index0', 'front': ''})
+    # systemd merges both EnvironmentFiles on restart: even old aliases in
+    # the read-only base .env must not revive a reset port or shadow a new one.
+    monkeypatch.setenv('RC_CAMERA_FL_PORT', '/dev/video1')
+    monkeypatch.setenv('RC_CAM_REAR', '/dev/video3')
+    for line in overlay.read_text().splitlines():
+        key, value = line.split('=', 1)
+        assert key.startswith(('RC_CAMERA_', 'RC_CAM_'))  # never replace the session secret
+        monkeypatch.setenv(key, value)
+    assert [s['port'] for s in layout.camera_specs()] == ['', '/dev/v4l/by-path/pci-0:12:1.0-video-index0', '', '']
+
+
 def test_apply_settings_reconfigures_manager_without_hardware(tmp_path, monkeypatch):
     clean_camera_env(monkeypatch)
     CameraManager.reset_instance()

@@ -11,6 +11,7 @@ import json
 import math
 import os
 import re
+import stat
 import tempfile
 import threading
 import time
@@ -84,6 +85,49 @@ def _interface_name(path: Path) -> str:
     return ""
 
 
+def video_capture_capability(path: str, udev_data: Path = Path("/run/udev/data")) -> bool | None:
+    """udev's per-node V4L2 capabilities, without opening or probing the camera."""
+    try:
+        st = os.stat(path)
+        if stat.S_ISCHR(st.st_mode):
+            key = f"c{os.major(st.st_rdev)}:{os.minor(st.st_rdev)}"
+            with (udev_data / key).open(errors="replace") as db:
+                for line in db:
+                    if line.startswith("E:ID_V4L_CAPABILITIES="):
+                        return "capture" in line.strip().split("=", 1)[1].split(":")
+    except OSError:
+        pass
+    return None  # no udev DB (e.g. a container) is not a negative capability
+
+
+def primary_video_node(device: dict) -> dict | None:
+    """One input per USB camera. Prefer actual capture, then UVC's index 0.
+
+    The index is local to the camera, *not* the number/parity of /dev/videoN.
+    A standalone capture node can have a nonzero index.
+    """
+    nodes = (n for n in device.get("nodes", []) if n.get("kind") == "video" and n.get("capture") is not False)
+    return min(nodes, key=lambda n: (n.get("capture") is not True, str(n.get("index")) != "0", n["path"]),
+               default=None)
+
+
+def _video_input_error(device: dict, node: dict) -> str:
+    if device.get("vidPid") in KINECT_CAMERA_IDS:
+        return "Этот видеопорт относится к Kinect, а не к обзорной камере"
+    # Real capture endpoints remain usable by exact path even on multi-stream
+    # cameras. Only use the UVC index as a fallback within the same interface.
+    capture = node.get("capture")
+    if capture is True or (capture is None and str(node.get("index") or "") in ("", "0")):
+        return ""
+    primary = primary_video_node(device)
+    if capture is None and not (primary and str(primary.get("index")) == "0" and
+                                primary.get("interface") == node.get("interface")):
+        return ""
+    return (f"{node['path']} — служебный или дополнительный узел. " +
+            (f"Выберите видеовход {primary['path']} (USB {device['topology']})." if primary else
+             "У этой камеры не найден видеовход для захвата кадров."))
+
+
 class UsbTopology:
     """Snapshot of physical USB devices and their tty/video/lp nodes via sysfs."""
 
@@ -146,6 +190,8 @@ class UsbTopology:
                         "interface": _interface_name(Path(_real(str(device_path)))),
                         "index": _text(path / "index") if kind == "video" else "",
                         "name": _text(path / "name") if kind == "video" else ""}
+                if kind == "video":
+                    node["capture"] = video_capture_capability(str(node_path))
                 devices[usb_name]["nodes"].append(node)
 
         nodes = [node for device in devices.values() for node in device["nodes"]]
@@ -197,6 +243,20 @@ def _identity(device: dict | None, node: dict | None) -> dict | None:
             "interface": (node or {}).get("interface", ""), "index": (node or {}).get("index", "")}
 
 
+def _camera_identity(topology: dict, device: dict, node: dict, previous=None) -> dict:
+    identity = _identity(device, node)
+    # Four identical cameras may even share a serial. Unplugging three must not
+    # promote the survivor to the "unique" camera of every disconnected role.
+    serial = identity["serial"]
+    if _meaningful_serial(serial) and (
+        sum(d.get("vidPid") == identity["vidPid"] and d.get("serial") == serial
+            for d in topology.get("devices", [])) > 1 or
+        (isinstance(previous, dict) and previous.get("sharedSerial") and previous.get("serial") == serial)
+    ):
+        identity["sharedSerial"] = True
+    return identity
+
+
 def _resolve_identity(topology: dict, identity: Any) -> tuple[dict | None, dict | None, str]:
     """Re-match an old observation against current USB; duplicated serials are weak.
 
@@ -210,7 +270,7 @@ def _resolve_identity(topology: dict, identity: Any) -> tuple[dict | None, dict 
     serial = identity.get("serial") if isinstance(identity.get("serial"), str) else ""
     if _meaningful_serial(serial):
         matches = [d for d in candidates if d.get("serial") == serial]
-        if len(matches) == 1:
+        if len(matches) == 1 and not identity.get("sharedSerial"):
             device, confidence = matches[0], "serial"
         else:
             # Cloned/duplicated serials can distinguish a socket, not a device.
@@ -227,6 +287,7 @@ def _resolve_identity(topology: dict, identity: Any) -> tuple[dict | None, dict 
     if kind == "usb":
         return device, None, confidence
     matches = [n for n in device.get("nodes", []) if n.get("kind") == kind and
+               (kind != "video" or n.get("capture") is not False) and
                n.get("interface", "") == identity.get("interface", "") and
                n.get("index", "") == identity.get("index", "")]
     if len(matches) != 1:
@@ -334,8 +395,8 @@ class DeviceRegistry:
         device, node = _find_port(topology, port) if port else (None, None)
         if role.startswith("camera_") and device and (not node or node.get("kind") != "video"):
             raise ValueError("Для камеры нужен видеопорт этого USB-устройства")
-        if role.startswith("camera_") and device and device.get("vidPid") in KINECT_CAMERA_IDS:
-            raise ValueError("Этот видеопорт относится к Kinect, а не к обзорной камере")
+        if role.startswith("camera_") and port and not device and video_capture_capability(port) is False:
+            raise ValueError(f"{port} не поддерживает захват кадров. Выберите видеовход камеры.")
         hint = ({"port": port, "identity": _identity(device, node), "updatedAt": self.clock()} if port else
                 {"port": "", "identity": None, "disabled": True, "updatedAt": self.clock()}
                 if role.startswith("camera_") else None)
@@ -348,6 +409,11 @@ class DeviceRegistry:
                     other_device, _, _ = _resolve_identity(topology, old.get("identity"))
                     if other_device and other_device["topology"] == device["topology"]:
                         raise ValueError("Эта физическая камера уже указана для другой роли")
+                error = _video_input_error(device, node)
+                if error:
+                    raise ValueError(error)
+                prior = self._data["hints"].get(role, {}).get("identity")
+                hint["identity"] = _camera_identity(topology, device, node, prior)
             if hint is None:
                 self._data["hints"].pop(role, None)
             else:
@@ -428,7 +494,10 @@ class DeviceRegistry:
                     device, node = None, None
             now = self.clock()
             if device and node and node.get("kind") == "video":
-                hint["identity"] = _identity(device, node)
+                error = _video_input_error(device, node)
+                if error:
+                    raise ValueError(error)
+                hint["identity"] = _camera_identity(topology, device, node, hint.get("identity"))
                 # Отвечаем силой той личности, которую только что записали.
                 confidence = _resolve_identity(topology, hint["identity"])[2]
             hint["port"] = known
@@ -529,7 +598,7 @@ class DeviceRegistry:
         if isinstance(own, dict):
             device, node, confidence = _resolve_identity(topology, own.get("identity"))
             if device and node and node.get("kind") == "video":
-                return node["path"]
+                return "" if _video_input_error(device, node) else node["path"]
             # «Сброс» выключает камеру до нового назначения.
             if own.get("disabled"):
                 return ""
@@ -539,13 +608,20 @@ class DeviceRegistry:
             # открываем; подтверждение всё равно потребует свежего кадра.
             if confidence == "unverified" and own.get("port"):
                 assigned = _camera_assigned_port("camera_" + short)
-                if assigned and _real(assigned) == _real(str(own["port"])):
-                    return default
-            return ""
+                if not assigned or not default or not (_real(default) == _real(assigned) == _real(str(own["port"]))):
+                    return ""
+            else:
+                return ""
         # A legacy/default path must not steal a hinted camera via its second
         # V4L2 interface. Otherwise retain existing behaviour for compatibility.
-        default_device, _ = _find_port(topology, default)
+        if not default:
+            return ""
+        default_device, default_node = _find_port(topology, default)
+        if not default_device and refresh and video_capture_capability(default) is False:
+            return ""
         if default_device:
+            if not default_node or default_node.get("kind") != "video" or _video_input_error(default_device, default_node):
+                return ""
             for key, hint in hints.items():
                 if not key.startswith("camera_") or not isinstance(hint, dict):
                     continue
@@ -679,6 +755,12 @@ class DeviceRegistry:
                                    "Камера не открыта: проверьте порт и укажите её снова.")
             else:
                 item["detail"] = str(cam.get("captureError") or "Нет свежих кадров. Проверьте камеру, драйвер и права доступа.")
+            if cam and not frame_ok and not target and not (hint or {}).get("disabled"):
+                selected, node = _find_port(topology, str((hint or {}).get("port") or cam.get("device") or ""))
+                if selected and node and node.get("kind") == "video":
+                    error = _video_input_error(selected, node)
+                    if error:
+                        item.update(status="warning", label="Проверьте видеовход", detail=error)
             entries.append(item)
 
         item = base("lidar")
@@ -827,21 +909,23 @@ class DeviceRegistry:
         self.remember(updates, topology)
         # Expose candidate lists, never as proof or a whitelist. Suppress hubs
         # and root controllers; one USB device may have many V4L2 interfaces.
-        options = {"serial": [], "video": [], "usb": [], "printer": []}
+        from .device_ports import _usb_options, _video_options
+        options = {"serial": [], "video": [o for o in _video_options(topology, include_unlisted=False)
+                                           if not o.get("kinect")],
+                   "usb": _usb_options(topology), "printer": []}
         for device in topology.get("devices", []):
-            if not device.get("isHub") and TOPOLOGY_RE.fullmatch(device.get("topology", "")):
+            if device.get("printerClass") and not device.get("isHub") and TOPOLOGY_RE.fullmatch(device.get("topology", "")):
                 usb = {"port": "usb:" + device["topology"], "name": device.get("product") or "USB-устройство",
                        "connection": device.get("connection"), "vidPid": device.get("vidPid")}
-                options["usb"].append(usb)
-                if device.get("printerClass"):
-                    options["printer"].append(usb)
+                options["printer"].append(usb)
             for node in device.get("nodes", []):
+                if node["kind"] not in ("printer", "serial"):
+                    continue
                 option = {"port": node["path"], "name": node.get("name") or device.get("product") or node["kind"],
                           "connection": device.get("connection"), "vidPid": device.get("vidPid"),
                           "aliases": node.get("aliases", []), "topology": device["topology"],
                           "index": node.get("index", "")}
-                if node["kind"] in options and not (node["kind"] == "video" and device.get("vidPid") in KINECT_CAMERA_IDS):
-                    options[node["kind"]].append(option)
+                options[node["kind"]].append(option)
         return {"ok": True, "generatedAt": now, "usbAvailable": bool(topology.get("available")),
                 "storageError": self.error or None, "devices": entries, "options": options,
                 "wheelDiscovery": {"ready": bool(master.get("ready")), "error": master.get("error"),

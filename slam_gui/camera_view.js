@@ -6,6 +6,7 @@
   const $ = (id) => document.getElementById(id);
   const cameras = [];
   const frameListeners = new Set();
+  let sources = [];
   let active = false;
 
   function notifyFrame(camera) {
@@ -92,7 +93,11 @@
   function status(camera, live) {
     const n = camera.n;
     const empty = $('cam' + n + '-empty');
-    if (empty) { empty.hidden = live; empty.textContent = 'Нет сигнала · переподключение…'; }
+    if (empty) {
+      empty.hidden = live;
+      const source = sources.find(s => s.id === n - 1);
+      empty.textContent = (source && source.captureError) || 'Нет кадра · проверьте видеовход в «Устройствах»';
+    }
     const chip = $('cam' + n + '-chip');
     if (chip) { chip.textContent = live ? '● LIVE' : 'нет сигнала'; chip.classList.toggle('ok', live); }
     const dot = $('cam' + n + '-dot');
@@ -130,10 +135,8 @@
     // браузером уже к размеченному изображению, поэтому рамки не съезжают.
     const camId = camera.n - 1;
     const plain = 'api/camera/' + camId + '/frame?t=' + Date.now();
-    const url = window.RCVision && window.RCVision.frameUrl
-      ? window.RCVision.frameUrl(camId)
-      : (window.RCSessionUrl ? window.RCSessionUrl(plain) : plain);
-    image.src = url;
+    if (window.RCVision && window.RCVision.loadFrame) window.RCVision.loadFrame(image, camId);
+    else image.src = window.RCSessionUrl ? window.RCSessionUrl(plain) : plain;
   }
 
   function stop(camera) {
@@ -147,6 +150,7 @@
   }
 
   window.RCCameraView = {
+    setSources(list) { sources = Array.isArray(list) ? list : []; },
     setActive(value) {
       init();
       if (active === !!value) return;

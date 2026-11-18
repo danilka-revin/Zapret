@@ -68,7 +68,7 @@ class Config:
     kiosk_mode_lock_seconds: int = 30
     # --- камеры: раздельные V4L2-порты для передней и задней камер ---
     camera_front: str = ""             # RC_CAMERA_FRONT или RC_CAMERA_FRONT_PORT
-    camera_rear: str = ""              # RC_CAMERA_REAR  или RC_CAMERA_REAR_PORT (пусто → авто /dev/video0/1)
+    camera_rear: str = ""              # RC_CAMERA_REAR  или RC_CAMERA_REAR_PORT (пусто → не назначена)
     # --- сводка работы робота (рейсы, энергия, замок) ---
     stats_file: Path = PROJECT_ROOT / "data" / "stats.json"
     _loaded_from: str = field(default="", repr=False)
