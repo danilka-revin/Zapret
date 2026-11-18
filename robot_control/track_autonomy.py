@@ -1,23 +1,17 @@
-"""Автономный проезд трассы с конусами («отдельная вкладка» бортового ПК).
+"""Прямое автономное движение с остановкой перед препятствием.
 
-Что делает сервис
------------------
-* едет только через подтверждённый проезд между столбиками: каждый столбик
-  запрещён для всего корпуса, лидар независимо проверяет путь торможения;
-* у знака «СТОП» снимает тягу, ждёт подтверждения тормоза на всех четырёх
-  колёсах и только после этого отсчитывает минимум 3 с;
-* знак «неровность» + Kinect: подтверждаем кочку по кадру глубины, заранее
-  снижаем скорость, на подъёме по гироскопу/одометрии добавляем тягу порциями,
-  пока робот не переедет, после кочки снова держим малую скорость и только
-  потом возвращаемся к обычной;
-* красный, жёлтый и неясный сигнал — STOP; разрешение только по свежим
-  отдельным кадрам зелёного. Повторный красный не скрывается таймером;
-* потеря конусов, кадров, глубины, E-STOP, кнопка «Стоп», тайм-аут и предел
-  дистанции — всегда STOP.
+Сервис не строит карту и не ведёт робот по столбикам: держит колёса прямо,
+пока физический сектор лидара перед корпусом свободен; препятствие в пути
+торможения завершает заезд остановкой. Знаки СТОП, светофор и кочка по-прежнему
+обрабатываются отдельно: знак СТОП — выдержка не менее 3 с после подтверждения
+остановки, красный/жёлтый/неясный сигнал — STOP, кочка — медленный проезд с
+подтверждением Kinect и наклона. Робот не объезжает препятствия и не выбирает
+повороты автоматически.
 
-Это НЕ nav2 и не сертифицированная система безопасности. Тяга включается
-только при ``RC_TRACK_ENABLE=1``, свежих камерах, подтверждении осмотра зоны
-оператором, снятом E-STOP и готовом шасси. Все команды идут через уже
+Это НЕ nav2 и не сертифицированная система безопасности. Движение начинается
+только после ручной команды «Запустить», свежих камер, осмотра зоны оператором,
+снятого E-STOP и готового шасси. ``RC_TRACK_ENABLE=1`` лишь разрешает ручной
+пуск и никогда само не запускает моторы. Все команды идут через уже
 существующие ``slam.dispatch_drive_command`` / ``dispatch_steering_command``
 (защёлка E-STOP, лимиты углов, watchdog прошивки сохраняются).
 
@@ -41,17 +35,20 @@ from typing import Any, Callable, Optional
 from . import estop as estop_latch
 from . import eventlog
 from .ground_hazards import GroundHazardTracker, analyze_ground_points, ground_points_from_depth
-from .navigation import _scan_coverage
 from .slam_map import lidar_mount_offset
-from .track_passage import PASSAGE_REASONS, estimate_corridor, passage_fits, post_in_path, swept_hit
+from .track_passage import estimate_corridor, swept_hit
 from .vision.classes import CLASS_INFO
 
 #: Маркер команд вкладки (как ``exploration``, ``delivery``, ``kinect``).
 AUTONOMY_HEADER = "autonomy"
 MODULES = ("FL", "FR", "RL", "RR")
 FRONT_CAMERAS = (0, 2)
-TRACK_SCENARIOS = ("full", "straight", "stop", "bump", "light", "gate", "blocked_gate")
+TRACK_SCENARIOS = ("full", "straight", "stop", "bump", "light", "gate", "blocked_gate", "dead_end")
 WHEEL_TELEMETRY_MAX_AGE_S = 0.75
+#: Достаточно переднего полукруга вокруг запрошенного курса, не 360°.
+TRACK_SCAN_HALF_ANGLE_DEG = 90.0
+TRACK_SCAN_MAX_GAP_DEG = 30.0
+TRACK_SCAN_MIN_POINTS = 30
 BRAKE_TIMEOUT_S = 5.0
 STEER_TOLERANCE_DEG = 2.0
 MAX_SC_EDGES_PER_S = 6700  # 150 мкс между фронтами в прошивке
@@ -86,7 +83,7 @@ def _env_int(name: str, default: int, lo: int, hi: int) -> int:
 class TrackConfig:
     """Все пороги трассы в одном месте; лимиты не дают выставить опасное."""
 
-    enabled: bool = False                 # RC_TRACK_ENABLE: явный пуск в .env
+    enabled: bool = True                  # RC_TRACK_ENABLE разрешает только ручной пуск
     simulation: bool = False              # смотреть камеры, но НЕ трогать тягу
     tick_s: float = 0.20                  # < 650 мс watchdog прошивки
     stale_s: float = 1.5                  # свежесть кадров/знаков
@@ -98,17 +95,19 @@ class TrackConfig:
     max_steer_deg: float = 22.0           # крабовый ход, не разворот на месте
     steer_deadband_deg: float = 2.5       # руль в движении не перекладываем
     steer_settle_s: float = 0.45          # ждём, пока колёса дойдут до угла
-    steer_gain: float = 1.0               # поправка угла краба к центру проезда
-    gyro_damping: float = 0.02            # гироскоп гасит рыскание на кочке
-    lookahead_m: float = 2.5              # точка прицеливания по коридору
-    min_cones: int = 2                    # минимум конусов, чтобы ехать
+    # Legacy-пороги геометрии столбиков оставлены для совместимости/диагностики.
+    # Режим движения вперёд не выбирает по ним путь и не требует пары столбиков.
+    steer_gain: float = 1.0
+    gyro_damping: float = 0.02
+    lookahead_m: float = 2.5
+    min_cones: int = 2
     min_confidence: float = 0.35          # порог уверенности детектора
     max_lateral_m: float = 4.0
     min_corridor_m: float = 0.9           # уже корпуса + запас → STOP
     max_corridor_m: float = 3.5
     max_offset_m: float = 1.5             # «не сильно далеко от конусов»
     max_nearest_m: float = 4.5            # ближайший конус слишком далеко
-    lane_lost_s: float = 1.5              # сколько ждём восстановления проезда без тяги
+    lane_lost_s: float = 1.5              # сколько ждём свежих кадров уже без тяги
     stop_wait_s: float = 3.0              # не меньше 3 с после полной остановки
     stop_offset_m: float = 0.45           # продольный допуск «возле знака»
     stop_side_m: float = 1.8              # знак в боковой камере на таком расстоянии
@@ -131,6 +130,7 @@ class TrackConfig:
     clearance_m: float = 0.12            # запас от края корпуса
     stop_clearance_m: float = 0.8        # проверяемый путь торможения, не измеренный результат
     lidar_scan_age_s: float = 0.75
+    lidar_slow_distance_m: float = 2.0   # заранее замедлиться перед объектом в пути
     max_speed_mps: float = 0.35          # отсечка по SC, не уставка регулятора
     bump_max_height_m: float = 0.12
     require_depth: bool = True
@@ -142,7 +142,7 @@ class TrackConfig:
     @classmethod
     def from_env(cls) -> "TrackConfig":
         return cls(
-            enabled=_env_bool("RC_TRACK_ENABLE", False),
+            enabled=_env_bool("RC_TRACK_ENABLE", True),
             simulation=_env_bool("RC_TRACK_SIMULATION", False),
             tick_s=_env_float("RC_TRACK_TICK_S", 0.20, 0.05, 0.30),
             stale_s=_env_float("RC_TRACK_STALE_S", 1.5, 0.3, 2.0),
@@ -187,6 +187,7 @@ class TrackConfig:
             clearance_m=_env_float("RC_TRACK_CLEARANCE_M", 0.12, 0.08, 1.0),
             stop_clearance_m=_env_float("RC_TRACK_STOP_CLEARANCE_M", 0.8, 0.5, 4.0),
             lidar_scan_age_s=_env_float("RC_TRACK_LIDAR_MAX_AGE_S", 0.75, 0.3, 1.0),
+            lidar_slow_distance_m=_env_float("RC_TRACK_LIDAR_SLOW_M", 2.0, 0.8, 6.0),
             max_speed_mps=_env_float("RC_TRACK_MAX_SPEED_MPS", 0.35, 0.05, 0.6),
             bump_max_height_m=_env_float("RC_TRACK_BUMP_MAX_HEIGHT_M", 0.12, 0.04, 0.2),
             require_depth=_env_bool("RC_TRACK_REQUIRE_DEPTH", True),
@@ -206,7 +207,7 @@ class TrackConfig:
             "stop_offset_m", "stop_side_m", "bump_slow_m", "bump_cross_m",
             "stall_s", "pitch_deg", "max_distance_m", "max_duration_s", "finish_distance_m",
             "robot_length_m", "robot_width_m", "clearance_m", "post_radius_m",
-            "stop_clearance_m", "max_speed_mps", "bump_max_height_m", "require_depth",
+            "stop_clearance_m", "lidar_slow_distance_m", "max_speed_mps", "bump_max_height_m", "require_depth",
             "require_imu", "require_blind_check", "side_camera_deg")}
 
 
@@ -434,15 +435,68 @@ def traffic_decision(vision: dict[str, Any], marks: list[dict[str, Any]],
             "cameraId": green[0] if green else None, "frameStamp": green[1] if green else None}
 
 
-def lidar_clearance(info: dict[str, Any], angle_deg: float, cfg: TrackConfig) -> dict[str, Any]:
-    """Independent scan-only veto along the protected braking envelope."""
-    points = info.get("points") if info.get("trusted") is True else None
-    ready, count, _ = _scan_coverage(points)
-    if not ready:
-        return {"ready": False, "blocked": False, "points": count, "nearestM": None}
-    offset = lidar_mount_offset()
-    nearest = None
+def _track_scan_coverage(points: Any, angle_deg: float) -> tuple[bool, int, float | None]:
+    """Validate only the front half-sector used by straight-line obstacle checks.
+
+    General map navigation needs 360° coverage; this mode only needs the sector
+    around its commanded path. Angles are relative to the course direction, and
+    the two sector edges count as uncovered gaps so a small fragment cannot pass.
+    """
+    if not isinstance(points, (list, tuple)):
+        return False, 0, None
+    try:
+        center = math.radians(float(angle_deg))
+    except (TypeError, ValueError):
+        return False, 0, None
+    if not math.isfinite(center):
+        return False, 0, None
+    half = math.radians(TRACK_SCAN_HALF_ANGLE_DEG)
+    max_gap = math.radians(TRACK_SCAN_MAX_GAP_DEG)
+    angles: list[float] = []
     for point in points:
+        if not isinstance(point, dict):
+            continue
+        try:
+            distance, angle = float(point["r"]), float(point["a"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (math.isfinite(distance) and distance > 0 and math.isfinite(angle)):
+            continue
+        relative = math.atan2(math.sin(angle - center), math.cos(angle - center))
+        if abs(relative) <= half + 1e-9:
+            angles.append(_clamp(relative, -half, half))
+    angles = sorted(set(angles))
+    count = len(angles)
+    if count < TRACK_SCAN_MIN_POINTS:
+        return False, count, None
+    gaps = [angles[0] + half]
+    gaps.extend(b - a for a, b in zip(angles, angles[1:]))
+    gaps.append(half - angles[-1])
+    largest_gap = max(gaps)
+    return largest_gap <= max_gap + 1e-9, count, math.degrees(largest_gap)
+
+
+def lidar_clearance(info: dict[str, Any], angle_deg: float, cfg: TrackConfig) -> dict[str, Any]:
+    """Check obstacles in the swept path using trusted physical LiDAR points.
+
+    A fresh, adequately sampled forward sector is enough; requiring a complete
+    360° revolution here unnecessarily blocks a straight course. ``nearestAheadM``
+    is the distance from the robot's front edge, used to slow down before STOP.
+    """
+    points = info.get("points") if isinstance(info, dict) and info.get("trusted") is True else None
+    ready, count, _ = _track_scan_coverage(points, angle_deg)
+    if not ready:
+        return {"ready": False, "blocked": False, "points": count,
+                "nearestM": None, "nearestAheadM": None, "nearestPoint": None}
+    offset = lidar_mount_offset()
+    direction = math.radians(float(angle_deg))
+    ux, uy = math.cos(direction), math.sin(direction)
+    nearest = None
+    nearest_ahead = None
+    nearest_point = None
+    for point in points:
+        if not isinstance(point, dict):
+            continue
         try:
             r, a = float(point["r"]), float(point["a"])
         except (KeyError, TypeError, ValueError):
@@ -450,12 +504,22 @@ def lidar_clearance(info: dict[str, Any], angle_deg: float, cfg: TrackConfig) ->
         if not (math.isfinite(r) and math.isfinite(a) and r > 0):
             continue
         x, y = offset + r * math.cos(a), r * math.sin(a)
+        along = x * ux + y * uy
+        lateral = -x * uy + y * ux
+        if (along >= cfg.robot_length_m / 2 and
+                abs(lateral) <= cfg.robot_width_m / 2 + cfg.clearance_m):
+            ahead = max(0.0, along - cfg.robot_length_m / 2)
+            if nearest_ahead is None or ahead < nearest_ahead:
+                nearest_ahead = ahead
+                nearest_point = {"x": round(x, 3), "y": round(y, 3)}
         if swept_hit(x, y, angle_deg, cfg.stop_clearance_m,
                      cfg.robot_length_m / 2 + cfg.clearance_m,
                      cfg.robot_width_m / 2 + cfg.clearance_m):
             nearest = r if nearest is None else min(nearest, r)
     return {"ready": True, "blocked": nearest is not None, "points": count,
-            "nearestM": round(nearest, 2) if nearest is not None else None}
+            "nearestM": round(nearest, 2) if nearest is not None else None,
+            "nearestAheadM": round(nearest_ahead, 2) if nearest_ahead is not None else None,
+            "nearestPoint": nearest_point}
 
 
 _EMPTY_GROUND: dict[str, Any] = {"ok": False, "depthFresh": False, "nearestBumpM": None,
@@ -939,9 +1003,10 @@ class TrackAutonomyService:
         except Exception:  # noqa: BLE001
             pass
         fresh_cameras, front_fresh = _vision_readiness(vision, self.cfg)
+        # Posts are optional display hints, not permission to move or a route.
         cones = cone_points(vision, layout, self.cfg)
-        corridor = estimate_corridor(cones, self.cfg)
-        lidar = lidar_clearance(self._scan_info(), corridor["steerLeftDeg"], self.cfg)
+        corridor = {"required": False, "ok": False, "reason": "not_used", "steerLeftDeg": 0.0}
+        lidar = lidar_clearance(self._scan_info(), 0.0, self.cfg)
         real = not self.motion.simulation
         require_blind = real or self.cfg.require_blind_check
         estop_clear = not self._is_estopped()
@@ -954,7 +1019,8 @@ class TrackAutonomyService:
             "camerasFresh": front_fresh,
             "conesVisible": len(cones) >= self.cfg.min_cones,
             "corridorOk": bool(corridor.get("ok")),
-            "geometryCalibrated": bool(layout.get("calibrated")) and not layout.get("duplicatePorts"),
+            "geometryCalibrated": bool(layout.get("calibrated")),
+            "cameraPortsDistinct": not bool(layout.get("duplicatePorts")),
             "lidarReady": bool(lidar["ready"]), "lidarClear": bool(lidar["ready"] and not lidar["blocked"]),
             "driveReady": bool(getattr(source, "supports_drive", False)),
             "steerReady": bool(getattr(source, "supports_individual_steer", False)),
@@ -996,10 +1062,6 @@ class TrackAutonomyService:
             blockers.append("Машинное зрение не работает: проверьте /api/vision/state и камеры")
         if not checks["camerasFresh"]:
             blockers.append("Нужны свежие кадры обеих передних камер (%.1f с)" % self.cfg.stale_s)
-        if not checks["conesVisible"]:
-            blockers.append("Конусы не видны: поставьте робота в коридор и проверьте разметку кадров")
-        if not checks["corridorOk"]:
-            blockers.append(PASSAGE_REASONS.get(corridor["reason"], "Проезд не подтверждён"))
         if rivals:
             blockers.append("Другой режим уже владеет приводом: " + ", ".join(rivals))
         if not checks["standstill"]:
@@ -1012,10 +1074,10 @@ class TrackAutonomyService:
         if self.cfg.require_imu and not checks["imuFresh"]:
             blockers.append("Нет свежего гироскопа/наклона: подъём на кочке не контролируется")
         if real:
-            if not checks["geometryCalibrated"]:
-                blockers.append("Откалибруйте геометрию камер и Kinect; проверьте порты камер")
+            if not checks["cameraPortsDistinct"]:
+                blockers.append("Камеры назначены на одинаковые порты: проверьте назначения камер")
             if not checks["lidarReady"]:
-                blockers.append("Нет свежего полного физического скана лидара")
+                blockers.append("Нет свежего физического скана в переднем секторе лидара")
             elif not checks["lidarClear"]:
                 blockers.append("Лидар видит препятствие на пути корпуса")
             if not checks["wheelFeedback"] or not checks["brakeFeedback"]:
@@ -1041,7 +1103,9 @@ class TrackAutonomyService:
             if not checks["geometryCalibrated"]:
                 warnings.append("Геометрия камер не откалибрована: углы взяты по умолчанию")
             if not checks["lidarReady"]:
-                warnings.append("Нет физического скана лидара: прогон не проверяет препятствия")
+                warnings.append("Нет физического сектора лидара: сухой прогон не проверяет препятствия")
+        if real and not checks["geometryCalibrated"]:
+            warnings.append("Геометрия не откалибрована: для знаков и Kinect используются примерные значения")
         if not checks["depthFresh"]:
             warnings.append("Нет полного кадра Kinect: перед кочкой режим встанет, "
                             "используйте raw depth, а не points/ranges")
@@ -1068,6 +1132,7 @@ class TrackAutonomyService:
         payload = {
             "ok": True, "active": self.active,
             "enabled": self.cfg.enabled, "simulation": self.cfg.simulation,
+            "navigationMode": "forward",
             "config": self.cfg.public(),
             "updatedAt": round(time.time(), 3),
             "elapsedS": round(max(0.0, self.clock() - session["started"]), 2) if session else 0.0,
@@ -1087,7 +1152,7 @@ class TrackAutonomyService:
     def _new_session(self, now: float) -> dict[str, Any]:
         return {
             "started": now, "last": now, "finished": False,
-            "lane_lost_since": None, "vision_lost_since": None,
+            "vision_lost_since": None,
             "stop_target": None, "stop_seen_at": None, "stop_braking": False,
             "stop_wait_until": None, "stop_served": None,
             "light_target": None, "light_seen_at": None, "light_waiting": False,
@@ -1127,7 +1192,7 @@ class TrackAutonomyService:
             self._cancel = threading.Event()
             self._session = self._new_session(self.clock())
             self._state = {
-                "phase": "starting", "message": "Проверка камер, проезда и датчиков…",
+                "phase": "starting", "message": "Проверка камер и датчиков перед движением вперёд…",
                 "distanceM": 0.0, "percent": 0.0, "steerLeftDeg": 0.0,
                 "boostPercent": 0.0, "events": [],
                 "counters": {"stop": 0, "bump": 0, "traffic": 0, "powerBoosts": 0},
@@ -1172,7 +1237,8 @@ class TrackAutonomyService:
             "ok": bool(vision.get("ok") and vision.get("enabled") and vision.get("running")),
             "fresh": front_fresh, "freshCameras": fresh_cameras, "cones": cones, "signs": signs,
             "traffic": traffic, "ground": ground, "imu": imu,
-            "geometryCalibrated": bool(layout.get("calibrated")) and not layout.get("duplicatePorts"),
+            "geometryCalibrated": bool(layout.get("calibrated")),
+            "cameraPortsDistinct": not bool(layout.get("duplicatePorts")),
         }
 
     # ---------------------------------------------------------------- журнал --
@@ -1401,7 +1467,7 @@ class TrackAutonomyService:
             return "bump_climb", cfg.slow_percent + session["boost"], "Переезжаю подтверждённую кочку."
         if now < session["bump_post_until"]:
             return "bump_exit", cfg.slow_percent, "После кочки держу малую тягу."
-        return "following", cfg.cruise_percent, "Двигаюсь через подтверждённый проезд."
+        return "following", cfg.cruise_percent, "Двигаюсь вперёд; препятствия контролирует лидар."
 
     def _check_progress(self, session: dict[str, Any], feedback: dict[str, Any], now: float) -> None:
         """Reject missing traction acknowledgments and an unresponsive wheel."""
@@ -1459,8 +1525,8 @@ class TrackAutonomyService:
                 raise TrackAutonomyError("chassis_feedback", "Потеряна свежая телеметрия четырёх колёс")
             if max(feedback["wheelSpeedMps"], feedback["peakWheelSpeedMps"]) > cfg.max_speed_mps:
                 raise TrackAutonomyError("overspeed", "Превышен предел скорости по телеметрии колёс")
-            if not snap["geometryCalibrated"]:
-                raise TrackAutonomyError("geometry", "Нет подтверждённой геометрии камер и Kinect")
+            if not snap.get("cameraPortsDistinct", True):
+                raise TrackAutonomyError("camera_ports", "Камеры назначены на одинаковые порты")
             self._check_progress(session, feedback, now)
         delta = self._odometer.update(dt, raw)
         distance = self._odometer.distance
@@ -1470,52 +1536,45 @@ class TrackAutonomyService:
             self._finish(session, "done", "Достигнута настроенная дистанция финиша.", "ok")
             return
 
-        cones, signs, traffic, ground, imu = (snap[key] for key in ("cones", "signs", "traffic", "ground", "imu"))
-        corridor = estimate_corridor(cones, cfg)
-        steer = corridor["steerLeftDeg"]
-        if imu.get("fresh"):
-            steer -= float(imu.get("gyroZ") or 0) * cfg.gyro_damping
-        steer = _clamp(steer, -cfg.max_steer_deg, cfg.max_steer_deg)
+        cones = snap.get("cones") or []
+        signs, traffic, ground, imu = (snap[key] for key in ("signs", "traffic", "ground", "imu"))
+        corridor = {"required": False, "ok": False, "reason": "not_used", "steerLeftDeg": 0.0}
+        # This mode drives straight; cones are not route markers and LiDAR is a
+        # front-sector obstacle veto, not a steering/localization source.
+        steer = 0.0
         angle = -self.motion.probe_angle(steer)
         scan = self._scan_info()
         lidar = lidar_clearance(scan, angle, cfg)
-        if self.motion.percent > 0 and angle != -self.motion.steer_deg and lidar["ready"] and not lidar["blocked"]:
-            lidar = lidar_clearance(scan, -self.motion.steer_deg, cfg)
         self._set(distanceM=round(distance, 3), perception={"ok": snap["ok"],
                   "freshCameras": snap["freshCameras"], "cones": len(cones), "signs": len(signs)},
                   cones=cones[:24], signs=signs[:12], corridor=corridor, lidar=lidar,
                   traffic=traffic, ground={k: ground.get(k) for k in ("ok", "nearestBumpM", "status", "reason")},
                   imu=imu, telemetry={k: feedback.get(k) for k in ("linkOk", "onlineWheels", "wheelSpeedMps")})
         if lidar["blocked"]:
-            self._finish(session, "blocked", "Лидар видит препятствие на пути корпуса — STOP.", "stop")
+            self._finish(session, "blocked", "Тупик или препятствие на пути корпуса по лидару — STOP. "
+                         "Для продолжения нужен новый ручной запуск.", "stop")
             return
         if real and not lidar["ready"]:
-            raise TrackAutonomyError("lidar_lost", "Потерян свежий полный физический скан лидара")
-        if real and not ground.get("depthFresh"):
+            raise TrackAutonomyError("lidar_lost", "Потерян свежий сектор физического лидара перед роботом")
+        if (real or cfg.require_depth) and not ground.get("depthFresh"):
             raise TrackAutonomyError("depth_lost", "Потерян навигационный кадр глубины Kinect")
         if cfg.require_imu and not imu.get("fresh"):
             raise TrackAutonomyError("imu_lost", "Потеряны данные о наклоне")
 
-        # Keep the traffic latch even during a sign dwell or a temporary lane stop.
+        # Keep the traffic latch even during a sign dwell or a camera-data hold.
         vision_fresh = snap["ok"] and snap["fresh"]
         wait_light = self._traffic(session, traffic if vision_fresh else {}, signs if vision_fresh else [], now, distance)
-        if not vision_fresh or not corridor["ok"]:
+        if not vision_fresh:
             session["stop_wait_until"] = None  # don't count time without confirmed feedback
-            lost = "vision_lost_since" if not vision_fresh else "lane_lost_since"
-            message = ("Нет свежих кадров передних камер" if not vision_fresh else
-                       PASSAGE_REASONS.get(corridor["reason"], "Проезд не подтверждён"))
-            if session[lost] is None:
-                session[lost] = now
-            if now - session[lost] > cfg.lane_lost_s:
+            if session["vision_lost_since"] is None:
+                session["vision_lost_since"] = now
+            message = "Нет свежих кадров передних камер"
+            if now - session["vision_lost_since"] > cfg.lane_lost_s:
                 self._finish(session, "blocked", message + " — STOP.", "stop")
             else:
-                self._hold(session, "lane_lost", message + " — стою.")
+                self._hold(session, "vision_lost", message + " — стою.")
             return
-        session["vision_lost_since"] = session["lane_lost_since"] = None
-        if (not passage_fits(corridor, angle, cfg) or post_in_path(cones, angle, corridor["travelM"], cfg)
-                or self.motion.percent > 0 and post_in_path(cones, -self.motion.steer_deg, cfg.stop_clearance_m, cfg)):
-            self._finish(session, "blocked", "Угол колёс не оставляет безопасного прохода между столбиками.", "stop")
-            return
+        session["vision_lost_since"] = None
 
         wait_stop, slow_stop = self._stop_sign(session, signs, now, distance, feedback)
         if wait_stop:
@@ -1531,6 +1590,11 @@ class TrackAutonomyService:
             speed = min(speed, cfg.slow_percent)
             if phase == "following":
                 phase, message = "stop_approach", "Подъезжаю к знаку СТОП на малой тяге."
+        approach = _number(lidar.get("nearestAheadM"))
+        if approach is not None and approach <= cfg.lidar_slow_distance_m:
+            speed = min(speed, cfg.slow_percent)
+            if phase == "following":
+                phase, message = "obstacle_approach", "Препятствие впереди: заранее снижаю скорость."
         with self._motion_lock:
             if self._cancel.is_set() or session["finished"]:
                 return
@@ -1572,7 +1636,7 @@ class TrackAutonomyService:
                          max_duration_s=240.0, max_distance_m=200.0)
         sim = TrackAutonomyService(
             config=config, perception_provider=world.snapshot,
-            telemetry_provider=world.telemetry, lidar_provider=world.scan,
+            telemetry_provider=world.telemetry, lidar_provider=world.scan_ahead,
             source_provider=lambda: None,
             rivals_provider=lambda: [], estop=lambda: None,
             clock=world.clock, log_events=False,
@@ -1588,21 +1652,26 @@ class TrackAutonomyService:
         session = sim._session
         counters = dict(sim._state.get("counters") or {})
         phase = sim._state["phase"]
-        stopped_at_gate = (phase == "blocked" and sim._odometer.distance == 0.0 and
-                           sim._state["corridor"].get("reason") == "corridor_narrow")
+        expected_stop = world.scenario in {"blocked_gate", "dead_end"}
+        stopped_before_obstacle = (phase == "blocked" and sim.motion.percent == 0 and
+                                   sim._state.get("lidar", {}).get("blocked") is True)
+        if world.scenario == "blocked_gate":
+            stopped_before_obstacle = stopped_before_obstacle and sim._odometer.distance == 0.0
+        elif world.scenario == "dead_end":
+            stopped_before_obstacle = stopped_before_obstacle and 0 < sim._odometer.distance < 8.0
         required = {"full": ("stop", "bump", "traffic"), "stop": ("stop",),
                     "bump": ("bump",), "light": ("traffic",)}.get(world.scenario, ())
-        passed = (stopped_at_gate if world.scenario == "blocked_gate" else
+        passed = (stopped_before_obstacle if expected_stop else
                   phase == "done" and all(counters[key] >= 1 for key in required))
         return {
-            "ok": True, "passed": passed, "expectedStop": world.scenario == "blocked_gate",
+            "ok": True, "passed": passed, "expectedStop": expected_stop,
             "scenario": world.scenario, "steps": steps, "phase": phase,
             "message": sim._state.get("message"),
             "distanceM": round(sim._odometer.distance, 2),
             "elapsedS": round(world.clock() - session["started"], 2),
             "counters": counters,
             "events": list(session["events"]),
-            "commands": sim.motion.command_count,
+            "commands": sim.motion.command_count, "finalPercent": sim.motion.percent,
             "maxBoostPercent": round(float(session.get("max_boost") or 0.0), 2),
         }
 
@@ -1611,10 +1680,10 @@ class TrackAutonomyService:
 class ScriptedWorld:
     """Синтетические камеры/датчики для сухого прогона и юнит-тестов.
 
-    Трасса: прямая → плавный левый поворот → правый поворот → СТОП (12 м) →
-    кочка (22 м, для проезда нужна добавка тяги) → светофор (32 м, красный
-    4 с, потом зелёный) → финиш 44 м. Конусы выдаются сразу в координатах
-    робота (как после ``cone_points``), поэтому геометрия камер не участвует.
+    Прямой путь без обязательных столбиков: СТОП (12 м), кочка (22 м,
+    нужна добавка тяги), светофор (32 м, красный 4 с, потом зелёный), финиш
+    44 м. ``dead_end`` — стена в 8 м, ``blocked_gate`` — препятствие у старта.
+    Синтетический лидар отдаёт передний сектор, а не полный круговой скан.
     """
 
     def __init__(self, scenario: str = "full") -> None:
@@ -1631,17 +1700,6 @@ class ScriptedWorld:
 
     def clock(self) -> float:
         return self.t
-
-    def _center(self, distance: float) -> float:
-        if self.scenario == "gate":
-            return 0.40  # смещённый створ: на одном нулевом угле не проедем
-        if distance < 8.0:
-            return 0.0
-        if distance < 16.0:
-            return 0.9 * (distance - 8.0) / 8.0           # уходим влево
-        if distance < 26.0:
-            return 0.9 - 1.5 * (distance - 16.0) / 10.0   # и вправо
-        return -0.6
 
     def advance(self, dt: float, percent: float, steer_left_deg: float = 0.0) -> None:
         self.percent = percent
@@ -1673,23 +1731,26 @@ class ScriptedWorld:
         points = [{"a": i * math.tau / 90, "r": 7.0} for i in range(90)]
         return {"trusted": True, "points": points}
 
+    def scan_ahead(self, _max_age: float) -> dict[str, Any]:
+        """Dry-run-only front scan, with physical obstacles in two scenarios."""
+        points = [{"a": math.radians(a), "r": 7.0} for a in range(-90, 91, 3)]
+        obstacles: list[tuple[float, float]] = []
+        if self.scenario in {"gate", "blocked_gate"}:
+            x, half = (3.0, 0.8) if self.scenario == "gate" else (0.85, 0.4)
+            obstacles = [(x - self.s, side * half - self.y) for side in (-1, 1)]
+        elif self.scenario == "dead_end":
+            obstacles = [(8.0 - self.s, y / 20 - self.y) for y in range(-24, 25)]
+        offset = lidar_mount_offset()
+        for x, y in obstacles:
+            points.append({"a": math.atan2(y, x - offset), "r": math.hypot(x - offset, y)})
+        return {"trusted": True, "points": points}
+
     def snapshot(self, _now: float) -> dict[str, Any]:
         cones: list[dict[str, Any]] = []
-        for step in range(-1, 7):
-            ahead = (math.floor(self.s / 0.9) + step + 1) * 0.9
-            if self.scenario == "gate" and ahead < 2.7:
-                continue
-            x = ahead - self.s
-            lateral = self._center(ahead) - self.y
-            half = 0.8
-            if self.scenario == "blocked_gate" and step == 1:
-                half = 0.40
-            elif self.scenario in {"full", "gate"} and abs(ahead - 5.4) < 1e-6:
-                half = 0.66   # real gap between the two occupied posts
-            for side in (-1.0, 1.0):
-                cones.append({"x": round(x, 3), "y": round(lateral + side * half, 3),
-                              "distance": round(abs(x), 3), "cameraId": 0 if side > 0 else 2,
-                              "confidence": 0.9})
+        if self.scenario in {"gate", "blocked_gate"}:
+            x, half = (3.0, 0.8) if self.scenario == "gate" else (0.85, 0.4)
+            cones = [{"x": x - self.s, "y": side * half - self.y, "confidence": 0.9}
+                     for side in (-1, 1)]
         signs: list[dict[str, Any]] = []
         traffic: dict[str, Any] = {"visible": False, "state": "none", "hold": False,
                                    "fresh": True, "counts": {"red": 0, "yellow": 0, "green": 0}}

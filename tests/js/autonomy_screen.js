@@ -30,10 +30,12 @@ class El {
     this.clientWidth = 900; this.clientHeight = 600; this.width = 900; this.height = 600;
     this.events = {}; this.style = {};
   }
+  get textContent() { return this._textContent + (this.children || []).map((c) => c.textContent).join(''); }
+  set textContent(value) { this._textContent = String(value); this.children = []; }
   addEventListener(name, listener) { (this.events[name] ||= []).push(listener); }
   removeEventListener() {}
   dispatch(name, event) { (this.events[name] || []).forEach((listener) => listener(Object.assign({ target: this, preventDefault() {} }, event))); }
-  click() { this.dispatch('click'); }
+  click() { if (!this.disabled) this.dispatch('click'); }
   appendChild(child) { this.children.push(child); child.parentElement = this; return child; }
   replaceChildren(...children) { this.children = children; children.forEach((child) => { child.parentElement = this; }); }
   setAttribute(name, value) { this.attrs[name] = String(value); if (name.startsWith('data-')) this.dataset[name.slice(5)] = String(value); }
@@ -74,7 +76,7 @@ function statusBody() {
   return Object.assign({}, payload.status, {
     active: started && !stopped,
     phase: stopped ? 'cancelled' : started ? 'following' : 'idle',
-    canStart: !started && !stopped,
+    canStart: payload.status.canStart && !started && !stopped,
     csrfToken: 'test-token'
   });
 }
@@ -103,6 +105,15 @@ async function flush(times = 8) {
   const start = byId('aut-start');
   const stop = byId('aut-stop');
   const blind = byId('aut-blind');
+  const checkLines = byId('aut-checks').children;
+  const initial = {
+    badChecks: checkLines.filter((line) => line.className.endsWith('is-bad')).map((line) => line.textContent),
+    geometryClass: checkLines.find((line) => /геометрия/.test(line.textContent)).className,
+    canvasEmptyHidden: byId('aut-canvas-empty').hidden,
+    obstacleDistance: byId('aut-obstacle-distance').textContent,
+    lidarPoints: byId('aut-lidar-points').textContent,
+    pathMeta: byId('aut-path-meta').textContent,
+  };
   const beforeBlind = start.disabled;
   blind.checked = true;
   blind.dispatch('change');
@@ -110,16 +121,19 @@ async function flush(times = 8) {
 
   start.click(); await flush();
   stop.click(); await flush();
-  byId('aut-scenario').value = 'bump';
+  byId('aut-scenario').value = payload.simulate.scenario || 'bump';
   byId('aut-simulate').click(); await flush();
   byId('aut-estop').click(); await flush();
 
+  global.RCAutonomy.renderLive(Object.assign({}, global.RCAutonomy._state.status, { phase: 'obstacle_approach' }));
+  const approachPhase = byId('aut-phase').textContent;
+  global.RCAutonomy.renderLive(global.RCAutonomy._state.status);
   const find = (needle) => calls.filter((call) => call.url.indexOf(needle) !== -1);
   const cam = byId('aut-cam-0'), cameraSrc = cam.src;
   cam.onerror();  // no fresh annotation for this input
   const result = {
     calls,
-    beforeBlind, afterBlind,
+    beforeBlind, afterBlind, initial, approachPhase, simSummary: byId('aut-sim-summary').textContent,
     checks: byId('aut-checks').children.length,
     warnings: byId('aut-warnings').children.length,
     events: byId('aut-events').children.length,

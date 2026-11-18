@@ -1,4 +1,4 @@
-"""Логика вкладки «Автономность»: коридор, знаки, светофор, кочка, безопасность.
+"""Логика вкладки «Автономность»: движение вперёд, знаки, кочка, безопасность.
 
 Проверяется сам модуль robot_control/track_autonomy.py без USB, Flask и модели:
 восприятие подменяется словарями и маленькими фейками, как в других тестах
@@ -144,7 +144,7 @@ class FakeClock:
 def perception(cones=None, signs=None, traffic=None, ground=None, imu=None, fresh=True):
     return {
         "ok": True, "fresh": fresh, "freshCameras": 4,
-        "cones": cones if cones is not None else straight_cones(),
+        "cones": cones if cones is not None else [],
         "signs": signs or [],
         "traffic": traffic or {"visible": False, "state": "none", "hold": False, "fresh": True},
         "ground": ground or {"ok": False, "nearestBumpM": None},
@@ -215,14 +215,47 @@ def test_gap_fits_full_chassis_and_does_not_ignore_solo_post():
 def test_scan_clearance_rejects_api_or_incomplete_scans_and_checks_crab_path(monkeypatch):
     monkeypatch.setenv("RC_LIDAR_OFFSET_M", "0.28")
     info = ScriptedWorld.scan(0.5)
-    assert lidar_clearance(info, 0, cfg()) == {"ready": True, "blocked": False,
-                                                "points": 90, "nearestM": None}
+    clear = lidar_clearance(info, 0, cfg())
+    assert clear["ready"] and not clear["blocked"] and clear["nearestM"] is None
+    assert clear["points"] == 45  # only forward angles, not the entire revolution
+    assert clear["nearestAheadM"] == pytest.approx(6.91)
+    assert clear["nearestPoint"] == {"x": 7.28, "y": 0.0}
     assert not lidar_clearance(dict(info, trusted=False), 0, cfg())["ready"]
     assert not lidar_clearance(dict(info, points=info["points"][:30]), 0, cfg())["ready"]
     obstacle = {"a": math.atan2(0.58, 0.72), "r": math.hypot(0.58, 0.72)}  # chassis (1.0, 0.58)
     info["points"].append(obstacle)
     assert not lidar_clearance(info, 0, cfg())["blocked"]
     assert lidar_clearance(info, 22, cfg())["blocked"]
+
+
+def test_forward_lidar_sector_does_not_require_a_full_revolution():
+    from robot_control.navigation import _scan_coverage
+
+    info = ScriptedWorld("straight").scan_ahead(0.5)
+    assert lidar_clearance(info, 0, cfg())["ready"]
+    assert not _scan_coverage(info["points"])[0]  # map navigation stays stricter
+    assert _scan_coverage(ScriptedWorld.scan(0.5)["points"])[0]
+
+
+@pytest.mark.parametrize("kind", ["rear_only", "front_hole", "missing_edges", "sparse", "duplicates", "invalid"])
+def test_forward_lidar_sector_rejects_blind_or_invalid_coverage(kind):
+    info = ScriptedWorld("straight").scan_ahead(0.5)
+    if kind == "rear_only":
+        info["points"] = [{"a": math.radians(a), "r": 7.0} for a in range(91, 270, 3)]
+    elif kind == "front_hole":
+        info["points"] = [p for p in info["points"] if abs(p["a"]) > math.radians(21)]
+    elif kind == "missing_edges":
+        info["points"] = [p for p in info["points"] if abs(p["a"]) < math.radians(55)]
+    elif kind == "sparse":
+        info["points"] = info["points"][::3]
+    elif kind == "duplicates":
+        info["points"] = info["points"][::3] * 5
+    else:
+        info["points"] = [None, {}, {"a": 0, "r": float("nan")},
+                          {"a": float("inf"), "r": 2.0}, {"a": 0, "r": -1.0}]
+    result = lidar_clearance(info, 0, cfg())
+    assert not result["ready"]
+    assert result["nearestAheadM"] is None and result["nearestPoint"] is None
 
 
 def test_sign_marks_front_side_and_fallback():
@@ -435,7 +468,8 @@ def test_preflight_lists_all_blockers_and_allows_clean_start():
     assert any("галочку" in item for item in blocked["blockers"])
     clean = service.preflight(blind_zone_checked=True, for_start=True)
     assert clean["canStart"] is True, clean["blockers"]
-    assert clean["checks"]["conesVisible"] and clean["checks"]["corridorOk"]
+    assert clean["checks"]["conesVisible"]
+    assert not clean["checks"]["corridorOk"] and clean["preview"]["corridor"]["required"] is False
     # E-STOP и чужой режим тяги блокируют пуск, даже если всё остальное готово.
     service._estop = lambda: {"reason": "оператор"}
     assert service.preflight(blind_zone_checked=True)["checks"]["estopClear"] is False
@@ -443,6 +477,53 @@ def test_preflight_lists_all_blockers_and_allows_clean_start():
     service._rivals = lambda: ["навигация по карте"]
     assert any("владеет приводом" in item
                for item in service.preflight(blind_zone_checked=True)["blockers"])
+
+
+def test_default_enabled_means_manual_start_only(monkeypatch):
+    monkeypatch.delenv("RC_TRACK_ENABLE", raising=False)
+    assert TrackConfig().enabled and TrackConfig.from_env().enabled
+    source = FakeSource()
+    service = TrackAutonomyService(
+        vision_provider=vision, layout_provider=lambda: dict(layout(), calibrated=False),
+        kinect_provider=FakeKinect, lidar_provider=ScriptedWorld("straight").scan_ahead,
+        source_provider=lambda: source, telemetry_provider=source.read,
+        estop=lambda: None, log_events=False)
+    for _ in range(2):
+        status = service.status()
+        assert status["enabled"] and status["canStart"], status["blockers"]
+        assert status["navigationMode"] == "forward"
+        assert not status["active"] and status["phase"] == "idle"
+        assert not status["checks"]["conesVisible"] and not status["checks"]["geometryCalibrated"]
+        assert status["warnings"] and status["corridor"]["required"] is False
+    assert service._session is None and service.motion.command_count == 0
+    assert service.motion.percent == 0 and source.brakes == 0
+    monkeypatch.setenv("RC_TRACK_ENABLE", "0")
+    assert TrackConfig.from_env().enabled is False
+
+
+@pytest.mark.parametrize("failure", ["depth", "lidar", "ports"])
+def test_approximate_geometry_does_not_waive_required_sensors_or_camera_ports(failure):
+    source = FakeSource()
+    service = TrackAutonomyService(
+        config=cfg(require_depth=False, require_blind_check=False),
+        vision_provider=vision, layout_provider=lambda: dict(layout(), calibrated=False),
+        kinect_provider=FakeKinect, lidar_provider=ScriptedWorld("straight").scan_ahead,
+        source_provider=lambda: source, telemetry_provider=source.read,
+        estop=lambda: None, log_events=False)
+    assert service.preflight(blind_zone_checked=True, for_start=True)["canStart"]
+    if failure == "depth":
+        service._kinect = lambda: FakeKinect(nav_fresh=False)
+        key = "depthFresh"
+    elif failure == "lidar":
+        service._lidar = lambda _age: {"trusted": False, "points": ScriptedWorld.scan(0.5)["points"]}
+        key = "lidarReady"
+    else:
+        service._layout = lambda: dict(layout(), calibrated=False, duplicatePorts=["/dev/video0"])
+        key = "cameraPortsDistinct"
+    status = service.preflight(blind_zone_checked=True, for_start=True)
+    assert not status["canStart"] and not status["checks"][key] and status["blockers"]
+    assert not any("Откалибруйте" in b for b in status["blockers"])
+    assert service.motion.command_count == 0
 
 
 def test_preflight_requires_four_wheels_and_live_link_for_real_drive():
@@ -600,22 +681,34 @@ def test_bump_slows_adds_power_by_gyro_then_slows_again():
     assert service._state["percent"] == pytest.approx(4.0)
 
 
-def test_lane_lost_and_estop_stop_the_loop():
-    clock = FakeClock()
-    service, clock = service_with_perception(lambda: perception(cones=[], fresh=True),
-                                             clock=clock)
+def test_missing_or_unpaired_posts_do_not_gate_motion_or_steer():
+    service, clock = service_with_perception(lambda: perception(cones=straight_cones()))
+    for posts in (straight_cones(), [], [cone(3.4, 1.5)], [], []):
+        service._perception = lambda _now: perception(cones=posts, imu={"fresh": True, "gyroZ": 30.0})
+        clock.advance(2.0)  # longer than the former lost-corridor timeout
+        service._step(clock())
+        assert service._state["phase"] == "following" and not service._session["finished"]
+        assert service.motion.percent == service.cfg.cruise_percent and service.motion.steer_deg == 0
+        assert service._state["corridor"]["required"] is False
+
+
+def test_camera_loss_and_estop_still_stop_the_loop():
+    service, clock = service_with_perception(lambda: perception())
     service._step(clock())
-    assert service._state["phase"] == "lane_lost"
+    assert service.motion.percent > 0
+    service._perception = lambda _now: perception(fresh=False)
+    clock.advance(0.2)
+    service._step(clock())
+    assert service._state["phase"] == "vision_lost" and service.motion.percent == 0
     clock.advance(2.0)
     service._step(clock())
-    assert service._state["phase"] == "blocked"
-    assert "двух границ" in service._state["message"].lower()
-    assert service.motion.percent == 0.0
+    assert service._state["phase"] == "blocked" and service.motion.percent == 0
+    assert "кадров" in service._state["message"].lower()
 
-    service2, clock2 = service_with_perception(lambda _now: perception(), clock=FakeClock())
+    service2, clock2 = service_with_perception(lambda: perception(), clock=FakeClock())
     service2._estop = lambda: {"reason": "кнопка"}
     service2._step(clock2())
-    assert service2._state["phase"] == "error"
+    assert service2._state["phase"] == "error" and service2.motion.percent == 0
     assert "E-STOP" in service2._state["message"]
 
 
@@ -656,20 +749,29 @@ def real_service_on_fakes():
         drive=lambda _src, body: (sent.append(body["percent"]) or {"ok": True}, 200),
         clock=clock, log_events=False)
     service._perceive = lambda _now: dict(perception(ground={"ok": True, "depthFresh": True}),
-                                         geometryCalibrated=True)
+                                         geometryCalibrated=False)
     service._session = service._new_session(clock())
     service.motion.stop()
     feedback.update(source.read())  # initial tagged brake was applied
     return service, clock, source, feedback, sent
 
 
-@pytest.mark.parametrize("failure", ["untrusted", "obstacle", "wheel", "overspeed", "depth"])
+@pytest.mark.parametrize("failure", ["untrusted", "missing_scan", "front_gap", "obstacle",
+                                     "wheel", "link", "overspeed", "depth", "ports"])
 def test_real_run_brakes_on_live_failure(failure):
     service, clock, src, feedback, sent = real_service_on_fakes()
     service._step(clock())
     assert sent == [8.0]
     if failure == "untrusted":
         service._lidar = lambda age: dict(ScriptedWorld.scan(age), trusted=False)
+    elif failure == "missing_scan":
+        service._lidar = lambda _age: {}  # real provider returns no points on stale scans
+    elif failure == "front_gap":
+        service._lidar = lambda age: dict(ScriptedWorld.scan(age), points=ScriptedWorld.scan(age)["points"][:30])
+    elif failure == "ports":
+        service._perceive = lambda _now: dict(perception(ground={"depthFresh": True}), cameraPortsDistinct=False)
+    elif failure == "link":
+        feedback["linkOk"] = False
     elif failure == "obstacle":
         def blocked(age):
             scan = ScriptedWorld.scan(age)
@@ -688,6 +790,52 @@ def test_real_run_brakes_on_live_failure(failure):
     service._step(clock())
     assert sent == [8.0] and src.brakes == 2
     assert service.motion.percent == 0 and service._state["phase"] in {"blocked", "error"}
+
+
+def test_real_forward_run_slows_then_stops_before_obstacle_and_does_not_autoresume(monkeypatch):
+    monkeypatch.setenv("RC_LIDAR_OFFSET_M", "0.28")
+    service, clock, src, _feedback, sent = real_service_on_fakes()
+    world = ScriptedWorld("straight")
+    service._lidar = world.scan_ahead  # no full revolution and no posts
+    service._step(clock())
+    assert sent == [8.0]
+
+    def approaching(_age):
+        scan = world.scan_ahead(0.5)
+        # Not just the centre ray: a point near the chassis' left edge counts.
+        x, y = obstacle["x"] - 0.28, 0.40
+        scan["points"].append({"a": math.atan2(y, x), "r": math.hypot(x, y)})
+        return scan
+
+    obstacle = {"x": 1.9}
+    service._lidar = approaching
+    clock.advance(0.2)
+    service._step(clock())
+    assert sent == [8.0, 4.0] and service._state["phase"] == "obstacle_approach"
+    assert service._state["lidar"]["nearestAheadM"] == pytest.approx(1.52)
+    assert not service._state["lidar"]["blocked"]
+    obstacle["x"] = 1.1
+    clock.advance(0.2)
+    service._step(clock())
+    assert service.motion.percent == 0 and service._state["phase"] == "blocked"
+    assert service._state["lidar"]["blocked"] and src.brakes == 2
+    service._lidar = world.scan_ahead  # clearing the object cannot restart a finished run
+    clock.advance(0.2)
+    service._step(clock())
+    assert sent == [8.0, 4.0] and service.motion.percent == 0
+
+
+@pytest.mark.parametrize("limit", ["distance", "time"])
+def test_forward_run_keeps_distance_and_time_failsafes(limit):
+    service, clock, src, _feedback, sent = real_service_on_fakes()
+    service._step(clock())
+    if limit == "distance":
+        service._odometer.distance = service.cfg.max_distance_m
+    else:
+        clock.advance(service.cfg.max_duration_s + 1)
+    service._step(clock())
+    assert sent == [8.0] and src.brakes == 2 and service.motion.percent == 0
+    assert service._state["phase"] == "error"
 
 
 def test_stop_dwell_requires_new_brake_id_and_all_stopped():
@@ -779,13 +927,20 @@ def test_full_simulation_covers_signs_bump_and_light():
     assert resumed["atS"] - stopped["atS"] >= 3.0
 
 
-def test_scripted_world_track_can_turn_both_ways():
+def test_scripted_world_straight_has_no_posts_and_a_front_sector():
     world = ScriptedWorld("straight")
-    assert world._center(4.0) == 0.0
-    assert world._center(12.0) > 0.0    # левая дуга
-    assert world._center(24.0) < 0.0   # правая дуга
     snap = world.snapshot(0.0)
-    assert len(snap["cones"]) >= 8 and snap["fresh"] is True
+    assert snap["cones"] == [] and snap["fresh"] is True
+    assert lidar_clearance(world.scan_ahead(0.5), 0, cfg())["ready"]
+    world.advance(1.0, 8.0)
+    assert world.s > 0 and world.y == 0
+
+
+def test_simulated_dead_end_moves_then_stops_before_wall():
+    report = simulate_track("dead_end")
+    assert report["passed"] and report["expectedStop"]
+    assert report["phase"] == "blocked" and 0 < report["distanceM"] < 8.0
+    assert report["finalPercent"] == 0 and "лидару" in report["message"]
 
 
 def test_simulated_blocked_gate_never_moves():
