@@ -154,6 +154,8 @@ def test_monitor_cannot_steer_drive_or_stop(kiosk_client):
         ("/api/wheels/settings", {}),
         ("/api/lidar/settings", {}),
         ("/api/scan_mode/enable", {}),
+        ("/api/kinect/depth", {"X-Robot-Control": "kinect"}),
+        ("/api/vision/config", {}),
     ):
         response = kiosk_client.post(path, json={}, headers=headers)
         assert response.status_code == 403, path
@@ -163,8 +165,27 @@ def test_monitor_cannot_steer_drive_or_stop(kiosk_client):
 def test_monitor_keeps_the_common_information(kiosk_client):
     open_mode(kiosk_client, "5656")
     for path in ("/api/kiosk_state", "/api/battery", "/api/lidar", "/api/kiosk_logs",
-                 "/api/kiosk_lock", "/api/pc_state", "/api/connections"):
+                 "/api/kiosk_lock", "/api/pc_state", "/api/connections",
+                 "/api/kinect/status", "/api/kinect/preview", "/api/vision/field"):
         assert kiosk_client.get(path).status_code == 200, path
+
+
+def test_monitor_and_main_share_sensor_fullscreen_without_exposing_settings(kiosk_client):
+    open_mode(kiosk_client, "5656")
+    monitor_html = kiosk_client.get("/monitor").get_data(as_text=True)
+    for token in ('id="sensor-lidar"', 'id="sensor-kinect"', 'id="sensor-combined"',
+                  'id="sensor-fullscreen-toggle"', 'id="lidar-fullscreen-btn"',
+                  'id="kinect-fullscreen-btn"', 'id="kinect-3d-canvas"'):
+        assert token in monitor_html
+    assert "lidar_settings.js" not in monitor_html
+    assert "power.js" not in monitor_html
+
+    open_mode(kiosk_client, "7232")
+    main_html = kiosk_client.get("/kiosk").get_data(as_text=True)
+    for token in ('id="sensor-lidar"', 'id="sensor-kinect"', 'id="sensor-combined"',
+                  'id="sensor-fullscreen-toggle"', 'id="lidar-fullscreen-btn"',
+                  'id="kinect-fullscreen-btn"', 'id="kinect-3d-canvas"'):
+        assert token in main_html
 
 
 def test_monitor_displays_jbd_independently_of_chassis():
@@ -237,6 +258,8 @@ def test_signed_link_keeps_monitor_restrictions(kiosk_client):
     state = client.get("/api/kiosk_state?m=" + token)
     assert state.status_code == 200
     assert "battery" in client.get("/api/battery?m=" + token).get_json()
+    assert client.get("/api/kinect/preview?m=" + token).status_code == 200
+    assert client.get("/api/vision/field?m=" + token).status_code == 200
     steer = client.post("/api/kiosk_steer?m=" + token, json={"module": "FL", "angle": 5},
                         headers={"X-Robot-Control": "steering"})
     assert steer.status_code == 403

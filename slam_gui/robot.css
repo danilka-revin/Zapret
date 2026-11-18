@@ -2292,7 +2292,107 @@ body[data-remote-view="motors"] .remote-drive-panel small { display: block; marg
 .kinect-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; color: #aabac7; padding: 20px; margin: 0; pointer-events: none; }
 .kinect-empty[hidden] { display: none; }
 .kinect-controls { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 5px; }
-.kinect-controls button { min-width: 42px; min-height: 42px; padding: 4px; font-size: 22px; }
+.kinect-controls button { min-width: 42px; min-height: 42px; padding: 4px; font-size: 22px; display: inline-flex; align-items: center; justify-content: center; }
 .kinect-controls button[aria-pressed="true"] { border-color: #52bdf4; color: #69d5ff; background: rgba(47, 150, 199, .18); }
 .kinect-controls button[hidden] { display: none; }
 .kinect-view-hint { margin: 0; color: var(--muted); font-size: 12px; }
+
+/* Полноэкранный обзор датчиков: Лидар · 2D, Kinect · 3D и Общий обзор · 3D. */
+.sensor-panel-head { gap: 12px; flex-wrap: wrap; }
+.sensor-head-actions {
+  display: flex; align-items: center; gap: 10px;
+  margin-left: auto; min-width: 0; max-width: 100%;
+}
+.sensor-head-actions .panel-meta {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sensor-head-actions .panel-meta[hidden] { display: none; }
+.sensor-fullscreen-btn {
+  flex: none;
+  display: inline-flex; align-items: center; gap: 7px;
+  min-height: 38px; padding: 7px 14px;
+  border: 1px solid var(--line-2, var(--line)); border-radius: 10px;
+  background: var(--bg-2); color: var(--text);
+  font: inherit; font-size: 14px; font-weight: 700;
+  white-space: nowrap; cursor: pointer; touch-action: manipulation;
+  transition: border-color .15s ease, background .15s ease, color .15s ease;
+}
+.sensor-fullscreen-btn:hover,
+.sensor-stage-fs:hover {
+  border-color: #52bdf4; color: var(--text); background: var(--panel-2);
+}
+.sensor-fullscreen-btn[aria-pressed="true"],
+.sensor-stage-fs[aria-pressed="true"] {
+  border-color: #52bdf4; color: #69d5ff; background: rgba(47, 150, 199, .18);
+}
+body[data-theme="light"] .sensor-switch-btn[aria-pressed="true"],
+body[data-theme="light"] .sensor-fullscreen-btn[aria-pressed="true"],
+body[data-theme="light"] .sensor-stage-fs[aria-pressed="true"] {
+  border-color: #1d9bf0; color: #0969a6; background: rgba(29, 155, 240, .12);
+}
+.sensor-stage-fs {
+  position: absolute; top: 10px; right: 10px; z-index: 3;
+  width: 38px; height: 38px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line-2, var(--line)); border-radius: 10px;
+  background: var(--panel); color: var(--text);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .28);
+  cursor: pointer; touch-action: manipulation;
+}
+.sensor-fullscreen-btn:focus-visible,
+.sensor-stage-fs:focus-visible,
+.kinect-controls button:focus-visible {
+  outline: 2px solid #52bdf4; outline-offset: 2px;
+}
+[data-sensor-fullscreen] .fs-ico { display: block; flex: none; }
+[data-sensor-fullscreen] .fs-ico-collapse { display: none; }
+[data-sensor-fullscreen][aria-pressed="true"] .fs-ico-expand { display: none; }
+[data-sensor-fullscreen][aria-pressed="true"] .fs-ico-collapse { display: block; }
+
+body.sensor-fullscreen { overflow: hidden !important; }
+body.sensor-fullscreen .kiosk {
+  opacity: 1 !important;
+  transform: none !important;
+  filter: none !important;
+  transition: none !important;
+}
+body.sensor-fullscreen .rc-stop-launch.rc-stop-floating,
+body.sensor-fullscreen .rc-lidar-launch.rc-lidar-floating {
+  display: none !important;
+}
+.lidar.is-fullscreen {
+  position: fixed; inset: 0; z-index: 1500;
+  width: 100vw; height: 100vh; height: 100dvh;
+  min-height: 0 !important; max-height: none;
+  margin: 0; border: 0; border-radius: 0;
+  padding: 14px 20px 16px;
+  background: var(--panel);
+  box-shadow: none;
+}
+.lidar.is-fullscreen .sensor-panel-head { margin-bottom: 8px; }
+.lidar.is-fullscreen .sensor-switch { margin-bottom: 10px; }
+.lidar.is-fullscreen .lidar-body { gap: 10px; }
+.lidar.is-fullscreen .lidar-body[hidden],
+.lidar.is-fullscreen .kinect-view[hidden] { display: none; }
+.lidar.is-fullscreen .lidar-stats {
+  display: flex; flex-wrap: wrap; gap: 10px;
+}
+.lidar.is-fullscreen .lidar-stats > div {
+  flex-direction: row; align-items: baseline; gap: 10px;
+  padding: 6px 14px; border-radius: 10px;
+}
+.lidar.is-fullscreen .lidar-stats dd { font-size: 20px; }
+.lidar.is-fullscreen .lidar-map,
+.lidar.is-fullscreen .kinect-stage {
+  border-radius: 14px; min-height: 0;
+}
+.lidar.is-fullscreen .rc-lv-zoom button {
+  width: 40px; height: 40px; font-size: 20px;
+}
+.lidar.is-fullscreen .sensor-stage-fs {
+  width: 42px; height: 42px;
+}
+@media (max-width: 700px) {
+  .lidar.is-fullscreen { padding: 10px 12px 12px; }
+  .sensor-fullscreen-btn { padding: 6px 11px; font-size: 13px; }
+}

@@ -187,10 +187,17 @@
 
       <!-- Правая колонка: лидар на всю высоту -->
       <div class="col-right">
-        <section class="lidar" aria-labelledby="lidar-title">
-          <header class="section-head">
+        <section class="lidar" id="sensor-overview-panel" data-sensor-panel aria-labelledby="lidar-title">
+          <header class="section-head sensor-panel-head">
             <h2 id="lidar-title">Обзор датчиков</h2>
-            <span class="panel-meta" id="lidar-meta">нет скана</span>
+            <div class="sensor-head-actions">
+              <span class="panel-meta" id="lidar-meta">нет скана</span>
+              <button type="button" id="sensor-fullscreen-toggle" class="sensor-fullscreen-btn" data-sensor-fullscreen aria-pressed="false" aria-label="Развернуть лидар на полный экран (Esc — свернуть)" title="Развернуть лидар на полный экран (Esc — свернуть)">
+                <svg class="fs-ico fs-ico-expand" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                <svg class="fs-ico fs-ico-collapse" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+                <span class="sensor-fs-label">На полный экран</span>
+              </button>
+            </div>
           </header>
           <div class="sensor-switch" role="group" aria-label="Источник обзора">
             <button type="button" id="sensor-lidar" class="sensor-switch-btn" aria-pressed="true">Лидар · 2D</button>
@@ -205,6 +212,10 @@
             <div class="lidar-map">
               <canvas id="lidar-canvas" aria-label="Карта лидара"></canvas>
               <p class="lidar-empty" id="lidar-empty">скана лидара нет</p>
+              <button type="button" id="lidar-fullscreen-btn" class="sensor-stage-fs" data-sensor-fullscreen aria-pressed="false" aria-label="Развернуть лидар на полный экран (Esc — свернуть)" title="Развернуть лидар на полный экран (Esc — свернуть)">
+                <svg class="fs-ico fs-ico-expand" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                <svg class="fs-ico fs-ico-collapse" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+              </button>
             </div>
           </div>
           <div id="sensor-kinect-view" class="kinect-view" hidden>
@@ -217,9 +228,13 @@
                 <button type="button" id="kinect-zoom-out" aria-label="Отдалить">−</button>
                 <button type="button" id="kinect-zoom-in" aria-label="Приблизить">+</button>
                 <button type="button" id="kinect-reset-view" aria-label="Сбросить вид">⊙</button>
+                <button type="button" id="kinect-fullscreen-btn" class="kinect-fs-btn" data-sensor-fullscreen aria-pressed="false" aria-label="Развернуть 3D-вид на полный экран (Esc — свернуть)" title="Развернуть 3D-вид на полный экран (Esc — свернуть)">
+                  <svg class="fs-ico fs-ico-expand" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                  <svg class="fs-ico fs-ico-collapse" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+                </button>
               </div>
             </div>
-            <p class="kinect-view-hint">Перетащите или нажмите стрелки для вращения · щипок или колёсико для масштаба · голубая пирамида — примерная зона, где Kinect видит глубину</p>
+            <p class="kinect-view-hint">Перетащите или нажмите стрелки для вращения · щипок или колёсико для масштаба · Esc — свернуть · голубая пирамида — примерная зона, где Kinect видит глубину</p>
           </div>
         </section>
       </div>

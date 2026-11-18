@@ -133,18 +133,130 @@ body {
 .wheel-num { font-family: var(--mono); font-size: 22px; font-weight: 700; }
 .wheel-sub { color: var(--muted); font-size: 12px; }
 
-/* лидар */
-.lidar-body { display: flex; gap: 16px; align-items: stretch; min-height: 0; }
-.lidar-wrap { position: relative; flex: 1; min-height: 240px; background: #060607; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
-.lidar-wrap canvas { width: 100%; height: 100%; display: block; }
+/* обзор датчиков: лидар 2D, Kinect 3D и общий 3D-обзор */
+.sensor-card { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.sensor-panel-head { align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.sensor-head-actions {
+  display: flex; align-items: center; gap: 10px;
+  margin-left: auto; min-width: 0; max-width: 100%;
+}
+.sensor-head-actions > span {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sensor-switch { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; flex: none; }
+.sensor-switch-btn,
+.kinect-controls button {
+  border: 1px solid var(--line-2); border-radius: 10px; color: var(--text);
+  background: var(--panel-2); padding: 8px 14px;
+  font: inherit; font-size: 15px; font-weight: 600;
+  cursor: pointer; touch-action: manipulation;
+}
+.sensor-switch-btn:hover,
+.kinect-controls button:hover { background: #1e1e23; border-color: #3c3c45; }
+.sensor-switch-btn[aria-pressed="true"] {
+  border-color: #52bdf4; color: #69d5ff; background: rgba(47, 150, 199, .16);
+}
+.sensor-fullscreen-btn {
+  flex: none;
+  display: inline-flex; align-items: center; gap: 7px;
+  min-height: 38px; padding: 7px 14px;
+  border: 1px solid var(--line-2); border-radius: 10px;
+  background: var(--panel-2); color: var(--text);
+  font: inherit; font-size: 14px; font-weight: 700;
+  white-space: nowrap; cursor: pointer; touch-action: manipulation;
+  transition: border-color .15s ease, background .15s ease, color .15s ease;
+}
+.sensor-fullscreen-btn:hover,
+.sensor-stage-fs:hover { background: #1e1e23; border-color: #52bdf4; }
+.sensor-fullscreen-btn[aria-pressed="true"],
+.sensor-stage-fs[aria-pressed="true"] {
+  border-color: #52bdf4; color: #69d5ff; background: rgba(47, 150, 199, .18);
+}
+.sensor-stage-fs {
+  position: absolute; top: 10px; right: 10px; z-index: 3;
+  width: 38px; height: 38px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line-2); border-radius: 10px;
+  background: rgba(16, 16, 18, .88); color: var(--text);
+  cursor: pointer; touch-action: manipulation;
+}
+.sensor-fullscreen-btn:focus-visible,
+.sensor-stage-fs:focus-visible,
+.sensor-switch-btn:focus-visible,
+.kinect-controls button:focus-visible,
+.rc-lv-zoom button:focus-visible {
+  outline: 2px solid #52bdf4; outline-offset: 2px;
+}
+[data-sensor-fullscreen] .fs-ico { display: block; flex: none; }
+[data-sensor-fullscreen] .fs-ico-collapse { display: none; }
+[data-sensor-fullscreen][aria-pressed="true"] .fs-ico-expand { display: none; }
+[data-sensor-fullscreen][aria-pressed="true"] .fs-ico-collapse { display: block; }
+
+.lidar-body { flex: 1 1 auto; display: flex; gap: 14px; align-items: stretch; min-height: 0; }
+.lidar-wrap { position: relative; flex: 1; min-height: 200px; background: #060607; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.lidar-wrap canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+.lidar-wrap canvas:active { cursor: grabbing; }
 .lidar-empty {
   position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
-  padding: 20px; color: var(--muted); font-size: 15px; line-height: 1.45;
+  padding: 20px; margin: 0; color: var(--muted); font-size: 15px; line-height: 1.45;
+  pointer-events: none;
 }
-.lidar-stats { display: flex; flex-direction: column; gap: 10px; justify-content: center; min-width: 132px; }
-.lidar-stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.rc-lv-zoom { position: absolute; right: 10px; bottom: 10px; z-index: 2; display: flex; gap: 5px; }
+.rc-lv-zoom button {
+  appearance: none; width: 36px; height: 36px; padding: 0;
+  border: 1px solid var(--line-2); border-radius: 9px;
+  background: rgba(16, 16, 18, .88); color: var(--text);
+  font: 700 18px/1 system-ui, sans-serif; cursor: pointer; touch-action: manipulation;
+}
+.rc-lv-zoom button:hover { border-color: #52bdf4; background: #1e1e23; }
+.lidar-stats { display: flex; flex-direction: column; gap: 8px; justify-content: center; min-width: 128px; }
+.lidar-stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; }
 .lidar-stat span { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .3px; }
-.lidar-stat b { font-family: var(--mono); font-size: 20px; }
+.lidar-stat b { font-family: var(--mono); font-size: 19px; }
+
+.kinect-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.kinect-view-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); flex: none; }
+.kinect-stage { position: relative; flex: 1 1 auto; min-height: 200px; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: #0a101a; }
+#kinect-3d-canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+#kinect-3d-canvas:active { cursor: grabbing; }
+.kinect-empty {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  text-align: center; color: #aabac7; padding: 20px; margin: 0; font-size: 15px; pointer-events: none;
+}
+.kinect-controls { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 5px; }
+.kinect-controls button {
+  min-width: 40px; min-height: 40px; padding: 4px; font-size: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(23, 23, 26, .9);
+}
+.kinect-controls button[aria-pressed="true"] { border-color: #52bdf4; color: #69d5ff; background: rgba(47, 150, 199, .18); }
+.kinect-controls button[hidden] { display: none; }
+.kinect-view-hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; flex: none; }
+
+body.sensor-fullscreen { overflow: hidden !important; }
+.sensor-card.is-fullscreen {
+  position: fixed; inset: 0; z-index: 1500;
+  width: 100vw; height: 100vh; height: 100dvh;
+  min-height: 0; max-height: none;
+  margin: 0; border: 0; border-radius: 0;
+  padding: 14px 20px 16px;
+  background: var(--panel);
+}
+.sensor-card.is-fullscreen .sensor-panel-head { margin-bottom: 8px; }
+.sensor-card.is-fullscreen .sensor-switch { margin-bottom: 10px; }
+.sensor-card.is-fullscreen .lidar-body { flex-direction: column; gap: 10px; }
+.sensor-card.is-fullscreen .lidar-stats {
+  order: -1; flex-direction: row; flex-wrap: wrap; justify-content: flex-start;
+  gap: 10px; min-width: 0; flex: none;
+}
+.sensor-card.is-fullscreen .lidar-stat {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 6px 14px; border-radius: 10px;
+}
+.sensor-card.is-fullscreen .lidar-wrap,
+.sensor-card.is-fullscreen .kinect-stage { min-height: 0; flex: 1 1 auto; }
+.sensor-card.is-fullscreen .rc-lv-zoom button { width: 42px; height: 42px; font-size: 20px; }
+.sensor-card.is-fullscreen .sensor-stage-fs { width: 42px; height: 42px; }
 
 /* журнал */
 .log-card { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -193,12 +305,23 @@ body {
 .case-key[data-action="open"]:disabled { opacity: .42; cursor: not-allowed; }
 .case-hint { color: var(--muted); font-size: 13px; border-top: 1px dashed var(--line-2); padding-top: 10px; }
 
-/* узкие экраны: одна колонка, страница прокручивается */
-@media (max-width: 1200px), (max-height: 700px) {
+/* узкие и невысокие экраны: страница прокручивается, обзор не обрезается */
+@media (max-width: 1200px), (max-height: 880px) {
   body { overflow: auto; }
   .mon { height: auto; min-height: 100vh; }
+  .lidar-wrap, .kinect-stage { min-height: 280px; }
+  .sensor-card.is-fullscreen .lidar-wrap,
+  .sensor-card.is-fullscreen .kinect-stage { min-height: 0; }
+}
+@media (max-width: 1200px) {
   .mon-main { grid-template-columns: minmax(0, 1fr); }
   .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .wheels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lidar-body { flex-direction: column; }
+  .lidar-stats { flex-direction: row; flex-wrap: wrap; min-width: 0; }
+  .lidar-stat { flex: 1 1 110px; }
+}
+@media (max-width: 700px) {
+  .sensor-card.is-fullscreen { padding: 10px 12px 12px; }
+  .sensor-fullscreen-btn { padding: 6px 11px; font-size: 13px; }
 }
