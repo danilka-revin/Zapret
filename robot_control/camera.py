@@ -1,4 +1,4 @@
-"""Модуль работы с веб-камерами (USB V4L2 /dev/video*, OpenCV, MJPEG-стриминг).
+"""Модуль работы с веб-камерами (USB V4L2 /dev/video*, OpenCV/FFmpeg, MJPEG-стриминг).
 
 Обеспечивает:
 1. Захват видеопотоков с четырёх Logitech C930e: передняя левая (id 0),
@@ -13,12 +13,15 @@
 
 from __future__ import annotations
 
-import glob
+from contextlib import closing
 import logging
 import os
+import shutil
 import threading
 import time
 from typing import Any, Generator, Optional
+
+from .camera_capture import ffmpeg_frames, modes, opencv_frames
 
 log = logging.getLogger("robot_control.camera")
 
@@ -44,9 +47,11 @@ class CameraDevice:
         self._revalidate_provider = revalidate_provider
         self._role_checker = role_checker
         self.capture_error = ""
-        self.width = 640
-        self.height = 360
-        self.fps = 30
+        self.capture_mode = ""
+        self.capture_fourcc = None
+        self.frames_received = 0
+        self.dark_frame = None
+        self.width = self.height = self.fps = None  # only report measured frames
         self.is_active = False
         self._stop = False
         self._thread: Optional[threading.Thread] = None
@@ -120,13 +125,27 @@ class CameraDevice:
         return frame
 
     def _capture_loop(self) -> None:
-        try:
-            import cv2
-        except (ImportError, OSError) as exc:
-            self.capture_error = f"Не загружается OpenCV ({exc}). На борту: .venv/bin/pip install opencv-python-headless"
-            log.info("Камера %s: %s", self.cam_id, self.capture_error)
+        # OpenCV's Linux select() otherwise waits 10s on a silent UVC stream.
+        os.environ.setdefault("OPENCV_VIDEOIO_V4L_SELECT_TIMEOUT", "2")
+        backend = (os.environ.get("RC_CAMERA_BACKEND") or "auto").strip().lower()
+        if backend not in ("auto", "opencv", "ffmpeg"):
+            self.capture_error = "RC_CAMERA_BACKEND: укажите auto, opencv или ffmpeg"
             return
-
+        cv2 = None
+        if backend != "ffmpeg":
+            try:
+                import cv2
+            except (ImportError, OSError, RuntimeError):
+                pass
+        ffmpeg = shutil.which("ffmpeg") if backend != "opencv" else None
+        profiles = modes(cv2 is not None, ffmpeg is not None)
+        if not profiles:
+            self.capture_error = (f"Нет средства захвата на борту (RC_CAMERA_BACKEND={backend}). "
+                                  "Для FFmpeg: sudo apt install ffmpeg; "
+                                  "для OpenCV: .venv/bin/pip install opencv-python-headless")
+            return
+        previous = None
+        attempt = 0
         while not self._stop:
             dev_target = self._target()
             # The inventory worker refreshes absent paths. Avoid repeatedly
@@ -145,64 +164,50 @@ class CameraDevice:
                 self.capture_error = "Видеовход не подтверждён. Проверьте устройство и выбранный порт"
                 time.sleep(0.5)
                 continue
-            cap = None
+            fingerprint = self._fingerprint(dev_target)
+            if not fingerprint:
+                time.sleep(.25)
+                continue
+            identity = (dev_target, fingerprint)
+            if identity != previous:
+                previous, attempt = identity, 0
+            mode = profiles[attempt]
+            self.capture_mode = mode.label
+
+            def current(*, revalidate=False):
+                return (not self._stop and self._fingerprint(dev_target) == fingerprint and
+                        self._target(revalidate=revalidate) == dev_target)
+
             try:
-                fingerprint = self._fingerprint(dev_target)
-                if fingerprint is None:
-                    continue
-                cap = cv2.VideoCapture(dev_target, cv2.CAP_V4L2 if hasattr(cv2, "CAP_V4L2") else cv2.CAP_ANY)
-                if not cap.isOpened():
-                    self.capture_error = (f"Нет доступа к {dev_target}: проверьте группу video у бортового процесса"
-                                          if not os.access(dev_target, os.R_OK | os.W_OK) else
-                                          f"Не открыт {dev_target}: проверьте видеовход и не занят ли он другой программой")
-                    continue
-                if self._fingerprint(dev_target) != fingerprint or self._target(revalidate=True) != dev_target:
-                    self.capture_error = "USB-устройство изменилось; проверьте назначение камеры"
-                    continue
-                # Four uncompressed C930e streams can exhaust a single USB 2 hub.
-                # Request camera-side MJPEG before streaming; unsupported properties
-                # simply return False and leave the driver's format in use.
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-                cap.set(cv2.CAP_PROP_FPS, self.fps)
-                with self.lock:
-                    self.opened_path = dev_target
-                    self._opened_fingerprint = fingerprint
-                log.info("Камера %s подключена (%s)", self.cam_id, dev_target)
-                next_check = 0.0
-                failures = 0
-                while not self._stop and cap.isOpened():
-                    if time.monotonic() >= next_check:
-                        next_check = time.monotonic() + 0.5
-                        if self._target() != dev_target or not os.path.exists(dev_target):
+                if not os.access(dev_target, os.R_OK | os.W_OK):
+                    raise PermissionError("нет доступа; проверьте группу video у бортового процесса")
+                reader = (opencv_frames(cv2, dev_target, mode, current) if mode.backend == "OpenCV" else
+                          ffmpeg_frames(ffmpeg, dev_target, mode, current))
+                first = True
+                with closing(reader):
+                    for frame in reader:
+                        # Also validate *after* the first read: changing format or
+                        # starting FFmpeg can reopen a node after the initial check.
+                        if not current(revalidate=first):
                             break
-                    ret, frame = cap.read()
-                    if self._fingerprint(dev_target) != fingerprint:
-                        break
-                    if not ret or frame is None:
-                        self.capture_error = f"{dev_target} открыт, но нет кадра. Проверьте видеовход, кабель и USB-хаб"
-                        failures += 1
-                        if failures >= 25:
-                            break  # disconnected cameras must be reopened on hotplug
-                        time.sleep(0.04)
-                        continue
-                    failures = 0
-                    ret, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
-                    if ret:
+                        if first:
+                            log.info("Камера %s: первый JPEG %s · %s", self.cam_id, dev_target, mode.label)
+                        first = False
                         with self.lock:
                             if self._stop:
                                 break
-                            self.latest_jpeg = buf.tobytes()
+                            self.opened_path = dev_target
+                            self._opened_fingerprint = fingerprint
+                            self.latest_jpeg = frame.jpeg
                             self.latest_time = time.time()
                             self.frame_source = "capture"
+                            self.frames_received += 1
+                            self.width, self.height, self.fps = frame.width, frame.height, frame.fps
+                            self.capture_fourcc, self.dark_frame = frame.fourcc, frame.dark
                             self.capture_error = ""
                             self.is_active = True
-                    else:
-                        self.capture_error = f"{dev_target}: не удалось закодировать кадр JPEG"
-                    time.sleep(1.0 / self.fps)
-            except Exception as exc:  # noqa: BLE001
-                self.capture_error = f"Ошибка захвата с {dev_target}: {exc}"
+            except Exception as exc:  # driver error, no frames, codec missing, etc.
+                self.capture_error = f"{dev_target} · {mode.label}: {exc}"
                 log.debug("Камера %s: %s", self.cam_id, self.capture_error)
             finally:
                 with self.lock:
@@ -214,10 +219,9 @@ class CameraDevice:
                         self.latest_jpeg = None
                         self.latest_time = 0.0
                         self.frame_source = ""
-                if cap is not None:
-                    cap.release()
+                attempt = (attempt + 1) % len(profiles)
                 if not self._stop:
-                    time.sleep(0.5)
+                    time.sleep(1.0 if attempt == 0 else .25)
 
 
 class CameraManager:
@@ -388,7 +392,10 @@ class CameraManager:
             with dev.lock:
                 frame_age = max(0.0, time.time() - dev.latest_time) if frame_present and dev.latest_time else None
                 frame_source = dev.frame_source if frame_present else ""
-                opened_path = dev.opened_path if frame_present else None
+                captured = frame_source == "capture"
+                opened_path = dev.opened_path if captured else None
+                dark, fourcc = (dev.dark_frame, dev.capture_fourcc) if captured else (None, None)
+                width, height, fps = (dev.width, dev.height, dev.fps) if captured else (None, None, None)
             result.append(
                 {
                     "id": cid,
@@ -398,11 +405,15 @@ class CameraManager:
                     "frameSource": frame_source,
                     "frameAgeS": round(frame_age, 3) if frame_age is not None else None,
                     "captureError": dev.capture_error or None,
+                    "captureMode": dev.capture_mode or None,
+                    "captureFourcc": fourcc,
+                    "framesReceived": dev.frames_received,
+                    "darkFrame": dark,
                     "exists": os.path.exists(opened_path or dev.device_path),
                     "active": frame_present,
-                    "width": dev.width,
-                    "height": dev.height,
-                    "fps": dev.fps,
+                    "width": width,
+                    "height": height,
+                    "fps": fps,
                     "role": dev.role,
                     "model": dev.spec.get("model", "Logitech C930e"),
                     "yaw_deg": dev.spec.get("yaw_deg", 0.0),

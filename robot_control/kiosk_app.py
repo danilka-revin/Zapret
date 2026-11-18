@@ -1984,7 +1984,7 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             # Последние сообщения прошивки мастера («# FR: Калибровка ЗАВЕРШЕНА!»).
             "masterMessages": snap.get("masterMessages") or [],
             # Свет, замок, карты и компас отдельной платы (может не быть).
-            "sensorModule": sensor_state_payload(),
+            "sensorModule": sensor_state_payload(telemetry_only=True),
         }})
 
     @app.get("/api/kiosk_wheel_state")
@@ -2396,13 +2396,19 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
     def current_sensor_module():
         return app.extensions.get("rc_sensor_module")
 
-    def sensor_state_payload():
+    def sensor_state_payload(*, telemetry_only=False):
         module = current_sensor_module()
         if module is None:
             return {"configured": False, "ok": False, "connected": False,
                     "stripEnabled": False, "error": "не настроен (RC_SENSOR_PORT)"}
         try:
-            return module.state()
+            data = module.state()
+            if telemetry_only:
+                # Общий снимок читают в т.ч. гостевые мониторы. UID и журнал
+                # приложений нужны экрану карт, но не общей телеметрии.
+                return {k: v for k, v in data.items()
+                        if k not in ("recentCards", "lastCard", "cardList", "events")}
+            return data
         except Exception as exc:  # noqa: BLE001 — экран не должен падать из-за платы
             return {"configured": True, "ok": False, "connected": False,
                     "error": str(exc) or type(exc).__name__}
