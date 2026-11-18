@@ -78,6 +78,16 @@
         <p class="cards-count">в памяти: <b id="sm-cards-count">—</b>
           <span class="cards-legend">администратор открывает всегда, пользователь — только
             на погрузке и выгрузке</span></p>
+        <!-- Считыватель греется, пока подан передатчик. Его можно погасить и
+             проверить нагрев: карты при этом не читаются. -->
+        <p class="cards-count">считыватель: <b id="sm-rfid-state">—</b>
+          <span class="cards-legend">выключенный не читает карты и почти не греется</span></p>
+        <div class="row">
+          <button type="button" class="btn btn--ghost" id="sm-rfid-off"
+                  title="погасить передатчик и приёмник RC522: проверка нагрева">Выключить считыватель</button>
+          <button type="button" class="btn btn--ghost" id="sm-rfid-on"
+                  title="вернуть чтение карт">Включить считыватель</button>
+        </div>
         <label class="pin-field" for="sm-scans">Последние считывания (до 20, включая неизвестные)</label>
         <div class="row">
           <select id="sm-scans" aria-label="Выбрать считанный UID">

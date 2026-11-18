@@ -266,6 +266,14 @@
   function renderCards(data) {
     renderScans(data);
     const list = Array.isArray(data.cardList) ? data.cardList : [];
+    // Считыватель можно погасить (нагрев). Показываем это прямо: иначе «карты
+    // не читаются» выглядит как поломка, а не как решение оператора.
+    const reader = $('sm-rfid-state');
+    if (reader) {
+      const on = data.rfidOn;
+      reader.textContent = on === true ? 'включён' : on === false ? 'выключен' : '—';
+      reader.dataset.state = on === true ? 'on' : on === false ? 'off' : '';
+    }
     setText($('sm-cards-count'), hasNumber(data.cards) ? data.cards : '—');
     const rfid = $('sm-rfid');
     const last = data.lastCard;
@@ -454,6 +462,14 @@
     // поэтому PIN не нужен — это динамик, а не доступ.
     const buzz = $('sm-buzz');
     if (buzz) buzz.addEventListener('click', () => act('сигнал зуммера', 'api/sensor_module/buzz', {}));
+
+    // Считыватель карт: питание антенны. PIN не нужен — это нагрев, не доступ.
+    const rfidOff = $('sm-rfid-off');
+    if (rfidOff) rfidOff.addEventListener('click', () => act('считыватель карт',
+                                                            'api/sensor_module/rfid', { on: false }));
+    const rfidOn = $('sm-rfid-on');
+    if (rfidOn) rfidOn.addEventListener('click', () => act('считыватель карт',
+                                                           'api/sensor_module/rfid', { on: true }));
 
     const stripModes = document.querySelectorAll ? document.querySelectorAll('[data-strip-mode]') : [];
     Array.prototype.forEach.call(stripModes, (button) => {

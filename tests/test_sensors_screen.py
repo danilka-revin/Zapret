@@ -61,6 +61,7 @@ def snapshot(**kwargs) -> dict:
         "stripEnabled": False,
         "stripLeds": None,
         "rfid": "ready",
+        "rfidOn": True,
         "cards": 3,
         "cardList": [{"idx": 1, "uid": "A1B2C3D4", "role": "admin"},
                      {"idx": 2, "uid": "01020304", "role": "user"}],
@@ -358,6 +359,33 @@ def test_buzzer_check_button_sends_buzz_without_pin(tmp_path):
     # Кнопка есть на странице и ничего не включает: только звук.
     page = (ROOT / "slam_gui" / "sensors.html").read_text(encoding="utf-8")
     assert 'id="sm-buzz"' in page and "Проверить сигнал" in page
+
+
+def test_rfid_reader_can_be_switched_off_for_heat_test(tmp_path):
+    """Считыватель гасят кнопкой: карты не читаются, RC522 не греется."""
+    out = run_screen(screen(rfidOn=False), tmp_path)
+    assert out["cards"]["reader"] == "выключен"
+    assert out["cards"]["readerState"] == "off"
+
+    payload = screen(rfidOn=False)
+    payload["actions"] = {"rfidOff": True}
+    out = run_screen(payload, tmp_path)
+    posts = [call for call in out["callsAfter"] if call["method"] == "POST"]
+    assert posts == [{"url": "api/sensor_module/rfid", "method": "POST", "body": {"on": False}}]
+    assert out["afterRfid"]["tone"] == "ok"
+    assert "считыватель карт" in out["afterRfid"]["text"]
+    # Кнопки есть на странице и не требуют PIN: это режим железа.
+    page = (ROOT / "slam_gui" / "sensors.html").read_text(encoding="utf-8")
+    assert 'id="sm-rfid-off"' in page and 'id="sm-rfid-on"' in page
+    assert 'id="sm-rfid-state"' in page
+
+
+def test_rfid_reader_switch_on_sends_on(tmp_path):
+    payload = screen(rfidOn=False)
+    payload["actions"] = {"rfidOn": True}
+    out = run_screen(payload, tmp_path)
+    posts = [call for call in out["callsAfter"] if call["method"] == "POST"]
+    assert posts == [{"url": "api/sensor_module/rfid", "method": "POST", "body": {"on": True}}]
 
 
 def test_empty_rfid_list_is_distinguished_from_not_loaded(tmp_path):

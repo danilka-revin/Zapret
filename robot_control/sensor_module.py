@@ -106,7 +106,7 @@ TELEMETRY_FIELDS = (
 )
 #: Поля, которые появились позже и потому необязательны: старую прошивку не
 #: прошивают одновременно с обновлением сервера, и кадр без них — норма.
-OPTIONAL_TELEMETRY_FIELDS = ("nleds", "warn")
+OPTIONAL_TELEMETRY_FIELDS = ("nleds", "warn", "rfid_on")
 #: Биты необязательного поля warn= (не ошибки датчиков, а предупреждения).
 WARNING_BITS = ((1 << 0, "замок открыт слишком долго"),)
 #: Сколько диодов ждём в ленте внизу рамы. Прошивка сообщает своё число, а
@@ -253,6 +253,10 @@ def parse_telemetry(line: str) -> dict[str, Any]:
         "errors": [name for bit, name in ERROR_BITS if _int(fields, "err") & bit],
         # Предупреждения: «замок открыт дольше 10 с». Старая прошивка поля не
         # шлёт — тогда warnMask=0, а не выдуманное предупреждение.
+        # Включён ли считыватель карт: rfid off гасит антенну (проверка нагрева),
+        # и экран должен говорить об этом прямо, а не показывать «карт нет».
+        "rfidOn": (_int_optional(fields, "rfid_on") or 0) == 1
+        if "rfid_on" in fields else None,
         "warnMask": _int_optional(fields, "warn") or 0,
         "warnings": [name for bit, name in WARNING_BITS if (_int_optional(fields, "warn") or 0) & bit],
         "uptimeMs": _int(fields, "t"),
@@ -474,6 +478,17 @@ def command_cargo(kind: str, minutes: int | None = None) -> str:
     return "cargo %s %d" % (key, value)
 
 
+def command_rfid(on: bool | None) -> str:
+    """``rfid on|off`` — включить/выключить считыватель; без аргумента — состояние.
+
+    Выключение гасит передатчик и приёмник: так проверяют нагрев RC522 и так
+    плата работает на стоянке, когда карты не нужны.
+    """
+    if on is None:
+        return "rfid"
+    return "rfid on" if on else "rfid off"
+
+
 def command_mag(action: str) -> str:
     key = str(action).strip().lower()
     if key not in ("start", "stop", "reset"):
@@ -678,6 +693,9 @@ class SensorModule:
                 self._card_list_known = False
         self.send(command)
 
+    def rfid(self, on: bool | None = True) -> None:
+        self.send(command_rfid(on))
+
     def mag_calibration(self, action: str) -> None:
         self.send(command_mag(action))
 
@@ -721,6 +739,7 @@ class SensorModule:
                     "windowKind": "none", "windowActive": False,
                     "rfid": "none", "cards": 0, "linkOk": False, "errors": [],
                     "errorsMask": 0, "warnMask": 0, "warnings": [], "uptimeMs": None,
+                    "rfidOn": None,
                 })
             else:
                 snapshot.update({key: value for key, value in frame.items() if key != "kind"})

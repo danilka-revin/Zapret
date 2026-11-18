@@ -774,6 +774,10 @@ class FakeModule:
         sm.command_card(action, uid, role)
         self.calls.append(("card", action, uid, role))
 
+    def rfid(self, on=True):
+        sm.command_rfid(on)                 # валидация — как у настоящего клиента
+        self.calls.append(("rfid", on))
+
     def mag_calibration(self, action):
         sm.command_mag(action)
         self.calls.append(("mag", action))
@@ -849,6 +853,42 @@ def test_buzz_endpoint_is_a_plain_check_without_pin(kiosk_app):
     reply = client.post("/api/sensor_module/buzz", json={})
     assert reply.status_code == 200 and reply.get_json()["ok"] is True
     assert module.calls == [("buzz",)]
+
+
+def test_rfid_reader_can_be_switched_off_and_on_again(kiosk_app):
+    """Нагрев RC522: rfid off гасит антенну, rfid on возвращает чтение карт."""
+    module = FakeModule()
+    kiosk_app.extensions["rc_sensor_module"] = module
+    client = kiosk_app.test_client()
+    reply = client.post("/api/sensor_module/rfid", json={"on": False})
+    assert reply.status_code == 200 and reply.get_json()["ok"] is True
+    reply = client.post("/api/sensor_module/rfid", json={"on": True})
+    assert reply.status_code == 200, reply.get_json()
+    assert module.calls == [("rfid", False), ("rfid", True)]
+    # Без поля "on" — только показать состояние, ничего не выключая.
+    assert client.post("/api/sensor_module/rfid", json={}).status_code == 200
+    assert module.calls[-1] == ("rfid", None)
+    assert sm.command_rfid(False) == "rfid off"
+    assert sm.command_rfid(True) == "rfid on"
+    assert sm.command_rfid(None) == "rfid"
+
+
+def test_rfid_polling_is_duty_cycled_so_the_coil_cools():
+    """Катушку греет время под питанием, а не частота опроса: антенна кратко."""
+    text = _text()
+    assert int(_const("RFID_POLL_MS")) >= 400
+    # Приём обрывается внутренним таймером RC522, а не общим пределом шага.
+    assert int(_const("RC_TIMER_RELOAD")) < 700
+    restart = text[text.index("void rfidRestart("):text.index("void rfidResetState(")]
+    assert "rcAntennaOff();" in restart, "между сеансами антенна обесточена"
+    tick = text[text.index("void rfidTick("):text.index("// ================================ команды")]
+    assert "rcAntennaOn();" in tick and "RFID_TX_ON_MS" in tick
+    # rfid off гасит и передатчик, и приёмник — это и есть проверка нагрева.
+    disable = text[text.index("void rfidDisable("):text.index("void rfidDisabledTick(")]
+    assert "rcPowerDown();" in disable
+    # По умолчанию карты читаются после старта: замок не должен «ослепнуть».
+    assert re.search(r"#define\s+SENSOR_RFID_AUTO_ON\s+1\b", text)
+    assert "rfidRestart(millis());" in text[text.index("void setup()"):]
 
 
 def test_strip_mode_endpoint_covers_all_four_modes(kiosk_app):
