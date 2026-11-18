@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import threading
 from dataclasses import replace
 
 from conftest import login
@@ -71,11 +72,13 @@ def test_kiosk_autonomy_commands_require_marker(kiosk_client):
     assert report["ok"] is True and report["phase"] == "done"
     assert report["counters"]["stop"] >= 1 and report["counters"]["bump"] >= 1
     assert report["counters"]["traffic"] >= 1 and report["counters"]["powerBoosts"] >= 1
+    closed = kiosk_client.post("/api/autonomy/simulate", json={"scenario": "blocked_gate"}, headers=marker)
+    assert closed.status_code == 200 and closed.json["passed"] and closed.json["distanceM"] == 0
     bad = kiosk_client.post("/api/autonomy/simulate", json={"scenario": "sideways"}, headers=marker)
     assert bad.status_code == 400
 
 
-def test_kiosk_autonomy_start_requires_blind_check_and_preempts_rivals(kiosk_client, monkeypatch):
+def test_simulated_autonomy_requires_blind_check_without_braking_other_modes(kiosk_client, monkeypatch):
     track = kiosk_client.application.extensions["rc_track"]
     # Тестовый киоск работает без шасси: включаем только логику пуска, а не
     # реальные команды Serial (симуляция внутри TrackMotion).
@@ -101,7 +104,7 @@ def test_kiosk_autonomy_start_requires_blind_check_and_preempts_rivals(kiosk_cli
     started = kiosk_client.post("/api/autonomy/start",
                                 json={"blindZoneChecked": True}, headers=marker)
     assert started.status_code == 202, started.get_json()
-    assert started.get_json()["ok"] is True and preempted == [True]
+    assert started.get_json()["ok"] is True and not preempted
     stopped = kiosk_client.post("/api/autonomy/stop", json={}, headers=marker)
     assert stopped.status_code == 200 and stopped.get_json()["ok"] is True
 
@@ -145,3 +148,46 @@ def test_remote_autonomy_page_assets_and_proxy(client, operator, monkeypatch):
     assert calls[-1].full_url.endswith("/api/autonomy/simulate")
     assert client.post("/api/autonomy/simulate", json={"scenario": "full"},
                        headers={"X-CSRF-Token": token}).status_code == 400
+
+
+def test_other_autonomous_modes_cannot_take_track_drive(kiosk_client, monkeypatch):
+    track = kiosk_client.application.extensions["rc_track"]
+    monkeypatch.setattr(type(track), "active", property(lambda _self: True))
+    response = kiosk_client.post("/api/scan_mode/enable", json={})
+    assert response.status_code == 409 and response.json["reason"] == "autonomy_active"
+    response = kiosk_client.post("/api/navigation/start", json={}, headers={"X-Robot-Control": "navigation"})
+    assert response.status_code == 409 and response.json["reason"] == "autonomy_active"
+
+
+def test_stop_retires_an_autonomy_start_during_preflight(kiosk_client, monkeypatch):
+    app = kiosk_client.application
+    track = app.extensions["rc_track"]
+    track.motion.simulation = True  # no command can touch a port
+    requested, release = threading.Event(), threading.Event()
+    responses = []
+    marker = {"X-Robot-Control": AUTONOMY_HEADER}
+
+    def preflight(*, for_start=False, **_kw):
+        if for_start:
+            requested.set()
+            assert release.wait(3.0)
+        return {"blockers": [], "canStart": True}
+
+    monkeypatch.setattr(track, "preflight", preflight)
+
+    def start():
+        with app.test_client() as client:
+            responses.append(client.post("/api/autonomy/start", json={"blindZoneChecked": True}, headers=marker))
+
+    worker = threading.Thread(target=start)
+    worker.start()
+    try:
+        assert requested.wait(1.0)
+        stopped = kiosk_client.post("/api/autonomy/stop", json={}, headers=marker)
+        assert stopped.status_code == 200
+    finally:
+        release.set()
+        worker.join(3.0)
+    assert not worker.is_alive()
+    assert not track.active and track.motion.command_count == 0
+    assert responses[0].status_code == 409 and responses[0].json["code"] == "start_interrupted"

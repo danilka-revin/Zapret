@@ -16,7 +16,10 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:  # base kiosk and dry runs do not need vision dependencies
+    np = None
 
 try:  # OpenCV уже используется camera.py; отсутствие — не падение импорта.
     import cv2
@@ -29,7 +32,7 @@ from .traffic import classify_traffic_light, fuse_signal, verify_traffic_light
 
 def cv2_available() -> bool:
     """Есть ли OpenCV в текущем процессе."""
-    return cv2 is not None
+    return cv2 is not None and np is not None
 
 
 @dataclass(frozen=True)
@@ -228,7 +231,7 @@ class HeuristicDetector:
     # --------------------------------------------------------------- detect
     def detect(self, frame_bgr: Any) -> list[Detection]:
         """Найти знаки на BGR-кадре. Без OpenCV возвращает пустой список."""
-        if cv2 is None:
+        if not cv2_available():
             return []
         frame = np.asarray(frame_bgr)
         if frame.ndim != 3 or frame.shape[2] < 3 or frame.size == 0:

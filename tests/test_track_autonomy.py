@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import math
+import queue
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -16,8 +18,8 @@ from robot_control.kinect import KinectDepthService
 from robot_control.track_autonomy import (
     BumpDetector, Odometer, ScriptedWorld, TrackAutonomyError,
     TrackAutonomyService, TrackConfig, TrackMotion, _downsample_depth_frame,
-    camera_specs, cone_points, estimate_corridor, kinect_navigation_ready,
-    sign_marks, simulate_track, traffic_decision,
+    camera_specs, chassis_feedback, cone_points, estimate_corridor, kinect_navigation_ready,
+    lidar_clearance, sign_marks, simulate_track, traffic_decision,
 )
 
 
@@ -58,7 +60,7 @@ def vision(*, detections: dict[int, list] | None = None,
     cameras = {}
     for cid in range(4):
         cameras[str(cid)] = {"id": cid, "active": True, "ageS": 0.1,
-                             "width": 640, "height": 360,
+                             "width": 640, "height": 360, "frameStamp": 99.9,
                              "detections": (detections or {}).get(cid, []), "error": None}
     return {"ok": True, "enabled": True, "running": running,
             "cameras": cameras, "counts": {},
@@ -87,7 +89,7 @@ class FakeKinect:
     def fresh(self, _age=None):
         return self.is_nav_fresh  # старый API: «points» тоже может быть свежим
 
-    def navigation_fresh(self, _age=None):
+    def navigation_fresh(self, _age=None, *, allow_demo=True):
         return self.is_nav_fresh
 
     def navigation_frame(self):
@@ -99,12 +101,33 @@ class FakeKinect:
         raise AssertionError("preview() помечен notForNavigation: True")
 
 
+def gate_vision():
+    return vision(detections={0: [detection("cone", 0.08, 0.22)],
+                              2: [detection("cone", 0.92, 0.22)]})
+
+
+def fake_motors(**fields):
+    motor = dict(online=True, scCount=0, scPpr=90, scRecent=False, scRpm=0.0,
+                 drivePercent=0, angle=0.0, moving=False, telemetryAgeS=0.01, firmware=24,
+                 homed=True, brakeId=3)
+    return [dict(motor, id=role) | fields for role in ("FL", "FR", "RL", "RR")]
+
+
 class FakeSource:
     supports_drive = True
     supports_individual_steer = True
 
+    def __init__(self):
+        self.brake_id = 3
+        self.brakes = 0
+
     def read(self):
-        return {"motors": [], "wheelSpeedMps": 0.0, "linkOk": True}
+        return {"motors": fake_motors(brakeId=self.brake_id), "wheelSpeedMps": 0.0, "linkOk": True}
+
+    def brake_for_keyboard(self):
+        self.brake_id += 1
+        self.brakes += 1
+        return {"ok": True, "brakeId": self.brake_id}
 
 
 class FakeClock:
@@ -161,14 +184,12 @@ def test_corridor_center_and_left_right_turns():
     straight = estimate_corridor(straight_cones(), cfg())
     assert straight["ok"] and abs(straight["centerM"]) < 0.05
     assert abs(straight["steerLeftDeg"]) < 1.0
-    # Обе границы ушли влево (поворот трассы), а не «одна слева, одна справа».
-    left_curve = [cone(x, 0.6 + 0.25 * x, 2) for x in (0.8, 1.6, 2.4, 3.2)] + \
-                 [cone(x, 2.2 + 0.25 * x, 0) for x in (0.8, 1.6, 2.4, 3.2)]
-    turned = estimate_corridor(left_curve, cfg())
-    assert turned["ok"] and turned["steerLeftDeg"] > 5
-    right_curve = [cone(x, -0.6 - 0.25 * x, 2) for x in (0.8, 1.6, 2.4, 3.2)] + \
-                  [cone(x, 1.0 - 0.25 * x, 0) for x in (0.8, 1.6, 2.4, 3.2)]
-    assert estimate_corridor(right_curve, cfg())["steerLeftDeg"] < -5
+    # Доступный крабовый проезд, у которого оба столбика с одной стороны оси.
+    for sign in (-1, 1):
+        gate = estimate_corridor([cone(3.4, sign * 0.3), cone(3.4, sign * 1.9)], cfg())
+        assert gate["ok"] and sign * gate["steerLeftDeg"] > 5
+    unreachable = estimate_corridor([cone(0.8, 0.6), cone(0.8, 2.2)], cfg())
+    assert not unreachable["ok"] and unreachable["reason"] == "unreachable_gap"
 
 
 def test_corridor_rejects_narrow_missing_and_far_cones():
@@ -176,7 +197,32 @@ def test_corridor_rejects_narrow_missing_and_far_cones():
     assert estimate_corridor([cone(1.0, -0.2), cone(1.0, 0.2)], cfg())["reason"] == "corridor_narrow"
     assert estimate_corridor([cone(5.8, -0.8), cone(5.8, 0.8)], cfg())["reason"] == "cones_far"
     one_side = estimate_corridor([cone(1.0, 1.0), cone(2.0, 1.0)], cfg())
-    assert one_side["ok"] and one_side["degraded"] is True
+    assert not one_side["ok"]
+    assert not estimate_corridor([cone(1.0, -0.8), cone(2.0, 0.8)], cfg())["ok"]
+    assert not estimate_corridor([cone(1.0, -2), cone(1.0, 2)], cfg())["ok"]
+
+
+def test_gap_fits_full_chassis_and_does_not_ignore_solo_post():
+    gate = [cone(1.1, -0.65), cone(1.1, 0.65)]
+    assert estimate_corridor(gate, cfg())["ok"]
+    assert estimate_corridor(gate, cfg(robot_width_m=1.0))["reason"] == "corridor_narrow"
+    assert not estimate_corridor(straight_cones() + [cone(1.25, 0.0)], cfg())["ok"]
+    assert not estimate_corridor(gate + [cone(0.09, 0.0)], cfg())["ok"]
+    assert not estimate_corridor([cone(1.0, -0.46), cone(1.0, 0.46)] +
+                                 [cone(2.5, -0.9), cone(2.5, 0.9)], cfg())["ok"]
+
+
+def test_scan_clearance_rejects_api_or_incomplete_scans_and_checks_crab_path(monkeypatch):
+    monkeypatch.setenv("RC_LIDAR_OFFSET_M", "0.28")
+    info = ScriptedWorld.scan(0.5)
+    assert lidar_clearance(info, 0, cfg()) == {"ready": True, "blocked": False,
+                                                "points": 90, "nearestM": None}
+    assert not lidar_clearance(dict(info, trusted=False), 0, cfg())["ready"]
+    assert not lidar_clearance(dict(info, points=info["points"][:30]), 0, cfg())["ready"]
+    obstacle = {"a": math.atan2(0.58, 0.72), "r": math.hypot(0.58, 0.72)}  # chassis (1.0, 0.58)
+    info["points"].append(obstacle)
+    assert not lidar_clearance(info, 0, cfg())["blocked"]
+    assert lidar_clearance(info, 22, cfg())["blocked"]
 
 
 def test_sign_marks_front_side_and_fallback():
@@ -194,46 +240,87 @@ def test_sign_marks_front_side_and_fallback():
     assert len(fallback) == 1 and fallback[0]["side"] == "side"
 
 
-def test_traffic_light_only_green_allows_motion():
-    base = {"state": "green", "fresh": True,
-            "counts": {"red": 0, "yellow": 0, "green": 42}}
-    light = [{"class": "traffic_light", "side": "side", "signal": "green"}]
-    assert traffic_decision(vision(traffic=base), light, cfg())["hold"] is False
+def test_traffic_light_only_current_green_allows_motion():
+    base = {"state": "green", "fresh": True, "ageS": 0.1}
+    light = {"class": "traffic_light", "side": "side", "signal": "green"}
+    green = dict(detection("traffic_light", 0.5, 0.4, signal="green"), signalCounts={"green": 42})
+    picture = vision(traffic=base, detections={2: [green]})
+    decision = traffic_decision(picture, [light], cfg())
+    assert decision["hold"] is False and decision["frameStamp"] == 99.9
+    assert traffic_decision(vision(traffic=base), [light], cfg())["hold"]
+    # Tracker may still show green after the physical light changed.
     for state in ("red", "yellow", "unknown"):
-        payload = dict(base, state=state)
-        assert traffic_decision(vision(traffic=payload), light, cfg())["hold"] is True
-    # Малейший красный на светодиодном табло перебивает «зелёный».
-    mixed = dict(base, counts={"red": 12, "yellow": 0, "green": 42})
-    assert traffic_decision(vision(traffic=mixed), light, cfg())["state"] == "red"
-    assert traffic_decision(vision(traffic=base), [], cfg())["hold"] is False
+        picture["cameras"]["2"]["detections"] = [dict(green, signal=state)]
+        assert traffic_decision(picture, [light], cfg())["hold"]
+    picture["cameras"]["2"]["detections"] = [dict(green, signalCounts={"red": 12, "green": 42})]
+    assert traffic_decision(picture, [light], cfg())["state"] == "red"
+    picture["cameras"]["2"]["detections"] = [green]
+    picture["cameras"]["2"]["captureAgeS"] = 2.0
+    assert traffic_decision(picture, [light], cfg())["hold"]
 
 
 # ------------------------------------------------------------------ привод ---
-def test_motion_brakes_before_steer_and_inverts_sign():
-    clock = FakeClock()
+def test_motion_waits_for_current_brake_and_steering_ack():
+    clock, src = FakeClock(), FakeSource()
     sent = []
-    motion = TrackMotion(lambda: object(),
+    motion = TrackMotion(lambda: src,
                          lambda _s, body: (sent.append(("drive", body)) or {"ok": True}, 200),
                          lambda _s, body: (sent.append(("steer", body)) or {"ok": True}, 200),
                          cfg(steer_settle_s=0.4), simulation=False, clock=clock)
-    assert motion.command(8.0, 10.0) is False           # влево → угол прошивки -10°
-    assert sent[0] == ("drive", {"percent": 0})
-    assert all(item[1]["angle"] == -10.0 for item in sent if item[0] == "steer")
+    old = chassis_feedback(src.read())
+    assert motion.command(8.0, 10.0, old) is False
+    assert src.brakes == 1 and sent == []
+    still_moving = src.read()
+    still_moving["motors"][0]["scRecent"] = True
+    assert not motion.command(8.0, 10.0, chassis_feedback(still_moving))
+    assert not motion.command(8.0, 10.0, old) and sent == []
+    assert not motion.command(8.0, 10.0, chassis_feedback(src.read()))
+    assert [item[1]["angle"] for item in sent] == [-10.0] * 4
     clock.advance(0.5)
-    assert motion.command(8.0, 10.0) is True
+    assert not motion.command(8.0, 10.0, chassis_feedback(src.read()))  # time isn't angle confirmation
+    aligned = dict(src.read(), motors=fake_motors(brakeId=src.brake_id, angle=-10.0))
+    assert motion.command(8.0, 10.0, chassis_feedback(aligned))
     assert sent[-1] == ("drive", {"percent": 8.0})
-    # Без изменения угла тяга повторяется каждый такт (watchdog 650 мс).
-    assert motion.command(8.0, 10.0) is True
-    assert sent[-1] == ("drive", {"percent": 8.0})
+    assert motion.command(8.0, 10.0, chassis_feedback(aligned))
+    assert sent[-1] == sent[-2]  # watchdog heartbeat
+
+
+def test_motion_hold_clears_pending_steering_on_all_four_port_queues():
+    from robot_control.slam import load_backend
+
+    # Use the real backend command queue but construct it without workers or ports.
+    backend = load_backend()
+    source = backend.MasterSource.__new__(backend.MasterSource)
+    source._commands_lock, source.lock = threading.RLock(), threading.RLock()
+    source.serial_ready = threading.Event()
+    source.serial_ready.set()
+    source.commands = queue.Queue()
+    source.links = {m: SimpleNamespace(module=m, commands=queue.Queue()) for m in ("FL", "FR", "RL", "RR")}
+    for link in source.links.values():
+        link.commands.put_nowait(b"w 10\n")
+    source.commands.put_nowait(b"t 8\n")
+
+    def unexpected(_source, _body):
+        pytest.fail("a hold must not enqueue drive or steer commands")
+
+    motion = TrackMotion(lambda: source, unexpected, unexpected, cfg())
+    motion.steering_at = motion.clock()
+    motion.hold()
+    assert motion.steering_at is None and motion.percent == 0.0 and motion.brake_id is not None
+    assert source.commands.empty()
+    for link in source.links.values():
+        assert link.commands.get_nowait() == f"s q\nb {motion.brake_id}\n".encode()
+        assert link.commands.empty()
 
 
 def test_motion_drive_refusal_is_not_swallowed():
-    motion = TrackMotion(lambda: object(),
+    src = FakeSource()
+    motion = TrackMotion(lambda: src,
                          lambda _s, _body: ({"ok": False, "reason": "estop"}, 409),
-                         lambda _s, _body: ({"ok": True}, 200),
-                         cfg(), simulation=False)
-    with pytest.raises(TrackAutonomyError) as caught:
-        motion.command(8.0, 0.0)
+                         lambda _s, _body: ({"ok": True}, 200), cfg())
+    motion.stop()
+    with pytest.raises(TrackAutonomyError, match="estop") as caught:
+        motion.command(8.0, 0.0, chassis_feedback(src.read()))
     assert caught.value.code == "drive_refused"
 
 
@@ -282,7 +369,7 @@ def test_bump_detector_uses_navigation_frame_not_preview(monkeypatch):
     kinect = FakeKinect()
     detector = BumpDetector()
     first = detector.update(kinect, {"pitch": 0.0}, 1.0, cfg())
-    assert first["ok"] is False and first["status"] == "unknown"
+    assert first["ok"] is False and not first["depthFresh"] and first["status"] == "unknown"
     assert len(calls) == 1 and kinect.nav_frames == 1
     # Повтор того же frameId не должен набирать confirm_frames обманом.
     detector.update(kinect, {"pitch": 0.0}, 1.2, cfg())
@@ -311,6 +398,12 @@ def test_kinect_navigation_frame_requires_raw_depth():
     assert service.navigation_fresh(1.5) is False
     assert kinect_navigation_ready(service, cfg()) is False
 
+    service.feed({"width": 2, "height": 2, "depth": [1.0] * 4, "units": "m",
+                  "stamp": clock(), "capture_source": "demo"})
+    assert service.navigation_frame()["captureSource"] == "demo"
+    assert not kinect_navigation_ready(service, cfg())
+    assert kinect_navigation_ready(service, cfg(simulation=True))
+
 
 def test_bump_detector_empty_depth_is_unknown_not_flat():
     detector = BumpDetector()
@@ -322,9 +415,7 @@ def test_bump_detector_empty_depth_is_unknown_not_flat():
 
 # -------------------------------------------------------------- предполёт ---
 def test_preflight_lists_all_blockers_and_allows_clean_start():
-    cones = {0: [detection("cone", 0.15, 0.2), detection("cone", 0.15, 0.12)],
-             2: [detection("cone", 0.85, 0.2), detection("cone", 0.85, 0.12)]}
-    fake_vision = vision(detections=cones)
+    fake_vision = gate_vision()
     base = dict(config=replace(cfg(enabled=True, require_depth=True), simulation=True),
                 vision_provider=lambda: fake_vision,
                 layout_provider=layout,
@@ -355,16 +446,14 @@ def test_preflight_lists_all_blockers_and_allows_clean_start():
 
 
 def test_preflight_requires_four_wheels_and_live_link_for_real_drive():
-    cones = {0: [detection("cone", 0.15, 0.2), detection("cone", 0.15, 0.12)],
-             2: [detection("cone", 0.85, 0.2), detection("cone", 0.85, 0.12)]}
-    fake_vision = vision(detections=cones)
+    fake_vision = gate_vision()
 
     def service_with_motors(motors, link_ok=True):
         return TrackAutonomyService(
             config=replace(cfg(enabled=True), simulation=False, require_depth=False,
                            require_imu=False, require_blind_check=False),
             vision_provider=lambda: fake_vision, layout_provider=layout,
-            kinect_provider=lambda: FakeKinect(nav_fresh=False),
+            kinect_provider=lambda: FakeKinect(), lidar_provider=ScriptedWorld.scan,
             imu_provider=lambda: {"ok": True, "stale": False},
             source_provider=lambda: FakeSource(),
             telemetry_provider=lambda: {"motors": motors, "wheelSpeedMps": 0.0,
@@ -381,9 +470,9 @@ def test_preflight_requires_four_wheels_and_live_link_for_real_drive():
     no_link = service_with_motors(two * 2, link_ok=False).preflight()
     assert any("связи с платами колёс" in item for item in no_link["blockers"])
 
-    four = [{"id": name, "online": True, "scCount": 0, "scPpr": 90}
-            for name in ("FL", "FR", "RL", "RR")]
-    clean = service_with_motors(four).preflight()
+    four = fake_motors()
+    clean = service_with_motors(four).preflight(blind_zone_checked=True, for_start=True)
+    assert clean["canStart"], clean["blockers"]
     assert clean["checks"]["chassisLink"] is True
     assert clean["checks"]["wheelsOnline"] is True
     assert not any("колеса онлайн" in item or "связи с платами" in item
@@ -406,7 +495,6 @@ def test_start_requires_blind_check_and_enabled(monkeypatch):
 
 # ------------------------------------------------------- состояния автомата ---
 def test_stop_sign_waits_three_seconds_and_resumes():
-    script = {"phase": "front"}
     clock = FakeClock()
 
     def front():
@@ -422,33 +510,60 @@ def test_stop_sign_waits_three_seconds_and_resumes():
          "side": "side", "cameraId": 1, "confidence": 0.9}])
     clock.advance(0.2)
     service._step(clock())
-    assert service._state["phase"] == "stop_wait"
+    assert service._state["phase"] == "stop_braking"
     assert service.motion.percent == 0.0
-    clock.advance(3.1)
+    clock.advance(0.5)
+    service._step(clock())
+    assert service._state["phase"] == "stop_wait"
+    clock.advance(2.9)
+    service._step(clock())
+    assert service.motion.percent == 0.0
+    clock.advance(0.2)
     service._step(clock())
     assert service._state["phase"] == "following"
     assert service._state["counters"]["stop"] == 1
 
 
-def test_traffic_red_yellow_green_sequence():
-    clock = FakeClock()
-    states = {"current": "red"}
-    script = lambda: perception(traffic={"visible": True, "state": states["current"],
-                                         "hold": states["current"] != "green",
-                                         "fresh": True}, signs=[
-        {"class": "traffic_light", "x": 1.5, "y": 1.2, "distance": 1.6,
-         "side": "side", "signal": states["current"]}])
-    service, clock = service_with_perception(script, clock=clock)
+def test_traffic_red_yellow_green_sequence_replay_and_loss():
+    states = {"current": "red", "frame": 90.0, "visible": True}
+
+    def script():
+        green = states["current"] == "green"
+        return perception(traffic={"visible": states["visible"], "state": states["current"],
+                                    "hold": not green, "fresh": True, "frames": {1: states["frame"]},
+                                    "cameraId": 1 if green else None,
+                                    "frameStamp": states["frame"] if green else None}, signs=[
+            {"class": "traffic_light", "x": 1.5, "y": 1.2, "distance": 1.6,
+             "side": "side", "signal": states["current"], "cameraId": 1}])
+
+    service, clock = service_with_perception(script)
+
+    def click(color, stamp, expected):
+        states.update(current=color, frame=stamp)
+        clock.advance(0.2)
+        service._step(clock())
+        assert service._state["phase"] == expected
+        assert (service.motion.percent == 0.0) == (expected == "traffic_wait")
+
+    click("red", 90.0, "traffic_wait")
+    click("yellow", 90.1, "traffic_wait")
+    click("green", 90.2, "traffic_wait")
+    click("green", 90.2, "traffic_wait")  # same frame is not another vote
+    click("green", 90.3, "following")
+    click("red", 90.4, "traffic_wait")  # no cooldown can suppress a new red
+    click("green", 90.2, "traffic_wait")
+    click("green", 90.3, "traffic_wait")  # old frames arriving in order are still replays
+    click("green", 90.5, "traffic_wait")
+    click("green", 90.6, "following")
+    states["visible"] = False
+    click("green", 90.7, "traffic_wait")
+    states["visible"] = True
+    click("green", 90.6, "traffic_wait")
+    click("green", 90.8, "traffic_wait")
+    states["visible"] = False
+    clock.advance(4.0)
     service._step(clock())
-    assert service._state["phase"] == "traffic_wait"
-    states["current"] = "yellow"
-    clock.advance(0.2)
-    service._step(clock())
-    assert service._state["phase"] == "traffic_wait"
-    states["current"] = "green"
-    clock.advance(0.2)
-    service._step(clock())
-    assert service._state["phase"] == "following"
+    assert service._state["phase"] == "error" and service.motion.percent == 0
 
 
 def test_bump_slows_adds_power_by_gyro_then_slows_again():
@@ -457,7 +572,7 @@ def test_bump_slows_adds_power_by_gyro_then_slows_again():
     script = lambda: perception(
         signs=[{"class": "speed_bump", "x": world["bump"], "y": 1.0,
                 "distance": world["bump"], "side": "front", "confidence": 0.9}],
-        ground={"ok": True, "nearestBumpM": world["bump"]},
+        ground={"ok": True, "nearestBumpM": world["bump"], "bumpFarM": world["bump"] + 0.75},
         imu={"fresh": True, "pitch": world["pitch"], "roll": 0.0, "gyroZ": 0.0})
     service, clock = service_with_perception(script, clock=clock)
     service._step(clock())
@@ -468,10 +583,16 @@ def test_bump_slows_adds_power_by_gyro_then_slows_again():
     clock.advance(0.2)
     service._step(clock())
     assert service._state["phase"] == "bump_climb"
+    clock.advance(0.9)
+    service._step(clock())
     assert service._state["counters"]["powerBoosts"] >= 1
     assert service._state["percent"] > 4.0
     # «Проехали»: имитируем прирост одометрии (счётчики SC).
     service._odometer.distance = 1.2
+    clock.advance(0.2)
+    service._step(clock())
+    assert service._state["phase"] == "bump_climb"  # rear of the body has not cleared the far edge
+    service._odometer.distance = 1.6
     clock.advance(0.2)
     service._step(clock())
     assert service._state["phase"] == "bump_exit"
@@ -487,8 +608,8 @@ def test_lane_lost_and_estop_stop_the_loop():
     assert service._state["phase"] == "lane_lost"
     clock.advance(2.0)
     service._step(clock())
-    assert service._state["phase"] == "error"
-    assert "потерян" in service._state["message"].lower()
+    assert service._state["phase"] == "blocked"
+    assert "двух границ" in service._state["message"].lower()
     assert service.motion.percent == 0.0
 
     service2, clock2 = service_with_perception(lambda _now: perception(), clock=FakeClock())
@@ -498,11 +619,147 @@ def test_lane_lost_and_estop_stop_the_loop():
     assert "E-STOP" in service2._state["message"]
 
 
+def test_bump_sign_without_kinect_confirmation_remains_stopped():
+    service, clock = service_with_perception(lambda: perception(
+        signs=[{"class": "speed_bump", "x": 0.4, "y": 0.9, "side": "front"}],
+        ground={"ok": True, "nearestBumpM": None},
+        imu={"fresh": True, "pitch": 9.0}))
+    service._step(clock())
+    assert service.motion.percent == 0 and service._state["phase"] == "bump_wait"
+    clock.advance(service.cfg.bump_cross_timeout_s + 0.2)
+    service._step(clock())
+    assert service.motion.percent == 0 and service._state["phase"] == "error"
+    assert service._state["counters"]["bump"] == service._state["counters"]["powerBoosts"] == 0
+
+
+def test_bump_timeout_is_not_success_even_with_confirmed_depth():
+    service, clock = service_with_perception(lambda: perception(
+        signs=[{"class": "speed_bump", "x": 0.4, "y": 0.9, "side": "front"}],
+        ground={"ok": True, "nearestBumpM": 0.4},
+        imu={"fresh": True, "pitch": 0.0}))
+    service._step(clock())
+    assert service.motion.percent == 4 and service._state["phase"] == "bump_climb"
+    clock.advance(service.cfg.bump_cross_timeout_s + 0.2)
+    service._step(clock())
+    assert service._state["phase"] == "error" and service.motion.percent == 0
+    assert service._state["counters"]["bump"] == 0
+
+
+def real_service_on_fakes():
+    """Run physical-mode guards with explicit fake actuator and sensor providers."""
+    clock, source = FakeClock(), FakeSource()
+    feedback = source.read()
+    sent = []
+    service = TrackAutonomyService(
+        config=cfg(enabled=True), lidar_provider=ScriptedWorld.scan,
+        telemetry_provider=lambda: feedback, estop=lambda: None, source_provider=lambda: source,
+        drive=lambda _src, body: (sent.append(body["percent"]) or {"ok": True}, 200),
+        clock=clock, log_events=False)
+    service._perceive = lambda _now: dict(perception(ground={"ok": True, "depthFresh": True}),
+                                         geometryCalibrated=True)
+    service._session = service._new_session(clock())
+    service.motion.stop()
+    feedback.update(source.read())  # initial tagged brake was applied
+    return service, clock, source, feedback, sent
+
+
+@pytest.mark.parametrize("failure", ["untrusted", "obstacle", "wheel", "overspeed", "depth"])
+def test_real_run_brakes_on_live_failure(failure):
+    service, clock, src, feedback, sent = real_service_on_fakes()
+    service._step(clock())
+    assert sent == [8.0]
+    if failure == "untrusted":
+        service._lidar = lambda age: dict(ScriptedWorld.scan(age), trusted=False)
+    elif failure == "obstacle":
+        def blocked(age):
+            scan = ScriptedWorld.scan(age)
+            scan["points"].append({"a": 0.0, "r": 0.5})
+            return scan
+        service._lidar = blocked
+    elif failure == "wheel":
+        feedback["motors"][3]["telemetryAgeS"] = 1.0
+    elif failure == "overspeed":
+        # One wheel can exceed the limit even when the aggregate is small.
+        feedback["motors"][3]["scRpm"] = 60.0
+        feedback["wheelSpeedMps"] = 0.17
+    else:
+        service._perceive = lambda _now: dict(perception(), geometryCalibrated=True)
+    clock.advance(0.2)
+    service._step(clock())
+    assert sent == [8.0] and src.brakes == 2
+    assert service.motion.percent == 0 and service._state["phase"] in {"blocked", "error"}
+
+
+def test_stop_dwell_requires_new_brake_id_and_all_stopped():
+    service, clock, src, feedback, sent = real_service_on_fakes()
+    service._step(clock())
+    sign = {"class": "stop_sign", "x": 0.4, "y": 1.0, "distance": 1.1, "side": "side"}
+    service._perceive = lambda _now: dict(perception(signs=[sign], ground={"depthFresh": True}),
+                                         geometryCalibrated=True)
+    clock.advance(0.2)
+    service._step(clock())  # a second, uniquely identified STOP
+    clock.advance(3.1)
+    service._step(clock())  # old brake ID is not acknowledgement
+    assert service._state["phase"] == "stop_braking" and sent == [8.0]
+    feedback.update(src.read())
+    feedback["motors"][0]["scRecent"] = True
+    clock.advance(0.2)
+    service._step(clock())
+    assert service._state["phase"] == "stop_braking"
+    feedback["motors"][0]["scRecent"] = False
+    clock.advance(0.2)
+    service._step(clock())
+    assert service._state["phase"] == "stop_wait"
+    clock.advance(2.9)
+    service._step(clock())
+    assert sent == [8.0]
+    clock.advance(0.2)
+    service._step(clock())
+    assert sent == [8.0, 8.0] and service._state["counters"]["stop"] == 1
+
+
+def test_real_run_stops_when_a_wheel_does_not_move():
+    service, clock, src, feedback, sent = real_service_on_fakes()
+    service._step(clock())
+    for motor in feedback["motors"]:
+        motor["drivePercent"] = 8
+    for _ in range(20):
+        for motor in feedback["motors"][:3]:
+            motor["scCount"] += 2
+        clock.advance(0.2)
+        service._step(clock())
+    assert sent and src.brakes == 2 and service.motion.percent == 0
+    assert "RR не подтвердило движение" in service._state["message"]
+
+
+def test_interrupt_cannot_be_overtaken_by_a_tick_already_reading_sensors():
+    service, clock, src, _feedback, sent = real_service_on_fakes()
+    entered, release = threading.Event(), threading.Event()
+    perceive = service._perceive
+
+    def delayed(now):
+        entered.set()
+        assert release.wait(3.0)
+        return perceive(now)
+
+    service._perceive = delayed
+    worker = threading.Thread(target=service._step, args=(clock(),))
+    worker.start()
+    try:
+        assert entered.wait(1.0)
+        service.interrupt("Стоп")
+    finally:
+        release.set()
+        worker.join(3.0)
+    assert not worker.is_alive() and sent == []
+    assert src.brakes == 2 and service._state["phase"] == "cancelled"
+
+
 # ------------------------------------------------------------- сухой прогон ---
-@pytest.mark.parametrize("scenario", ["full", "straight", "stop", "bump", "light"])
+@pytest.mark.parametrize("scenario", ["full", "straight", "stop", "bump", "light", "gate"])
 def test_simulated_track_finishes(scenario):
     report = simulate_track(scenario)
-    assert report["ok"] is True
+    assert report["ok"] is True and report["passed"] is True
     assert report["phase"] == "done" and report["distanceM"] >= 40.0
     assert report["steps"] > 50
 
@@ -529,3 +786,9 @@ def test_scripted_world_track_can_turn_both_ways():
     assert world._center(24.0) < 0.0   # правая дуга
     snap = world.snapshot(0.0)
     assert len(snap["cones"]) >= 8 and snap["fresh"] is True
+
+
+def test_simulated_blocked_gate_never_moves():
+    report = simulate_track("blocked_gate")
+    assert report["passed"] and report["expectedStop"]
+    assert report["phase"] == "blocked" and report["distanceM"] == 0
