@@ -170,6 +170,10 @@ def test_service_state_field_and_annotated_frame():
     annotated = service.annotated_frame(0)
     assert annotated and annotated[:2] == b"\xff\xd8"
 
+    # A slow inference finishing now cannot turn an old exposure into a live frame.
+    service.process_frame(0, jpeg.tobytes(), stamp=service._cameras[0].stamp - 3)
+    assert service.annotated_frame(0) is None
+
     off = service.configure(enabled=False)
     assert off["enabled"] is False and off["field"] == []
     assert service.annotated_frame(3) is None
@@ -195,7 +199,7 @@ def test_camera_pollers_use_vision_when_available():
     """Оба экрана камер умеют брать размеченный кадр у RCVision."""
     for name in ("slam_gui/camera_frames.js", "slam_gui/camera_view.js"):
         source = (Path(__file__).resolve().parents[1] / name).read_text(encoding="utf-8")
-        assert "RCVision.frameUrl" in source
+        assert "RCVision.loadFrame" in source
         assert "api/camera/" in source
 
 

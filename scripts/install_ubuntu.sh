@@ -86,15 +86,26 @@ log "Python проекта: $PYTHON3 — $("$PYTHON3" --version 2>&1) (нуже�
 # --- 1-2. python и зависимости (работает офлайн через vendor/) -------------- #
 RC_PYTHON3="$PYTHON3" ./scripts/ensure_deps.sh
 
-# USB Serial мастера доступен пользователю через группу dialout.
-LOGIN_USER="${SUDO_USER:-${USER:-$(id -un)}}"
-if getent group dialout >/dev/null 2>&1 && ! id -nG "$LOGIN_USER" 2>/dev/null | tr ' ' '\n' | grep -qx dialout; then
-  if $SUDO usermod -aG dialout "$LOGIN_USER"; then
-    log "$LOGIN_USER добавлен в dialout; выйдите из сеанса Ubuntu и войдите снова, чтобы группа вступила в силу"
-  else
-    log "не удалось добавить $LOGIN_USER в dialout; выполните: sudo usermod -aG dialout $LOGIN_USER"
+# USB-камеры читаются на борту. Базовый офлайн-набор пульта не требует ни
+# OpenCV, ни YOLO; отсутствие колеса/сети не должно сорвать установку пульта.
+if ! .venv/bin/python -c 'import cv2' 2>/dev/null; then
+  log "ставлю OpenCV для USB-камер…"
+  if ! .venv/bin/python -m pip install --only-binary=:all: --find-links vendor --retries 1 --timeout 8 'opencv-python-headless>=4.8,<5' ||
+     ! .venv/bin/python -c 'import cv2'; then
+    log 'Без OpenCV USB-кадров не будет. При наличии сети: .venv/bin/pip install "opencv-python-headless>=4.8,<5"'
   fi
 fi
+
+LOGIN_USER="${SUDO_USER:-${USER:-$(id -un)}}"
+for group in dialout video; do
+  if getent group "$group" >/dev/null 2>&1 && ! id -nG "$LOGIN_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$group"; then
+    if $SUDO usermod -aG "$group" "$LOGIN_USER"; then
+      log "$LOGIN_USER добавлен в $group; выйдите из сеанса Ubuntu и войдите снова, чтобы группа вступила в силу"
+    else
+      log "не удалось добавить $LOGIN_USER в $group; выполните: sudo usermod -aG $group $LOGIN_USER"
+    fi
+  fi
+done
 
 # --- 3. .env с секретным ключом ---------------------------------------------- #
 if [[ ! -f .env ]]; then

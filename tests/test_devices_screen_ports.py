@@ -290,3 +290,17 @@ def test_confirm_button_is_hidden_until_a_frame_arrives(tmp_path):
     out = run_actions(tmp_path, cameraConfirm="camera_FL", snapshot=camera_snapshot(False))
     assert out["actions"]["confirm"]["found"] is True
     assert out["actions"]["confirm"]["hidden"] is True
+
+
+def test_camera_picker_never_reintroduces_v4l2_siblings(tmp_path):
+    ports = ports_payload()
+    inputs, siblings = [], []
+    for i in range(4):
+        alias = f'/dev/v4l/by-path/pci-0:14-usb-0:{i+1}:1.0-video-index0'
+        inputs.append(dict(option(alias, f'/dev/video{2*i+1}', 'C930e', f'1-{i+1}', by_path=alias), serial='SAME'))
+        siblings.append(option(f'/dev/video{2*i}', f'/dev/video{2*i}', 'C930e', f'1-{i+1}'))
+    ports['options']['video'] = inputs
+    snapshot = snapshot_payload(dict(ports['options'], video=inputs + siblings))
+    out = run_screen(tmp_path, ports=ports, snapshot=snapshot)
+    assert out['camera']['values'] == [o['port'] for o in inputs]
+    assert all('S/N SAME' in label for label in out['camera']['labels'][1:])

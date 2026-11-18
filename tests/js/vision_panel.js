@@ -52,7 +52,7 @@ const snapshot = {
     {name: 'stop_sign', short: 'STOP', color: '#ff3d71'},
     {name: 'speed_bump', short: 'НЕРОВН', color: '#ffb020'},
   ],
-  cameras: {0: {detections: [{}, {}]}, 1: {detections: []},
+  cameras: {0: {active: true, captureAgeS: 0.1, detections: [{}, {}]}, 1: {detections: []},
     2: {detections: [{}]}, 3: {detections: []}},
   trafficLight: {state: 'red', label: 'Красный — стоим', cameraId: 0,
     counts: {red: 900, yellow: 120, green: 20}, action: 'stop'},
@@ -114,7 +114,8 @@ bootHandlers.forEach((handler) => handler());
   vision.setOverlay(false);
   assert.match(vision.frameUrl(3), /api\/camera\/3\/frame\?t=/);
   vision.setOverlay(true);
-  assert.match(vision.frameUrl(3), /api\/vision\/camera\/3\/frame\?t=/);
+  assert.match(vision.frameUrl(0), /api\/vision\/camera\/0\/frame\?t=/);
+  assert.match(vision.frameUrl(3), /api\/camera\/3\/frame\?t=/, 'no annotation yet: show the raw camera');
 
   assert.equal(elements['vision-signal'].textContent, 'Красный — стоим · CAM 0');
   assert.equal(elements['vision-signal'].dataset.state, 'red');
@@ -130,6 +131,13 @@ bootHandlers.forEach((handler) => handler());
     'событие rc-vision-state должно доходить до карты');
   assert.equal(mapPayload.field.length, 2, 'карта получает отметки знаков');
 
+  const fail = () => {};
+  const image = {onerror: fail};
+  vision.loadFrame(image, 0);
+  assert.match(image.src, /api\/vision\/camera\/0\/frame/);
+  image.onerror(); // annotated route returned 404 after the state snapshot
+  assert.match(image.src, /api\/camera\/0\/frame/);
+  assert.equal(image.onerror, fail, 'a raw failure goes to the original poller');
   // Closed-course timeout remains UNKNOWN and never lights the green lamp.
   snapshot.trafficLight = {state: 'unknown', label: 'Сигнал не определён', action: 'wait', counts: {},
     closedCourse: {enabled: true, phase: 'waiting', remainingS: 3.0, recommendation: 'wait'}};

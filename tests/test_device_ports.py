@@ -366,3 +366,20 @@ def test_payload_reads_the_topology_once(monkeypatch):
     assert registry.calls == 1
     assert len(payload["options"]["serial"]) == 2
     assert set(payload["options"]) == {"serial", "video", "usb"}  # ключи из devices.js
+
+
+def test_video_fallback_without_sysfs_groups_links_but_never_guesses_by_parity(tmp_path, monkeypatch):
+    from robot_control import camera_settings, device_registry
+    # A pair of stable links, two unrelated bare nodes and an offline assignment.
+    link = '/dev/v4l/by-path/pci-0000:00:14.0-usb-0:1:1.0-video-index'
+    names = [link + '1', link + '0', '/dev/video2', '/dev/video3', '/dev/video88']
+    real = {path: str(tmp_path / ('video' + str(i))) for i, path in enumerate(names)}
+    for path in names[:-1]:
+        Path(real[path]).touch()
+    monkeypatch.setattr(camera_settings, 'candidate_video_paths', lambda: names)
+    monkeypatch.setattr(ports, '_real', lambda path: real.get(path, path))
+    monkeypatch.setattr(device_registry, 'video_capture_capability', lambda path: None)
+    rows = ports._video_options({'devices': []})
+    assert {r['device'] for r in rows} == {real[p] for p in names[1:]}
+    assert next(r for r in rows if r['port'] == link + '0')['exists']
+    assert not next(r for r in rows if r['device'] == real[names[-1]])['exists']

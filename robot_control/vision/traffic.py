@@ -20,9 +20,10 @@ from __future__ import annotations
 import math
 import time
 from collections import Counter, deque
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-import numpy as np
+if TYPE_CHECKING:
+    import numpy as np
 
 from .classes import TRAFFIC_LIGHT_LABELS, TRAFFIC_LIGHT_STATES
 
@@ -36,6 +37,7 @@ MIN_PIXELS = 8
 
 def _bgr_to_hsv(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Векторизованный BGR→HSV в шкале OpenCV (H 0…179, S/V 0…255)."""
+    import numpy as np
     rgb = np.asarray(frame, dtype=np.float32) / 255.0
     b, g, r = rgb[..., 0], rgb[..., 1], rgb[..., 2]
     mx = np.maximum(np.maximum(r, g), b)
@@ -57,6 +59,7 @@ def _bgr_to_hsv(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 def color_counts(frame: np.ndarray) -> dict[str, int]:
     """Сколько пикселей каждого сигнального цвета в кадре/рамке."""
+    import numpy as np
     arr = np.asarray(frame)
     if arr.ndim != 3 or arr.shape[-1] < 3 or not arr.size:
         return {state: 0 for state in TRAFFIC_LIGHT_STATES}
@@ -109,6 +112,7 @@ def verify_traffic_light(roi_bgr: Any, *, prefer_red: bool = False) -> dict[str,
     panel stays unknown. These are bench heuristics, not a safety
     certification; the legacy production mode is unchanged.
     """
+    import numpy as np
     arr = np.asarray(roi_bgr)
     result: dict[str, Any] = {"validBody": False, "state": UNKNOWN,
                               "confidence": 0.0, "counts": {s: 0 for s in TRAFFIC_LIGHT_STATES},
@@ -304,6 +308,7 @@ class TrafficLightTracker:
 
 def hue_deg(rgb_fraction: tuple[float, float, float]) -> float:
     """Небольшая помощь для тестов/калибровки: тон RGB в градусах OpenCV."""
+    import numpy as np
     arr = np.array([[rgb_fraction[::-1]]], dtype=np.float32)
     h, _, _ = _bgr_to_hsv(arr)
     value = float(h[0, 0])

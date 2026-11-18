@@ -174,36 +174,18 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function drawCamView(canvasId, yawOff, title) {
-  const c = document.getElementById(canvasId);
-  if (!c) return;
-  const ctx = c.getContext("2d");
-  const w = c.width, h = c.height;
-  ctx.fillStyle = "#0b120f";
-  ctx.fillRect(0, 0, w, h);
-  const yaw = state.yaw + yawOff;
-  for (let col = 0; col < w; col += 3) {
-    const ang = yaw + ((col / w) - 0.5) * 1.15;
-    const r = raycast(state.x, state.y, ang, 8);
-    const wallH = Math.min(h * 0.9, (180 / Math.max(0.35, r)));
-    const y0 = (h - wallH) / 2;
-    const shade = Math.max(30, 140 - r * 14);
-    ctx.fillStyle = `rgb(${shade * 0.55|0},${shade * 0.5|0},${40})`;
-    ctx.fillRect(col, y0, 3, wallH);
-  }
-  ctx.fillStyle = "rgba(213,255,69,0.12)";
-  ctx.fillRect(0, h * 0.52, w, h * 0.48);
-  ctx.fillStyle = "#d5ff45";
-  ctx.font = "bold 11px Inter, sans-serif";
-  ctx.fillText(title, 10, 16);
-}
-
-function drawCam() {
-  drawCamView("cam", 0, "CAM-F перед");
-  drawCamView("cam-rear", Math.PI, "CAM-R зад");
-  const hud = document.getElementById("cam-hud");
-  if (hud) hud.textContent = "sim 2×";
-}
+// The engineering console uses the same four bounded JPEG feeds as the main
+// screen. Do not paint simulated scenery over real (or missing) camera frames.
+window.RCCameraFrames?.whileVisible?.((id, image) => {
+  const name = ["cam", "cam-rear", "cam-right", "cam-rear-right"][id];
+  const canvas = document.getElementById(name);
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  if (image) ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  else ctx.clearRect(0, 0, canvas.width, canvas.height);
+  document.getElementById(name + "-hud").textContent = image ? "LIVE" : "нет кадра";
+});
 
 function drawMap() {
   const c = document.getElementById("map");

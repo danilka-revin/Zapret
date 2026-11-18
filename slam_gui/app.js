@@ -1369,7 +1369,6 @@ function loop(now) {
     drawStick();
     drawMap();
     drawChassisPanel();
-    drawCam(now);
     drawLidar();
     if (window.RSConsole && window.RSConsole.frame) window.RSConsole.frame(now);
   } catch (err) {
