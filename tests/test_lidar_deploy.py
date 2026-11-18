@@ -187,11 +187,11 @@ def test_opencv_is_optional_offline_but_required_with_camera_flag(offline_instal
 
     optional = run_deps(project, {**env, "RC_DEPS_CAMERA": "1"})
     assert optional.returncode == 0, optional.stdout + optional.stderr
-    assert "USB-камеры недоступны" in optional.stderr
+    assert "OpenCV для USB-камер недоступен" in optional.stderr
 
     required = run_deps(project, env, "--camera")  # explicit flag overrides opt-out
     assert required.returncode == 1, required.stdout + required.stderr
-    assert "USB-камеры недоступны" in required.stderr
+    assert "OpenCV для USB-камер недоступен" in required.stderr
 
 
 # ---------------------------------------------------------------------------

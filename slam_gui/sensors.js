@@ -3,7 +3,7 @@
  * Плата живёт своей жизнью: сервер только показывает её состояние и передаёт
  * команды. Поэтому экран никогда не рисует «всё хорошо» из воздуха — нет кадра,
  * значит нет данных; нет ленты — значит габариты честно помечены как отключённые.
- * Концевика отсека нет, поэтому карточка показывает только замок.
+ * Концевик D42 и команда замку D7 — разные показания.
  */
 (function () {
   'use strict';
@@ -17,7 +17,7 @@
   const ROLE_TITLES = {admin: 'администратор', user: 'пользователь'};
   const WINDOW_TITLES = {none: 'нет окна', load: 'погрузка', unload: 'выгрузка'};
 
-  const state = {data: null, busy: false, timer: 0, lastCardSignature: null};
+  const state = {data: null, busy: false, timer: 0, lastCardSignature: null, scansKey: null};
   let controlSession = null;
 
   function $(id) { return document.getElementById(id); }
@@ -121,12 +121,14 @@
     setText($('sm-errors'), errors.length ? errors.join(', ') : (ok ? 'нет' : '—'));
   }
 
-  // Концевика отсека пока нет (D8 не подключён): показываем только замок.
+  // Не выводить состояние двери из команды засову или из устаревшей телеметрии.
   function renderCompartment(data) {
     setText($('sm-lock'), data.lockOpen === true ? 'открыт'
       : data.lockOpen === false ? 'закрыт' : '—');
     const lockEl = $('sm-lock');
-    if (lockEl) lockEl.dataset.state = data.lockOpen ? 'open' : 'closed';
+    if (lockEl) lockEl.dataset.state = data.lockOpen === true ? 'open' : data.lockOpen === false ? 'closed' : '';
+    const closed = data.ok && !data.stale ? data.doorClosed : null;
+    setText($('sm-door'), closed === true ? 'закрыта' : closed === false ? 'открыта' : 'нет данных');
   }
 
   function renderWindow(data) {
@@ -208,7 +210,28 @@
     return list.map((item) => item.uid + ':' + item.role).join(',');
   }
 
+  function renderScans(data) {
+    const select = $('sm-scans');
+    if (!select) return;
+    const scans = Array.isArray(data.recentCards) ? data.recentCards : (data.lastCard ? [data.lastCard] : []);
+    const key = scans.map(s => s.uid + ':' + s.atMs).join(',');
+    if (key === state.scansKey) return;
+    state.scansKey = key;
+    const prompt = document.createElement('option');
+    prompt.value = '';
+    prompt.textContent = scans.length ? 'Выберите считанный UID…' : 'Поднесите одну карту';
+    const options = scans.slice().reverse().map(scan => {
+      const opt = document.createElement('option');
+      opt.value = scan.uid;
+      opt.textContent = scan.uid + ' · ' + (scan.reason === 'unknown' ? 'не записана' : roleTitle(scan.role));
+      return opt;
+    });
+    // Только явный выбор копирует UID в форму. Новое чтение его не заменяет.
+    select.replaceChildren(prompt, ...options);
+  }
+
   function renderCards(data) {
+    renderScans(data);
     const list = Array.isArray(data.cardList) ? data.cardList : [];
     setText($('sm-cards-count'), hasNumber(data.cards) ? data.cards : '—');
     const rfid = $('sm-rfid');
@@ -425,13 +448,17 @@
                                                          { open: false }));
 
     // Карты: добавить с ролью, записать с платы с ролью, обновить, очистить.
+    const scans = $('sm-scans');
+    if (scans) scans.addEventListener('change', () => {
+      if (scans.value) $('sm-card-uid').value = scans.value;
+    });
     const add = $('sm-card-add');
     if (add) {
       add.addEventListener('click', () => {
         const field = $('sm-card-uid');
         const uid = field && field.value ? field.value.trim().toUpperCase() : '';
-        if (uid.length !== 8) {
-          message('UID карты — 8 hex-знаков, например A1B2C3D4', 'err');
+        if (!/^(?:[0-9A-F]{8}|[0-9A-F]{14}|[0-9A-F]{20})$/.test(uid)) {
+          message('UID карты — 8, 14 или 20 hex-знаков, например A1B2C3D4', 'err');
           return;
         }
         cardCommand('добавить ' + uid, { action: 'add', uid: uid, role: roleField() });

@@ -46,14 +46,15 @@
     </section>
 
     <div class="grid">
-      <!-- Замок отсека: карта переключает, кнопки дублируют. Концевика нет. -->
+      <!-- Команда засову и физический концевик — разные показания. -->
       <article class="card" aria-labelledby="sm-lock-title">
         <header class="card-head">
           <h2 id="sm-lock-title">Замок отсека</h2>
           <span class="hint">серво D7</span>
         </header>
         <dl class="metrics">
-          <div><dt>замок</dt><dd id="sm-lock">—</dd></div>
+          <div><dt>замок (команда D7)</dt><dd id="sm-lock">—</dd></div>
+          <div><dt>дверь (концевик D42)</dt><dd id="sm-door">—</dd></div>
         </dl>
         <label class="pin-field" for="sm-pin">PIN кейса — нужен для открытия, карт и окна погрузки</label>
         <div class="row">
@@ -62,8 +63,8 @@
           <button type="button" class="btn btn--danger" id="sm-lock-open">Открыть отсек</button>
           <button type="button" class="btn btn--ghost" id="sm-lock-close">Закрыть</button>
         </div>
-        <p class="note">Карта открывает отсек, повторное прикладывание — закрывает.
-          Замок закрывается сам через 10 с без связи с сервером. Физический ключ
+        <p class="note">Разрешённая карта открывает замок до следующего прикладывания или команды «Закрыть».
+          Положение самой двери показывает концевик. Физический ключ
           остаётся основным: это вспомогательный замок.</p>
       </article>
 
@@ -76,8 +77,16 @@
         <p class="cards-count">в памяти: <b id="sm-cards-count">—</b>
           <span class="cards-legend">администратор открывает всегда, пользователь — только
             на погрузке и выгрузке</span></p>
+        <label class="pin-field" for="sm-scans">Последние считывания (до 20, включая неизвестные)</label>
         <div class="row">
-          <input type="text" id="sm-card-uid" placeholder="UID, 8 hex" maxlength="8"
+          <select id="sm-scans" aria-label="Выбрать считанный UID">
+            <option value="">Поднесите одну карту</option>
+          </select>
+        </div>
+        <p class="note">Сигнал зуммера означает чтение, а не допуск. Выберите UID,
+          затем роль и нажмите «Добавить» с PIN кейса.</p>
+        <div class="row">
+          <input type="text" id="sm-card-uid" placeholder="UID, 8/14/20 hex" maxlength="20"
                  spellcheck="false" autocomplete="off">
           <select id="sm-card-role" aria-label="Роль карты">
             <option value="user" selected>пользователь</option>
@@ -86,7 +95,7 @@
           <button type="button" class="btn" id="sm-card-add">Добавить</button>
         </div>
         <div class="row">
-          <button type="button" class="btn" id="sm-card-learn">Записать карту с платы</button>
+          <button type="button" class="btn" id="sm-card-learn">Записать следующую карту</button>
           <button type="button" class="btn btn--ghost" id="sm-card-list">Обновить список</button>
           <button type="button" class="btn btn--danger" id="sm-card-clear">Очистить</button>
         </div>

@@ -83,6 +83,8 @@ def library_sources(header: str, root: Path) -> list[Path]:
     if header == "Servo.h":
         # У Servo исходник под каждую платформу свой; для Mega нужен avr/Servo.cpp.
         return [base / "avr" / "Servo.cpp"] if (base / "avr" / "Servo.cpp").is_file() else []
+    if header == "Wire.h":
+        return [base / "Wire.cpp", base / "utility" / "twi.c"]
     return sorted(base.glob("*.cpp"))
 
 
@@ -123,6 +125,10 @@ def build(ino: Path, out_dir: Path) -> str:
         if root is None:
             raise SystemExit(f"библиотека {folder} не найдена: задайте {env_key}")
         libraries.append((header, root))
+    # SPI, Wire и EEPROM входят в ядро AVR, но у каждой свой include path.
+    for name in ("SPI", "Wire", "EEPROM"):
+        if name + ".h" in includes:
+            libraries.append((name + ".h", core / "libraries" / name / "src"))
     gcc, gxx = str(avr / "bin" / "avr-gcc"), str(avr / "bin" / "avr-g++")
     include = ["-I", str(core / "cores" / "arduino"), "-I", str(core / "variants" / "mega")]
     for _, root in libraries:

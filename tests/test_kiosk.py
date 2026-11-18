@@ -146,6 +146,7 @@ def test_telemetry_api_returns_only_public_values(kiosk_client):
         cameras = body["data"]["cameras"]
         assert isinstance(cameras, list)
         assert all(set(cam) <= {"id", "name", "device", "openedPath", "frameSource", "frameAgeS",
+                                "captureMode", "captureFourcc", "framesReceived", "darkFrame",
                                 "captureError", "exists", "active", "width", "height", "fps", "role",
                                 "model", "yaw_deg", "hfov_deg", "stream_url", "frame_url"} for cam in cameras)
         # причина «нет скана» видна на экране, а не только в журнале

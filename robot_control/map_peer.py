@@ -395,6 +395,10 @@ def _camera_frame(origin: str, cam_id: int, *, path: str | None = None) -> bytes
 
 def proxy_vision_json(origin: str, operation: str):
     """Состояние YOLO/светофора и отметки поля живут на борту, не в пульте."""
+    if operation == 'config':
+        request.max_content_length = 4096
+        return _forward_json(origin, '/api/vision/config', methods={'POST'},
+                             limit=MAX_NAV_REPLY_BYTES, timeout=5.0)
     routes = {'state': '/api/vision/state', 'field': '/api/vision/field'}
     if operation not in routes:
         return jsonify(ok=False, error='Неизвестная операция распознавания'), 404

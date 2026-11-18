@@ -86,6 +86,18 @@ log "Python проекта: $PYTHON3 — $("$PYTHON3" --version 2>&1) (нуже�
 # --- 1-2. python и зависимости (работает офлайн через vendor/) -------------- #
 RC_PYTHON3="$PYTHON3" ./scripts/ensure_deps.sh
 
+# OpenCV уже проверил общий bootstrap. Если его не удалось поднять, полный
+# установщик может поставить системный резерв. Не обращаемся к apt офлайн
+# или при явном отключении необязательных зависимостей камер.
+if [[ "${RC_DEPS_CAMERA:-1}" == "1" && "${RC_DEPS_OFFLINE:-0}" != "1" ]] &&
+   ! command -v ffmpeg >/dev/null && command -v apt-get >/dev/null &&
+   ! .venv/bin/python -c 'import cv2
+raise SystemExit(not (callable(cv2.VideoCapture) and cv2.videoio_registry.hasBackend(cv2.CAP_V4L2)))' 2>/dev/null; then
+  log 'OpenCV недоступен; пробую установить FFmpeg для захвата через V4L2…'
+  $SUDO apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=8 install -y --no-install-recommends ffmpeg ||
+    log 'Для USB-камер: sudo apt install ffmpeg или ./scripts/ensure_deps.sh --camera.'
+fi
+
 LOGIN_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 for group in dialout video; do
   if getent group "$group" >/dev/null 2>&1 && ! id -nG "$LOGIN_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$group"; then

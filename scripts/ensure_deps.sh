@@ -170,7 +170,7 @@ ensure_camera() {
     log "$status"
     return 0
   fi
-  printf '%s\n' 'USB-камеры недоступны, базовый пульт может работать без них.' \
+  printf '%s\n' 'OpenCV для USB-камер недоступен; базовый пульт может работать без него.' \
     "Причина проверки: $(printf '%s\n' "$status" | tail -n 1)" \
     'На бортовом ПК: ./scripts/ensure_deps.sh --camera, затем перезапустите киоск.' \
     'Без сети нужны совместимые колёса OpenCV и NumPy (см. docs/DEPLOY_UBUNTU.md).' >&2

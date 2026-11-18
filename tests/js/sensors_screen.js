@@ -241,7 +241,8 @@ function logItems() {
         (b) => ({ mode: b.getAttribute('data-strip-mode'), disabled: !!b.disabled,
                   title: b.title || '' })),
     },
-    /* Концевика отсека нет: на экране только замок. */
+    door: byId('sm-door').textContent,
+    scans: byId('sm-scans').children.map(opt => opt.textContent),
     lock: { text: byId('sm-lock').textContent,
             state: byId('sm-lock').dataset.state || '' },
     window: {
@@ -296,6 +297,13 @@ function logItems() {
       await sleep(20);
     }
     if (acts.uid !== undefined) byId('sm-card-uid').value = String(acts.uid);
+    if (acts.selectScan) {
+      const select = byId('sm-scans');
+      const option = select.children.find(opt => opt.value === acts.selectScan);
+      if (!option) throw Error('UID не показан');
+      select.value = option.value;
+      (select.events.change || []).forEach(fn => fn());
+    }
     if (acts.cardRole !== undefined) byId('sm-card-role').value = String(acts.cardRole);
     if (acts.cardAdd) {
       byId('sm-card-add').click();

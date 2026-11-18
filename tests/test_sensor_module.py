@@ -61,6 +61,8 @@ def telemetry(**overrides) -> str:
         "err": 0, "t": 1234,
     }
     fields.update(overrides)
+    if fields["fw"] == 5:
+        fields.setdefault("doorclosed", 0)
     body = " ".join("%s=%s" % (key, value) for key, value in fields.items())
     return frame("@S " + body)
 
@@ -73,9 +75,9 @@ def test_pinout_is_exactly_the_wired_one():
     assert _const("RC522_RST_PIN") == "9"
     assert _const("STRIP_PIN") == "6"
     assert _const("LOCK_SERVO_PIN") == "7"
-    # Концевик отсека (D8) пока не подключён и из прошивки убран: пина нет,
-    # состояние двери не передаётся, запрета движения по ней тоже нет.
-    assert "DOOR_SWITCH_PIN" not in text and "doorTick" not in text
+    assert _const("DOOR_SWITCH_PIN") == "42"
+    assert _const("BUZZER_PIN") == "44"
+    assert int(_const("LOCK_CLOSED_ANGLE")) - int(_const("LOCK_OPEN_ANGLE")) == 90
     assert re.search(r"RELAY_PINS\[4\]\s*=\s*\{2,\s*3,\s*4,\s*5\}", text)
     # GY-87 на аппаратном I²C Mega: SDA = 20, SCL = 21 (Wire.begin() без аргументов).
     assert "Wire.begin()" in text and "Wire.begin(" not in text.replace("Wire.begin()", "")
@@ -127,11 +129,8 @@ def test_sketch_avoids_heap_and_blocking_prints():
 
 
 def test_sketch_version_matches_server_protocol():
-    # 4 — убран концевик отсека: нет поля door= и кадра kind=door. Разбор на
-    # сервере идёт в ногу с прошивкой.
-    assert int(_const("SENSOR_PROTOCOL")) == sm.SENSOR_PROTOCOL == 4
-    # Старая прошивка (fw3) продолжает работать: плату прошивают вручную.
-    assert 3 in sm.SENSOR_PROTOCOLS
+    assert int(_const("SENSOR_PROTOCOL")) == sm.SENSOR_PROTOCOL == 5
+    assert {3, 4, 5} <= set(sm.SENSOR_PROTOCOLS)
 
 
 def test_led_strip_is_wired_73_leds_under_the_frame():
@@ -284,8 +283,7 @@ def test_telemetry_parses_into_degrees_and_flags():
     assert parsed["pressureHpa"] == 699.6
     assert parsed["altitudeM"] == 3016.74
     assert parsed["lockOpen"] is True
-    # Концевика нет: состояние двери из кадра не берётся вовсе.
-    assert "doorOpen" not in parsed
+    assert parsed["doorClosed"] is False
     assert parsed["lights"] == {"head": True, "stop": False, "left": True,
                                 "right": False, "dim": False}
     assert parsed["stripEnabled"] is False        # лента пока не подключена
@@ -528,7 +526,7 @@ def test_card_list_is_collected_from_cardinfo_frames():
 def test_empty_card_list_is_known_after_the_board_sends_its_terminator():
     module, _, _ = make_module()
     module.feed(frame("@CARDINFO end=1 total=0 t=11"))  # unsolicited boot banner
-    assert module.state()["cardListKnown"] is False
+    assert module.state()["cardListKnown"] is True
     module.card("list")
     assert module.state()["cardListKnown"] is False
     module.feed(frame("@CARDINFO end=1 total=0 t=12"))
@@ -549,15 +547,37 @@ def test_cargo_window_comes_from_telemetry():
     assert module.state()["windowActive"] is False
 
 
-def test_there_is_no_door_state_without_the_switch():
-    """Концевика нет — нет ни состояния двери, ни запрета движения по нему."""
+def test_switch_requires_fresh_fw5_telemetry_even_if_an_ack_is_recent():
     module, _, clock = make_module()
-    clock.now = 2.0
-    module.feed(telemetry(lock=1))
-    state = module.state()
-    assert state["ok"] is True and state["lockOpen"] is True
-    assert "doorOpen" not in state
-    assert not hasattr(module, "compartment_open")
+    for fw in (3, 4):
+        module.feed(telemetry(fw=fw, lock=0, door=1))
+        assert module.state()["doorClosed"] is None
+    module.feed(telemetry(lock=1, doorclosed=1))
+    assert module.state()["lockOpen"] and module.state()["doorClosed"]
+    clock.now += sm.STALE_AFTER_S + 1
+    module.feed(frame("@ACK cmd=lock id=3 ok=1 t=12"))
+    assert module.state()["connected"] and module.state()["doorClosed"] is None
+    with pytest.raises(sm.SensorFrameError):
+        sm.parse_telemetry(telemetry(doorclosed=2))
+
+
+def test_scanned_uids_are_not_the_enrollment_list():
+    module, port, _ = make_module()
+    uids = ["AABBCCDD", "AABBCCDD001122", "AABBCCDD001122010203"]
+    for uid in uids:
+        module.feed(frame(f"@CARD uid={uid} ok=0 act=deny role=none why=unknown cards=0 t=1"))
+    for i in range(30):
+        module.feed(frame(f"@ACK cmd=stat id={i} ok=1 t=12"))
+    assert [x["uid"] for x in module.state()["recentCards"]] == uids
+    assert module.state()["cardList"] == []
+    assert port.written == []  # чтение не посылает команд записи
+    module.card("add", uids[1], "admin")
+    assert port.written == [b"card add AABBCCDD001122 admin\r\n"]
+    assert sm.parse_cardinfo(frame(f"@CARDINFO idx=1 uid={uids[1]} role=admin total=1 t=13"))["uid"] == uids[1]
+    assert sm.command_card("add", uids[2], "admin") == f"card add {uids[2]} admin"
+    for bad in ("AABBCCD", "AABBCCDD11", "AABBCCDD00112233", "AABBCCDD00112Z"):
+        with pytest.raises(ValueError):
+            module.card("add", bad, "admin")
 
 
 def test_cards_acks_and_events_are_kept_for_the_screen():
@@ -873,10 +893,9 @@ def test_map_without_module_still_works(kiosk_app):
 
 
 def test_motion_does_not_depend_on_the_door_switch(kiosk_app):
-    """Концевика нет — движение не запирается: робот едет как обычно.
+    """Концевик информационный — эта плата не вводит запрет движения.
 
-    D8 не подключён, поэтому состояние двери не приходит вовсе. Раньше из-за
-    этого «открытый отсек» вычислялся по висящему входу и робот не ехал.
+    Состояние D42 отображается отдельно от привода и команд замку.
     """
     class FakeDriveSource:
         name = "master"
@@ -903,10 +922,15 @@ def test_motion_does_not_depend_on_the_door_switch(kiosk_app):
     assert source.commands == [10, 15]
 
 
-def test_kiosk_state_carries_the_sensor_block():
-    """Поле sensorModule в /api/kiosk_state — контракт для экрана."""
-    source = (ROOT / "robot_control" / "kiosk_app.py").read_text(encoding="utf-8")
-    assert '"sensorModule": sensor_state_payload()' in source
+def test_public_kiosk_snapshot_does_not_broadcast_card_uids(kiosk_app):
+    module, _, _ = make_module()
+    module.feed(telemetry(doorclosed=1))
+    module.feed(frame("@CARD uid=04010203040506 ok=0 act=deny role=none why=unknown cards=0 t=1"))
+    kiosk_app.extensions["rc_sensor_module"] = module
+    client = kiosk_app.test_client()
+    assert client.get("/api/sensor_module").json["data"]["recentCards"][0]["uid"] == "04010203040506"
+    public = client.get("/api/kiosk_state").json["data"]["sensorModule"]
+    assert public["doorClosed"] is True and '04010203040506' not in str(public)
 
 
 # ----------------------------- лента внизу рамы ----------------------------- #
