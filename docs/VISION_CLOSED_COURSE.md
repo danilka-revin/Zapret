@@ -93,3 +93,17 @@ production-веса при реализации не изменялись.
 менялись ради этого поведения. Тесты: `tests/test_vision_closed_course.py` и
 `tests/js/vision_panel.js` — точная граница 5 с, дубликаты/потеря кадров,
 смена корпуса/камеры, red/yellow latch, API, отключение и потеря связи UI.
+
+## Результаты перед слиянием
+
+- **31 новый Python-тест** этого режима; профильный набор после интеграции:
+  **232 passed, 1 skipped**, Node `vision panel: OK`.
+- Полный pytest после включения актуального main: **2238 passed, 30 skipped,
+  1 failed**, 358.96 с. Единственное падение — прежний Kinect
+  `test_depth_to_scan_wall_in_front_and_floor_filtered`. Его тест, Kinect
+  и sensor-layout побайтно совпадают с main; посторонние assertions
+  не менялись и не отключались. Полный набор **не объявляется полностью зелёным**.
+- SHA production/всех сохранённых кандидатов/ONNX/VAL-профиля и меток
+  повторно сверены; протокол выбора и показатели модели не менялись.
+
+Логи и проверка неизменности: `models/vision/training/closed-course/checks.json`.

@@ -1,5 +1,5 @@
 {
-  "checkedAt": "2026-11-18T00:10:28.132754+00:00",
+  "checkedAt": "2026-11-18T04:14:24.442710+00:00",
   "artifactIntegrityPassed": true,
   "deploymentAccepted": false,
   "warning": "Integrity/parity passed, QUALITY GATES FAILED. No further training, inference, relabelling, threshold/profile selection or production promotion performed by this verification.",
