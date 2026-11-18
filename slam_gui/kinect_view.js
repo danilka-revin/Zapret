@@ -71,6 +71,52 @@
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
   }
+  /* Примерная зона видимости Kinect в системе 3D-вида (X вправо, Y вверх,
+   * Z вперёд). Усечённая пирамида от min_range до max_range; углы и монтаж
+   * берутся из calibrations, а не из hardcoded 57°/43°. */
+  function kinectFrustum(mount = {}, spec = {}, lidarOffsetM = DEFAULT_LIDAR_OFFSET_M) {
+    const offset = finiteNumber(lidarOffsetM, DEFAULT_LIDAR_OFFSET_M);
+    const zMount = finiteNumber(mount.z_m, 0.45);
+    const yaw = finiteNumber(mount.yaw_deg === undefined ? spec.yaw_deg : mount.yaw_deg, 0) * Math.PI / 180;
+    const pitch = finiteNumber(mount.pitch_deg === undefined ? spec.pitch_deg : mount.pitch_deg, 0) * Math.PI / 180;
+    const hfovDeg = Math.max(5, Math.min(140, finiteNumber(spec.hfov_deg === undefined ? mount.hfov_deg : spec.hfov_deg, 57)));
+    const vfovDeg = Math.max(5, Math.min(120, finiteNumber(spec.vfov_deg === undefined ? mount.vfov_deg : spec.vfov_deg, 43)));
+    const near = Math.max(0.1, finiteNumber(spec.min_range_m === undefined ? mount.min_range_m : spec.min_range_m, 0.45));
+    const far = Math.max(near + 0.1, finiteNumber(spec.max_range_m === undefined ? mount.max_range_m : spec.max_range_m, 4));
+    const tanH = Math.tan(hfovDeg * Math.PI / 360);
+    const tanV = Math.tan(vfovDeg * Math.PI / 360);
+    const cosY = Math.cos(yaw), sinY = Math.sin(yaw);
+    const cosP = Math.cos(pitch), sinP = Math.sin(pitch);
+    const origin = [0, zMount, offset + KINECT_FORWARD_OF_LIDAR_M];
+    // Те же базисы, что и transformKinect: ось, «вправо» и «вверх» камеры.
+    const axis = [-cosP * sinY, -sinP, cosP * cosY];
+    const right = [cosY, 0, sinY];
+    const up = [-sinP * sinY, cosP, sinP * cosY];
+    const at = (distance, lateral, vertical) => [
+      origin[0] + axis[0] * distance + right[0] * lateral + up[0] * vertical,
+      origin[1] + axis[1] * distance + right[1] * lateral + up[1] * vertical,
+      origin[2] + axis[2] * distance + right[2] * lateral + up[2] * vertical,
+    ];
+    const rect = (distance) => {
+      const hw = distance * tanH, hh = distance * tanV;
+      return [at(distance, -hw, -hh), at(distance, hw, -hh),
+        at(distance, hw, hh), at(distance, -hw, hh)];
+    };
+    const nearRect = rect(near), farRect = rect(far);
+    const side = 'rgba(56, 189, 248, 0.055)';
+    const faces = [];
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      faces.push({vertices: [nearRect[i], nearRect[j], farRect[j], farRect[i]], color: side});
+    }
+    faces.push({vertices: farRect, color: 'rgba(56, 189, 248, 0.075)'});
+    const rings = [];
+    for (let distance = Math.ceil(near); distance <= far + 1e-6; distance += 1) {
+      rings.push({distance, vertices: rect(distance)});
+    }
+    return {origin, axis, right, up, nearRect, farRect, faces, rings,
+      near, far, hfovDeg, vfovDeg, zMount, offset};
+  }
   function visionSignGeometry(marker) {
     const data = marker || {};
     const x = finiteNumber(data.x_m, 0), y = finiteNumber(data.y_m, 0);
@@ -181,7 +227,7 @@
   }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { decodeFrame, transformLidar, transformKinect, robotParts, orbitCoordinates,
-      visionSignGeometry, signLocalShape, signPoint, visionSignFaces };
+      kinectFrustum, visionSignGeometry, signLocalShape, signPoint, visionSignFaces };
   }
   if (!root.document) return;
 
@@ -190,6 +236,8 @@
   let signMarkers = [], signDeadline = 0;
   let deadline = 0, lidarDeadline = 0, lidarOffsetM = DEFAULT_LIDAR_OFFSET_M;
   let kinectMount = {z_m: 0.45, yaw_deg: 0, pitch_deg: 0};
+  let kinectSpec = {hfov_deg: 57, vfov_deg: 43, min_range_m: 0.45, max_range_m: 4.0};
+  let showKinectFov = true;
   let running = false, generation = 0, lastFrameId = null, lastDeadline = 0;
   let timer = null;
   const pointers = new Map();
@@ -220,8 +268,15 @@
       ? ' (масштаб ×' + Number(scaled.sizeScale || 1).toFixed(2) + ')'
       : ' (1:1)';
     const signNote = signsFresh ? ' · знаков: ' + signMarkers.length + scaleNote : '';
+    const spec = kinectSpec || {};
+    const hfov = Math.round(finiteNumber(spec.hfov_deg, 57));
+    const vfov = Math.round(finiteNumber(spec.vfov_deg, 43));
+    const far = finiteNumber(spec.max_range_m, 4);
+    const fovNote = showKinectFov
+      ? ' · зона Kinect ' + hfov + '°×' + vfov + '°, до ' + far.toFixed(1) + ' м'
+      : ' · зона Kinect выключена';
     if (note) note.textContent = 'Модель робота · фактические углы колёс (при свежей телеметрии) · Лидар z=550 мм · Kinect +130 мм вперёд, z=' +
-      Math.round(kinectZ * 1000) + ' мм' + signNote;
+      Math.round(kinectZ * 1000) + ' мм' + fovNote + signNote;
   }
   function draw() {
     const canvas = $('kinect-3d-canvas');
@@ -414,6 +469,42 @@
       };
       for (let forward = 0; forward <= 6; forward += 1) gridLine([-3, 0, forward], [3, 0, forward]);
       for (let left = -3; left <= 3; left += 1) gridLine([-left, 0, 0], [-left, 0, 6]);
+      // Полупрозрачная пирамида: «куда примерно смотрит Kinect», а не карта.
+      // Рисуется до точек и модели робота, чтобы не перекрывать облако.
+      if (showKinectFov) {
+        const frustum = kinectFrustum(kinectMount, kinectSpec, lidarOffsetM);
+        drawFaces(frustum.faces, 'rgba(56, 189, 248, 0.16)');
+        const outline = (vertices, color, width) => {
+          const points = vertices.map(project);
+          if (!points.every(Boolean)) return;
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+          points.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+          ctx.closePath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = Math.max(1, ratio) * width;
+          ctx.stroke();
+        };
+        frustum.rings.forEach((ring) => outline(ring.vertices, 'rgba(103, 210, 255, 0.28)', 1));
+        outline(frustum.farRect, 'rgba(103, 210, 255, 0.55)', 1.5);
+        // Четыре луча от сенсора до дальних углов делают границы зоны читаемыми.
+        for (let i = 0; i < 4; i++) {
+          const a = project(frustum.origin), b = project(frustum.farRect[i]);
+          if (!a || !b) continue;
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+          ctx.strokeStyle = 'rgba(103, 210, 255, 0.35)';
+          ctx.lineWidth = Math.max(1, ratio); ctx.stroke();
+        }
+        const label = project(frustum.farRect[2]);
+        if (label) {
+          ctx.fillStyle = 'rgba(170, 230, 255, 0.85)';
+          ctx.font = '600 ' + (11 * ratio) + 'px ui-monospace, monospace';
+          ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+          ctx.fillText('Kinect ' + Math.round(frustum.hfovDeg) + '°×' +
+            Math.round(frustum.vfovDeg) + '° · ' + frustum.far.toFixed(1) + ' м',
+            label.x + 6 * ratio, label.y - 4 * ratio);
+        }
+      }
     }
     for (const point of displayPoints) {
       const screen = project(point);
@@ -508,7 +599,17 @@
       const decoded = decodeFrame(data);
       if (!decoded.length) { expire('Нет точек в кадре глубины'); return; }
       kinectPoints = decoded;
-      if (data.mount && typeof data.mount === 'object') kinectMount = data.mount;
+      if (data.mount && typeof data.mount === 'object') {
+        kinectMount = data.mount;
+        kinectSpec = Object.assign({}, kinectSpec, {
+          hfov_deg: finiteNumber(data.mount.hfov_deg, kinectSpec.hfov_deg),
+          vfov_deg: finiteNumber(data.mount.vfov_deg, kinectSpec.vfov_deg),
+          min_range_m: finiteNumber(data.mount.min_range_m, kinectSpec.min_range_m),
+          max_range_m: finiteNumber(data.mount.max_range_m, kinectSpec.max_range_m),
+          yaw_deg: finiteNumber(data.mount.yaw_deg, kinectSpec.yaw_deg),
+          pitch_deg: finiteNumber(data.mount.pitch_deg, kinectSpec.pitch_deg),
+        });
+      }
       deadline = nextDeadline;
       if (mode !== 'combined') {
         const label = data.captureSource === 'demo' ? 'ДЕМО · синтетический кадр' : 'Свежий кадр';
@@ -552,11 +653,22 @@
       vision.onState((payload) => setVisionMarkers(payload && payload.field));
     }
   }
+  function setKinectFov(enabled) {
+    showKinectFov = !!enabled;
+    const button = $('kinect-fov-toggle');
+    if (button) button.setAttribute('aria-pressed', String(showKinectFov));
+    draw();
+  }
   function setMode(next) {
     if (!['lidar', 'kinect', 'combined'].includes(next)) return;
     mode = next; generation++;
     const active = mode !== 'lidar';
     const lidarButton = $('sensor-lidar'), kinectButton = $('sensor-kinect'), combinedButton = $('sensor-combined');
+    const fovButton = $('kinect-fov-toggle');
+    if (fovButton) {
+      fovButton.hidden = mode !== 'combined';
+      fovButton.setAttribute('aria-pressed', String(showKinectFov));
+    }
     if (lidarButton) lidarButton.setAttribute('aria-pressed', String(mode === 'lidar'));
     if (kinectButton) kinectButton.setAttribute('aria-pressed', String(mode === 'kinect'));
     if (combinedButton) combinedButton.setAttribute('aria-pressed', String(mode === 'combined'));
@@ -583,6 +695,12 @@
     if (kinectButton) kinectButton.addEventListener('click', () => setMode('kinect'));
     if (combinedButton) combinedButton.addEventListener('click', () => setMode('combined'));
     const zoomIn = $('kinect-zoom-in'), zoomOut = $('kinect-zoom-out'), reset = $('kinect-reset-view');
+    const fovButton = $('kinect-fov-toggle');
+    if (fovButton) {
+      fovButton.hidden = mode !== 'combined';
+      fovButton.setAttribute('aria-pressed', String(showKinectFov));
+      fovButton.addEventListener('click', () => setKinectFov(!showKinectFov));
+    }
     if (zoomIn) zoomIn.addEventListener('click', () => { zoom = clamp(zoom * 1.25, .4, 5); draw(); });
     if (zoomOut) zoomOut.addEventListener('click', () => { zoom = clamp(zoom / 1.25, .4, 5); draw(); });
     if (reset) reset.addEventListener('click', () => { yaw = .25; pitch = -.15; zoom = 1; draw(); });
@@ -631,6 +749,7 @@
     }, 500);
   }
   root.RCKinectView = {active: () => mode !== 'lidar', mode: () => mode, setMode, draw,
+    setKinectFov, kinectFov: () => showKinectFov,
     setLidarScan, setVisionMarkers};
   if (root.document.readyState === 'loading') root.document.addEventListener('DOMContentLoaded', bind);
   else bind();

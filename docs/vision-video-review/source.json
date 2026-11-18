@@ -1,0 +1,79 @@
+{
+  "url": "https://codeload.github.com/p25543770-lang/yolo-stop/zip/3cb277bfadf7d0034943117f9146d4b92bb773a9",
+  "revision": "3cb277bfadf7d0034943117f9146d4b92bb773a9",
+  "archiveSha256": "464f43a9042be1e802745b7f00c8c44074b51d5bea8c4611eb4553afa5f55c70",
+  "videos": [
+    {
+      "name": "VID_20261117_223120_204.mp4",
+      "sha256": "e1f87d64eaa5c0f1ae939eda52e65ca75f27f00a85e7df69de9a778893a9fc01",
+      "fps": 44.29529402192141,
+      "frames": 248,
+      "extracted": 6,
+      "archiveMember": "yolo-stop-3cb277bfadf7d0034943117f9146d4b92bb773a9/VID_20261117_223120_204.mp4",
+      "bytes": 2361519
+    },
+    {
+      "name": "VID_20261117_223120_211.mp4",
+      "sha256": "8ad1e05abf7bf4fc7cd64c2246ef0cf4986d1b48e36ca687bbc3f3c02203def8",
+      "fps": 21.60557335606573,
+      "frames": 98,
+      "extracted": 5,
+      "archiveMember": "yolo-stop-3cb277bfadf7d0034943117f9146d4b92bb773a9/VID_20261117_223120_211.mp4",
+      "bytes": 1926575
+    },
+    {
+      "name": "VID_20261117_223120_293.mp4",
+      "sha256": "105204a7c1e117ebb5810dec383e9dcf2d9908a2b5e651211e21d05f6a51ee85",
+      "fps": 21.524096315830754,
+      "frames": 186,
+      "extracted": 9,
+      "archiveMember": "yolo-stop-3cb277bfadf7d0034943117f9146d4b92bb773a9/VID_20261117_223120_293.mp4",
+      "bytes": 3608725
+    },
+    {
+      "name": "VID_20261117_223120_414.mp4",
+      "sha256": "0904c43f6de3f878aa46aa47570d08ae6ff196199dcec7dd8922a0ff144981c0",
+      "fps": 59.49401309879913,
+      "frames": 379,
+      "extracted": 7,
+      "archiveMember": "yolo-stop-3cb277bfadf7d0034943117f9146d4b92bb773a9/VID_20261117_223120_414.mp4",
+      "bytes": 2679950
+    },
+    {
+      "name": "VID_20261117_223120_448.mp4",
+      "sha256": "1bad0c6167d5086fb2c0d3c9301b4c8fbe1cea4d7bddc02839987ee94f336ba8",
+      "fps": 44.747440183201284,
+      "frames": 170,
+      "extracted": 4,
+      "archiveMember": "yolo-stop-3cb277bfadf7d0034943117f9146d4b92bb773a9/VID_20261117_223120_448.mp4",
+      "bytes": 1596762
+    },
+    {
+      "name": "VID_20261117_223120_495.mp4",
+      "sha256": "4acd5763cf4d8f3f5589c4afcdf8438213cd72cf6ed02b1acebcbb2f482eb691",
+      "fps": 44.648673568586574,
+      "frames": 495,
+      "extracted": 11,
+      "archiveMember": "yolo-stop-3cb277bfadf7d0034943117f9146d4b92bb773a9/VID_20261117_223120_495.mp4",
+      "bytes": 4685295
+    },
+    {
+      "name": "VID_20261117_223120_760.mp4",
+      "sha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef",
+      "fps": 32.03578772682997,
+      "frames": 444,
+      "extracted": 14,
+      "archiveMember": "yolo-stop-3cb277bfadf7d0034943117f9146d4b92bb773a9/VID_20261117_223120_760.mp4",
+      "bytes": 5846510
+    },
+    {
+      "name": "VID_20261117_223120_865.mp4",
+      "sha256": "77c10bc166dbe8f6dd0a4f3c435359073f1eb0eb1aaea918223f5aa67fe3c553",
+      "fps": 31.571702577755488,
+      "frames": 263,
+      "extracted": 9,
+      "archiveMember": "yolo-stop-3cb277bfadf7d0034943117f9146d4b92bb773a9/VID_20261117_223120_865.mp4",
+      "bytes": 3515913
+    }
+  ]
+}

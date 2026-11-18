@@ -42,12 +42,13 @@
           <canvas id="kinect-3d-canvas" tabindex="0" aria-label="Свежий 3D-обзор лидара и Kinect вокруг робота"></canvas>
           <p class="kinect-empty" id="kinect-3d-empty">Ожидание свежего скана лидара и кадра Kinect</p>
           <div class="scan-3d-controls" aria-label="Управление 3D видом">
+            <button type="button" id="kinect-fov-toggle" aria-label="Показать зону видимости Kinect" aria-pressed="true" title="Голубая пирамида — примерная зона видимости Kinect">◰</button>
             <button type="button" id="kinect-zoom-out" aria-label="Отдалить">−</button>
             <button type="button" id="kinect-zoom-in" aria-label="Приблизить">+</button>
             <button type="button" id="kinect-reset-view" aria-label="Сбросить вид">⊙</button>
           </div>
         </div>
-        <p class="scan-3d-hint">Облака показывают только текущий кадр и не записываются в навигационную карту. Перетащите для вращения, колесо — масштаб.</p>
+        <p class="scan-3d-hint">Облака показывают только текущий кадр и не записываются в навигационную карту. Перетащите для вращения, колесо — масштаб. Голубая пирамида — примерная зона, где Kinect видит глубину.</p>
       </div>
       <dl class="scan-stats">
         <div><dt>изучено</dt><dd id="map-cov">—</dd></div>

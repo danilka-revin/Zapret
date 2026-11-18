@@ -1,0 +1,1463 @@
+{
+  "source": "VID_20261117_223120_211.mp4",
+  "sourceSha256": "8ad1e05abf7bf4fc7cd64c2246ef0cf4986d1b48e36ca687bbc3f3c02203def8",
+  "frames": 98,
+  "originalSplit": "val",
+  "review": "negative-video-review.json",
+  "profile": {
+    "weights": "models/vision/yolo-stop-improved.pt",
+    "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+    "confidence": 0.25,
+    "imgsz": 512,
+    "device": "cpu",
+    "preferRed": false,
+    "backend": "yolo+fusion",
+    "trafficMode": "body",
+    "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+    "selectedAt": "2026-11-17T22:20:28.470178+00:00",
+    "selectedOn": "canonical val plus agent-reviewed negative VAL video; no test-based threshold/model selection",
+    "testAlreadyObservedInThisCycle": true,
+    "testReuseNote": "Initial candidate test was already evaluated and is NOT a new blind holdout. Body-only guard was developed on the separate VAL shoe clip and canonical val, using pre-existing body thresholds. Test results were not used to tune its thresholds. Final profile is frozen before repeated test evaluation; all earlier results preserved.",
+    "heuristicEnabled": false,
+    "selectionFile": "models/vision/training/refinement/validation-selection-body-guard.json",
+    "selectionFileSha256": "cda8f31e0195bb9e29187a06f7119836892c0aa15c61e41f8ccad54851bacdf4",
+    "objective": "0.7*canonical_macro_F1 + 0.3*signal_balanced_recall_including_misses; falseGreen==0 on canonical val; no more traffic-FP frames on the agent-reviewed 98-frame VAL shoe clip than baseline (21). Matched confidence .25 for all.",
+    "warning": "Bench only, not autonomous-ready. Body mode only deletes post-NMS boxes; it cannot create or recolour green. Some shoe false positives remain. Test is REUSED, not an independent new safety benchmark."
+  },
+  "results": {
+    "before": {
+      "weights": "models/vision/yolo-stop-candidate.pt",
+      "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+      "trafficFalsePositiveBoxes": 22,
+      "framesWithTrafficFalsePositive": 21,
+      "falseTrafficSignals": {
+        "unknown": 21,
+        "red": 1
+      }
+    },
+    "after": {
+      "weights": "models/vision/yolo-stop-improved.pt",
+      "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+      "trafficFalsePositiveBoxes": 11,
+      "framesWithTrafficFalsePositive": 11,
+      "falseTrafficSignals": {
+        "yellow": 2,
+        "red": 9
+      }
+    }
+  },
+  "perFrame": [
+    {
+      "frame": 0,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 1,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 2,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.271,
+            "box": {
+              "x": 0.6868,
+              "y": 0.0006,
+              "w": 0.3132,
+              "h": 0.4325
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 3,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.308,
+            "box": {
+              "x": 0.7154,
+              "y": 0.0007,
+              "w": 0.2846,
+              "h": 0.3756
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 4,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.39,
+            "box": {
+              "x": 0.7049,
+              "y": 0.0011,
+              "w": 0.2927,
+              "h": 0.4182
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 5,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 6,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 7,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 8,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 9,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.336,
+            "box": {
+              "x": 0.4915,
+              "y": 0.8447,
+              "w": 0.2418,
+              "h": 0.1538
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 10,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.376,
+            "box": {
+              "x": 0.391,
+              "y": 0.8733,
+              "w": 0.3564,
+              "h": 0.1264
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 11,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 12,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 13,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 14,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 15,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 16,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.352,
+            "box": {
+              "x": 0.4307,
+              "y": 0.7713,
+              "w": 0.1577,
+              "h": 0.2287
+            },
+            "signal": "red",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 17,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 18,
+      "predictions": {
+        "before": [],
+        "after": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.28,
+            "box": {
+              "x": 0.6555,
+              "y": 0.0,
+              "w": 0.3433,
+              "h": 1.0
+            },
+            "signal": "yellow",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ]
+      }
+    },
+    {
+      "frame": 19,
+      "predictions": {
+        "before": [],
+        "after": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.45,
+            "box": {
+              "x": 0.7255,
+              "y": 0.0,
+              "w": 0.2739,
+              "h": 1.0
+            },
+            "signal": "yellow",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ]
+      }
+    },
+    {
+      "frame": 20,
+      "predictions": {
+        "before": [],
+        "after": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.253,
+            "box": {
+              "x": 0.7311,
+              "y": 0.156,
+              "w": 0.2689,
+              "h": 0.844
+            },
+            "signal": "red",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ]
+      }
+    },
+    {
+      "frame": 21,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 22,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 23,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 24,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 25,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 26,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 27,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 28,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 29,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 30,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.286,
+            "box": {
+              "x": 0.3965,
+              "y": 0.839,
+              "w": 0.4106,
+              "h": 0.161
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 31,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 32,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 33,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.649,
+            "box": {
+              "x": 0.3918,
+              "y": 0.3937,
+              "w": 0.2616,
+              "h": 0.6063
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 34,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.559,
+            "box": {
+              "x": 0.3803,
+              "y": 0.3141,
+              "w": 0.2672,
+              "h": 0.6859
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 35,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.429,
+            "box": {
+              "x": 0.3771,
+              "y": 0.3464,
+              "w": 0.2846,
+              "h": 0.6536
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 36,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 37,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 38,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.298,
+            "box": {
+              "x": 0.1391,
+              "y": 0.8359,
+              "w": 0.4539,
+              "h": 0.1641
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 39,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 40,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 41,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 42,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 43,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 44,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.719,
+            "box": {
+              "x": 0.2549,
+              "y": 0.3555,
+              "w": 0.2601,
+              "h": 0.6439
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 45,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.721,
+            "box": {
+              "x": 0.2751,
+              "y": 0.3452,
+              "w": 0.2664,
+              "h": 0.6538
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 46,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.5,
+            "box": {
+              "x": 0.2991,
+              "y": 0.4175,
+              "w": 0.2526,
+              "h": 0.5825
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 47,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.356,
+            "box": {
+              "x": 0.3139,
+              "y": 0.4849,
+              "w": 0.2765,
+              "h": 0.5151
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 48,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.408,
+            "box": {
+              "x": 0.34,
+              "y": 0.6203,
+              "w": 0.2853,
+              "h": 0.3797
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          },
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.304,
+            "box": {
+              "x": 0.8446,
+              "y": 0.0,
+              "w": 0.1554,
+              "h": 0.2042
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 49,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 50,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 51,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 52,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 53,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 54,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 55,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.264,
+            "box": {
+              "x": 0.4025,
+              "y": 0.556,
+              "w": 0.3428,
+              "h": 0.4425
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.354,
+            "box": {
+              "x": 0.0007,
+              "y": 0.0,
+              "w": 0.2609,
+              "h": 0.776
+            },
+            "signal": "red",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ]
+      }
+    },
+    {
+      "frame": 56,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.337,
+            "box": {
+              "x": 0.3717,
+              "y": 0.4246,
+              "w": 0.3496,
+              "h": 0.5752
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.387,
+            "box": {
+              "x": 0.0,
+              "y": 0.0147,
+              "w": 0.258,
+              "h": 0.8315
+            },
+            "signal": "red",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ]
+      }
+    },
+    {
+      "frame": 57,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.392,
+            "box": {
+              "x": 0.3449,
+              "y": 0.4088,
+              "w": 0.3559,
+              "h": 0.5912
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.418,
+            "box": {
+              "x": 0.0001,
+              "y": 0.0245,
+              "w": 0.2589,
+              "h": 0.9139
+            },
+            "signal": "red",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 2,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ]
+      }
+    },
+    {
+      "frame": 58,
+      "predictions": {
+        "before": [],
+        "after": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.397,
+            "box": {
+              "x": 0.0,
+              "y": 0.0256,
+              "w": 0.2654,
+              "h": 0.9736
+            },
+            "signal": "red",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 1,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ]
+      }
+    },
+    {
+      "frame": 59,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 60,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 61,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 62,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 63,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 64,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 65,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 66,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.299,
+            "box": {
+              "x": 0.2721,
+              "y": 0.8761,
+              "w": 0.2556,
+              "h": 0.1231
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 67,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 68,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 69,
+      "predictions": {
+        "before": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.474,
+            "box": {
+              "x": 0.2336,
+              "y": 0.5291,
+              "w": 0.3903,
+              "h": 0.4709
+            },
+            "signal": "unknown",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ],
+        "after": []
+      }
+    },
+    {
+      "frame": 70,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 71,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 72,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 73,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 74,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 75,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 76,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 77,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 78,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 79,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 80,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 81,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 82,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 83,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 84,
+      "predictions": {
+        "before": [],
+        "after": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.357,
+            "box": {
+              "x": 0.0,
+              "y": 0.0023,
+              "w": 0.1509,
+              "h": 0.6207
+            },
+            "signal": "red",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ]
+      }
+    },
+    {
+      "frame": 85,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 86,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 87,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 88,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 89,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 90,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 91,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 92,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 93,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    },
+    {
+      "frame": 94,
+      "predictions": {
+        "before": [],
+        "after": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.266,
+            "box": {
+              "x": 0.6828,
+              "y": 0.0009,
+              "w": 0.3157,
+              "h": 0.9991
+            },
+            "signal": "red",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ]
+      }
+    },
+    {
+      "frame": 95,
+      "predictions": {
+        "before": [],
+        "after": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.356,
+            "box": {
+              "x": 0.7384,
+              "y": 0.0,
+              "w": 0.2616,
+              "h": 0.9929
+            },
+            "signal": "red",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ]
+      }
+    },
+    {
+      "frame": 96,
+      "predictions": {
+        "before": [],
+        "after": [
+          {
+            "class": "traffic_light",
+            "label": "Светофор",
+            "short": "СВЕТОФОР",
+            "action": "signal",
+            "color": "#a78bfa",
+            "confidence": 0.381,
+            "box": {
+              "x": 0.7536,
+              "y": 0.0,
+              "w": 0.2454,
+              "h": 1.0
+            },
+            "signal": "red",
+            "signalCounts": {
+              "red": 0,
+              "yellow": 0,
+              "green": 0
+            },
+            "source": "yolo"
+          }
+        ]
+      }
+    },
+    {
+      "frame": 97,
+      "predictions": {
+        "before": [],
+        "after": []
+      }
+    }
+  ],
+  "warning": "ONE correlated validation clip, agent-reviewed target-free traffic frames; NOT independent human GT, overall accuracy, specificity in new scenes or a safety test. Not used to re-select model/profile."
+}

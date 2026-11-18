@@ -420,8 +420,17 @@ class KinectDepthService:
                       "maxAgeS": float(self._spec["max_age_s"]), "source": self._source,
                       "captureSource": self._capture_source,
                       "capturePort": self._capture_port,
-                      "mount": {key: float(self._spec[key]) for key in
-                                ("z_m", "yaw_deg", "pitch_deg")}}
+                      # Полная геометрия: 3D-обзор рисует не только точки,
+                      # но и примерный конус видимости с реальными углами и
+                      # диапазоном. Старые ключи z/yaw/pitch сохранены.
+                      "mount": {key: (int(self._spec[key]) if key == "scan_columns"
+                                      else float(self._spec[key]))
+                                for key in ("x_m", "y_m", "z_m", "yaw_deg",
+                                            "pitch_deg", "hfov_deg", "vfov_deg",
+                                            "min_range_m", "max_range_m",
+                                            "min_height_m", "max_height_m",
+                                            "max_age_s", "scan_columns")
+                                if key in self._spec}}
             if available:
                 result.update(self._preview)
             return result

@@ -1,0 +1,9 @@
+{
+  "status": "training still running; recovery checkpoint ONLY, not a finished result",
+  "savedAt": "2026-11-17T23:42:16.954685+00:00",
+  "epochsCompletedAtSnapshot": 23,
+  "bestEpoch": 14,
+  "runDirectory": "runs/vision/20261117T230705Z-0fc4b9/train",
+  "sha256": "199658ca3f7f2eeeef26249caa2bd6b995aa217dbd36b285758e9a5b166159fc",
+  "note": "Temporary protection for a long CPU run; final weights/profile will only be published after early stopping and validation. No TEST evaluation yet."
+}

@@ -1,0 +1,1510 @@
+{
+  "createdAt": "2026-11-17T21:16:45.995330+00:00",
+  "weights": "models/vision/yolo-stop-candidate.pt",
+  "modelSha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+  "sourceRevision": "3cb277bfadf7d0034943117f9146d4b92bb773a9",
+  "archiveSha256": "464f43a9042be1e802745b7f00c8c44074b51d5bea8c4611eb4553afa5f55c70",
+  "profile": {
+    "confidence": 0.25,
+    "imgsz": 512,
+    "preferRed": false,
+    "backend": "yolo+fusion"
+  },
+  "versions": {
+    "torch": "2.2.2+cu121",
+    "ultralytics": "8.4.215",
+    "opencv": "4.11.0"
+  },
+  "frames": 2283,
+  "durationS": 62.22192222222222,
+  "processing": "Every decoded source frame; no tracker, smoothing, frame skipping or heuristic ensemble. Detection on original pixels. Output resized to 960x540 plus labels.",
+  "timing": "Output CFR at source average FPS, approximately original speed; source PTS in trace. Audio omitted.",
+  "warning": "Not independent new data: sparse frames from these same source videos belonged to train/val/test as marked. No frame-level ground truth. Output counts are NOT accuracy, recall, verified misses, or a safety guarantee.",
+  "clips": [
+    {
+      "source": "VID_20261117_223120_204.mp4",
+      "sha256": "e1f87d64eaa5c0f1ae939eda52e65ca75f27f00a85e7df69de9a778893a9fc01",
+      "split": [
+        "val"
+      ],
+      "frames": 248,
+      "declaredFrames": 248,
+      "allFramesProcessed": true,
+      "fps": 44.29529402192141,
+      "durationS": 5.598788888888889,
+      "sourceResolution": [
+        1280,
+        720
+      ],
+      "outputResolution": [
+        960,
+        624
+      ],
+      "video": "VID_20261117_223120_204-detections.mp4",
+      "videoSha256": "e955fd759f812019bf1b6b76a5a04e09e684586d57ddd7489385d292058539b4",
+      "trace": "VID_20261117_223120_204-predictions.jsonl",
+      "traceSha256": "52de5500c1ee8de0cfe70c491cdff4ad02922a2b80c20ef06ef4612eb3112c29",
+      "poster": "VID_20261117_223120_204-poster.jpg",
+      "storyboard": "VID_20261117_223120_204-storyboard.jpg",
+      "framesWithClass": {
+        "cone": 230,
+        "traffic_light": 55
+      },
+      "detectionCounts": {
+        "cone": 543,
+        "traffic_light": 59
+      },
+      "trafficOutputFrameCounts": {
+        "no_detection": 193,
+        "red": 47,
+        "yellow": 3,
+        "red|yellow": 2,
+        "unknown": 3
+      },
+      "trafficOutputRuns": [
+        {
+          "state": "no_detection",
+          "startFrame": 0,
+          "endFrameExclusive": 24,
+          "startS": 0.0,
+          "endS": 0.541818,
+          "frames": 24
+        },
+        {
+          "state": "red",
+          "startFrame": 24,
+          "endFrameExclusive": 25,
+          "startS": 0.541818,
+          "endS": 0.564394,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 25,
+          "endFrameExclusive": 27,
+          "startS": 0.564394,
+          "endS": 0.609546,
+          "frames": 2
+        },
+        {
+          "state": "red",
+          "startFrame": 27,
+          "endFrameExclusive": 28,
+          "startS": 0.609546,
+          "endS": 0.632121,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 28,
+          "endFrameExclusive": 30,
+          "startS": 0.632121,
+          "endS": 0.677273,
+          "frames": 2
+        },
+        {
+          "state": "red",
+          "startFrame": 30,
+          "endFrameExclusive": 46,
+          "startS": 0.677273,
+          "endS": 1.038485,
+          "frames": 16
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 46,
+          "endFrameExclusive": 60,
+          "startS": 1.038485,
+          "endS": 1.354546,
+          "frames": 14
+        },
+        {
+          "state": "yellow",
+          "startFrame": 60,
+          "endFrameExclusive": 62,
+          "startS": 1.354546,
+          "endS": 1.399697,
+          "frames": 2
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 62,
+          "endFrameExclusive": 68,
+          "startS": 1.399697,
+          "endS": 1.535152,
+          "frames": 6
+        },
+        {
+          "state": "red",
+          "startFrame": 68,
+          "endFrameExclusive": 69,
+          "startS": 1.535152,
+          "endS": 1.557728,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 69,
+          "endFrameExclusive": 74,
+          "startS": 1.557728,
+          "endS": 1.670606,
+          "frames": 5
+        },
+        {
+          "state": "red",
+          "startFrame": 74,
+          "endFrameExclusive": 84,
+          "startS": 1.670606,
+          "endS": 1.896364,
+          "frames": 10
+        },
+        {
+          "state": "red|yellow",
+          "startFrame": 84,
+          "endFrameExclusive": 85,
+          "startS": 1.896364,
+          "endS": 1.91894,
+          "frames": 1
+        },
+        {
+          "state": "red",
+          "startFrame": 85,
+          "endFrameExclusive": 86,
+          "startS": 1.91894,
+          "endS": 1.941516,
+          "frames": 1
+        },
+        {
+          "state": "yellow",
+          "startFrame": 86,
+          "endFrameExclusive": 87,
+          "startS": 1.941516,
+          "endS": 1.964091,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 87,
+          "endFrameExclusive": 90,
+          "startS": 1.964091,
+          "endS": 2.031819,
+          "frames": 3
+        },
+        {
+          "state": "red",
+          "startFrame": 90,
+          "endFrameExclusive": 91,
+          "startS": 2.031819,
+          "endS": 2.054394,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 91,
+          "endFrameExclusive": 92,
+          "startS": 2.054394,
+          "endS": 2.07697,
+          "frames": 1
+        },
+        {
+          "state": "red",
+          "startFrame": 92,
+          "endFrameExclusive": 93,
+          "startS": 2.07697,
+          "endS": 2.099546,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 93,
+          "endFrameExclusive": 94,
+          "startS": 2.099546,
+          "endS": 2.122122,
+          "frames": 1
+        },
+        {
+          "state": "red",
+          "startFrame": 94,
+          "endFrameExclusive": 105,
+          "startS": 2.122122,
+          "endS": 2.370455,
+          "frames": 11
+        },
+        {
+          "state": "red|yellow",
+          "startFrame": 105,
+          "endFrameExclusive": 106,
+          "startS": 2.370455,
+          "endS": 2.393031,
+          "frames": 1
+        },
+        {
+          "state": "red",
+          "startFrame": 106,
+          "endFrameExclusive": 107,
+          "startS": 2.393031,
+          "endS": 2.415606,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 107,
+          "endFrameExclusive": 108,
+          "startS": 2.415606,
+          "endS": 2.438182,
+          "frames": 1
+        },
+        {
+          "state": "red",
+          "startFrame": 108,
+          "endFrameExclusive": 110,
+          "startS": 2.438182,
+          "endS": 2.483334,
+          "frames": 2
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 110,
+          "endFrameExclusive": 121,
+          "startS": 2.483334,
+          "endS": 2.731667,
+          "frames": 11
+        },
+        {
+          "state": "red",
+          "startFrame": 121,
+          "endFrameExclusive": 122,
+          "startS": 2.731667,
+          "endS": 2.754243,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 122,
+          "endFrameExclusive": 180,
+          "startS": 2.754243,
+          "endS": 4.063637,
+          "frames": 58
+        },
+        {
+          "state": "unknown",
+          "startFrame": 180,
+          "endFrameExclusive": 183,
+          "startS": 4.063637,
+          "endS": 4.131364,
+          "frames": 3
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 183,
+          "endFrameExclusive": 248,
+          "startS": 4.131364,
+          "endS": 5.598789,
+          "frames": 65
+        }
+      ],
+      "trafficOutputTransitions": 29,
+      "inferenceMedianMs": 45.094,
+      "inferenceP95Ms": 51.692
+    },
+    {
+      "source": "VID_20261117_223120_211.mp4",
+      "sha256": "8ad1e05abf7bf4fc7cd64c2246ef0cf4986d1b48e36ca687bbc3f3c02203def8",
+      "split": [
+        "val"
+      ],
+      "frames": 98,
+      "declaredFrames": 98,
+      "allFramesProcessed": true,
+      "fps": 21.60557335606573,
+      "durationS": 4.535866666666666,
+      "sourceResolution": [
+        1280,
+        720
+      ],
+      "outputResolution": [
+        960,
+        624
+      ],
+      "video": "VID_20261117_223120_211-detections.mp4",
+      "videoSha256": "8da6b061e63d63f226e8cc229cfa10826f5055ab1cd84402d08a3979dc802c2a",
+      "trace": "VID_20261117_223120_211-predictions.jsonl",
+      "traceSha256": "daee318527fced605ec2d66d08f00f9db086e7027d374a08353f26d5ea1fc4c9",
+      "poster": "VID_20261117_223120_211-poster.jpg",
+      "storyboard": "VID_20261117_223120_211-storyboard.jpg",
+      "framesWithClass": {
+        "traffic_light": 21
+      },
+      "detectionCounts": {
+        "traffic_light": 22
+      },
+      "trafficOutputFrameCounts": {
+        "no_detection": 77,
+        "unknown": 20,
+        "red": 1
+      },
+      "trafficOutputRuns": [
+        {
+          "state": "no_detection",
+          "startFrame": 0,
+          "endFrameExclusive": 2,
+          "startS": 0.0,
+          "endS": 0.092569,
+          "frames": 2
+        },
+        {
+          "state": "unknown",
+          "startFrame": 2,
+          "endFrameExclusive": 5,
+          "startS": 0.092569,
+          "endS": 0.231422,
+          "frames": 3
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 5,
+          "endFrameExclusive": 9,
+          "startS": 0.231422,
+          "endS": 0.416559,
+          "frames": 4
+        },
+        {
+          "state": "unknown",
+          "startFrame": 9,
+          "endFrameExclusive": 11,
+          "startS": 0.416559,
+          "endS": 0.509128,
+          "frames": 2
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 11,
+          "endFrameExclusive": 16,
+          "startS": 0.509128,
+          "endS": 0.74055,
+          "frames": 5
+        },
+        {
+          "state": "red",
+          "startFrame": 16,
+          "endFrameExclusive": 17,
+          "startS": 0.74055,
+          "endS": 0.786834,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 17,
+          "endFrameExclusive": 30,
+          "startS": 0.786834,
+          "endS": 1.388531,
+          "frames": 13
+        },
+        {
+          "state": "unknown",
+          "startFrame": 30,
+          "endFrameExclusive": 31,
+          "startS": 1.388531,
+          "endS": 1.434815,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 31,
+          "endFrameExclusive": 33,
+          "startS": 1.434815,
+          "endS": 1.527384,
+          "frames": 2
+        },
+        {
+          "state": "unknown",
+          "startFrame": 33,
+          "endFrameExclusive": 36,
+          "startS": 1.527384,
+          "endS": 1.666237,
+          "frames": 3
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 36,
+          "endFrameExclusive": 38,
+          "startS": 1.666237,
+          "endS": 1.758805,
+          "frames": 2
+        },
+        {
+          "state": "unknown",
+          "startFrame": 38,
+          "endFrameExclusive": 39,
+          "startS": 1.758805,
+          "endS": 1.80509,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 39,
+          "endFrameExclusive": 44,
+          "startS": 1.80509,
+          "endS": 2.036512,
+          "frames": 5
+        },
+        {
+          "state": "unknown",
+          "startFrame": 44,
+          "endFrameExclusive": 49,
+          "startS": 2.036512,
+          "endS": 2.267933,
+          "frames": 5
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 49,
+          "endFrameExclusive": 55,
+          "startS": 2.267933,
+          "endS": 2.545639,
+          "frames": 6
+        },
+        {
+          "state": "unknown",
+          "startFrame": 55,
+          "endFrameExclusive": 58,
+          "startS": 2.545639,
+          "endS": 2.684493,
+          "frames": 3
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 58,
+          "endFrameExclusive": 66,
+          "startS": 2.684493,
+          "endS": 3.054767,
+          "frames": 8
+        },
+        {
+          "state": "unknown",
+          "startFrame": 66,
+          "endFrameExclusive": 67,
+          "startS": 3.054767,
+          "endS": 3.101052,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 67,
+          "endFrameExclusive": 69,
+          "startS": 3.101052,
+          "endS": 3.19362,
+          "frames": 2
+        },
+        {
+          "state": "unknown",
+          "startFrame": 69,
+          "endFrameExclusive": 70,
+          "startS": 3.19362,
+          "endS": 3.239905,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 70,
+          "endFrameExclusive": 98,
+          "startS": 3.239905,
+          "endS": 4.535867,
+          "frames": 28
+        }
+      ],
+      "trafficOutputTransitions": 20,
+      "inferenceMedianMs": 45.627,
+      "inferenceP95Ms": 52.354
+    },
+    {
+      "source": "VID_20261117_223120_293.mp4",
+      "sha256": "105204a7c1e117ebb5810dec383e9dcf2d9908a2b5e651211e21d05f6a51ee85",
+      "split": [
+        "train"
+      ],
+      "frames": 186,
+      "declaredFrames": 186,
+      "allFramesProcessed": true,
+      "fps": 21.524096315830754,
+      "durationS": 8.641477777777778,
+      "sourceResolution": [
+        1280,
+        720
+      ],
+      "outputResolution": [
+        960,
+        624
+      ],
+      "video": "VID_20261117_223120_293-detections.mp4",
+      "videoSha256": "ffe14b7969d0d3d478ce54f9db2f8f6598ce2b0d72b12ce2ff50976ac6b60106",
+      "trace": "VID_20261117_223120_293-predictions.jsonl",
+      "traceSha256": "30255c6bcdca62988d77940c8b4358863ca0873e62cad7c24ff7a6b56776d5a3",
+      "poster": "VID_20261117_223120_293-poster.jpg",
+      "storyboard": "VID_20261117_223120_293-storyboard.jpg",
+      "framesWithClass": {
+        "stop_sign": 12,
+        "cone": 179,
+        "speed_bump": 54,
+        "traffic_light": 25
+      },
+      "detectionCounts": {
+        "stop_sign": 12,
+        "cone": 390,
+        "speed_bump": 54,
+        "traffic_light": 26
+      },
+      "trafficOutputFrameCounts": {
+        "no_detection": 161,
+        "red": 5,
+        "unknown": 2,
+        "yellow": 18
+      },
+      "trafficOutputRuns": [
+        {
+          "state": "no_detection",
+          "startFrame": 0,
+          "endFrameExclusive": 20,
+          "startS": 0.0,
+          "endS": 0.929191,
+          "frames": 20
+        },
+        {
+          "state": "red",
+          "startFrame": 20,
+          "endFrameExclusive": 24,
+          "startS": 0.929191,
+          "endS": 1.115029,
+          "frames": 4
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 24,
+          "endFrameExclusive": 29,
+          "startS": 1.115029,
+          "endS": 1.347327,
+          "frames": 5
+        },
+        {
+          "state": "red",
+          "startFrame": 29,
+          "endFrameExclusive": 30,
+          "startS": 1.347327,
+          "endS": 1.393787,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 30,
+          "endFrameExclusive": 67,
+          "startS": 1.393787,
+          "endS": 3.11279,
+          "frames": 37
+        },
+        {
+          "state": "unknown",
+          "startFrame": 67,
+          "endFrameExclusive": 68,
+          "startS": 3.11279,
+          "endS": 3.15925,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 68,
+          "endFrameExclusive": 69,
+          "startS": 3.15925,
+          "endS": 3.205709,
+          "frames": 1
+        },
+        {
+          "state": "unknown",
+          "startFrame": 69,
+          "endFrameExclusive": 70,
+          "startS": 3.205709,
+          "endS": 3.252169,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 70,
+          "endFrameExclusive": 81,
+          "startS": 3.252169,
+          "endS": 3.763224,
+          "frames": 11
+        },
+        {
+          "state": "yellow",
+          "startFrame": 81,
+          "endFrameExclusive": 83,
+          "startS": 3.763224,
+          "endS": 3.856143,
+          "frames": 2
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 83,
+          "endFrameExclusive": 84,
+          "startS": 3.856143,
+          "endS": 3.902603,
+          "frames": 1
+        },
+        {
+          "state": "yellow",
+          "startFrame": 84,
+          "endFrameExclusive": 90,
+          "startS": 3.902603,
+          "endS": 4.18136,
+          "frames": 6
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 90,
+          "endFrameExclusive": 95,
+          "startS": 4.18136,
+          "endS": 4.413658,
+          "frames": 5
+        },
+        {
+          "state": "yellow",
+          "startFrame": 95,
+          "endFrameExclusive": 96,
+          "startS": 4.413658,
+          "endS": 4.460118,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 96,
+          "endFrameExclusive": 99,
+          "startS": 4.460118,
+          "endS": 4.599496,
+          "frames": 3
+        },
+        {
+          "state": "yellow",
+          "startFrame": 99,
+          "endFrameExclusive": 100,
+          "startS": 4.599496,
+          "endS": 4.645956,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 100,
+          "endFrameExclusive": 111,
+          "startS": 4.645956,
+          "endS": 5.157011,
+          "frames": 11
+        },
+        {
+          "state": "yellow",
+          "startFrame": 111,
+          "endFrameExclusive": 112,
+          "startS": 5.157011,
+          "endS": 5.20347,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 112,
+          "endFrameExclusive": 124,
+          "startS": 5.20347,
+          "endS": 5.760985,
+          "frames": 12
+        },
+        {
+          "state": "yellow",
+          "startFrame": 124,
+          "endFrameExclusive": 131,
+          "startS": 5.760985,
+          "endS": 6.086202,
+          "frames": 7
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 131,
+          "endFrameExclusive": 186,
+          "startS": 6.086202,
+          "endS": 8.641478,
+          "frames": 55
+        }
+      ],
+      "trafficOutputTransitions": 20,
+      "inferenceMedianMs": 45.42,
+      "inferenceP95Ms": 52.941
+    },
+    {
+      "source": "VID_20261117_223120_414.mp4",
+      "sha256": "0904c43f6de3f878aa46aa47570d08ae6ff196199dcec7dd8922a0ff144981c0",
+      "split": [
+        "test"
+      ],
+      "frames": 379,
+      "declaredFrames": 379,
+      "allFramesProcessed": true,
+      "fps": 59.49401309879913,
+      "durationS": 6.370388888888889,
+      "sourceResolution": [
+        1280,
+        720
+      ],
+      "outputResolution": [
+        960,
+        624
+      ],
+      "video": "VID_20261117_223120_414-detections.mp4",
+      "videoSha256": "50af71b759aba6210d4036c66a2e748c32b495fda7ed2bfbe43dfa223bc58fee",
+      "trace": "VID_20261117_223120_414-predictions.jsonl",
+      "traceSha256": "fbf310281e9f12cfa4e0260833138fd8edb686c1fb00e07f4c587b82c4c96758",
+      "poster": "VID_20261117_223120_414-poster.jpg",
+      "storyboard": "VID_20261117_223120_414-storyboard.jpg",
+      "framesWithClass": {
+        "cone": 379
+      },
+      "detectionCounts": {
+        "cone": 391
+      },
+      "trafficOutputFrameCounts": {
+        "no_detection": 379
+      },
+      "trafficOutputRuns": [
+        {
+          "state": "no_detection",
+          "startFrame": 0,
+          "endFrameExclusive": 379,
+          "startS": 0.0,
+          "endS": 6.370389,
+          "frames": 379
+        }
+      ],
+      "trafficOutputTransitions": 0,
+      "inferenceMedianMs": 43.968,
+      "inferenceP95Ms": 48.44
+    },
+    {
+      "source": "VID_20261117_223120_448.mp4",
+      "sha256": "1bad0c6167d5086fb2c0d3c9301b4c8fbe1cea4d7bddc02839987ee94f336ba8",
+      "split": [
+        "train"
+      ],
+      "frames": 170,
+      "declaredFrames": 170,
+      "allFramesProcessed": true,
+      "fps": 44.747440183201284,
+      "durationS": 3.7991,
+      "sourceResolution": [
+        1280,
+        720
+      ],
+      "outputResolution": [
+        960,
+        624
+      ],
+      "video": "VID_20261117_223120_448-detections.mp4",
+      "videoSha256": "df786dcb792092ce4d4da03518b781b15043f948fb6e67100585eb57ccdb6fdc",
+      "trace": "VID_20261117_223120_448-predictions.jsonl",
+      "traceSha256": "47068cd47a26cd31f8f4cab7dc941d74082d5275ad052b38c61b0950d4d0f69c",
+      "poster": "VID_20261117_223120_448-poster.jpg",
+      "storyboard": "VID_20261117_223120_448-storyboard.jpg",
+      "framesWithClass": {
+        "cone": 114
+      },
+      "detectionCounts": {
+        "cone": 275
+      },
+      "trafficOutputFrameCounts": {
+        "no_detection": 170
+      },
+      "trafficOutputRuns": [
+        {
+          "state": "no_detection",
+          "startFrame": 0,
+          "endFrameExclusive": 170,
+          "startS": 0.0,
+          "endS": 3.7991,
+          "frames": 170
+        }
+      ],
+      "trafficOutputTransitions": 0,
+      "inferenceMedianMs": 42.482,
+      "inferenceP95Ms": 48.826
+    },
+    {
+      "source": "VID_20261117_223120_495.mp4",
+      "sha256": "4acd5763cf4d8f3f5589c4afcdf8438213cd72cf6ed02b1acebcbb2f482eb691",
+      "split": [
+        "train"
+      ],
+      "frames": 495,
+      "declaredFrames": 495,
+      "allFramesProcessed": true,
+      "fps": 44.648673568586574,
+      "durationS": 11.086555555555556,
+      "sourceResolution": [
+        1280,
+        720
+      ],
+      "outputResolution": [
+        960,
+        624
+      ],
+      "video": "VID_20261117_223120_495-detections.mp4",
+      "videoSha256": "7429dbaf5d08a5eaf56d541bc3887ce82d4d10142b59abf231a2d76af3d6960c",
+      "trace": "VID_20261117_223120_495-predictions.jsonl",
+      "traceSha256": "ff0daa227aed483fcd54c2e20af79ecbcb07a43b02ac962a630e1a6b16a4bcd4",
+      "poster": "VID_20261117_223120_495-poster.jpg",
+      "storyboard": "VID_20261117_223120_495-storyboard.jpg",
+      "framesWithClass": {
+        "stop_sign": 131,
+        "cone": 359,
+        "traffic_light": 102,
+        "speed_bump": 116
+      },
+      "detectionCounts": {
+        "stop_sign": 131,
+        "cone": 726,
+        "traffic_light": 111,
+        "speed_bump": 116
+      },
+      "trafficOutputFrameCounts": {
+        "no_detection": 393,
+        "red": 100,
+        "yellow": 2
+      },
+      "trafficOutputRuns": [
+        {
+          "state": "no_detection",
+          "startFrame": 0,
+          "endFrameExclusive": 21,
+          "startS": 0.0,
+          "endS": 0.470339,
+          "frames": 21
+        },
+        {
+          "state": "red",
+          "startFrame": 21,
+          "endFrameExclusive": 22,
+          "startS": 0.470339,
+          "endS": 0.492736,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 22,
+          "endFrameExclusive": 57,
+          "startS": 0.492736,
+          "endS": 1.276634,
+          "frames": 35
+        },
+        {
+          "state": "red",
+          "startFrame": 57,
+          "endFrameExclusive": 58,
+          "startS": 1.276634,
+          "endS": 1.299031,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 58,
+          "endFrameExclusive": 59,
+          "startS": 1.299031,
+          "endS": 1.321428,
+          "frames": 1
+        },
+        {
+          "state": "red",
+          "startFrame": 59,
+          "endFrameExclusive": 60,
+          "startS": 1.321428,
+          "endS": 1.343825,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 60,
+          "endFrameExclusive": 144,
+          "startS": 1.343825,
+          "endS": 3.22518,
+          "frames": 84
+        },
+        {
+          "state": "red",
+          "startFrame": 144,
+          "endFrameExclusive": 145,
+          "startS": 3.22518,
+          "endS": 3.247577,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 145,
+          "endFrameExclusive": 293,
+          "startS": 3.247577,
+          "endS": 6.562345,
+          "frames": 148
+        },
+        {
+          "state": "yellow",
+          "startFrame": 293,
+          "endFrameExclusive": 294,
+          "startS": 6.562345,
+          "endS": 6.584742,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 294,
+          "endFrameExclusive": 295,
+          "startS": 6.584742,
+          "endS": 6.607139,
+          "frames": 1
+        },
+        {
+          "state": "yellow",
+          "startFrame": 295,
+          "endFrameExclusive": 296,
+          "startS": 6.607139,
+          "endS": 6.629536,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 296,
+          "endFrameExclusive": 319,
+          "startS": 6.629536,
+          "endS": 7.144669,
+          "frames": 23
+        },
+        {
+          "state": "red",
+          "startFrame": 319,
+          "endFrameExclusive": 329,
+          "startS": 7.144669,
+          "endS": 7.36864,
+          "frames": 10
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 329,
+          "endFrameExclusive": 330,
+          "startS": 7.36864,
+          "endS": 7.391037,
+          "frames": 1
+        },
+        {
+          "state": "red",
+          "startFrame": 330,
+          "endFrameExclusive": 337,
+          "startS": 7.391037,
+          "endS": 7.547817,
+          "frames": 7
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 337,
+          "endFrameExclusive": 338,
+          "startS": 7.547817,
+          "endS": 7.570214,
+          "frames": 1
+        },
+        {
+          "state": "red",
+          "startFrame": 338,
+          "endFrameExclusive": 417,
+          "startS": 7.570214,
+          "endS": 9.339583,
+          "frames": 79
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 417,
+          "endFrameExclusive": 495,
+          "startS": 9.339583,
+          "endS": 11.086556,
+          "frames": 78
+        }
+      ],
+      "trafficOutputTransitions": 18,
+      "inferenceMedianMs": 44.238,
+      "inferenceP95Ms": 50.654
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "sha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef",
+      "split": [
+        "train"
+      ],
+      "frames": 444,
+      "declaredFrames": 444,
+      "allFramesProcessed": true,
+      "fps": 32.03578772682997,
+      "durationS": 13.859499999999999,
+      "sourceResolution": [
+        1280,
+        720
+      ],
+      "outputResolution": [
+        960,
+        624
+      ],
+      "video": "VID_20261117_223120_760-detections.mp4",
+      "videoSha256": "ee8178f07e9924f34d827dfbdb72c37ad9d62bcbde261538d220362979c1debc",
+      "trace": "VID_20261117_223120_760-predictions.jsonl",
+      "traceSha256": "9dec5dbb35ee430bc4284dd1ce4bbf92b9cf70271c9f817bd74836e8537b1f17",
+      "poster": "VID_20261117_223120_760-poster.jpg",
+      "storyboard": "VID_20261117_223120_760-storyboard.jpg",
+      "framesWithClass": {
+        "stop_sign": 114,
+        "cone": 247,
+        "traffic_light": 22,
+        "speed_bump": 79
+      },
+      "detectionCounts": {
+        "stop_sign": 114,
+        "cone": 523,
+        "traffic_light": 25,
+        "speed_bump": 79
+      },
+      "trafficOutputFrameCounts": {
+        "no_detection": 422,
+        "red": 12,
+        "unknown": 5,
+        "red|yellow": 3,
+        "yellow": 2
+      },
+      "trafficOutputRuns": [
+        {
+          "state": "no_detection",
+          "startFrame": 0,
+          "endFrameExclusive": 75,
+          "startS": 0.0,
+          "endS": 2.341132,
+          "frames": 75
+        },
+        {
+          "state": "red",
+          "startFrame": 75,
+          "endFrameExclusive": 77,
+          "startS": 2.341132,
+          "endS": 2.403562,
+          "frames": 2
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 77,
+          "endFrameExclusive": 222,
+          "startS": 2.403562,
+          "endS": 6.92975,
+          "frames": 145
+        },
+        {
+          "state": "unknown",
+          "startFrame": 222,
+          "endFrameExclusive": 227,
+          "startS": 6.92975,
+          "endS": 7.085825,
+          "frames": 5
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 227,
+          "endFrameExclusive": 262,
+          "startS": 7.085825,
+          "endS": 8.178354,
+          "frames": 35
+        },
+        {
+          "state": "red",
+          "startFrame": 262,
+          "endFrameExclusive": 269,
+          "startS": 8.178354,
+          "endS": 8.396859,
+          "frames": 7
+        },
+        {
+          "state": "red|yellow",
+          "startFrame": 269,
+          "endFrameExclusive": 270,
+          "startS": 8.396859,
+          "endS": 8.428074,
+          "frames": 1
+        },
+        {
+          "state": "red",
+          "startFrame": 270,
+          "endFrameExclusive": 271,
+          "startS": 8.428074,
+          "endS": 8.459289,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 271,
+          "endFrameExclusive": 274,
+          "startS": 8.459289,
+          "endS": 8.552935,
+          "frames": 3
+        },
+        {
+          "state": "yellow",
+          "startFrame": 274,
+          "endFrameExclusive": 275,
+          "startS": 8.552935,
+          "endS": 8.58415,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 275,
+          "endFrameExclusive": 276,
+          "startS": 8.58415,
+          "endS": 8.615365,
+          "frames": 1
+        },
+        {
+          "state": "yellow",
+          "startFrame": 276,
+          "endFrameExclusive": 277,
+          "startS": 8.615365,
+          "endS": 8.64658,
+          "frames": 1
+        },
+        {
+          "state": "red|yellow",
+          "startFrame": 277,
+          "endFrameExclusive": 279,
+          "startS": 8.64658,
+          "endS": 8.70901,
+          "frames": 2
+        },
+        {
+          "state": "red",
+          "startFrame": 279,
+          "endFrameExclusive": 281,
+          "startS": 8.70901,
+          "endS": 8.77144,
+          "frames": 2
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 281,
+          "endFrameExclusive": 444,
+          "startS": 8.77144,
+          "endS": 13.8595,
+          "frames": 163
+        }
+      ],
+      "trafficOutputTransitions": 14,
+      "inferenceMedianMs": 45.137,
+      "inferenceP95Ms": 52.232
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "sha256": "77c10bc166dbe8f6dd0a4f3c435359073f1eb0eb1aaea918223f5aa67fe3c553",
+      "split": [
+        "train"
+      ],
+      "frames": 263,
+      "declaredFrames": 263,
+      "allFramesProcessed": true,
+      "fps": 31.571702577755488,
+      "durationS": 8.330244444444444,
+      "sourceResolution": [
+        1280,
+        720
+      ],
+      "outputResolution": [
+        960,
+        624
+      ],
+      "video": "VID_20261117_223120_865-detections.mp4",
+      "videoSha256": "c21627f30a761c6a2aa5ca138ecc30f816106c86bc403823754ce3a1f2d3bdb0",
+      "trace": "VID_20261117_223120_865-predictions.jsonl",
+      "traceSha256": "47593e0213c098331f2793d519d89b5ac373521a6ec9ae6e2c309bc89c387443",
+      "poster": "VID_20261117_223120_865-poster.jpg",
+      "storyboard": "VID_20261117_223120_865-storyboard.jpg",
+      "framesWithClass": {
+        "stop_sign": 37,
+        "cone": 247,
+        "traffic_light": 21,
+        "speed_bump": 54
+      },
+      "detectionCounts": {
+        "stop_sign": 37,
+        "cone": 524,
+        "traffic_light": 21,
+        "speed_bump": 54
+      },
+      "trafficOutputFrameCounts": {
+        "no_detection": 242,
+        "red": 11,
+        "yellow": 2,
+        "green": 7,
+        "unknown": 1
+      },
+      "trafficOutputRuns": [
+        {
+          "state": "no_detection",
+          "startFrame": 0,
+          "endFrameExclusive": 11,
+          "startS": 0.0,
+          "endS": 0.348413,
+          "frames": 11
+        },
+        {
+          "state": "red",
+          "startFrame": 11,
+          "endFrameExclusive": 12,
+          "startS": 0.348413,
+          "endS": 0.380087,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 12,
+          "endFrameExclusive": 17,
+          "startS": 0.380087,
+          "endS": 0.538457,
+          "frames": 5
+        },
+        {
+          "state": "red",
+          "startFrame": 17,
+          "endFrameExclusive": 19,
+          "startS": 0.538457,
+          "endS": 0.601805,
+          "frames": 2
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 19,
+          "endFrameExclusive": 41,
+          "startS": 0.601805,
+          "endS": 1.298631,
+          "frames": 22
+        },
+        {
+          "state": "red",
+          "startFrame": 41,
+          "endFrameExclusive": 42,
+          "startS": 1.298631,
+          "endS": 1.330305,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 42,
+          "endFrameExclusive": 47,
+          "startS": 1.330305,
+          "endS": 1.488675,
+          "frames": 5
+        },
+        {
+          "state": "red",
+          "startFrame": 47,
+          "endFrameExclusive": 48,
+          "startS": 1.488675,
+          "endS": 1.520349,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 48,
+          "endFrameExclusive": 106,
+          "startS": 1.520349,
+          "endS": 3.357437,
+          "frames": 58
+        },
+        {
+          "state": "red",
+          "startFrame": 106,
+          "endFrameExclusive": 107,
+          "startS": 3.357437,
+          "endS": 3.389111,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 107,
+          "endFrameExclusive": 108,
+          "startS": 3.389111,
+          "endS": 3.420785,
+          "frames": 1
+        },
+        {
+          "state": "red",
+          "startFrame": 108,
+          "endFrameExclusive": 109,
+          "startS": 3.420785,
+          "endS": 3.452459,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 109,
+          "endFrameExclusive": 116,
+          "startS": 3.452459,
+          "endS": 3.674176,
+          "frames": 7
+        },
+        {
+          "state": "red",
+          "startFrame": 116,
+          "endFrameExclusive": 117,
+          "startS": 3.674176,
+          "endS": 3.70585,
+          "frames": 1
+        },
+        {
+          "state": "yellow",
+          "startFrame": 117,
+          "endFrameExclusive": 118,
+          "startS": 3.70585,
+          "endS": 3.737524,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 118,
+          "endFrameExclusive": 120,
+          "startS": 3.737524,
+          "endS": 3.800872,
+          "frames": 2
+        },
+        {
+          "state": "red",
+          "startFrame": 120,
+          "endFrameExclusive": 121,
+          "startS": 3.800872,
+          "endS": 3.832546,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 121,
+          "endFrameExclusive": 130,
+          "startS": 3.832546,
+          "endS": 4.117611,
+          "frames": 9
+        },
+        {
+          "state": "green",
+          "startFrame": 130,
+          "endFrameExclusive": 131,
+          "startS": 4.117611,
+          "endS": 4.149285,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 131,
+          "endFrameExclusive": 135,
+          "startS": 4.149285,
+          "endS": 4.275981,
+          "frames": 4
+        },
+        {
+          "state": "green",
+          "startFrame": 135,
+          "endFrameExclusive": 136,
+          "startS": 4.275981,
+          "endS": 4.307655,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 136,
+          "endFrameExclusive": 137,
+          "startS": 4.307655,
+          "endS": 4.339329,
+          "frames": 1
+        },
+        {
+          "state": "green",
+          "startFrame": 137,
+          "endFrameExclusive": 142,
+          "startS": 4.339329,
+          "endS": 4.497699,
+          "frames": 5
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 142,
+          "endFrameExclusive": 145,
+          "startS": 4.497699,
+          "endS": 4.59272,
+          "frames": 3
+        },
+        {
+          "state": "unknown",
+          "startFrame": 145,
+          "endFrameExclusive": 146,
+          "startS": 4.59272,
+          "endS": 4.624394,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 146,
+          "endFrameExclusive": 151,
+          "startS": 4.624394,
+          "endS": 4.782764,
+          "frames": 5
+        },
+        {
+          "state": "yellow",
+          "startFrame": 151,
+          "endFrameExclusive": 152,
+          "startS": 4.782764,
+          "endS": 4.814438,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 152,
+          "endFrameExclusive": 180,
+          "startS": 4.814438,
+          "endS": 5.701308,
+          "frames": 28
+        },
+        {
+          "state": "red",
+          "startFrame": 180,
+          "endFrameExclusive": 181,
+          "startS": 5.701308,
+          "endS": 5.732982,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 181,
+          "endFrameExclusive": 198,
+          "startS": 5.732982,
+          "endS": 6.271439,
+          "frames": 17
+        },
+        {
+          "state": "red",
+          "startFrame": 198,
+          "endFrameExclusive": 199,
+          "startS": 6.271439,
+          "endS": 6.303113,
+          "frames": 1
+        },
+        {
+          "state": "no_detection",
+          "startFrame": 199,
+          "endFrameExclusive": 263,
+          "startS": 6.303113,
+          "endS": 8.330244,
+          "frames": 64
+        }
+      ],
+      "trafficOutputTransitions": 31,
+      "inferenceMedianMs": 43.082,
+      "inferenceP95Ms": 49.76
+    }
+  ]
+}

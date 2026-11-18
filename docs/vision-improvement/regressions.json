@@ -1,0 +1,644 @@
+{
+  "casesFixedBeforeImprovedInference": true,
+  "selection": "from previously saved failure notes, not selected for new success",
+  "profile": {
+    "weights": "models/vision/yolo-stop-improved.pt",
+    "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+    "confidence": 0.25,
+    "imgsz": 512,
+    "device": "cpu",
+    "preferRed": false,
+    "backend": "yolo+fusion",
+    "trafficMode": "body",
+    "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+    "selectedAt": "2026-11-17T22:20:28.470178+00:00",
+    "selectedOn": "canonical val plus agent-reviewed negative VAL video; no test-based threshold/model selection",
+    "testAlreadyObservedInThisCycle": true,
+    "testReuseNote": "Initial candidate test was already evaluated and is NOT a new blind holdout. Body-only guard was developed on the separate VAL shoe clip and canonical val, using pre-existing body thresholds. Test results were not used to tune its thresholds. Final profile is frozen before repeated test evaluation; all earlier results preserved.",
+    "heuristicEnabled": false,
+    "selectionFile": "models/vision/training/refinement/validation-selection-body-guard.json",
+    "selectionFileSha256": "cda8f31e0195bb9e29187a06f7119836892c0aa15c61e41f8ccad54851bacdf4",
+    "objective": "0.7*canonical_macro_F1 + 0.3*signal_balanced_recall_including_misses; falseGreen==0 on canonical val; no more traffic-FP frames on the agent-reviewed 98-frame VAL shoe clip than baseline (21). Matched confidence .25 for all.",
+    "warning": "Bench only, not autonomous-ready. Body mode only deletes post-NMS boxes; it cannot create or recolour green. Some shoe false positives remain. Test is REUSED, not an independent new safety benchmark."
+  },
+  "beforeSha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+  "afterSha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+  "sourceRevision": "3cb277bfadf7d0034943117f9146d4b92bb773a9",
+  "sourceManifest": "../vision-video-review/source.json",
+  "cases": [
+    {
+      "source": "VID_20261117_223120_211.mp4",
+      "frame": 16,
+      "originalSplit": "val",
+      "caption": "Обувь: ложный светофор",
+      "decodedFrameSha256": "d3940e8678d0f2d2ec6260fb570528f81fb251251e7d81ee1eb90e386e0f2c64",
+      "before": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.352,
+          "box": {
+            "x": 0.4307,
+            "y": 0.7713,
+            "w": 0.1577,
+            "h": 0.2287
+          },
+          "signal": "red",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 0,
+            "green": 0
+          },
+          "source": "yolo"
+        }
+      ],
+      "after": []
+    },
+    {
+      "source": "VID_20261117_223120_211.mp4",
+      "frame": 44,
+      "originalSplit": "val",
+      "caption": "Обувь: уверенная ложная рамка",
+      "decodedFrameSha256": "8c595161b8493d180ddc81e0f1cfb5fd706592ff906cea29cc2e6f84967b804b",
+      "before": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.719,
+          "box": {
+            "x": 0.2549,
+            "y": 0.3555,
+            "w": 0.2601,
+            "h": 0.6439
+          },
+          "signal": "unknown",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 0,
+            "green": 0
+          },
+          "source": "yolo"
+        }
+      ],
+      "after": []
+    },
+    {
+      "source": "VID_20261117_223120_204.mp4",
+      "frame": 60,
+      "originalSplit": "val",
+      "caption": "Лишняя рамка на двери/фоне",
+      "decodedFrameSha256": "9281a986b3ec1ad637a960f5384237447442adb299c2cb15384be9c15c05340c",
+      "before": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.276,
+          "box": {
+            "x": 0.6305,
+            "y": 0.0019,
+            "w": 0.369,
+            "h": 0.7192
+          },
+          "signal": "yellow",
+          "signalCounts": {
+            "red": 83,
+            "yellow": 370,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.769,
+          "box": {
+            "x": 0.3558,
+            "y": 0.3932,
+            "w": 0.036,
+            "h": 0.1942
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.487,
+          "box": {
+            "x": 0.4546,
+            "y": 0.3619,
+            "w": 0.0389,
+            "h": 0.2498
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "after": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.297,
+          "box": {
+            "x": 0.7232,
+            "y": 0.0035,
+            "w": 0.2768,
+            "h": 0.8492
+          },
+          "signal": "yellow",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 0,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.826,
+          "box": {
+            "x": 0.3557,
+            "y": 0.3937,
+            "w": 0.035,
+            "h": 0.1917
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.569,
+          "box": {
+            "x": 0.4526,
+            "y": 0.3633,
+            "w": 0.0407,
+            "h": 0.2522
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ]
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 116,
+      "originalSplit": "train",
+      "caption": "Видимый зелёный: прежняя ошибка red",
+      "decodedFrameSha256": "fb760dba81479521367d71a956c542afc8eb67969150589c69eb5566f5f5743c",
+      "before": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.428,
+          "box": {
+            "x": 0.5065,
+            "y": 0.0653,
+            "w": 0.0788,
+            "h": 0.2219
+          },
+          "signal": "red",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 4,
+            "green": 265
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.803,
+          "box": {
+            "x": 0.302,
+            "y": 0.4015,
+            "w": 0.0803,
+            "h": 0.2936
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.78,
+          "box": {
+            "x": 0.2246,
+            "y": 0.4293,
+            "w": 0.0413,
+            "h": 0.2205
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.27,
+          "box": {
+            "x": 0.6682,
+            "y": 0.0,
+            "w": 0.1922,
+            "h": 0.7986
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "after": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.939,
+          "box": {
+            "x": 0.2244,
+            "y": 0.4303,
+            "w": 0.0377,
+            "h": 0.2174
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.903,
+          "box": {
+            "x": 0.3016,
+            "y": 0.4014,
+            "w": 0.0812,
+            "h": 0.2938
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ]
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 117,
+      "originalSplit": "train",
+      "caption": "Видимый зелёный: прежняя ошибка yellow",
+      "decodedFrameSha256": "2ec90a64c2229bb23c007c5d793a83669700be1099a389c7b940a63a31abc2c8",
+      "before": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.645,
+          "box": {
+            "x": 0.5227,
+            "y": 0.0013,
+            "w": 0.3668,
+            "h": 0.9114
+          },
+          "signal": "yellow",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 1091,
+            "green": 144
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.772,
+          "box": {
+            "x": 0.2354,
+            "y": 0.4326,
+            "w": 0.0414,
+            "h": 0.2148
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.718,
+          "box": {
+            "x": 0.3135,
+            "y": 0.4082,
+            "w": 0.0769,
+            "h": 0.2851
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "after": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.915,
+          "box": {
+            "x": 0.2362,
+            "y": 0.4328,
+            "w": 0.0396,
+            "h": 0.2145
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.855,
+          "box": {
+            "x": 0.3128,
+            "y": 0.4117,
+            "w": 0.0767,
+            "h": 0.2828
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ]
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 119,
+      "originalSplit": "train",
+      "caption": "Видимый зелёный: прежний пропуск",
+      "decodedFrameSha256": "265661c554c57eb1a32ee45ef9ae792ae9dd99510e09343d34cb2a3901a99699",
+      "before": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.894,
+          "box": {
+            "x": 0.2445,
+            "y": 0.441,
+            "w": 0.0418,
+            "h": 0.2179
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.863,
+          "box": {
+            "x": 0.3208,
+            "y": 0.4096,
+            "w": 0.0858,
+            "h": 0.3051
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "after": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.944,
+          "box": {
+            "x": 0.244,
+            "y": 0.4395,
+            "w": 0.0405,
+            "h": 0.2209
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.941,
+          "box": {
+            "x": 0.3219,
+            "y": 0.4106,
+            "w": 0.0823,
+            "h": 0.3031
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ]
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 138,
+      "originalSplit": "train",
+      "caption": "Видимый зелёный: прежний верный ответ",
+      "decodedFrameSha256": "8e9a464bf37d56eea21019131341c34d9c767d5b26f12f9828ae9e9e868e1ac2",
+      "before": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.895,
+          "box": {
+            "x": 0.1712,
+            "y": 0.4344,
+            "w": 0.0547,
+            "h": 0.3028
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.584,
+          "box": {
+            "x": 0.2678,
+            "y": 0.3952,
+            "w": 0.1174,
+            "h": 0.4667
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.419,
+          "box": {
+            "x": 0.6986,
+            "y": 0.0,
+            "w": 0.1443,
+            "h": 0.3357
+          },
+          "signal": "green",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 2,
+            "green": 307
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.344,
+          "box": {
+            "x": 0.4961,
+            "y": 0.3918,
+            "w": 0.0454,
+            "h": 0.2327
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "after": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.95,
+          "box": {
+            "x": 0.1694,
+            "y": 0.4386,
+            "w": 0.0556,
+            "h": 0.2994
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.825,
+          "box": {
+            "x": 0.2673,
+            "y": 0.3971,
+            "w": 0.1187,
+            "h": 0.4646
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.494,
+          "box": {
+            "x": 0.4967,
+            "y": 0.3919,
+            "w": 0.0454,
+            "h": 0.2332
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ]
+    }
+  ],
+  "warning": "Qualitative comparisons only; source clips include train and val footage, not independent new ground truth. No smoothing or tracker. No new selection after test."
+}

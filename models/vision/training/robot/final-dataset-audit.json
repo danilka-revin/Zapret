@@ -1,0 +1,43 @@
+{
+  "splits": {
+    "train": {
+      "images": 297,
+      "counts": {
+        "cone": 208,
+        "speed_bump": 24,
+        "traffic_light_yellow": 26,
+        "stop_sign": 44,
+        "traffic_light_green": 19,
+        "traffic_light": 33,
+        "pedestrian_crossing": 11,
+        "traffic_light_red": 29
+      },
+      "missingClasses": []
+    },
+    "val": {
+      "images": 61,
+      "counts": {
+        "cone": 63,
+        "stop_sign": 7,
+        "traffic_light": 8,
+        "pedestrian_crossing": 2,
+        "speed_bump": 7,
+        "traffic_light_red": 11,
+        "traffic_light_yellow": 3,
+        "traffic_light_green": 5
+      },
+      "missingClasses": []
+    }
+  },
+  "classes": [
+    "stop_sign",
+    "pedestrian_crossing",
+    "speed_bump",
+    "traffic_light",
+    "cone",
+    "traffic_light_red",
+    "traffic_light_yellow",
+    "traffic_light_green"
+  ],
+  "fingerprint": "0346f1b0d8f18fcb2d0dabf0baeac799947cd16c4971a1b10635961f622803bf"
+}

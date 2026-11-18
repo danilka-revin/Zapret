@@ -213,12 +213,13 @@
               <canvas id="kinect-3d-canvas" tabindex="0" aria-label="3D-обзор Kinect и лидара: вращение перетаскиванием, масштаб колесом или кнопками"></canvas>
               <p class="kinect-empty" id="kinect-3d-empty">Нет свежего кадра глубины Kinect</p>
               <div class="kinect-controls" aria-label="Управление 3D видом">
+                <button type="button" id="kinect-fov-toggle" aria-label="Показать зону видимости Kinect" aria-pressed="true" title="Голубая пирамида — примерная зона видимости Kinect">◰</button>
                 <button type="button" id="kinect-zoom-out" aria-label="Отдалить">−</button>
                 <button type="button" id="kinect-zoom-in" aria-label="Приблизить">+</button>
                 <button type="button" id="kinect-reset-view" aria-label="Сбросить вид">⊙</button>
               </div>
             </div>
-            <p class="kinect-view-hint">Перетащите или нажмите стрелки для вращения · щипок или колёсико для масштаба</p>
+            <p class="kinect-view-hint">Перетащите или нажмите стрелки для вращения · щипок или колёсико для масштаба · голубая пирамида — примерная зона, где Kinect видит глубину</p>
           </div>
         </section>
       </div>

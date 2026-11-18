@@ -1,0 +1,16 @@
+# Версии ключевых библиотек выполненного CPU-обучения (Python 3.11).
+# Общие зависимости / необязательность YOLO для робота — requirements-vision.txt.
+-r requirements-vision.txt
+numpy==1.26.4
+torch==2.2.2
+torchvision==0.17.2
+ultralytics==8.4.215
+opencv-python-headless==4.11.0.86
+PyYAML==6.0.3
+# Необязательный экспорт/проверка ONNX:
+onnx==1.17.0
+onnxruntime==1.20.1
+# На headless Linux после установки:
+# pip uninstall -y opencv-python
+# pip install --force-reinstall --no-deps opencv-python-headless==4.11.0.86
+# CUDA/CPU-колёса PyTorch выбирайте под свою машину; выполненный прогон — CPU.

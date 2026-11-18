@@ -1,0 +1,5 @@
+# Every-frame video review, matching the previously trained candidate environment.
+-r requirements-vision-training.txt
+# Bundled FFmpeg supplies H.264 encoding without a system ffmpeg executable.
+imageio-ffmpeg==0.6.0
+# Same headless-OpenCV reinstall instructions as requirements-vision-training.txt.

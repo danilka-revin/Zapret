@@ -176,7 +176,11 @@ def test_kinect_preview_api_is_live_depth_only_and_static_script_is_served(kiosk
     assert response.json['available'] and response.json['notForNavigation']
     assert len(base64.b64decode(response.json['data'])) == 40 * 30 * 2
     assert response.json['captureSource'] == 'unknown'
-    assert set(response.json['mount']) == {'z_m', 'yaw_deg', 'pitch_deg'}
+    # Раньше для 3D-просмотра хватало трёх чисел; теперь preview ещё отдаёт
+    # оптику и диапазон, чтобы «Общий обзор · 3D» рисовал зону видимости.
+    mount = response.json['mount']
+    assert {'z_m', 'yaw_deg', 'pitch_deg'} <= set(mount)
+    assert mount['hfov_deg'] > 0 and mount['max_range_m'] > mount['min_range_m']
     assert isinstance(response.json['mount']['z_m'], (int, float))
     demo = depth_payload()
     demo['capture_source'] = 'demo'

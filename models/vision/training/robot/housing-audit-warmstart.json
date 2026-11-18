@@ -1,0 +1,20 @@
+{
+  "model": "models/vision/training/robot/housing-audit-warmstart.pt",
+  "sha256": "162fa656785e01259763d13c91e823782f637689de00eb7ae38481504fbb6eb6",
+  "base": "models/vision/yolo-stop-candidate.pt",
+  "baseProvenance": {
+    "source": "https://github.com/AlaynaShaheen/object_detection_using_yolov8_tflite/tree/13f2ae34cfbb40d91c1b7b0c9c36cf96342288cc/yolov8n.pt",
+    "revision": "13f2ae34cfbb40d91c1b7b0c9c36cf96342288cc",
+    "contentSha256": "4df48185493a8e5284698efc2caddd44053bb88e8ef827b4ea2e84bf502891c0",
+    "checkpointVersion": "8.0.0.dev0",
+    "checkpointDate": "2022-12-30T00:12:08.084698",
+    "originalTrainingData": "coco.yaml",
+    "licenseNote": "Ultralytics model licensing applies; see https://github.com/ultralytics/ultralytics/blob/main/LICENSE"
+  },
+  "stoppedAt": "2026-11-17T23:06:57.038042+00:00",
+  "runDirectory": "runs/vision/20261117T225211Z-985219/train",
+  "epochsCompleted": 9,
+  "bestEpoch": 5,
+  "reason": "Interrupted after final enlarged annotation-sheet review found a new manually drawn TRAIN495/frame360 housing box unnecessarily extending into the right wall. Retain its better original box and rebuild the variant before continuing. No test evaluation and no output/production publication from this interrupted run.",
+  "reuse": "Warm start from the best VAL checkpoint only; optimizer reset, not resume, because dataset coordinates change."
+}

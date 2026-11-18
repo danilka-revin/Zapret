@@ -1,0 +1,5 @@
+# Archived generated stdout is evidence, not source formatting. Keep the exact
+# padding (and its recorded SHA); source-code whitespace checks remain enabled.
+models/vision/training/refinement/full-tests.txt -whitespace
+models/vision/training/robot/export-log.txt -whitespace
+models/vision/training/robot/final-training-log.txt -whitespace

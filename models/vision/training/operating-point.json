@@ -1,0 +1,17 @@
+{
+  "imgsz": 512,
+  "confidence": 0.25,
+  "preferRed": false,
+  "device": "cpu",
+  "backend": "yolo+fusion",
+  "chosenOn": "val",
+  "testUsedForSelection": false,
+  "validation": {
+    "confidence": 0.25,
+    "macroF1": 0.764426,
+    "signalBalancedRecall": 0.349495,
+    "falseGreen": 0,
+    "score": 0.639947
+  },
+  "warning": "Experimental operating point; mixed pseudo/agent labels. NOT robot safety validation."
+}

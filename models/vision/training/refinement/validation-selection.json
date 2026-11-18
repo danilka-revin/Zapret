@@ -1,0 +1,221 @@
+{
+  "split": "val",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "confidence": 0.25,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "backend": "yolo+fusion",
+  "objective": "0.7*canonical_macro_F1 + 0.3*signal_balanced_recall_including_misses; falseGreen==0 on val. Matched fixed confidence .25 for both checkpoints and modes. No test used.",
+  "points": [
+    {
+      "name": "baseline-legacy",
+      "weights": "models/vision/yolo-stop-candidate.pt",
+      "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+      "trafficMode": "legacy",
+      "macroF1": 0.7644262295081967,
+      "signalBalancedRecall": 0.34949494949494947,
+      "falseGreen": 0,
+      "score": 0.6399468455042225,
+      "counts": {
+        "tp": 70,
+        "fp": 31,
+        "fn": 36,
+        "precision": 0.693069306930693,
+        "recall": 0.660377358490566,
+        "f1": 0.6763285024154589
+      },
+      "signals": {
+        "red": {
+          "correct": 2,
+          "support": 11,
+          "predictions": 7,
+          "recallIncludingMisses": 0.18181818181818182,
+          "precision": 0.2857142857142857
+        },
+        "yellow": {
+          "correct": 2,
+          "support": 3,
+          "predictions": 5,
+          "recallIncludingMisses": 0.6666666666666666,
+          "precision": 0.4
+        },
+        "green": {
+          "correct": 1,
+          "support": 5,
+          "predictions": 1,
+          "recallIncludingMisses": 0.2,
+          "precision": 1.0
+        }
+      }
+    },
+    {
+      "name": "baseline-verified",
+      "weights": "models/vision/yolo-stop-candidate.pt",
+      "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+      "trafficMode": "verified",
+      "macroF1": 0.77775956284153,
+      "signalBalancedRecall": 0.1414141414141414,
+      "falseGreen": 0,
+      "score": 0.5868559364133135,
+      "counts": {
+        "tp": 70,
+        "fp": 26,
+        "fn": 36,
+        "precision": 0.7291666666666666,
+        "recall": 0.660377358490566,
+        "f1": 0.693069306930693
+      },
+      "signals": {
+        "red": {
+          "correct": 1,
+          "support": 11,
+          "predictions": 2,
+          "recallIncludingMisses": 0.09090909090909091,
+          "precision": 0.5
+        },
+        "yellow": {
+          "correct": 1,
+          "support": 3,
+          "predictions": 2,
+          "recallIncludingMisses": 0.3333333333333333,
+          "precision": 0.5
+        },
+        "green": {
+          "correct": 0,
+          "support": 5,
+          "predictions": 0,
+          "recallIncludingMisses": 0.0,
+          "precision": 0.0
+        }
+      }
+    },
+    {
+      "name": "improved-legacy",
+      "weights": "models/vision/yolo-stop-improved.pt",
+      "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+      "trafficMode": "legacy",
+      "macroF1": 0.780475628267836,
+      "signalBalancedRecall": 0.47676767676767673,
+      "falseGreen": 0,
+      "score": 0.6893632428177883,
+      "counts": {
+        "tp": 72,
+        "fp": 25,
+        "fn": 34,
+        "precision": 0.7422680412371134,
+        "recall": 0.6792452830188679,
+        "f1": 0.7093596059113301
+      },
+      "signals": {
+        "red": {
+          "correct": 4,
+          "support": 11,
+          "predictions": 7,
+          "recallIncludingMisses": 0.36363636363636365,
+          "precision": 0.5714285714285714
+        },
+        "yellow": {
+          "correct": 2,
+          "support": 3,
+          "predictions": 7,
+          "recallIncludingMisses": 0.6666666666666666,
+          "precision": 0.2857142857142857
+        },
+        "green": {
+          "correct": 2,
+          "support": 5,
+          "predictions": 2,
+          "recallIncludingMisses": 0.4,
+          "precision": 1.0
+        }
+      }
+    },
+    {
+      "name": "improved-verified",
+      "weights": "models/vision/yolo-stop-improved.pt",
+      "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+      "trafficMode": "verified",
+      "macroF1": 0.7778703308297119,
+      "signalBalancedRecall": 0.1414141414141414,
+      "falseGreen": 0,
+      "score": 0.5869334740050407,
+      "counts": {
+        "tp": 71,
+        "fp": 24,
+        "fn": 35,
+        "precision": 0.7473684210526316,
+        "recall": 0.6698113207547169,
+        "f1": 0.7064676616915423
+      },
+      "signals": {
+        "red": {
+          "correct": 1,
+          "support": 11,
+          "predictions": 2,
+          "recallIncludingMisses": 0.09090909090909091,
+          "precision": 0.5
+        },
+        "yellow": {
+          "correct": 1,
+          "support": 3,
+          "predictions": 3,
+          "recallIncludingMisses": 0.3333333333333333,
+          "precision": 0.3333333333333333
+        },
+        "green": {
+          "correct": 0,
+          "support": 5,
+          "predictions": 0,
+          "recallIncludingMisses": 0.0,
+          "precision": 0.0
+        }
+      }
+    }
+  ],
+  "selected": {
+    "name": "improved-legacy",
+    "weights": "models/vision/yolo-stop-improved.pt",
+    "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+    "trafficMode": "legacy",
+    "macroF1": 0.780475628267836,
+    "signalBalancedRecall": 0.47676767676767673,
+    "falseGreen": 0,
+    "score": 0.6893632428177883,
+    "counts": {
+      "tp": 72,
+      "fp": 25,
+      "fn": 34,
+      "precision": 0.7422680412371134,
+      "recall": 0.6792452830188679,
+      "f1": 0.7093596059113301
+    },
+    "signals": {
+      "red": {
+        "correct": 4,
+        "support": 11,
+        "predictions": 7,
+        "recallIncludingMisses": 0.36363636363636365,
+        "precision": 0.5714285714285714
+      },
+      "yellow": {
+        "correct": 2,
+        "support": 3,
+        "predictions": 7,
+        "recallIncludingMisses": 0.6666666666666666,
+        "precision": 0.2857142857142857
+      },
+      "green": {
+        "correct": 2,
+        "support": 5,
+        "predictions": 2,
+        "recallIncludingMisses": 0.4,
+        "precision": 1.0
+      }
+    }
+  },
+  "warning": "Small/noisy agent-assisted validation labels, NOT independent GT or proof of zero false-green risk. Modes and threshold frozen before new test inference.",
+  "weights": "models/vision/yolo-stop-improved.pt",
+  "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+  "trafficMode": "legacy"
+}

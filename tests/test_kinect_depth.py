@@ -128,6 +128,12 @@ def test_preview_decodes_one_frame_preserves_depth_and_expires():
     assert samples[60 * 160 + 80] == 2000
     assert samples[110 * 160 + 80] == 1200  # floor remains in 3D, unlike 2D scan
     assert preview["fx"] > 0 and preview["fy"] > 0
+    # 3D-обзор берёт углы и диапазон из того же кадра, а не из констант JS.
+    for key in ("z_m", "yaw_deg", "pitch_deg", "hfov_deg", "vfov_deg",
+                "min_range_m", "max_range_m"):
+        assert key in preview["mount"]
+    assert preview["mount"]["hfov_deg"] == service.spec["hfov_deg"]
+    assert preview["mount"]["max_range_m"] == service.spec["max_range_m"]
     clock["now"] += service.spec["max_age_s"] + .1
     assert not service.preview()["available"]
     assert "data" not in service.preview()

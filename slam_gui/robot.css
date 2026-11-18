@@ -2293,4 +2293,6 @@ body[data-remote-view="motors"] .remote-drive-panel small { display: block; marg
 .kinect-empty[hidden] { display: none; }
 .kinect-controls { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 5px; }
 .kinect-controls button { min-width: 42px; min-height: 42px; padding: 4px; font-size: 22px; }
+.kinect-controls button[aria-pressed="true"] { border-color: #52bdf4; color: #69d5ff; background: rgba(47, 150, 199, .18); }
+.kinect-controls button[hidden] { display: none; }
 .kinect-view-hint { margin: 0; color: var(--muted); font-size: 12px; }

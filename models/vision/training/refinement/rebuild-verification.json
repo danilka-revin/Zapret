@@ -1,0 +1,10 @@
+{
+  "checkedAt": "2026-11-17T22:25:31.407272+00:00",
+  "originalCanonicalFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "rebuiltTrainingFingerprint": "dd280f724628cb3aef8553aa3798bcee98138b9340d555a6091b957971d322d3",
+  "matchesTrainingSnapshot": true,
+  "reviewSha256": "27f934e7b1da7b84d40871ee212dea20d9b8f5e5bcf30752e212d10c0b30b9f9",
+  "trainingRecipeSha256": "540a270ec97b5a8d3dd046d32965eab3e64ad127b6846a10f58d51d612fb969b",
+  "currentRecipeSha256": "8cd84ed48fb8cd82123876be025df3a0e77efddc73dcfb25ba0669543ae87014",
+  "note": "Current recipe also invalidates equal-size label cache; exact image/label/split fingerprint reproduced."
+}

@@ -1,0 +1,12 @@
+path: datasets/yolo-stop-refined-color
+train: images/train
+val: images/val
+names:
+  0: stop_sign
+  1: pedestrian_crossing
+  2: speed_bump
+  3: traffic_light
+  4: cone
+  5: traffic_light_red
+  6: traffic_light_yellow
+  7: traffic_light_green

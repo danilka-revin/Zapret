@@ -1,0 +1,57 @@
+from pathlib import Path
+from collections import Counter
+import json,hashlib,sys
+sys.path.insert(0,str(Path.cwd()))
+import cv2,torch
+from scripts.evaluate_vision import evaluate
+from scripts.compare_vision import summarize,compare
+from robot_control.vision.detector import YoloDetector
+folder=Path('models/vision/training/refinement')
+prior_negative=json.loads(Path('docs/vision-improvement/negative-video-unguarded-evaluation.json').read_text())
+limit=prior_negative['results']['before']['framesWithTrafficFalsePositive']
+source=Path('.cache/vision/video-review/VID_20261117_223120_211.mp4')
+assert hashlib.sha256(source.read_bytes()).hexdigest()==prior_negative['sourceSha256']
+points=[];negative_traces={}
+torch.set_num_threads(2);cv2.setNumThreads(1)
+for variant,previous_key in (('baseline','before'),('improved','after')):
+ weights=Path('models/vision/yolo-stop-candidate.pt' if variant=='baseline' else 'models/vision/yolo-stop-improved.pt')
+ for mode in ('legacy','body','verified'):
+  name=f'{variant}-{mode}'
+  if mode=='body':
+   report=evaluate(weights=weights,data=Path('datasets/yolo-stop/data.yaml'),output=folder/f'val-{name}.json',
+                   split='val',confidence=.25,imgsz=512,device='cpu',prefer_red=False,traffic_mode=mode)
+  else:report=json.loads((folder/f'val-{name}.json').read_text())
+  if mode=='legacy':negative=prior_negative['results'][previous_key]
+  else:
+   detector=YoloDetector(str(weights),confidence=.25,imgsz=512,device='cpu',prefer_red=False,traffic_mode=mode)
+   cap=cv2.VideoCapture(str(source));rows=[]
+   while True:
+    ok,frame=cap.read()
+    if not ok:break
+    rows.append([d.to_dict() for d in detector.detect(frame)])
+   cap.release();assert len(rows)==98
+   traffic=[[d for d in detections if d['class']=='traffic_light'] for detections in rows]
+   negative={'framesWithTrafficFalsePositive':sum(bool(ds) for ds in traffic),
+             'trafficFalsePositiveBoxes':sum(map(len,traffic)),
+             'falseTrafficSignals':dict(Counter(d['signal'] for ds in traffic for d in ds))}
+   negative_traces[name]=rows
+  summary=summarize(report)
+  eligible=summary['falseGreen']==0 and negative['framesWithTrafficFalsePositive']<=limit
+  points.append({'name':name,'weights':str(weights),'sha256':report['sha256'],'trafficMode':mode,
+                 'macroF1':summary['macroF1'],'signalBalancedRecall':summary['signalBalancedRecall'],
+                 'falseGreen':summary['falseGreen'],'score':summary['validationObjective'],
+                 'negativeClip':negative,'eligible':eligible})
+  (folder/f'val-compare-{name}.json').write_text(json.dumps(compare(json.loads((folder/'val-baseline-legacy.json').read_text()),report),ensure_ascii=False,indent=2)+'\n')
+selected=max([p for p in points if p['eligible']],key=lambda p:(p['score'],p['macroF1'],p['name']))
+selection={'split':'val','confidence':.25,'imgsz':512,'device':'cpu','preferRed':False,'backend':'yolo+fusion',
+           'datasetFingerprint':report['datasetFingerprint'],'points':points,'selected':selected,
+           'weights':selected['weights'],'sha256':selected['sha256'],'trafficMode':selected['trafficMode'],
+           'objective':'0.7*canonical_macro_F1 + 0.3*signal_balanced_recall_including_misses; falseGreen==0 on canonical val; no more traffic-FP frames on the agent-reviewed 98-frame VAL shoe clip than baseline (21). Matched confidence .25 for all.',
+           'validationNegativeClip':'docs/vision-improvement/negative-video-review.json',
+           'developmentProtocol':'Initial candidate test was already evaluated and is NOT a new blind holdout. Body-only guard was developed on the separate VAL shoe clip and canonical val, using pre-existing body thresholds. Test results were not used to tune its thresholds. Final profile is frozen before repeated test evaluation; all earlier results preserved.',
+           'warning':'Small noisy pseudo/agent-assisted validation labels and ONE correlated negative video, NOT independent human GT or a safety guarantee.'}
+(folder/'validation-selection-body-guard.json').write_text(json.dumps(selection,ensure_ascii=False,indent=2)+'\n')
+(folder/'validation-negative-guard-traces.json').write_text(json.dumps({'sourceSha256':prior_negative['sourceSha256'],'points':points,'traces':negative_traces},ensure_ascii=False,indent=2)+'\n')
+print('VALIDATION BODY-GUARD COMPARISON COMPLETE')
+for p in points:print(p['name'],'F1',round(p['macroF1'],4),'signals',round(p['signalBalancedRecall'],4),'shoe FP frames',p['negativeClip']['framesWithTrafficFalsePositive'],'eligible',p['eligible'],'score',round(p['score'],4))
+print('SELECTED',selected['name'])

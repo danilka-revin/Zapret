@@ -22,10 +22,13 @@
 существующие ``slam.dispatch_drive_command`` / ``dispatch_steering_command``
 (защёлка E-STOP, лимиты углов, watchdog прошивки сохраняются).
 
-Факты для решений берутся из ``robot_control.vision`` (тот же контракт
-``/api/vision/state``, который дорабатывается на соседней ветке):
-``cameras[i].detections[]``, ``field[]`` и ``trafficLight``. Модуль не открывает
-USB, не обучает модель и не подменяет машинное зрение.
+Факты для решений берутся из ``robot_control.vision`` — доработанного и
+влитого из ``main`` / PR #158 машинного зрения (тот же публичный контракт
+``/api/vision/state``): ``cameras[i].detections[]``, ``field[]`` и
+``trafficLight``. Новые классы ``traffic_light_red/yellow/green`` сервис
+сводит к ``traffic_light`` + ``signal``, поэтому модуль одинаково работает
+со старыми и с дообученными весами. Модуль не открывает USB, не обучает
+модель и не подменяет машинное зрение.
 """
 from __future__ import annotations
 

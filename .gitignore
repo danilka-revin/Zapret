@@ -24,6 +24,18 @@ datasets/yolo-stop/raw/
 datasets/yolo-stop/labels/*.cache
 datasets/yolo-stop/*.zip
 datasets/yolo-stop/source-repo.zip
+# Refined training variant: keep compact labels/provenance, not pixels/caches.
+datasets/yolo-stop-refined/images/
+datasets/yolo-stop-refined/raw/
+datasets/yolo-stop-refined/**/*.cache
+datasets/yolo-stop-refined-color/images/
+datasets/yolo-stop-refined-color/raw/
+datasets/yolo-stop-refined-color/**/*.cache
+datasets/yolo-stop-robot/images/
+datasets/yolo-stop-robot/raw/
+datasets/yolo-stop-robot/**/*.cache
+# Deliberate portable delivery; other temporary exports remain ignored.
+!models/vision/yolo-stop-robot.onnx
 
 # --- Состояние интерфейса RUS SLAM (PIN ячейки пульта, журнал) ---
 slam_gui/state/

@@ -1,0 +1,96 @@
+from pathlib import Path
+from collections import Counter
+import sys, json, hashlib
+sys.path.insert(0,str(Path.cwd()))
+import cv2, torch
+from PIL import Image,ImageDraw,ImageFont
+from robot_control.vision.detector import YoloDetector
+
+torch.set_num_threads(2);cv2.setNumThreads(1)
+out=Path('docs/vision-improvement');out.mkdir(exist_ok=True)
+manifest=json.loads(Path('docs/vision-video-review/source.json').read_text())
+source={v['name']:v for v in manifest['videos']}
+profile_path=Path('models/vision/yolo-stop-improved-profile.json');profile=json.loads(profile_path.read_text())
+weights={'before':Path('models/vision/yolo-stop-candidate.pt'),'after':Path(profile['weights'])}
+assert hashlib.sha256(weights['after'].read_bytes()).hexdigest()==profile['sha256']
+detectors={key:YoloDetector(str(path),confidence=profile['confidence'],imgsz=profile['imgsz'],
+                            prefer_red=profile['preferRed'],device='cpu',traffic_mode='legacy' if key=='before' else profile['trafficMode']) for key,path in weights.items()}
+cases=[('211',16,'Обувь: ложный светофор'),('211',44,'Обувь: уверенная ложная рамка'),
+       ('204',60,'Лишняя рамка на двери/фоне'),('865',116,'Видимый зелёный: прежняя ошибка red'),
+       ('865',117,'Видимый зелёный: прежняя ошибка yellow'),('865',119,'Видимый зелёный: прежний пропуск'),
+       ('865',138,'Видимый зелёный: прежний верный ответ')]
+frames={};predictions={};negatives=[]
+name='VID_20261117_223120_211.mp4';video=Path('.cache/vision/video-review')/name
+assert hashlib.sha256(video.read_bytes()).hexdigest()==source[name]['sha256']
+cap=cv2.VideoCapture(str(video));i=0
+while True:
+ ok,frame=cap.read()
+ if not ok:break
+ if i==0:
+  for det in detectors.values():
+   det.detect(frame);det.detect(frame)
+ result={key:[d.to_dict() for d in det.detect(frame)] for key,det in detectors.items()}
+ negatives.append({'frame':i,'predictions':result})
+ if i in (16,44):frames[('211',i)]=frame;predictions[('211',i)]=result
+ i+=1
+cap.release();assert i==98
+for suffix in ('204','865'):
+ name=f'VID_20261117_223120_{suffix}.mp4';video=Path('.cache/vision/video-review')/name
+ assert hashlib.sha256(video.read_bytes()).hexdigest()==source[name]['sha256']
+ wanted={f for s,f,_ in cases if s==suffix};cap=cv2.VideoCapture(str(video));i=0
+ while wanted:
+  ok,frame=cap.read()
+  if not ok:raise ValueError('missing requested source frame')
+  if i in wanted:
+   frames[(suffix,i)]=frame;predictions[(suffix,i)]={key:[d.to_dict() for d in det.detect(frame)] for key,det in detectors.items()};wanted.remove(i)
+  i+=1
+ cap.release()
+negative_summary={}
+for key in detectors:
+ found=[[d for d in row['predictions'][key] if d['class']=='traffic_light'] for row in negatives]
+ negative_summary[key]={'weights':str(weights[key]),'sha256':hashlib.sha256(weights[key].read_bytes()).hexdigest(),
+                         'trafficFalsePositiveBoxes':sum(map(len,found)),
+                         'framesWithTrafficFalsePositive':sum(bool(ds) for ds in found),
+                         'falseTrafficSignals':dict(Counter(d['signal'] for ds in found for d in ds))}
+negative_report={'source':'VID_20261117_223120_211.mp4','sourceSha256':source['VID_20261117_223120_211.mp4']['sha256'],
+                 'frames':98,'originalSplit':'val','review':'negative-video-review.json',
+                 'profile':profile,'results':negative_summary,'perFrame':negatives,
+                 'warning':'ONE correlated validation clip, agent-reviewed target-free traffic frames; NOT independent human GT, overall accuracy, specificity in new scenes or a safety test. Not used to re-select model/profile.'}
+(out/'negative-video-evaluation.json').write_text(json.dumps(negative_report,ensure_ascii=False,indent=2)+'\n')
+font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',19)
+small=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',16)
+bold=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',22)
+colors={'red':'#ff6287','yellow':'#ffdf65','green':'#6cf0ae','unknown':'#c3affe',
+        'stop_sign':'#ff6287','speed_bump':'#ffdf65','pedestrian_crossing':'#70c8ff','cone':'#ffaa75'}
+labels={'stop_sign':'STOP','speed_bump':'BUMP SIGN','pedestrian_crossing':'PED SIGN','cone':'CONE'}
+sheet=Image.new('RGB',(1304,70+len(cases)*438+50),'#0b1422');draw=ImageDraw.Draw(sheet)
+draw.text((16,12),'ДО: исходный кандидат',font=bold,fill='white')
+draw.text((668,12),'ПОСЛЕ: дообученный кандидат',font=bold,fill='white')
+draw.text((16,43),'Одинаковые кадры и параметры; confidence — не вероятность правильности. Рамки настоящие.',font=small,fill='#c9d4e4')
+rows=[]
+for index,(suffix,frame_id,caption) in enumerate(cases):
+ key=(suffix,frame_id);frame=frames[key];y=70+index*438
+ original_split='val' if suffix in ('204','211') else 'train'
+ draw.text((16,y+2),f'{suffix} · кадр {frame_id} · {original_split} | {caption}',font=font,fill='white')
+ for column,version in enumerate(('before','after')):
+  im=Image.fromarray(cv2.cvtColor(cv2.resize(frame,(640,360)),cv2.COLOR_BGR2RGB));d=ImageDraw.Draw(im)
+  for det in predictions[key][version]:
+   box=det['box'];x1=box['x']*640;y1=box['y']*360;x2=(box['x']+box['w'])*640;y2=(box['y']+box['h'])*360
+   signal=det['signal'] or 'unknown';cls=det['class'];tag=signal if cls=='traffic_light' else labels.get(cls,cls)
+   tag+=f' {det["confidence"]:.2f}';color=colors.get(signal if cls=='traffic_light' else cls,'white')
+   d.rectangle((x1,y1,x2,y2),outline=color,width=3)
+   ty=max(0,min(337,y1-23));bb=d.textbbox((x1,ty),tag,font=small);d.rectangle(bb,fill='#0b1422');d.text((x1,ty),tag,font=small,fill=color)
+  x=12+column*652;sheet.paste(im,(x,y+31))
+  traffic=[d['signal'] for d in predictions[key][version] if d['class']=='traffic_light']
+  draw.text((x,y+398),'Светофор: '+(', '.join(traffic) if traffic else 'не найден'),font=font,fill='#d4e1ef')
+ rows.append({'source':f'VID_20261117_223120_{suffix}.mp4','frame':frame_id,'originalSplit':original_split,
+              'caption':caption,'decodedFrameSha256':hashlib.sha256(frame.tobytes()).hexdigest(),**predictions[key]})
+draw.text((16,70+len(cases)*438+8),'Фиксированные прежние ошибки, не независимый тест. Цвета всё ещё ненадёжны; тяга не включалась.',font=small,fill='#e2b6a7')
+sheet.save(out/'before-after.jpg',quality=93)
+report={'casesFixedBeforeImprovedInference':True,'selection':'from previously saved failure notes, not selected for new success',
+        'profile':profile,'beforeSha256':negative_summary['before']['sha256'],'afterSha256':negative_summary['after']['sha256'],
+        'sourceRevision':manifest['revision'],'sourceManifest':'../vision-video-review/source.json','cases':rows,
+        'warning':'Qualitative comparisons only; source clips include train and val footage, not independent new ground truth. No smoothing or tracker. No new selection after test.'}
+(out/'regressions.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
+print(json.dumps(negative_summary,ensure_ascii=False,indent=2))
+for row in rows:print(row['source'],row['frame'],[d['signal'] for d in row['before'] if d['class']=='traffic_light'],'->',[d['signal'] for d in row['after'] if d['class']=='traffic_light'])

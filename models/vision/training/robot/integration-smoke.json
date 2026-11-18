@@ -1,0 +1,674 @@
+{
+  "pt": {
+    "backend": "yolo",
+    "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+    "image": "1794903271167.jpg",
+    "serviceResult": {
+      "id": 0,
+      "active": true,
+      "ageS": 0.0,
+      "captureAgeS": 0.124,
+      "width": 1280,
+      "height": 964,
+      "detections": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.44,
+          "box": {
+            "x": 0.4081,
+            "y": 0.1531,
+            "w": 0.2848,
+            "h": 0.6863
+          },
+          "signal": "red",
+          "signalCounts": {
+            "red": 1552,
+            "yellow": 3475,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "action": "slow",
+          "color": "#ffb020",
+          "confidence": 0.833,
+          "box": {
+            "x": 0.1557,
+            "y": 0.1866,
+            "w": 0.1728,
+            "h": 0.2372
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.521,
+          "box": {
+            "x": 0.1602,
+            "y": 0.4238,
+            "w": 0.1299,
+            "h": 0.5326
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "error": null
+    },
+    "matchesSavedEvaluation": true,
+    "state": {
+      "ok": true,
+      "enabled": true,
+      "backend": "yolo",
+      "model": "models/vision/yolo-stop-robot.pt",
+      "imgsz": 512,
+      "device": "cpu",
+      "trafficMode": "legacy",
+      "heuristicEnabled": false,
+      "reason": "модель yolo-stop-robot.pt",
+      "cameras": {
+        "0": {
+          "id": 0,
+          "active": true,
+          "ageS": 0.005,
+          "captureAgeS": 0.129,
+          "width": 1280,
+          "height": 964,
+          "detections": [
+            {
+              "class": "traffic_light",
+              "label": "Светофор",
+              "short": "СВЕТОФОР",
+              "action": "signal",
+              "color": "#a78bfa",
+              "confidence": 0.44,
+              "box": {
+                "x": 0.4081,
+                "y": 0.1531,
+                "w": 0.2848,
+                "h": 0.6863
+              },
+              "signal": "red",
+              "signalCounts": {
+                "red": 1552,
+                "yellow": 3475,
+                "green": 0
+              },
+              "source": "yolo"
+            },
+            {
+              "class": "speed_bump",
+              "label": "Искусственная неровность",
+              "short": "НЕРОВН",
+              "action": "slow",
+              "color": "#ffb020",
+              "confidence": 0.833,
+              "box": {
+                "x": 0.1557,
+                "y": 0.1866,
+                "w": 0.1728,
+                "h": 0.2372
+              },
+              "signal": null,
+              "signalCounts": {},
+              "source": "yolo"
+            },
+            {
+              "class": "cone",
+              "label": "Конус / столбик",
+              "short": "КОНУС",
+              "action": "avoid",
+              "color": "#ff7a29",
+              "confidence": 0.521,
+              "box": {
+                "x": 0.1602,
+                "y": 0.4238,
+                "w": 0.1299,
+                "h": 0.5326
+              },
+              "signal": null,
+              "signalCounts": {},
+              "source": "yolo"
+            }
+          ],
+          "error": null
+        },
+        "1": {
+          "id": 1,
+          "active": false,
+          "ageS": null,
+          "captureAgeS": null,
+          "width": 0,
+          "height": 0,
+          "detections": [],
+          "error": null
+        },
+        "2": {
+          "id": 2,
+          "active": false,
+          "ageS": null,
+          "captureAgeS": null,
+          "width": 0,
+          "height": 0,
+          "detections": [],
+          "error": null
+        },
+        "3": {
+          "id": 3,
+          "active": false,
+          "ageS": null,
+          "captureAgeS": null,
+          "width": 0,
+          "height": 0,
+          "detections": [],
+          "error": null
+        }
+      },
+      "counts": {
+        "stop_sign": 0,
+        "pedestrian_crossing": 0,
+        "speed_bump": 1,
+        "traffic_light": 1,
+        "cone": 1
+      },
+      "trafficLight": {
+        "state": "red",
+        "label": "Красный — стоим",
+        "confidence": 0.309,
+        "cameraId": 0,
+        "ageS": 0.129,
+        "fresh": true,
+        "candidate": "unknown",
+        "counts": {
+          "red": 1552,
+          "yellow": 3475,
+          "green": 0
+        },
+        "votes": [
+          "red"
+        ],
+        "action": "stop"
+      },
+      "trafficLightLabels": {
+        "red": "Красный — стоим",
+        "yellow": "Жёлтый — готовимся",
+        "green": "Зелёный — можно ехать",
+        "unknown": "Сигнал не определён"
+      },
+      "field": [
+        {
+          "id": "cam0-traffic_light-0",
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "color": "#a78bfa",
+          "action": "signal",
+          "confidence": 0.44,
+          "cameraId": 0,
+          "x_m": 0.666,
+          "y_m": -0.048,
+          "z_m": 1.05,
+          "centerZ_m": 1.05,
+          "zSource": "CLASS_INFO",
+          "bearingDeg": -4.1,
+          "headingDeg": -4.1,
+          "distanceM": 0.67,
+          "width_m": 0.25,
+          "height_m": 0.6,
+          "thickness_m": 0.05,
+          "shape": "panel",
+          "sizeScale": 1.0,
+          "scale1to1": true,
+          "positionSource": "camera-estimate",
+          "signal": "red",
+          "ageS": 0.005
+        },
+        {
+          "id": "cam0-speed_bump-1",
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "color": "#ffb020",
+          "action": "slow",
+          "confidence": 0.833,
+          "cameraId": 0,
+          "x_m": 1.051,
+          "y_m": 0.407,
+          "z_m": 0.481,
+          "centerZ_m": 0.481,
+          "zSource": "camera-geometry",
+          "bearingDeg": 21.2,
+          "headingDeg": 21.2,
+          "distanceM": 1.13,
+          "width_m": 0.35,
+          "height_m": 0.35,
+          "thickness_m": 0.02,
+          "shape": "square",
+          "sizeScale": 1.0,
+          "scale1to1": true,
+          "positionSource": "camera-estimate",
+          "signal": null,
+          "ageS": 0.005
+        }
+      ],
+      "classes": [
+        {
+          "name": "stop_sign",
+          "label": "Знак «Стоп»",
+          "short": "STOP",
+          "color": "#ff3d71",
+          "action": "stop",
+          "height_m": 0.3,
+          "width_m": 0.3,
+          "thickness_m": 0.02,
+          "center_height_m": 0.95,
+          "shape": "octagon"
+        },
+        {
+          "name": "pedestrian_crossing",
+          "label": "Пешеходный переход",
+          "short": "ПЕШ",
+          "color": "#2f9bff",
+          "action": "slow",
+          "height_m": 0.35,
+          "width_m": 0.35,
+          "thickness_m": 0.02,
+          "center_height_m": 0.95,
+          "shape": "square"
+        },
+        {
+          "name": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "color": "#ffb020",
+          "action": "slow",
+          "height_m": 0.35,
+          "width_m": 0.35,
+          "thickness_m": 0.02,
+          "center_height_m": 0.95,
+          "shape": "square"
+        },
+        {
+          "name": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "color": "#a78bfa",
+          "action": "signal",
+          "height_m": 0.6,
+          "width_m": 0.25,
+          "thickness_m": 0.05,
+          "center_height_m": 1.05,
+          "shape": "panel"
+        },
+        {
+          "name": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "color": "#ff7a29",
+          "action": "avoid",
+          "height_m": 0.7,
+          "width_m": 0.25,
+          "thickness_m": 0.25,
+          "center_height_m": 0.35,
+          "shape": "cone"
+        }
+      ],
+      "frames": 1,
+      "inferenceMs": 111.0,
+      "intervalS": 0.25,
+      "updatedAt": 1794959982.453,
+      "running": false
+    },
+    "hardwareOpened": false
+  },
+  "onnx": {
+    "backend": "yolo",
+    "sha256": "c7f9c714f68d4bcada23e7e8028664f001f61b8fa5da8a466fd5431e49efdbee",
+    "image": "1794903271167.jpg",
+    "serviceResult": {
+      "id": 0,
+      "active": true,
+      "ageS": 0.0,
+      "captureAgeS": 0.141,
+      "width": 1280,
+      "height": 964,
+      "detections": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.44,
+          "box": {
+            "x": 0.4081,
+            "y": 0.1531,
+            "w": 0.2848,
+            "h": 0.6863
+          },
+          "signal": "red",
+          "signalCounts": {
+            "red": 1552,
+            "yellow": 3475,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "action": "slow",
+          "color": "#ffb020",
+          "confidence": 0.833,
+          "box": {
+            "x": 0.1557,
+            "y": 0.1866,
+            "w": 0.1728,
+            "h": 0.2372
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.521,
+          "box": {
+            "x": 0.1602,
+            "y": 0.4238,
+            "w": 0.1299,
+            "h": 0.5326
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "error": null
+    },
+    "matchesSavedEvaluation": true,
+    "state": {
+      "ok": true,
+      "enabled": true,
+      "backend": "yolo",
+      "model": "models/vision/yolo-stop-robot.onnx",
+      "imgsz": 512,
+      "device": "cpu",
+      "trafficMode": "legacy",
+      "heuristicEnabled": false,
+      "reason": "модель yolo-stop-robot.onnx",
+      "cameras": {
+        "0": {
+          "id": 0,
+          "active": true,
+          "ageS": 0.019,
+          "captureAgeS": 0.16,
+          "width": 1280,
+          "height": 964,
+          "detections": [
+            {
+              "class": "traffic_light",
+              "label": "Светофор",
+              "short": "СВЕТОФОР",
+              "action": "signal",
+              "color": "#a78bfa",
+              "confidence": 0.44,
+              "box": {
+                "x": 0.4081,
+                "y": 0.1531,
+                "w": 0.2848,
+                "h": 0.6863
+              },
+              "signal": "red",
+              "signalCounts": {
+                "red": 1552,
+                "yellow": 3475,
+                "green": 0
+              },
+              "source": "yolo"
+            },
+            {
+              "class": "speed_bump",
+              "label": "Искусственная неровность",
+              "short": "НЕРОВН",
+              "action": "slow",
+              "color": "#ffb020",
+              "confidence": 0.833,
+              "box": {
+                "x": 0.1557,
+                "y": 0.1866,
+                "w": 0.1728,
+                "h": 0.2372
+              },
+              "signal": null,
+              "signalCounts": {},
+              "source": "yolo"
+            },
+            {
+              "class": "cone",
+              "label": "Конус / столбик",
+              "short": "КОНУС",
+              "action": "avoid",
+              "color": "#ff7a29",
+              "confidence": 0.521,
+              "box": {
+                "x": 0.1602,
+                "y": 0.4238,
+                "w": 0.1299,
+                "h": 0.5326
+              },
+              "signal": null,
+              "signalCounts": {},
+              "source": "yolo"
+            }
+          ],
+          "error": null
+        },
+        "1": {
+          "id": 1,
+          "active": false,
+          "ageS": null,
+          "captureAgeS": null,
+          "width": 0,
+          "height": 0,
+          "detections": [],
+          "error": null
+        },
+        "2": {
+          "id": 2,
+          "active": false,
+          "ageS": null,
+          "captureAgeS": null,
+          "width": 0,
+          "height": 0,
+          "detections": [],
+          "error": null
+        },
+        "3": {
+          "id": 3,
+          "active": false,
+          "ageS": null,
+          "captureAgeS": null,
+          "width": 0,
+          "height": 0,
+          "detections": [],
+          "error": null
+        }
+      },
+      "counts": {
+        "stop_sign": 0,
+        "pedestrian_crossing": 0,
+        "speed_bump": 1,
+        "traffic_light": 1,
+        "cone": 1
+      },
+      "trafficLight": {
+        "state": "red",
+        "label": "Красный — стоим",
+        "confidence": 0.309,
+        "cameraId": 0,
+        "ageS": 0.16,
+        "fresh": true,
+        "candidate": "unknown",
+        "counts": {
+          "red": 1552,
+          "yellow": 3475,
+          "green": 0
+        },
+        "votes": [
+          "red"
+        ],
+        "action": "stop"
+      },
+      "trafficLightLabels": {
+        "red": "Красный — стоим",
+        "yellow": "Жёлтый — готовимся",
+        "green": "Зелёный — можно ехать",
+        "unknown": "Сигнал не определён"
+      },
+      "field": [
+        {
+          "id": "cam0-traffic_light-0",
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "color": "#a78bfa",
+          "action": "signal",
+          "confidence": 0.44,
+          "cameraId": 0,
+          "x_m": 0.666,
+          "y_m": -0.048,
+          "z_m": 1.05,
+          "centerZ_m": 1.05,
+          "zSource": "CLASS_INFO",
+          "bearingDeg": -4.1,
+          "headingDeg": -4.1,
+          "distanceM": 0.67,
+          "width_m": 0.25,
+          "height_m": 0.6,
+          "thickness_m": 0.05,
+          "shape": "panel",
+          "sizeScale": 1.0,
+          "scale1to1": true,
+          "positionSource": "camera-estimate",
+          "signal": "red",
+          "ageS": 0.019
+        },
+        {
+          "id": "cam0-speed_bump-1",
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "color": "#ffb020",
+          "action": "slow",
+          "confidence": 0.833,
+          "cameraId": 0,
+          "x_m": 1.051,
+          "y_m": 0.407,
+          "z_m": 0.481,
+          "centerZ_m": 0.481,
+          "zSource": "camera-geometry",
+          "bearingDeg": 21.2,
+          "headingDeg": 21.2,
+          "distanceM": 1.13,
+          "width_m": 0.35,
+          "height_m": 0.35,
+          "thickness_m": 0.02,
+          "shape": "square",
+          "sizeScale": 1.0,
+          "scale1to1": true,
+          "positionSource": "camera-estimate",
+          "signal": null,
+          "ageS": 0.019
+        }
+      ],
+      "classes": [
+        {
+          "name": "stop_sign",
+          "label": "Знак «Стоп»",
+          "short": "STOP",
+          "color": "#ff3d71",
+          "action": "stop",
+          "height_m": 0.3,
+          "width_m": 0.3,
+          "thickness_m": 0.02,
+          "center_height_m": 0.95,
+          "shape": "octagon"
+        },
+        {
+          "name": "pedestrian_crossing",
+          "label": "Пешеходный переход",
+          "short": "ПЕШ",
+          "color": "#2f9bff",
+          "action": "slow",
+          "height_m": 0.35,
+          "width_m": 0.35,
+          "thickness_m": 0.02,
+          "center_height_m": 0.95,
+          "shape": "square"
+        },
+        {
+          "name": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "color": "#ffb020",
+          "action": "slow",
+          "height_m": 0.35,
+          "width_m": 0.35,
+          "thickness_m": 0.02,
+          "center_height_m": 0.95,
+          "shape": "square"
+        },
+        {
+          "name": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "color": "#a78bfa",
+          "action": "signal",
+          "height_m": 0.6,
+          "width_m": 0.25,
+          "thickness_m": 0.05,
+          "center_height_m": 1.05,
+          "shape": "panel"
+        },
+        {
+          "name": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "color": "#ff7a29",
+          "action": "avoid",
+          "height_m": 0.7,
+          "width_m": 0.25,
+          "thickness_m": 0.25,
+          "center_height_m": 0.35,
+          "shape": "cone"
+        }
+      ],
+      "frames": 1,
+      "inferenceMs": 127.6,
+      "intervalS": 0.25,
+      "updatedAt": 1794959982.685,
+      "running": false
+    },
+    "hardwareOpened": false
+  }
+}

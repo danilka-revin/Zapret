@@ -1,0 +1,224 @@
+{
+  "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+  "confidence": 0.25,
+  "imgsz": 512,
+  "preferRed": false,
+  "backend": "yolo+fusion",
+  "checkpoint": "models/vision/yolo-stop-candidate.pt",
+  "predictionsFile": "models/vision/yolo-stop-candidate-evaluation.json",
+  "predictionsSha256": "0602a322975819a400ffb2f2459b9a3f91a507d947329e3c44d806cf558e342f",
+  "mode": "render_saved_inference; no new inference, training, or invented detections",
+  "cases": [
+    {
+      "source": "1794940327936.jpg",
+      "sourceSha256": "c594b1a26da7d7c46831ef13ed73db49c0f560b14ae62abbab935cf6629e5169",
+      "output": "01-distant-stop.jpg",
+      "title": "01  Далёкий STOP и сложный фон",
+      "note": "STOP найден: 0.87. Синий знак и дальние столбики остались без рамок.",
+      "predictions": [
+        {
+          "class": "stop_sign",
+          "label": "Знак «Стоп»",
+          "short": "STOP",
+          "action": "stop",
+          "color": "#ff3d71",
+          "confidence": 0.874,
+          "box": {
+            "x": 0.5733,
+            "y": 0.2912,
+            "w": 0.0623,
+            "h": 0.0986
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ]
+    },
+    {
+      "source": "1794940328112.jpg",
+      "sourceSha256": "05cfff2e0b54ecf8126b7e4f87daed13e5ea47319534fdcc7026d510af9690dd",
+      "output": "02-cropped-stop.jpg",
+      "title": "02  STOP частично вышел из кадра",
+      "note": "Обрезанный STOP найден: 0.52. Часть знака сверху не видна.",
+      "predictions": [
+        {
+          "class": "stop_sign",
+          "label": "Знак «Стоп»",
+          "short": "STOP",
+          "action": "stop",
+          "color": "#ff3d71",
+          "confidence": 0.517,
+          "box": {
+            "x": 0.4237,
+            "y": 0.0,
+            "w": 0.0925,
+            "h": 0.1971
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ]
+    },
+    {
+      "source": "1794940327834.jpg",
+      "sourceSha256": "44d82f40c4b5ee9beae92f561388403c4456265fb2abc5a703695b4ec75f9dd2",
+      "output": "03-edge-on-bump.jpg",
+      "title": "03  Знак неровности почти ребром",
+      "note": "Правильный класс, слабая уверенность: 0.32. Рамка очень узкая.",
+      "predictions": [
+        {
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "action": "slow",
+          "color": "#ffb020",
+          "confidence": 0.321,
+          "box": {
+            "x": 0.543,
+            "y": 0.2965,
+            "w": 0.0617,
+            "h": 0.2545
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ]
+    },
+    {
+      "source": "1794940327078.jpg",
+      "sourceSha256": "13ce7c75f482d46c03c4c97e0380e74eebfded4cdd7660aded04223d19d1a2bb",
+      "output": "04-clutter-and-false-positive.jpg",
+      "title": "04  Люди, стулья и столбик",
+      "note": "Столбик найден: 0.82. На фоне есть лишняя рамка «конус» с 0.26.",
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.818,
+          "box": {
+            "x": 0.5753,
+            "y": 0.2099,
+            "w": 0.0818,
+            "h": 0.4305
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.257,
+          "box": {
+            "x": 0.167,
+            "y": 0.0548,
+            "w": 0.0346,
+            "h": 0.1697
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ]
+    },
+    {
+      "source": "1794940327816.jpg",
+      "sourceSha256": "6198e24fc14c12e786632853d73bbe4dfe52eee60de36c8538c44ed486a5ca1a",
+      "output": "05-unknown-green.jpg",
+      "title": "05  Наклон камеры и зелёный сигнал",
+      "note": "Корпус найден, но итоговый цвет — «неизвестно». Зелёный не подтверждён.",
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.506,
+          "box": {
+            "x": 0.4932,
+            "y": 0.1456,
+            "w": 0.1066,
+            "h": 0.3002
+          },
+          "signal": "unknown",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 0,
+            "green": 140
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.66,
+          "box": {
+            "x": 0.2091,
+            "y": 0.5534,
+            "w": 0.0405,
+            "h": 0.2045
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.66,
+          "box": {
+            "x": 0.2631,
+            "y": 0.5489,
+            "w": 0.0407,
+            "h": 0.1929
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ]
+    },
+    {
+      "source": "1794940325770.jpg",
+      "sourceSha256": "f2d900f539402cac08eafd2a20d46af41ecd9002dcb32a784a02cdc5f70ae144",
+      "output": "06-missed-traffic-light.jpg",
+      "title": "06  Светофор и наклон всей сцены",
+      "note": "Ошибка: на светофоре вообще нет рамки. Из объектов найден только столбик.",
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.901,
+          "box": {
+            "x": 0.162,
+            "y": 0.5046,
+            "w": 0.0499,
+            "h": 0.1714
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ]
+    }
+  ]
+}

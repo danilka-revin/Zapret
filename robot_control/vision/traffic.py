@@ -10,8 +10,10 @@ HSV считается на numpy (без OpenCV), поэтому логику �
 * жёлтый/оранжевый 13…38;
 * зелёный 39…88 (гон 90…130 — синий экран-баннер, не сигнал).
 
-Пурпурный баннер и зелёная стена полигона в эти маски почти не попадают:
-у баннера тон 155…170, у стены яркость ниже порога диодов.
+Эти цветовые маски сами по себе не доказывают наличие светофора: яркая
+окрашенная поверхность может дать ложный сигнал. Опциональная проверка
+verify_traffic_light дополнительно проверяет корпус и положение секции,
+а YOLO всё равно должен независимо подтвердить green.
 """
 from __future__ import annotations
 
@@ -75,7 +77,7 @@ def classify_traffic_light(roi_bgr: Any, *, prefer_red: bool = False) -> dict[st
 
     Возвращает ``state``, ``confidence`` (доля победившего цвета), ``counts`` и
     ``pixels``. При ``prefer_red=True`` даже небольшое число красных диодов
-    даёт «красный» — безопасный режим для реальной езды.
+    даёт «красный». Это приоритет цвета, а не гарантия безопасности движения.
     """
     counts = color_counts(roi_bgr)
     total = sum(counts.values())
@@ -86,11 +88,107 @@ def classify_traffic_light(roi_bgr: Any, *, prefer_red: bool = False) -> dict[st
     dominant = max(TRAFFIC_LIGHT_STATES, key=lambda name: counts[name])
     if prefer_red and counts["red"] >= max(MIN_PIXELS, int(total * 0.12)):
         dominant = "red"
-    if counts[dominant] < max(MIN_PIXELS, int(total * 0.30)):
+    else:
+        ranked = sorted(counts.values(), reverse=True)
+        # Несколько одновременно горящих секций не означают «можно ехать».
+        if ranked[0] / total < 0.65 or ranked[1] / total > 0.25:
+            return result
+    if counts[dominant] < MIN_PIXELS:
         return result
     result["state"] = dominant
     result["confidence"] = round(counts[dominant] / total, 3)
     return result
+
+
+def verify_traffic_light(roi_bgr: Any, *, prefer_red: bool = False) -> dict[str, Any]:
+    """Opt-in geometric/photometric evidence inside a candidate light box.
+
+    Rejects wide/bright surfaces and requires emission in the appropriate
+    third of a dark housing. This evidence alone must NOT grant green:
+    YoloDetector also requires its learned green class. A dark/ambiguous
+    panel stays unknown. These are bench heuristics, not a safety
+    certification; the legacy production mode is unchanged.
+    """
+    arr = np.asarray(roi_bgr)
+    result: dict[str, Any] = {"validBody": False, "state": UNKNOWN,
+                              "confidence": 0.0, "counts": {s: 0 for s in TRAFFIC_LIGHT_STATES},
+                              "pixels": 0, "reason": "invalid-roi"}
+    if arr.ndim != 3 or arr.shape[-1] < 3 or arr.size == 0:
+        return result
+    height, width = arr.shape[:2]
+    if height < 12 or width < 5 or not 1.6 <= height / width <= 5.5:
+        result['reason'] = 'body-aspect'
+        return result
+    hue, saturation, value = _bgr_to_hsv(arr[..., :3])
+    dark_fraction = float(np.mean(value < 140))
+    result['darkFraction'] = round(dark_fraction, 4)
+    if dark_fraction < .4:
+        result['reason'] = 'no-dark-housing'
+        return result
+    result['validBody'] = True
+    # Dark housings are exposed differently from frame to frame. Require
+    # an absolute floor AND contrast over the local background, not V=185
+    # for every camera. Low-saturation red LEDs can be almost pink/white.
+    threshold = max(130.0, float(np.percentile(value, 30)) + 65.0)
+    bright = value >= threshold
+    masks = {
+        'red': bright & (saturation >= 40) & ((hue <= 12) | (hue >= 173)),
+        'yellow': bright & (saturation >= 65) & (hue > 12) & (hue <= 38),
+        # Green never gets the relaxed red/yellow exposure floor.
+        'green': bright & (value >= MIN_VALUE) & (saturation >= MIN_SATURATION) & (hue > 38) & (hue <= 88),
+    }
+    counts = {state: int(np.count_nonzero(mask)) for state, mask in masks.items()}
+    total = sum(counts.values())
+    result.update(counts=counts, pixels=total)
+    minimum = max(5, int(math.ceil(height * width * .0002)))
+    if total < minimum:
+        result['reason'] = 'no-emission'
+        return result
+    if total / (height * width) > .3:
+        result['reason'] = 'solid-coloured-surface'
+        return result
+    ranges = {'red': (0., .40), 'yellow': (.27, .73), 'green': (.60, 1.)}
+    valid: dict[str, bool] = {}
+    for state, mask in masks.items():
+        ys, xs = np.nonzero(mask)
+        lo, hi = ranges[state]
+        spatial = ((ys / height >= lo) & (ys / height <= hi) &
+                   (xs / width >= .08) & (xs / width <= .92))
+        valid[state] = len(ys) >= minimum and float(spatial.mean()) >= .72
+    dominant = max(TRAFFIC_LIGHT_STATES, key=lambda state: counts[state])
+    if prefer_red and valid['red'] and counts['red'] >= max(minimum, total * .12):
+        dominant = 'red'
+    else:
+        ranked = sorted(counts.values(), reverse=True)
+        # Multiple illuminated sections and uncertain hue never permit green.
+        if ranked[0] / total < .75 or ranked[1] / total > .15:
+            result['reason'] = 'ambiguous-emission'
+            return result
+    if not valid[dominant]:
+        result['reason'] = 'wrong-section-or-background'
+        return result
+    result.update(state=dominant, confidence=round(counts[dominant]/total, 3), reason='verified-section')
+    return result
+
+
+def fuse_signal(model_state: str | None, pixel_state: str, *,
+                colour_model: bool) -> str:
+    """Fail-closed согласование цвета YOLO и пикселей.
+
+    Старые 5-классовые модели работают как раньше (ROI → HSV). У новых
+    зелёный разрешён только при СОГЛАСИИ нейросети и HSV; generic/off,
+    отсутствие пикселей или конфликт не превращаются в разрешение движения.
+    Красный и жёлтый имеют консервативный приоритет, но не управляют моторами.
+    """
+    if not colour_model:
+        return pixel_state
+    if "red" in (model_state, pixel_state):
+        return "red"
+    if "yellow" in (model_state, pixel_state):
+        return "yellow"
+    if model_state == pixel_state == "green":
+        return "green"
+    return UNKNOWN
 
 
 class TrafficLightTracker:
@@ -102,7 +200,8 @@ class TrafficLightTracker:
     """
 
     def __init__(self, *, window: int = 7, switch_votes: int = 2,
-                 stale_s: float = 2.0) -> None:
+                 stale_s: float = 2.0, prefer_red: bool = False) -> None:
+        self.prefer_red = bool(prefer_red)
         self.window = max(1, int(window))
         self.switch_votes = max(1, int(switch_votes))
         self.stale_s = float(stale_s)
@@ -120,26 +219,40 @@ class TrafficLightTracker:
         self._counts = {name: max(0, int(counts.get(name, 0))) for name in TRAFFIC_LIGHT_STATES}
 
     def update(self, state: str, confidence: float = 0.0, camera_id: int = 0,
-               *, stamp: Optional[float] = None) -> dict[str, Any]:
+               *, stamp: Optional[float] = None,
+               evidence_stamp: Optional[float] = None) -> dict[str, Any]:
         now = time.time() if stamp is None else float(stamp)
         if state not in TRAFFIC_LIGHT_STATES:
             state = UNKNOWN
-        self._votes.append((now, state, max(0.0, min(1.0, float(confidence))), int(camera_id)))
+        # Старые голоса не участвуют, даже если новые кадры продолжают
+        # приходить с unknown. Иначе однажды увиденный green жил бесконечно.
+        self._votes = deque((vote for vote in self._votes if 0 <= now - vote[0] <= self.stale_s),
+                            maxlen=self.window)
+        observed = now if evidence_stamp is None else float(evidence_stamp)
+        # Обработка другой камеры не делает старый кадр новым голосом и не
+        # освежает его timestamp. Будущие/просроченные кадры тоже не голосуют.
+        if not 0 <= now - observed <= self.stale_s:
+            return self.snapshot(now=now)
+        if evidence_stamp is not None and any(vote[0] == observed and vote[3] == camera_id
+                                              for vote in self._votes):
+            return self.snapshot(now=now)
+        self._votes.append((observed, state, max(0.0, min(1.0, float(confidence))), int(camera_id)))
         tally: Counter[str] = Counter()
         conf: dict[str, float] = {}
-        cams: Counter[int] = Counter()
         last_seen: dict[str, float] = {}
         for stamp_value, vote, weight, cam in self._votes:
             if vote == UNKNOWN:
                 continue
             tally[vote] += weight if weight > 0 else 0.25
             conf[vote] = max(conf.get(vote, 0.0), weight)
-            cams[cam] += 1
-            last_seen[vote] = stamp_value
+            last_seen[vote] = max(last_seen.get(vote, stamp_value), stamp_value)
         # При равенстве голосов берём более свежий цвет, а не тот, что
         # случайно оказался первым в Counter.
         winner = max(tally, key=lambda name: (tally[name], last_seen.get(name, 0.0))) \
             if tally else UNKNOWN
+        red_override = self.prefer_red and 'red' in tally
+        if red_override:
+            winner = 'red'  # свежий red не ждёт, пока истечёт очередь green
         if winner == self._state:
             self._candidate = UNKNOWN
             self._candidate_hits = 0
@@ -147,12 +260,17 @@ class TrafficLightTracker:
             self._candidate_hits += 1
         else:
             self._candidate, self._candidate_hits = winner, 1
-        if winner != self._state and (self._state == UNKNOWN or self._candidate_hits >= self.switch_votes):
+        if winner != self._state and (red_override or self._state == UNKNOWN or self._candidate_hits >= self.switch_votes):
             self._state = winner
             self._candidate, self._candidate_hits = UNKNOWN, 0
+        if self._state not in last_seen:
+            self._state = UNKNOWN
         self._confidence = round(conf.get(self._state, 0.0), 3)
-        self._camera_id = cams.most_common(1)[0][0] if self._state != UNKNOWN and cams else None
-        self._updated_at = now
+        state_cameras = Counter(cam for _, vote, _, cam in self._votes if vote == self._state)
+        self._camera_id = state_cameras.most_common(1)[0][0] if self._state != UNKNOWN and state_cameras else None
+        # Свежесть — время реального свидетельства о текущем цвете, не
+        # время очередного update(unknown) или старого кадра другой камеры.
+        self._updated_at = last_seen.get(self._state)
         return self.snapshot(now=now)
 
     def snapshot(self, *, now: Optional[float] = None) -> dict[str, Any]:

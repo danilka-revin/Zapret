@@ -1,10 +1,10 @@
 """Словарь классов полигона: одна точка правды для обучения, API и экрана.
 
 Знаки взяты из техзадания («Стоп», «Пешеходный переход», «Искусственная
-неровность») и фотографий в ``p25543770-lang/yolo-stop``. Пятый класс —
-светодиодное табло светофора; шестой — ограничительные конусы/столбики, они же
-препятствия для объезда. Порядок ``CLASS_NAMES`` — порядок id в YOLO, менять
-его нельзя без переобучения модели.
+неровность») и фотографий в ``p25543770-lang/yolo-stop``. Четвёртый класс —
+светофор, пятый — ограничительные конусы/столбики. Порядок ``CLASS_NAMES`` —
+публичный контракт API и старых весов. ``TRAINING_CLASS_NAMES`` расширяет его
+тремя сигналами; на борту они сводятся к ``traffic_light`` + ``signal``.
 """
 from __future__ import annotations
 
@@ -52,6 +52,11 @@ CLASS_INFO: dict[str, dict[str, Any]] = {
 }
 
 TRAFFIC_LIGHT_STATES: tuple[str, ...] = ("red", "yellow", "green")
+# Не переставлять первые пять id: старые датасеты/веса остаются совместимыми.
+# generic traffic_light нужен для выключенного/неоднозначного табло.
+TRAINING_CLASS_NAMES = CLASS_NAMES + tuple(
+    f"traffic_light_{state}" for state in TRAFFIC_LIGHT_STATES
+)
 TRAFFIC_LIGHT_LABELS: dict[str, str] = {
     "red": "Красный — стоим",
     "yellow": "Жёлтый — готовимся",
@@ -95,4 +100,15 @@ def normalize_class(name: Any) -> str | None:
     key = str(name or "").strip().lower()
     if key in CLASS_NAMES:
         return key
+    if signal_from_class(key):
+        return "traffic_light"
     return _ALIASES.get(key)
+
+
+def signal_from_class(name: Any) -> str | None:
+    """Сигнал из имени нейросетевого класса, без изменения публичных id."""
+    key = str(name or "").strip().lower().replace(" ", "_").replace("-", "_")
+    for state in TRAFFIC_LIGHT_STATES:
+        if key in (f"traffic_light_{state}", f"{state}_light", f"{state}_traffic_light"):
+            return state
+    return None

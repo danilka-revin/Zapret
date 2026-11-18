@@ -1,0 +1,73 @@
+{
+  "metrics/precision(B)": 0.644364,
+  "metrics/recall(B)": 0.568012,
+  "metrics/mAP50(B)": 0.602199,
+  "metrics/mAP50-95(B)": 0.43157,
+  "fitness": 0.43157,
+  "perClass": [
+    {
+      "id": 0,
+      "name": "stop_sign",
+      "precision": 0.582544,
+      "recall": 0.857143,
+      "mAP50": 0.777193,
+      "mAP50-95": 0.591772
+    },
+    {
+      "id": 1,
+      "name": "pedestrian_crossing",
+      "precision": 0.863438,
+      "recall": 1.0,
+      "mAP50": 0.995,
+      "mAP50-95": 0.8955
+    },
+    {
+      "id": 2,
+      "name": "speed_bump",
+      "precision": 0.719017,
+      "recall": 0.571429,
+      "mAP50": 0.785,
+      "mAP50-95": 0.610196
+    },
+    {
+      "id": 3,
+      "name": "traffic_light",
+      "precision": 0.67507,
+      "recall": 0.625,
+      "mAP50": 0.652945,
+      "mAP50-95": 0.306819
+    },
+    {
+      "id": 4,
+      "name": "cone",
+      "precision": 0.888212,
+      "recall": 0.630666,
+      "mAP50": 0.701066,
+      "mAP50-95": 0.469617
+    },
+    {
+      "id": 5,
+      "name": "traffic_light_red",
+      "precision": 0.56529,
+      "recall": 0.126522,
+      "mAP50": 0.321548,
+      "mAP50-95": 0.179152
+    },
+    {
+      "id": 6,
+      "name": "traffic_light_yellow",
+      "precision": 0.239569,
+      "recall": 0.333333,
+      "mAP50": 0.114405,
+      "mAP50-95": 0.091524
+    },
+    {
+      "id": 7,
+      "name": "traffic_light_green",
+      "precision": 0.621772,
+      "recall": 0.4,
+      "mAP50": 0.470439,
+      "mAP50-95": 0.307975
+    }
+  ]
+}

@@ -63,6 +63,10 @@ def test_autonomy_html_links_and_safety_labels():
         assert key in env
     docs = (ROOT / "docs" / "TRACK_AUTONOMY.md").read_text(encoding="utf-8")
     assert "navigation_frame()" in docs and "notForNavigation" in docs
+    assert "уже влито в эту ветку" in docs and "PR #158" in docs
+    module_doc = (ROOT / "robot_control" / "track_autonomy.py").read_text(encoding="utf-8")
+    assert "влитого из ``main`` / PR #158" in module_doc
+    assert "дорабатывается на соседней ветке" not in module_doc
 
 
 @pytest.mark.skipif(NODE is None, reason="нет node")
