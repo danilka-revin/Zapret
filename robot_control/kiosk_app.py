@@ -2524,6 +2524,24 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             module.buzz()
         return sensor_command(act)
 
+    @app.post("/api/sensor_module/rfid")
+    def api_sensor_module_rfid():
+        """Считыватель карт: {"on": true|false}. Без поля — только состояние.
+
+        `off` гасит передатчик и приёмник RC522: модуль перестаёт греться и
+        карты не читаются — так проверяют причину нагрева. Обратно — `on`.
+        PIN не нужен: это режим железа, а не доступ к отсеку.
+        """
+        def act(module, body):
+            if "on" not in body:
+                module.rfid(None)
+                return
+            on = bool(body.get("on"))
+            module.rfid(on)
+            eventlog.record("ok", "считыватель карт: %s" % ("включён" if on else "выключен"),
+                            source="sensor")
+        return sensor_command(act)
+
     @app.post("/api/sensor_module/strip")
     def api_sensor_module_strip():
         """Режим адресной ленты: {"mode": "auto"|"off"|"floor"|"wave"}.

@@ -195,6 +195,7 @@ function status() {
     port: byId('sm-port').textContent,
     age: byId('sm-age').textContent,
     errors: byId('sm-errors').textContent,
+    warnings: byId('sm-warnings').textContent,
   };
 }
 
@@ -253,6 +254,8 @@ function logItems() {
       tone: byId('sm-window').dataset.tone || '',
     },
     cards: { count: byId('sm-cards-count').textContent, rfid: byId('sm-rfid').textContent,
+             reader: byId('sm-rfid-state').textContent,
+             readerState: byId('sm-rfid-state').dataset.state || '',
              rfidTone: byId('sm-rfid').dataset.tone || '',
              rows: cardRows(), role: byId('sm-card-role').value,
              empty: (byId('sm-card-list-box').children || []).map((c) => c.textContent) },
@@ -293,6 +296,18 @@ function logItems() {
       await sleep(20);
       result.afterStripMode = { text: byId('sm-msg').textContent,
                                 tone: byId('sm-msg').dataset.tone || '' };
+    }
+    if (acts.rfidOff) {
+      byId('sm-rfid-off').click();
+      await sleep(20);
+      result.afterRfid = { text: byId('sm-msg').textContent,
+                           tone: byId('sm-msg').dataset.tone || '' };
+    }
+    if (acts.rfidOn) {
+      byId('sm-rfid-on').click();
+      await sleep(20);
+      result.afterRfid = { text: byId('sm-msg').textContent,
+                           tone: byId('sm-msg').dataset.tone || '' };
     }
     if (acts.pin !== undefined) byId('sm-pin').value = String(acts.pin);
     if (acts.lockOpen) {

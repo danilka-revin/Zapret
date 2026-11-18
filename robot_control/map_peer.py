@@ -195,6 +195,7 @@ def proxy_sensor_module(origin: str, operation: str):
         "buzz": ("POST", "/api/sensor_module/buzz"),
         "lock": ("POST", "/api/sensor_module/lock"),
         "cards": ("POST", "/api/sensor_module/cards"),
+        "rfid": ("POST", "/api/sensor_module/rfid"),
         "cargo": ("POST", "/api/sensor_module/cargo"),
         "mag": ("POST", "/api/sensor_module/mag"),
     }

@@ -61,6 +61,7 @@ def snapshot(**kwargs) -> dict:
         "stripEnabled": False,
         "stripLeds": None,
         "rfid": "ready",
+        "rfidOn": True,
         "cards": 3,
         "cardList": [{"idx": 1, "uid": "A1B2C3D4", "role": "admin"},
                      {"idx": 2, "uid": "01020304", "role": "user"}],
@@ -181,6 +182,7 @@ def test_telemetry_frame_fills_the_whole_screen(tmp_path):
         "tone": "live", "title": "на связи",
         "sub": "Плата отвечает и присылает кадры",
         "port": "/dev/ttyUSB0", "age": "0.4 с назад", "errors": "нет",
+        "warnings": "нет",
     }
     assert out["compass"]["heading"] == "123°"
     assert out["compass"]["cardinal"] == "ЮВ"
@@ -308,6 +310,18 @@ def test_lights_go_to_the_api_the_operator_pressed(tmp_path):
     assert out["afterToggleMsg"]["tone"] == "ok"
 
 
+def test_open_lock_warning_is_shown_apart_from_sensor_errors(tmp_path):
+    """«Замок открыт слишком долго» — предупреждение, а не отказ датчика."""
+    payload = screen()
+    payload["snapshot"]["data"].update(warnMask=1, warnings=["замок открыт слишком долго"],
+                                       lockOpen=True, errors=[])
+    out = run_screen(payload, tmp_path)
+    assert out["status"]["warnings"] == "замок открыт слишком долго"
+    assert out["status"]["errors"] == "нет"
+    clean = run_screen(screen(), tmp_path)
+    assert clean["status"]["warnings"] == "нет"
+
+
 def test_automatic_brake_and_near_obstacle_are_shown_with_their_reason(tmp_path):
     """Стоп-сигнал и тревога — состояние сервера, а не кнопки оператора."""
     payload = screen()
@@ -345,6 +359,33 @@ def test_buzzer_check_button_sends_buzz_without_pin(tmp_path):
     # Кнопка есть на странице и ничего не включает: только звук.
     page = (ROOT / "slam_gui" / "sensors.html").read_text(encoding="utf-8")
     assert 'id="sm-buzz"' in page and "Проверить сигнал" in page
+
+
+def test_rfid_reader_can_be_switched_off_for_heat_test(tmp_path):
+    """Считыватель гасят кнопкой: карты не читаются, RC522 не греется."""
+    out = run_screen(screen(rfidOn=False), tmp_path)
+    assert out["cards"]["reader"] == "выключен"
+    assert out["cards"]["readerState"] == "off"
+
+    payload = screen(rfidOn=False)
+    payload["actions"] = {"rfidOff": True}
+    out = run_screen(payload, tmp_path)
+    posts = [call for call in out["callsAfter"] if call["method"] == "POST"]
+    assert posts == [{"url": "api/sensor_module/rfid", "method": "POST", "body": {"on": False}}]
+    assert out["afterRfid"]["tone"] == "ok"
+    assert "считыватель карт" in out["afterRfid"]["text"]
+    # Кнопки есть на странице и не требуют PIN: это режим железа.
+    page = (ROOT / "slam_gui" / "sensors.html").read_text(encoding="utf-8")
+    assert 'id="sm-rfid-off"' in page and 'id="sm-rfid-on"' in page
+    assert 'id="sm-rfid-state"' in page
+
+
+def test_rfid_reader_switch_on_sends_on(tmp_path):
+    payload = screen(rfidOn=False)
+    payload["actions"] = {"rfidOn": True}
+    out = run_screen(payload, tmp_path)
+    posts = [call for call in out["callsAfter"] if call["method"] == "POST"]
+    assert posts == [{"url": "api/sensor_module/rfid", "method": "POST", "body": {"on": True}}]
 
 
 def test_empty_rfid_list_is_distinguished_from_not_loaded(tmp_path):

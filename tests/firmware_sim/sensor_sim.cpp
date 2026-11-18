@@ -223,6 +223,7 @@ struct Rc522Model {
   }
 
   uint8_t readReg(uint8_t reg) {
+    settle();
     switch (reg) {
       case 0x37: return 0x92;                      // VersionReg: RC522
       case 0x01: return command;
@@ -240,7 +241,27 @@ struct Rc522Model {
     }
   }
 
+  //: Сколько времени передатчик был включён: ровно это и греет катушку.
+  double antenna_on_us = 0.0;
+  double antenna_since_us = -1.0;
+  bool antennaOn() const { return (tx_control & 0x03) == 0x03; }
+
+  void trackAntenna(bool was_on, bool now_on) {
+    if (!was_on && now_on) antenna_since_us = sim::now_us;
+    if (was_on && !now_on && antenna_since_us >= 0) {
+      antenna_on_us += sim::now_us - antenna_since_us;
+      antenna_since_us = -1.0;
+    }
+  }
+
   void writeReg(uint8_t reg, uint8_t value) {
+    settle();
+    if (reg == 0x14) {
+      const bool was_on = antennaOn();
+      tx_control = value;
+      trackAntenna(was_on, antennaOn());
+      return;
+    }
     switch (reg) {
       case 0x01:
         command = value;
@@ -253,12 +274,14 @@ struct Rc522Model {
       case 0x09: if (fifo.size() < 64) fifo.push_back(value); break;
       case 0x0A: if (value & 0x80) fifo.clear(); break;
       case 0x06: error = value; break;
-      case 0x14: tx_control = value; break;
       default: break;
     }
   }
 
   void reset() {
+    trackAntenna(antennaOn(), false);
+    pending = false;
+    pending_payload.clear();
     command = 0;
     com_irq = 0;
     error = 0;
@@ -267,16 +290,40 @@ struct Rc522Model {
     phase = 0;
   }
 
-  void answer(const std::vector<uint8_t>& payload) {
-    fifo = payload;
-    com_irq |= 0x20;      // RxIRq
+  //: Ответ карты приходит через ~1,2 мс, тишина обрывается внутренним таймером
+  //: RC522 через ~6 мс (как выставлено в прошивке). Мгновенный ответ модели
+  //: занижал бы время под питанием передатчика — а именно оно и греет модуль.
+  static constexpr int64_t CARD_ANSWER_US = 1200;
+  static constexpr int64_t RECEIVE_TIMEOUT_US = 5900;
+  std::vector<uint8_t> pending_payload;
+  bool pending_ok = false, pending = false;
+  int64_t pending_at_us = 0;
+
+  void settle() {
+    if (!pending || sim::now_us < pending_at_us) return;
+    pending = false;
+    if (pending_ok) {
+      fifo = pending_payload;
+      com_irq |= 0x20;      // RxIRq
+    } else {
+      fifo.clear();
+      com_irq |= 0x01;      // TimerIRq
+    }
     command = 0x00;
   }
 
+  void answer(const std::vector<uint8_t>& payload) {
+    pending_payload = payload;
+    pending_ok = true;
+    pending = true;
+    pending_at_us = sim::now_us + CARD_ANSWER_US;
+  }
+
   void timeout() {
-    fifo.clear();
-    com_irq |= 0x01;      // TimerIRq
-    command = 0x00;
+    pending_payload.clear();
+    pending_ok = false;
+    pending = true;
+    pending_at_us = sim::now_us + RECEIVE_TIMEOUT_US;
   }
 
   // Независимая побитовая реализация CRC_A для проверки кадров скетча.
@@ -365,6 +412,8 @@ static void boot() {
 
 static void send(const std::string& line) { board.serial.send(line); }
 
+
+
 static void run(double milliseconds) { sim::run_for_ms(milliseconds); }
 
 static bool wait_until(const std::function<bool()>& predicate, double timeout_ms) {
@@ -427,8 +476,16 @@ static void presentCard(const uint8_t* uid) {
   rc522.insert(uid);
 }
 
+//: Считыватель после старта включён сам (SENSOR_RFID_AUTO_ON=1), но команда
+//: нужна сценарию rfid_duty_cycle: вернуть чтение после rfid off.
+static void rfid_on() { send("rfid on"); }
+static bool card_event_soon(size_t& mark, double timeout_ms = 1200) {
+  return wait_until([&]() { return contains(board.serial.output.substr(mark), "@CARD "); },
+                    timeout_ms);
+}
+
 //: Дождаться кадра @CARD после отметки mark.
-static std::string readCard(size_t& mark, double timeout_ms = 600) {
+static std::string readCard(size_t& mark, double timeout_ms = 1200) {
   wait_until([&]() { return contains(board.serial.output.substr(mark), "@CARD "); }, timeout_ms);
   return lastFrame(board.serial.output.substr(mark), "@CARD ");
 }
@@ -588,6 +645,84 @@ static void scenario_buzzer_check() {
   CHECK(board.level[44] == LOW, "повторные нажатия не оставляют зуммер включённым");
 }
 
+// Забытый открытый замок: дольше 10 с по состоянию серво (не по концевику
+// D42) звучит рисунок из трёх коротких гудков с паузой, а не одиночный писк.
+static void scenario_lock_open_warning() {
+  boot();
+  // Концевик закрыт всё время: предупреждение не про дверь, а про засов.
+  board.level[42] = HIGH;
+  run(60);
+  size_t mark = board.serial.output.size();
+  CHECK(field(telemetry(mark), "warn") == 0, "при закрытом замке предупреждения нет");
+  send("lock hold");
+  CHECK(wait_until([]() { return board.servo_value == sensors::LOCK_OPEN_ANGLE; }, 200),
+        "замок открыт");
+  run(500);
+  CHECK(field(telemetry(mark), "warn") == 0, "первые 10 секунд тишина");
+  // До истечения 10 с зуммер молчит, пока не подошло время напоминания.
+  int low_steps = 0;
+  uint8_t previous = board.level[44];
+  const int64_t until_warn = sim::now_us + 9800 * 1000;
+  while (sim::now_us < until_warn) {
+    sim::run_for_ms(10);
+    if (board.level[44] != previous) { previous = board.level[44]; ++low_steps; }
+  }
+  CHECK(low_steps <= 2, "до 10 с зуммер не мигает (переходов: %d)", low_steps);
+  // После порога: три коротких гудка с паузой, затем пауза между рисунками.
+  const int64_t end = sim::now_us + 6000 * 1000;
+  int beeps = 0;
+  bool was_high = board.level[44] == HIGH;
+  bool saw_quiet_pause = false;
+  uint32_t quiet_since = 0;
+  while (sim::now_us < end) {
+    sim::run_for_ms(5);
+    const bool now_high = board.level[44] == HIGH;
+    if (now_high && !was_high) ++beeps;
+    if (!now_high && board.level[44] == LOW) {
+      if (!quiet_since) quiet_since = (uint32_t)(sim::now_us / 1000);
+      if ((uint32_t)(sim::now_us / 1000) - quiet_since >= 1000) saw_quiet_pause = true;
+    } else {
+      quiet_since = 0;
+    }
+    was_high = now_high;
+  }
+  // Один рисунок ≈ 3×120 + 2×110 + 1600 мс, поэтому за 6 с их два-три.
+  CHECK(beeps >= 5, "рисунок повторяется: гудков за 6 с — %d", beeps);
+  CHECK(saw_quiet_pause, "между рисунками есть пауза больше секунды");
+  CHECK(field(telemetry(mark), "warn") == 1,
+        "телеметрия сообщает warn=1, пока замок открыт слишком долго");
+  // Закрыли — рисунок прекращается сразу, а не доигрывает.
+  send("lock close");
+  run(300);
+  CHECK(board.level[44] == LOW, "после закрытия зуммер молчит");
+  CHECK(field(telemetry(mark), "warn") == 0, "после закрытия warn=0");
+  // Повторное открытие снова начинает отсчёт: напоминание не «сгорело».
+  send("lock hold");
+  run(10300);
+  bool again = false;
+  for (int i = 0; i < 400; ++i) {
+    sim::run_for_ms(5);
+    if (board.level[44] == HIGH) { again = true; break; }
+  }
+  CHECK(again, "после повторного открытия напоминание снова звучит");
+  send("lock close");
+  run(100);
+}
+
+static void scenario_lock_open_warning_off_for_short_open() {
+  boot();
+  // Штатное открытие по таймеру (<= 10 с) не должно пищать напоминанием.
+  send("lock open 2");
+  int transitions = 0;
+  uint8_t previous = board.level[44];
+  const int64_t end = sim::now_us + 9000 * 1000;
+  while (sim::now_us < end) {
+    sim::run_for_ms(5);
+    if (board.level[44] != previous) { previous = board.level[44]; ++transitions; }
+  }
+  CHECK(transitions == 0, "короткое открытие не пищит (переходов: %d)", transitions);
+}
+
 static void scenario_turn_blink() {
   boot();
   send("light left on");
@@ -745,9 +880,7 @@ static void scenario_card_denied() {
   const uint8_t stranger[4] = {0x11, 0x22, 0x33, 0x44};
   rc522.insert(stranger);
   size_t mark = board.serial.output.size();
-  CHECK(wait_until([&]() {
-          return contains(board.serial.output.substr(mark), "@CARD ");
-        }, 400), "чужая карта даёт событие");
+  CHECK(card_event_soon(mark), "чужая карта даёт событие");
   const std::string card = lastFrame(board.serial.output.substr(mark), "@CARD ");
   CHECK(card.find("uid=11223344") != std::string::npos, "UID в событии: %s", card.c_str());
   CHECK(field(card, "ok") == 0, "чужая карта отклонена: %s", card.c_str());
@@ -1017,9 +1150,7 @@ static void scenario_card_learn_persists() {
   const uint8_t fresh[4] = {0xDE, 0xAD, 0xBE, 0xEF};
   rc522.insert(fresh);
   size_t mark = board.serial.output.size();
-  CHECK(wait_until([&]() {
-          return contains(board.serial.output.substr(mark), "@CARD ");
-        }, 400), "режим обучения ловит карту");
+  CHECK(card_event_soon(mark), "режим обучения ловит карту");
   const std::string card = lastFrame(board.serial.output.substr(mark), "@CARD ");
   CHECK(field(card, "ok") == 1, "карта записана: %s", card.c_str());
   CHECK(fieldText(card, "role") == "admin", "карта записана администратором: %s", card.c_str());
@@ -1097,6 +1228,65 @@ static void scenario_garbage_safe() {
   CHECK(contains(fresh, "@S "), "телеметрия продолжается после мусора");
   CHECK(countLows(RELAYS, 4) == 0, "мусор не включает реле");
   CHECK(board.servo_value == sensors::LOCK_CLOSED_ANGLE, "мусор не открывает замок");
+}
+
+// Нагрев RC522: катушку греет не «частота опроса», а время под питанием
+// передатчика. Проверяем по регистру TX_CONTROL: без карты антенна живёт
+// единицы миллисекунд на сеанс, а не постоянно.
+static void scenario_rfid_duty_cycle() {
+  boot();
+  size_t mark = board.serial.output.size();
+  const std::string frame = telemetry(mark);
+  CHECK(field(frame, "rfid_on") == 1, "после старта считыватель включён: rfid_on=%ld",
+        field(frame, "rfid_on"));
+  CHECK(!rc522.card_present, "карты на считывателе нет");
+
+  // Минута без карт: сколько времени передатчик был под питанием.
+  rc522.antenna_on_us = 0.0;
+  rc522.antenna_since_us = rc522.antennaOn() ? sim::now_us : -1.0;
+  const double started_us = sim::now_us;
+  run(60000);
+  if (rc522.antenna_since_us >= 0) rc522.antenna_on_us += sim::now_us - rc522.antenna_since_us;
+  const double share = rc522.antenna_on_us / (sim::now_us - started_us) * 100.0;
+  // Один сеанс без карты — REQA и короткий приём (~6 мс), затем передатчик
+  // гаснет: за минуту набегает около 1,5 % времени под питанием.
+  // Прежняя прошивка (опрос каждые 100 мс, приём ~25 мс) держала антенну
+  // включённой постоянно — 100 % времени, отсюда и нагрев.
+  CHECK(share > 0.0 && share < 5.0, "антенна под питанием %.2f%% времени (было ~100%%)", share);
+
+  // Карта, лежащая на считывателе, читается и при таком режиме.
+  const uint8_t admin[4] = {0xA1, 0xB2, 0xC3, 0xD4};
+  rc522.insert(admin);
+  mark = board.serial.output.size();
+  CHECK(card_event_soon(mark, 1200), "карта читается при сеансовом опросе");
+  // Сеанс заканчивается сам: карта прочитана, антенна снова обесточена.
+  CHECK(!rc522.antennaOn(), "после чтения антенна обесточена");
+
+  // rfid off — проверка нагрева: передатчик и приёмник погашены, карты молчат.
+  send("rfid off");
+  run(50);
+  CHECK(!rc522.antennaOn(), "rfid off гасит антенну");
+  mark = board.serial.output.size();
+  rc522.remove();
+  run(500);
+  CHECK(!board.serial.output.substr(mark).empty(), "плата продолжает жить без считывателя");
+  CHECK(field(telemetry(mark), "rfid_on") == 0, "rfid_on=0 после rfid off");
+  const std::string status = [&]() {
+    size_t at = board.serial.output.size();
+    send("rfid");
+    wait_until([&]() { return contains(board.serial.output.substr(at), "@ACK id="); }, 200);
+    return board.serial.output.substr(at);
+  }();
+  CHECK(contains(status, "выключен"), "rfid без аргумента показывает состояние: %s",
+        status.substr(0, 80).c_str());
+  CHECK(contains(status, "RFID"), "состояние считывателя в журнале: %s",
+        status.substr(0, 80).c_str());
+
+  // rfid on возвращает чтение карт.
+  send("rfid on");
+  rc522.insert(admin);
+  mark = board.serial.output.size();
+  CHECK(card_event_soon(mark, 1200), "после rfid on карта снова читается");
 }
 
 static void scenario_sensor_faults() {
@@ -1283,6 +1473,8 @@ static const Scenario SCENARIOS[] = {
     {"tilt_compensation", scenario_tilt_compensation},
     {"lights", scenario_lights},
     {"turn_blink", scenario_turn_blink},
+    {"lock_open_warning", scenario_lock_open_warning},
+    {"lock_open_warning_short", scenario_lock_open_warning_off_for_short_open},
     {"buzzer_check", scenario_buzzer_check},
     {"dim_strip", scenario_dim_strip},
     {"strip_effects", scenario_strip_effects},
@@ -1300,6 +1492,7 @@ static const Scenario SCENARIOS[] = {
     {"eeprom_corrupt", scenario_eeprom_corrupt},
     {"link_timeout", scenario_link_timeout},
     {"garbage_safe", scenario_garbage_safe},
+    {"rfid_duty_cycle", scenario_rfid_duty_cycle},
     {"sensor_faults", scenario_sensor_faults},
     {"mag_calibration", scenario_mag_calibration},
 };

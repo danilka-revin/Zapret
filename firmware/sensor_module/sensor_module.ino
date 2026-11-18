@@ -40,7 +40,7 @@
 
   @S fw=5 hdg=12345 pitch=-120 roll=35 gz=12 press=69964 temp=150 alt=301674
      lock=0 doorclosed=1 light=5 dim=80 strip=0 nleds=73 cargo=0 rfid=0 cards=2 link=1
-     err=0 t=123456 crc=ABCD                          (5 Гц)
+     err=0 warn=0 rfid_on=1 t=123456 crc=ABCD          (5 Гц; хвост необязательный)
   @CARD uid=A1B2C3D4 ok=1 act=open role=admin why=none cards=2 t=1234 crc=ABCD
   @CARDINFO idx=1 uid=A1B2C3D4 role=admin total=2 t=1234 crc=ABCD
   @CARDINFO end=1 total=2 t=1234 crc=ABCD
@@ -51,11 +51,20 @@
 Команды (строки, \r\n): ping, stat, ?,
   light head|stop|left|right|dim on|off, light all off|on,
   dim 0…255, strip auto|off|floor|wave,
-  lock open [1…10] | lock hold | lock close,
+  lock open [1…10] | lock hold | lock close   (открыт >10 с — напоминание),
   card list | card add A1B2C3D4 [admin|user] | card learn [admin|user] |
     card role A1B2C3D4 admin|user | card del A1B2C3D4 | card clear,
   cargo load [1…240] | cargo unload [1…240] | cargo end,
-  mag cal start | mag cal stop | mag cal reset
+  mag cal start | mag cal stop | mag cal reset,
+  rfid on | rfid off | rfid
+
+Нагрев RC522: катушка 13,56 МГц греется, пока на передатчик подано питание,
+поэтому антенна включается только на время обмена. Карта опрашивается раз в
+400 мс, каждый сеанс — не дольше 120 мс, чаще всего 5–20 мс (REQA, антиколлизия,
+SELECT), остальное время передатчик и приёмник обесточены. Приём карты
+обрывается через ~6 мс тишины вместо ~25 мс. rfid off — погасить считыватель
+совсем (проверка нагрева), rfid — показать состояние. Сборка
+-DSENSOR_RFID_AUTO_ON=0 не включает считыватель после старта вовсе.
 
 Карты и роли: каждая запомненная карта — администратор или пользователь.
 Карта администратора открывает отсек в любой момент, карта пользователя —
@@ -104,9 +113,14 @@ static const bool RELAY_ACTIVE_LOW = true;
 static const uint8_t LOCK_SERVO_PIN = 7;
 static const uint8_t DOOR_SWITCH_PIN = 42;
 static const uint8_t BUZZER_PIN = 44;
-//: Сколько звучит зуммер по команде buzz: столько же, сколько по чтению карты.
+//: Сколько звучит зуммер по команде buzz и по чтению карты.
 //: Сигнал проверки — короткий, чтобы не заглушать площадку и не греть зуммер.
 static const uint16_t BUZZ_TEST_MS = 300;
+//: Открытый замок дольше этого времени считается «забыли закрыть»: звучит
+//: напоминание. Это не про концевик двери (D42), а про состояние засова.
+static const uint16_t LOCK_OPEN_WARN_MS = 10000;
+//: Маска битов лишнего открытия в новом необязательном поле кадра @S.
+static const uint8_t WARN_LOCK_OPEN = 1 << 0;
 
 static const uint8_t UID_MAX_BYTES = 10;
 struct CardUid {
@@ -120,6 +134,12 @@ struct CardUid {
 //: -DSENSOR_STRIP_ENABLED=0 для платы без ленты).
 #ifndef SENSOR_STRIP_ENABLED
 #define SENSOR_STRIP_ENABLED 1
+#endif
+//: 1 — читать карты после включения платы (обычное поведение). 0 — антенна
+//: обесточена до команды rfid on: так проверяют нагрев и так собирают плату,
+//: где карты не нужны. Сборка -DSENSOR_RFID_AUTO_ON=0.
+#ifndef SENSOR_RFID_AUTO_ON
+#define SENSOR_RFID_AUTO_ON 1
 #endif
 static const bool STRIP_ENABLED = SENSOR_STRIP_ENABLED != 0;
 
@@ -290,6 +310,7 @@ struct CardSlot {
 const char* roleName(uint8_t role);
 bool cargoActive(uint32_t now);
 void emitTelemetry();
+bool rfidDisabled();
 
 static CardSlot cards[CARD_SLOTS];
 static uint8_t card_count = 0;
@@ -316,6 +337,15 @@ static uint32_t door_changed_ms = 0;
 static bool buzzing = false;
 static uint32_t buzz_started_ms = 0;
 static uint16_t buzz_duration_ms = 0;
+//: Начало текущего открытия замка (серво), независимо от концевика D42.
+static uint32_t lock_opened_ms = 0;
+static uint8_t lock_warn_step = 0;          // 0 — пауза между гудками, 1 — гудок, 2 — пауза между рисунками
+static uint32_t lock_warn_ms = 0;           // момент смены шага
+static uint8_t lock_warn_beep = 0;          // сколько гудков рисунка уже сыграно
+static uint8_t lock_warn_cycle = 0;         // сколько рисунков уже сыграно
+static bool lock_warn_active = false;       // рисунок сейчас владеет зуммером
+static bool lock_warn_done = false;         // отпищал своё — молчим до закрытия
+
 static bool lock_open = false;
 static bool lock_held = false;                // открыт картой, сам не закроется
 static uint32_t lock_deadline = 0;
@@ -553,6 +583,24 @@ bool baroRead(int32_t* pressure_pa, int16_t* temp_c10) {
 }
 
 // =============================== RC522 =======================================
+//: Длительности опроса объявлены здесь: их использует и rcReset() (таймаут
+//: приёма), и шаги RFID ниже.
+//: Между попытками 400 мс: карта, положенная на считыватель, всё равно будет
+//: прочитана за полсекунды, а катушка почти всё время обесточена.
+static const uint32_t RFID_POLL_MS = 400;
+//: Сколько ждём ответа RC522 на один шаг (REQA, антиколлизия, SELECT).
+static const uint32_t RFID_STEP_MS = 12;
+//: Предделитель и перезагрузка внутреннего таймера RC522: приём обрывается
+//: через ~6 мс тишины вместо ~25 мс. Карта отвечает за 1–2 мс, так что этого
+//: хватает, а передатчик остаётся включённым вчетверо меньше времени.
+static const uint8_t RC_TIMER_PRESCALER = 223;
+static const uint16_t RC_TIMER_RELOAD = 180;
+//: Предел одного сеанса: дольше антенна не включена ни при каких условиях.
+static const uint32_t RFID_TX_ON_MS = 120;
+//: Пауза после включения антенны: поле 13,56 МГц должно установиться, иначе
+//: первая REQA уходит в пустоту, а карта «не видит» считыватель.
+static const uint32_t RFID_FIELD_SETTLE_MS = 3;
+
 void rcWrite(uint8_t reg, uint8_t value) {
   digitalWrite(RC522_SS_PIN, LOW);
   SPI.transfer((uint8_t)((reg << 1) & 0x7E));
@@ -574,6 +622,20 @@ void rcAntennaOn() {
   if ((rcRead(RC_REG_TX_CONTROL) & 0x03) != 0x03) rcSetBits(RC_REG_TX_CONTROL, 0x03);
 }
 
+//: Погасить передатчик (выход антенны) и остановить текущую команду. Нужно и
+//: для паузы между сеансами (катушка остывает), и для rfid off.
+void rcAntennaOff() {
+  rcWrite(RC_REG_TX_CONTROL, 0x00);
+  rcWrite(RC_REG_COMMAND, RC_CMD_IDLE);
+}
+
+//: Полное выключение аналоговой части: передатчик, приёмник, усилители
+//: (PowerDown). Так проверяют нагрев: микросхема остаётся на SPI, но не греется.
+void rcPowerDown() {
+  rcAntennaOff();
+  rcSetBits(RC_REG_COMMAND, 0x10);   // PowerDown
+}
+
 bool rcReset() {
   digitalWrite(RC522_RST_PIN, LOW);
   delay(5);
@@ -585,12 +647,11 @@ bool rcReset() {
     if (!(rcRead(RC_REG_COMMAND) & 0x10)) break;  // PowerDown сброшен
     delay(2);
   }
-  // Внутренний таймер RC522: 13.56 МГц / (2·169 + 1) ≈ 40 кГц, 1000 тиков ≈ 25 мс.
-  // Столько карта и получает на ответ; раньше таймаут ставил бы предел в доли мс.
+  // Внутренний таймер RC522: приём карты обрывается через ~6 мс тишины.
   rcWrite(RC_REG_T_MODE, 0x80);
-  rcWrite(RC_REG_T_PRESCALER, 0xA9);
-  rcWrite(RC_REG_T_RELOAD_H, 0x03);
-  rcWrite(RC_REG_T_RELOAD_L, 0xE8);
+  rcWrite(RC_REG_T_PRESCALER, RC_TIMER_PRESCALER);
+  rcWrite(RC_REG_T_RELOAD_H, (uint8_t)(RC_TIMER_RELOAD >> 8));
+  rcWrite(RC_REG_T_RELOAD_L, (uint8_t)RC_TIMER_RELOAD);
   rcWrite(RC_REG_TX_ASK, 0x40);
   rcWrite(RC_REG_MODE, 0x3D);
   rcAntennaOn();
@@ -932,10 +993,16 @@ void doorTick(uint32_t now) {
   const bool closed = digitalRead(DOOR_SWITCH_PIN) == HIGH;
   if (closed != door_raw) { door_raw = closed; door_changed_ms = now; }
   if (now - door_changed_ms >= 35) door_closed = door_raw;
-  if (buzzing && (uint32_t)(now - buzz_started_ms) >= buzz_duration_ms) {
-    digitalWrite(BUZZER_PIN, LOW);
-    buzzing = false;
-  }
+}
+
+//: Замок открыт дольше LOCK_OPEN_WARN_MS и ещё не отпищал своё.
+//: Концевик двери (D42) тут не участвует: забытый засов опасен и при
+//: закрытой створке, и именно это просили проверять.
+bool lockOpenTooLong(uint32_t now) {
+  if (!lock_open || lock_warn_done) return false;
+  // Таймерный lock open сам закрывается не позже LOCK_MAX_MS (10 с), поэтому
+  // небольшой запас не даёт пискнуть на границе штатного открытия.
+  return (uint32_t)(now - lock_opened_ms) >= LOCK_OPEN_WARN_MS + 250;
 }
 
 void lockApply(uint8_t angle) {
@@ -944,10 +1011,23 @@ void lockApply(uint8_t angle) {
   lockServo.write(angle);
 }
 
+//: Отметить начало открытия: напоминание «открыто слишком долго» считает время
+//: от него, а не от концевика двери. Каждое новое открытие начинает отсчёт заново.
+void lockOpened(uint32_t now) {
+  lock_opened_ms = now;
+  lock_warn_cycle = 0;
+  lock_warn_beep = 0;
+  lock_warn_step = 0;
+  lock_warn_active = false;
+  lock_warn_done = false;
+}
+
 void lockSet(bool open, uint16_t milliseconds) {
+  const bool was_open = lock_open;
   lock_open = open;
   lock_held = false;
   if (open) {
+    if (!was_open) lockOpened(millis());
     lock_deadline = millis() + (milliseconds == 0 ? LOCK_DEFAULT_MS : milliseconds);
     lockApply(LOCK_OPEN_ANGLE);
   } else {
@@ -958,6 +1038,7 @@ void lockSet(bool open, uint16_t milliseconds) {
 
 //: Открыть и держать: таймера нет, закрывает повторная карта или lock close.
 void lockHold() {
+  if (!lock_open) lockOpened(millis());
   lock_open = true;
   lock_held = true;
   lock_deadline = 0;
@@ -1022,12 +1103,18 @@ void lockTick(uint32_t now) {
 }
 
 // ================================ телеметрия =================================
+//: Активные предупреждения (не ошибки датчиков): сейчас только «замок открыт
+//: слишком долго». Поле warn= необязательное: старый сервер его просто не читает.
+uint8_t warningsMask() {
+  return lockOpenTooLong(millis()) ? WARN_LOCK_OPEN : 0;
+}
+
 void emitTelemetry() {
-  char line[224];
+  char line[240];
   const int n = snprintf_P(line, sizeof(line),
       PSTR("@S fw=%u hdg=%d pitch=%d roll=%d gz=%d press=%ld temp=%d alt=%ld "
            "lock=%d doorclosed=%d light=%u dim=%u strip=%d nleds=%u cargo=%u rfid=%u cards=%u link=%d "
-           "err=%u t=%lu"),
+           "err=%u warn=%u rfid_on=%u t=%lu"),
       (unsigned)SENSOR_PROTOCOL, (int)heading_cd, (int)pitch_cd, (int)roll_cd,
       (int)gyro_z_dps10, (long)baro_pressure_pa, (int)baro_temp_c10, (long)baro_altitude_cm,
       lock_open ? 1 : 0, door_closed ? 1 : 0,
@@ -1035,7 +1122,7 @@ void emitTelemetry() {
       (unsigned)STRIP_LEDS,
       (unsigned)cargo_kind, (unsigned)rfid_state,
       (unsigned)card_count, link_ok ? 1 : 0, (unsigned)error_mask,
-      (unsigned long)millis());
+      (unsigned)warningsMask(), rfidDisabled() ? 0 : 1, (unsigned long)millis());
   appendCheckedFrame(line, sizeof(line), n);
 }
 
@@ -1172,8 +1259,8 @@ void sensorsTick(uint32_t now) {
 // Именно REQA, а не WUPA: после чтения карта остаётся в HALT и на REQA не
 // отвечает, пока её не вынут из поля. Иначе карта, забытая на считывателе,
 // переключала бы отсек открыт-закрыт каждые две секунды.
-static const uint32_t RFID_POLL_MS = 100;   // как часто пробуем поле
-static const uint32_t RFID_STEP_MS = 40;    // дольше этого ответа не ждём
+// Антенна при этом не горит постоянно: сеанс опроса включается раз в
+// RFID_POLL_MS и гаснет сразу после обмена (см. rfidTick, rfidRestart).
 
 static uint8_t rfid_phase = 0;              // 0 ждём слот, 1 REQA, 2 anticoll, 3 SELECT
 static CardUid rfid_uid;
@@ -1183,6 +1270,28 @@ static uint8_t rfid_answer[8] = {0};
 static uint8_t rfid_answer_length = 0;
 static uint32_t rfid_started_ms = 0;
 static uint32_t rfid_slot_ms = 0;
+//: Сеанс опроса: передатчик включён не дольше RFID_TX_ON_MS, затем пауза.
+static uint32_t rfid_window_ms = 0;
+static uint32_t rfid_armed_ms = 0;          // когда поле установится и можно REQA
+static bool rfid_window_open = false;
+static bool rfid_disabled = false;          // считыватель сейчас выключен командой
+static uint32_t rfid_disabled_at = 0;       // когда его выключили (для напоминания)
+//: Был ли RC522 хоть раз найден на SPI. Команда rfid off — решение оператора,
+//: а не отказ: ERR_RFID за неё не выставляется.
+static bool rfid_seen = false;
+
+// --- Напоминание «замок открыт слишком долго» --------------------------------
+//: Рисунок из трёх коротких гудков, пауза, повтор. Активный зуммер умеет только
+//: «пищит/молчит», поэтому звук задаётся ритмом, а не высотой: три гудка
+//: читаются как предупреждение и не путаются с одиночным сигналом карты.
+static const uint8_t LOCK_WARN_BEEPS = 3;
+static const uint16_t LOCK_WARN_ON_MS = 120;
+static const uint16_t LOCK_WARN_GAP_MS = 110;
+static const uint16_t LOCK_WARN_PAUSE_MS = 1600;
+//: Чтобы очень долго открытый замок не пищал бесконечно и не бесил площадку:
+//: после стольких повторов рисунок замолкает до закрытия замка.
+static const uint8_t LOCK_WARN_REPEATS = 20;
+
 
 //: Короткий сигнал зуммера. Повторный вызов не удлиняет тон бесконечно:
 //: отсчёт начинается заново, и он всё равно закончится за заданное время.
@@ -1193,9 +1302,126 @@ void buzz(uint16_t milliseconds) {
   buzz_duration_ms = milliseconds;
 }
 
+//: Тик зуммера: обычный тон по времени или рисунок напоминания.
+//: Рисунок: три коротких гудка, пауза, повтор — активный зуммер умеет только
+//: «звук/тишина», поэтому предупреждение задаётся ритмом, а не высотой.
+void buzzerTick(uint32_t now) {
+  if (lockOpenTooLong(now)) {
+    if (!lock_warn_active) {
+      lock_warn_active = true;
+      lock_warn_beep = 0;
+      lock_warn_step = 1;
+      lock_warn_ms = now;
+      digitalWrite(BUZZER_PIN, HIGH);
+      buzzing = false;
+      return;
+    }
+    if (lock_warn_step == 1) {
+      if ((uint32_t)(now - lock_warn_ms) >= LOCK_WARN_ON_MS) {
+        digitalWrite(BUZZER_PIN, LOW);
+        ++lock_warn_beep;
+        lock_warn_ms = now;
+        lock_warn_step = (lock_warn_beep >= LOCK_WARN_BEEPS) ? 2 : 0;
+      }
+    } else if (lock_warn_step == 0) {
+      if ((uint32_t)(now - lock_warn_ms) >= LOCK_WARN_GAP_MS) {
+        digitalWrite(BUZZER_PIN, HIGH);
+        lock_warn_ms = now;
+        lock_warn_step = 1;
+      }
+    } else if ((uint32_t)(now - lock_warn_ms) >= LOCK_WARN_PAUSE_MS) {
+      ++lock_warn_cycle;
+      if (lock_warn_cycle >= LOCK_WARN_REPEATS) {
+        // Хватит: очень долго открытый замок не должен пищать бесконечно.
+        lock_warn_done = true;
+        lock_warn_active = false;
+        digitalWrite(BUZZER_PIN, LOW);
+        note(PSTR("замок открыт дольше %u с: напоминание звучало %u раз, дальше молчу"),
+             (unsigned)(LOCK_OPEN_WARN_MS / 1000), (unsigned)LOCK_WARN_REPEATS);
+        return;
+      }
+      lock_warn_beep = 0;
+      lock_warn_step = 1;
+      lock_warn_ms = now;
+      digitalWrite(BUZZER_PIN, HIGH);
+    }
+    return;
+  }
+  if (lock_warn_active) {
+    // Замок закрыли: гасим только рисунок, чужой тон не трогаем.
+    lock_warn_active = false;
+    digitalWrite(BUZZER_PIN, LOW);
+    lock_warn_step = 0;
+    lock_warn_beep = 0;
+  }
+  if (buzzing && (uint32_t)(now - buzz_started_ms) >= buzz_duration_ms) {
+    digitalWrite(BUZZER_PIN, LOW);
+    buzzing = false;
+  }
+}
+
+//: Закончить сеанс: антенну обесточить и ждать следующий слот. Именно это
+//: охлаждает RC522 — передатчик 13,56 МГц греется, пока на него подано питание,
+//: даже если карты нет и обмена не происходит.
 void rfidRestart(uint32_t now) {
   rfid_phase = 0;
+  rfid_armed_ms = 0;
   rfid_slot_ms = now + RFID_POLL_MS;
+  if (rfid_window_open) {
+    rfid_window_open = false;
+    if (!rfid_disabled) rcAntennaOff();
+  }
+}
+
+//: Переинициализировать RC522 и снова начать опрос. Используется командой
+//: rfid on и при старте (setup).
+void rfidResetState(uint32_t now) {
+  rfid_phase = 0;
+  rfid_slot_ms = now;
+  rfid_window_open = false;
+  if (!rcReset()) {
+    error_mask |= ERR_RFID;
+    note(PSTR("RC522 не отвечает на SPI: считыватель выключен"));
+    rfid_disabled = true;
+    rfid_disabled_at = now;
+    return;
+  }
+  rfid_seen = true;
+  error_mask &= (uint8_t)~ERR_RFID;
+  // rcReset() включает передатчик для проверки — гасим сразу: антенну включает
+  // только сеанс опроса, иначе после каждой rfid on она горит вхолостую.
+  if (!rfid_disabled) rcAntennaOff();
+}
+
+//: Включён ли считыватель сейчас (телеметрия rfid_on=): оператору нужно видеть,
+//: почему карты не читаются.
+bool rfidDisabled() { return rfid_disabled; }
+
+void rfidEnable(uint32_t now) {
+  rfid_disabled = false;
+  rfidResetState(now);
+}
+
+//: Выключить считыватель: передатчик и приёмник обесточены. Нужно для проверки
+//: нагрева, для долгих стоянок и когда карты не используются.
+void rfidDisable(uint32_t now) {
+  rfid_disabled = true;
+  rfid_disabled_at = now;
+  rfid_phase = 0;
+  rfid_window_open = false;
+  rcPowerDown();
+  // Считыватель исправен, его просто выключили: это не ERR_RFID.
+  if (rfid_seen) error_mask &= (uint8_t)~ERR_RFID;
+}
+
+//: Напоминание в журнал: считыватель выключен, карты не работают.
+void rfidDisabledTick(uint32_t now) {
+  static uint32_t last_note_ms = 0;
+  if (!rfid_disabled) return;
+  if ((uint32_t)(now - rfid_disabled_at) < 60000) return;
+  if (last_note_ms && (uint32_t)(now - last_note_ms) < 60000) return;
+  last_note_ms = now;
+  note(PSTR("RFID выключен командой: карты не читаются, антенна обесточена"));
 }
 
 // Решение принимается по полностью выбранному UID, независимо от ответа
@@ -1268,12 +1494,28 @@ void rfidAnticoll(uint32_t now) {
 }
 
 void rfidTick(uint32_t now) {
-  if (rfid_phase == 0) {
+  if (rfid_disabled) return;
+  if (!rfid_window_open) {
+    // Пауза между сеансами: антенна обесточена, катушка остывает.
     if ((int32_t)(now - rfid_slot_ms) < 0) return;
+    rfid_window_open = true;
+    rfid_window_ms = now;
+    rfid_armed_ms = now + RFID_FIELD_SETTLE_MS;
+    rcAntennaOn();
+    return;
+  }
+  if (rfid_phase == 0) {
+    // Сеанс только начался: ждём, пока поле установится, и шлём REQA.
+    if ((int32_t)(now - rfid_armed_ms) < 0) return;
     static const uint8_t reqa = PICC_REQA;
     rcStart(&reqa, 1, 7, false);
     rfid_phase = 1;
     rfid_started_ms = now;
+    return;
+  }
+  // Сеанс не должен затянуться: даже если RC522 молчит, антенну гасим.
+  if ((uint32_t)(now - rfid_window_ms) >= RFID_TX_ON_MS) {
+    rfidRestart(now);
     return;
   }
 
@@ -1369,7 +1611,7 @@ bool parseRole(const char* text, uint8_t* role) {
 }
 
 void printHelp() {
-  note(PSTR("команды: ping, stat, ?, light head|stop|left|right|dim on|off, light all off|on"));
+  note(PSTR("команды: ping, stat, ?, rfid on|off, light head|stop|left|right|dim on|off, light all off|on"));
   note(PSTR("dim 0…255, strip auto|off|floor|wave, buzz, lock open [1…10]|hold|close"));
   note(PSTR("card list|add UID [admin|user]|learn [admin|user]|role UID admin|user|del|clear"));
   note(PSTR("cargo load|unload [1…240]|end, mag cal start|stop|reset"));
@@ -1523,7 +1765,41 @@ void handleCommand(char* line) {
     emitAck("cargo", true);
     return;
   }
+  if (strcmp_P(word, PSTR("rfid")) == 0) {
+    // Нагрев RC522: rfid off обесточивает передатчик и приёмник (карты не
+    // читаются — так проверяют нагрев), rfid on возвращает чтение, rfid без
+    // аргумента показывает состояние и доли времени.
+    char* value = strtok_r(nullptr, " \t", &save);
+    if (!value) {
+      note(PSTR("RFID: %s, опрос каждые %u мс, сеанс до %u мс, приём %u мс"),
+           rfid_disabled ? "выключен" : "включён", (unsigned)RFID_POLL_MS,
+           (unsigned)RFID_TX_ON_MS, (unsigned)RFID_STEP_MS);
+      emitAck("rfid", true);
+      return;
+    }
+    bool on = false;
+    if (!parseOnOff(value, &on)) { emitAck("rfid", false); return; }
+    const uint32_t now = millis();
+    if (on) {
+      rfidEnable(now);
+      note(PSTR("RFID включён: опрос раз в %u мс, антенна не дольше %.0f%% времени"),
+           (unsigned)RFID_POLL_MS,
+           (float)RFID_TX_ON_MS * 100.0f / (float)(RFID_POLL_MS + RFID_TX_ON_MS));
+    } else {
+      rfidDisable(now);
+      note(PSTR("RFID выключен: передатчик и приёмник обесточены"));
+    }
+    emitTelemetry();
+    emitAck("rfid", true);
+    return;
+  }
   if (strcmp_P(word, PSTR("card")) == 0) {
+    // Карты без включённого считывателя не прочитать: включаем на время работы
+    // со списком, чтобы команда с экрана не выглядела «мёртвой».
+    if (rfid_disabled) {
+      rfidEnable(millis());
+      note(PSTR("RFID включён для работы со списком карт"));
+    }
     char* action = strtok_r(nullptr, " \t", &save);
     if (!action) { emitAck("card", false); return; }
     if (strcmp_P(action, PSTR("list")) == 0) {
@@ -1698,13 +1974,29 @@ void setup() {
 
   SPI.begin();
   SPI.setClockDivider(SPI_CLOCK_DIV4);   // 4 МГц: RC522 держит до 10 МГц
-  if (!rcReset()) error_mask |= ERR_RFID;
+  // Считыватель нужен для карт, но греется: включаем его не постоянно, а
+  // короткими сеансами (см. rfidTick). Совсем выключить — rfid off.
+#if SENSOR_RFID_AUTO_ON
+  rfidEnable(millis());
+  rfidRestart(millis());   // после проверки по SPI антенна сразу гаснет
+#else
+  rfidEnable(millis());
+  rfidDisable(millis());
+#endif
 
   note(PSTR("модуль датчиков fw%u: карт %u, ошибки 0x%02X"), (unsigned)SENSOR_PROTOCOL,
        (unsigned)card_count, (unsigned)error_mask);
   emitCardList();
   note(PSTR("I2C 20/21 · RC522 SS53 RST9 · лента D6 %s · реле D2-D5 · D7 замок · D42 дверь · D44 звук"),
        STRIP_ENABLED ? "(есть)" : "(не подключена)");
+#if SENSOR_RFID_AUTO_ON
+  note(PSTR("RFID: опрос раз в %u мс, антенна включена не дольше %.0f%% времени, "
+            "выключить — rfid off"),
+       (unsigned)RFID_POLL_MS,
+       (float)RFID_TX_ON_MS * 100.0f / (float)(RFID_POLL_MS + RFID_TX_ON_MS));
+#else
+  note(PSTR("RFID выключен: включить — rfid on"));
+#endif
 
   last_sensor_ms = 0;
   last_telemetry_ms = millis();
@@ -1719,6 +2011,7 @@ void loop() {
   readSerial();
   sensorsTick(now);
   doorTick(now);
+  buzzerTick(now);
   lockTick(now);
   cargoTick(now);
 
@@ -1734,6 +2027,7 @@ void loop() {
 
   // Обмен с картой неблокирующий: каждый проход loop() делает один маленький шаг.
   rfidTick(now);
+  rfidDisabledTick(now);
 
   if (!link_ok || (now - last_command_ms) > LINK_TIMEOUT_MS) {
     if (link_ok) {

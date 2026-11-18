@@ -115,6 +115,40 @@ def test_buzzer_check_command_is_short_and_touches_nothing_else():
     assert sm.command_buzz() == "buzz"
 
 
+def test_lock_open_warning_is_about_the_bolt_not_the_door_switch():
+    """Напоминание про открытый замок: время от открытия, концевик не в счёте."""
+    text = _text()
+    assert _const("LOCK_OPEN_WARN_MS") == "10000"
+    check = text[text.index("bool lockOpenTooLong("):text.index("void lockApply(")]
+    # Решение смотрит только на lock_open и время открытия, не на door_closed.
+    assert "lock_open" in check and "lock_opened_ms" in check
+    assert "door_closed" not in check and "DOOR_SWITCH_PIN" not in check
+    # Новое открытие начинает отсчёт заново, а закрытие сбрасывает флаги.
+    opened = text[text.index("void lockOpened("):text.index("void lockSet(")]
+    assert "lock_opened_ms = now" in opened and "lock_warn_done = false" in opened
+    # Рисунок: три коротких гудка с паузой — не одиночный писк карты.
+    assert _const("LOCK_WARN_BEEPS") == "3"
+    assert int(_const("LOCK_WARN_ON_MS")) < int(_const("LOCK_WARN_PAUSE_MS"))
+    # Тик зуммера вызывается в loop и не задваивается в doorTick.
+    loop = text[text.index("void loop()"):]
+    assert "buzzerTick(now);" in loop
+    door = text[text.index("void doorTick("):text.index("//: Замок открыт дольше")]
+    assert "BUZZER_PIN" not in door
+
+
+def test_lock_warning_parser_accepts_old_firmware_without_warn_field():
+    """Старый кадр без warn= — это не ошибка и не выдуманное предупреждение."""
+    fields = dict(fw=5, hdg=0, pitch=0, roll=0, gz=0, press=69964, temp=150, alt=301674,
+                  lock=1, doorclosed=1, light=0, dim=80, strip=1, nleds=73,
+                  cargo=0, rfid=0, cards=0, link=1, err=0, t=100)
+    plain = frame("@S " + " ".join("%s=%s" % item for item in fields.items()))
+    parsed = sm.parse_telemetry(plain)
+    assert parsed["warnMask"] == 0 and parsed["warnings"] == []
+    fields["warn"] = 1
+    warned = sm.parse_telemetry(frame("@S " + " ".join("%s=%s" % item for item in fields.items())))
+    assert warned["warnMask"] == 1 and warned["warnings"] == ["замок открыт слишком долго"]
+
+
 def test_relays_and_strip_are_off_after_reset_and_watchdog_runs():
     """После сброса свет выключен, замок закрыт; watchdog включён и кормится."""
     text = _text()
@@ -740,6 +774,10 @@ class FakeModule:
         sm.command_card(action, uid, role)
         self.calls.append(("card", action, uid, role))
 
+    def rfid(self, on=True):
+        sm.command_rfid(on)                 # валидация — как у настоящего клиента
+        self.calls.append(("rfid", on))
+
     def mag_calibration(self, action):
         sm.command_mag(action)
         self.calls.append(("mag", action))
@@ -815,6 +853,42 @@ def test_buzz_endpoint_is_a_plain_check_without_pin(kiosk_app):
     reply = client.post("/api/sensor_module/buzz", json={})
     assert reply.status_code == 200 and reply.get_json()["ok"] is True
     assert module.calls == [("buzz",)]
+
+
+def test_rfid_reader_can_be_switched_off_and_on_again(kiosk_app):
+    """Нагрев RC522: rfid off гасит антенну, rfid on возвращает чтение карт."""
+    module = FakeModule()
+    kiosk_app.extensions["rc_sensor_module"] = module
+    client = kiosk_app.test_client()
+    reply = client.post("/api/sensor_module/rfid", json={"on": False})
+    assert reply.status_code == 200 and reply.get_json()["ok"] is True
+    reply = client.post("/api/sensor_module/rfid", json={"on": True})
+    assert reply.status_code == 200, reply.get_json()
+    assert module.calls == [("rfid", False), ("rfid", True)]
+    # Без поля "on" — только показать состояние, ничего не выключая.
+    assert client.post("/api/sensor_module/rfid", json={}).status_code == 200
+    assert module.calls[-1] == ("rfid", None)
+    assert sm.command_rfid(False) == "rfid off"
+    assert sm.command_rfid(True) == "rfid on"
+    assert sm.command_rfid(None) == "rfid"
+
+
+def test_rfid_polling_is_duty_cycled_so_the_coil_cools():
+    """Катушку греет время под питанием, а не частота опроса: антенна кратко."""
+    text = _text()
+    assert int(_const("RFID_POLL_MS")) >= 400
+    # Приём обрывается внутренним таймером RC522, а не общим пределом шага.
+    assert int(_const("RC_TIMER_RELOAD")) < 700
+    restart = text[text.index("void rfidRestart("):text.index("void rfidResetState(")]
+    assert "rcAntennaOff();" in restart, "между сеансами антенна обесточена"
+    tick = text[text.index("void rfidTick("):text.index("// ================================ команды")]
+    assert "rcAntennaOn();" in tick and "RFID_TX_ON_MS" in tick
+    # rfid off гасит и передатчик, и приёмник — это и есть проверка нагрева.
+    disable = text[text.index("void rfidDisable("):text.index("void rfidDisabledTick(")]
+    assert "rcPowerDown();" in disable
+    # По умолчанию карты читаются после старта: замок не должен «ослепнуть».
+    assert re.search(r"#define\s+SENSOR_RFID_AUTO_ON\s+1\b", text)
+    assert "rfidRestart(millis());" in text[text.index("void setup()"):]
 
 
 def test_strip_mode_endpoint_covers_all_four_modes(kiosk_app):
