@@ -19,6 +19,21 @@ OPERATOR = "operator"
 PASSWORD = "correct-horse-battery"
 FAST_ITERATIONS = 1_000  # тесты не должны тормозить на PBKDF2
 
+# scripts/train_vision.py импортирует torch только ради версии, числа потоков и
+# проверки CUDA. Тяжёлый CUDA-пакет не нужен ни тестам, ни киоску: подменяем
+# минимальным объектом, если настоящий torch не установлен. Тесты обучения
+# сами подменяют ultralytics фейковой моделью.
+try:
+    import torch  # noqa: F401
+except ImportError:  # pragma: no cover - зависит от окружения CI
+    import types
+
+    _torch_stub = types.ModuleType("torch")
+    _torch_stub.__version__ = "0.0-test-stub"
+    _torch_stub.cuda = types.SimpleNamespace(is_available=lambda: False)
+    _torch_stub.set_num_threads = lambda _count: None
+    sys.modules.setdefault("torch", _torch_stub)
+
 
 @pytest.fixture(scope="session", autouse=True)
 def idle_lidar_singleton_for_tests():

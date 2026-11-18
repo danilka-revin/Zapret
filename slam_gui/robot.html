@@ -46,6 +46,13 @@
         </button>
         <!-- Кнопки-иконки: подпись живёт в tooltip и в aria-label, чтобы шапка
              11.6" не разрасталась до трёх строк на узких экранах. -->
+        <!-- Отдельная вкладка автономности: трасса с конусами, СТОП, кочка,
+             светофор. Сделана текстовой кнопкой, чтобы её было видно с расстояния. -->
+        <a id="k-autonomy-open" class="k-ctrl-btn k-autonomy-btn" href="/autonomy"
+           title="Автономность: трасса с конусами, знаки и светофор" aria-label="Автономность: трасса с конусами">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20h16M7 16l3-9 4 9M9 13h4"/><circle cx="18" cy="7" r="2"/></svg>
+          <span>Автономность</span>
+        </a>
         <a id="k-map-open" class="k-ctrl-btn k-ctrl-btn--icon" href="/map"
            title="Карта лидара" aria-label="Карта лидара">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3 3 6v15l6-3 6 3 6-3V3l-6 3-6-3Z"/><path d="M9 3v15M15 6v15"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>
@@ -206,12 +213,13 @@
               <canvas id="kinect-3d-canvas" tabindex="0" aria-label="3D-обзор Kinect и лидара: вращение перетаскиванием, масштаб колесом или кнопками"></canvas>
               <p class="kinect-empty" id="kinect-3d-empty">Нет свежего кадра глубины Kinect</p>
               <div class="kinect-controls" aria-label="Управление 3D видом">
+                <button type="button" id="kinect-fov-toggle" aria-label="Показать зону видимости Kinect" aria-pressed="true" title="Голубая пирамида — примерная зона видимости Kinect">◰</button>
                 <button type="button" id="kinect-zoom-out" aria-label="Отдалить">−</button>
                 <button type="button" id="kinect-zoom-in" aria-label="Приблизить">+</button>
                 <button type="button" id="kinect-reset-view" aria-label="Сбросить вид">⊙</button>
               </div>
             </div>
-            <p class="kinect-view-hint">Перетащите или нажмите стрелки для вращения · щипок или колёсико для масштаба</p>
+            <p class="kinect-view-hint">Перетащите или нажмите стрелки для вращения · щипок или колёсико для масштаба · голубая пирамида — примерная зона, где Kinect видит глубину</p>
           </div>
         </section>
       </div>
@@ -1118,6 +1126,12 @@
             </span>
             <span class="ctrl-card-arrow" aria-hidden="true">→</span>
           </button>
+
+          <a id="btn-autonomy-view" class="ctrl-card ctrl-card--accent" href="/autonomy" role="listitem">
+            <span class="ctrl-card-icon" aria-hidden="true">◈</span>
+            <span class="ctrl-card-text"><b>Автономность · трасса</b><small>конусы, знак СТОП, кочка, светофор · отдельная вкладка</small></span>
+            <span class="ctrl-card-arrow" aria-hidden="true">→</span>
+          </a>
 
           <button id="btn-steering-controls" class="ctrl-card ctrl-card--accent" type="button" role="listitem">
             <span class="ctrl-card-icon" aria-hidden="true">↗</span>

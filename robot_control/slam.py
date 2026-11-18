@@ -815,6 +815,9 @@ ASSETS = {
     "delivery.js": "delivery_js",
     "delivery.css": "delivery_css",
     "delivery_reference.png": "delivery_reference_png",
+    # вкладка «Автономность»: трасса с конусами, СТОП, кочка, светофор
+    "autonomy.js": "autonomy_js",
+    "autonomy.css": "autonomy_css",
     "viewport.js": "viewport_js",
     "camera_view.js": "camera_view_js",
     "camera_frames.js": "camera_frames_js",
@@ -1366,6 +1369,12 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
         """Доставка по векторной карте: старт, цель и сухой прогон без тяги."""
         return _send("delivery.html")
 
+    @bp.get("/autonomy")
+    @guard
+    def autonomy_screen():
+        """Отдельная вкладка автономности: конусы, СТОП, кочка, светофор."""
+        return _send("autonomy.html")
+
     @bp.get("/sensors")
     @guard
     def sensors_screen():
@@ -1521,6 +1530,41 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
             return delivery_proxy(suffix)
         bp.add_url_rule("/api/delivery" + suffix, endpoint=endpoint,
                         view_func=guard(delivery_action), methods=["POST"])
+
+    # ---------- вкладка «Автономность»: команды уходят владельцу тяги ------ #
+    def autonomy_proxy(suffix):
+        from .map_peer import proxy_autonomy
+        return proxy_autonomy(peer_kiosk_url().removesuffix("/api/kiosk_state"), suffix)
+
+    def autonomy_control_allowed():
+        if request.headers.get("X-Robot-Control") != "autonomy":
+            return False
+        return csrf_header_ok is not None and bool(csrf_header_ok())
+
+    @bp.get("/api/autonomy/status")
+    @guard
+    def api_autonomy_status():
+        response = autonomy_proxy("/status")
+        if isinstance(response, tuple):
+            response_obj, status_code = response[0], response[1]
+        else:
+            response_obj, status_code = response, response.status_code
+        if csrf_token_provider and getattr(response_obj, "is_json", False):
+            payload = response_obj.get_json(silent=True)
+            if isinstance(payload, dict):
+                payload["csrfToken"] = csrf_token_provider()
+                return jsonify(payload), status_code, {"Cache-Control": "no-store"}
+        return response
+
+    for _suffix, _endpoint in (("/start", "api_autonomy_start"),
+                               ("/stop", "api_autonomy_stop"),
+                               ("/simulate", "api_autonomy_simulate")):
+        def autonomy_action(suffix=_suffix):
+            if not autonomy_control_allowed():
+                return jsonify(ok=False, error="Недействительный CSRF-токен или заголовок управления."), 400
+            return autonomy_proxy(suffix)
+        bp.add_url_rule("/api/autonomy" + _suffix, endpoint=_endpoint,
+                        view_func=guard(autonomy_action), methods=["POST"])
 
     # ---------- автообследование: те же вход, CSRF и владелец железа -------- #
     def exploration_proxy(suffix):

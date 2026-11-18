@@ -86,6 +86,8 @@
   width: 36px; height: 36px; border: 1px solid rgba(255,255,255,.2); border-radius: 9px;
   background: rgba(18,21,25,.92); color: #f4f0f0; font: inherit; font-size: 20px; cursor: pointer;
 }
+.scan-3d-controls button[hidden] { display: none !important; }
+.scan-3d-controls button[aria-pressed="true"] { border-color: #52bdf4; color: #69d5ff; background: rgba(47,150,199,.2); }
 .scan-3d-hint { margin: 0; padding: 7px 10px; color: var(--muted, #9aa0a8); font-size: 11px; line-height: 1.45; }
 .scan-3d-view .kinect-empty { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); color: #aeb9c4; font-size: 12px; pointer-events: none; }
 .scan-3d-view .kinect-empty[hidden] { display: none; }

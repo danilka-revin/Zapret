@@ -66,6 +66,7 @@
         <a id="console-battery-link" class="nav-map-link" href="/battery">АКБ</a>
         <a id="console-controls-link" class="nav-map-link" href="/controls">Руление и тяга</a>
         <a id="console-map-link" class="nav-map-link" href="/map">Карта лидара</a>
+        <a id="console-autonomy-link" class="nav-map-link" href="/autonomy">Автономность · трасса</a>
       </nav>
       <div class="side-status">
         <div><span class="pulse" id="link-pulse"></span>Связь с базой</div>
@@ -326,12 +327,13 @@
                 <canvas id="kinect-3d-canvas" tabindex="0" aria-label="3D-обзор Kinect и лидара" style="width:100%;height:100%;display:block;touch-action:none;cursor:grab"></canvas>
                 <p class="kinect-empty" id="kinect-3d-empty" style="position:absolute;inset:0;display:grid;place-items:center;background:var(--bg);color:var(--muted);font-size:12px">Нет свежего кадра глубины Kinect</p>
                 <div class="kinect-controls" aria-label="Управление 3D видом" style="position:absolute;right:10px;bottom:10px;display:flex;flex-direction:column;gap:6px">
+                  <button type="button" id="kinect-fov-toggle" aria-label="Показать зону видимости Kinect" aria-pressed="true" title="Голубая пирамида — примерная зона видимости Kinect" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel);font-weight:800">◰</button>
                   <button type="button" id="kinect-zoom-in" aria-label="Приблизить" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel);font-weight:800">+</button>
                   <button type="button" id="kinect-zoom-out" aria-label="Отдалить" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel);font-weight:800">−</button>
                   <button type="button" id="kinect-reset-view" aria-label="Сбросить вид" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel);font-weight:800">⊙</button>
                 </div>
               </div>
-              <p class="kinect-view-hint" style="margin:0;color:var(--muted);font-size:11px">Перетащите или стрелки — вращение · колесо/щипок — масштаб</p>
+              <p class="kinect-view-hint" style="margin:0;color:var(--muted);font-size:11px">Перетащите или стрелки — вращение · колесо/щипок — масштаб · голубая пирамида — примерная зона, где Kinect видит глубину</p>
             </div>
           </div>
           <div class="panel">
@@ -551,6 +553,8 @@
     { const st = new URLSearchParams(location.search).get('st');
       if (st) {
         document.getElementById('console-map-link').href = '/map?st=' + encodeURIComponent(st);
+        const autonomy = document.getElementById('console-autonomy-link');
+        if (autonomy) autonomy.href = '/autonomy?st=' + encodeURIComponent(st);
       }
     }
   </script>

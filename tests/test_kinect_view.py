@@ -8,11 +8,24 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 
+@pytest.mark.parametrize('page', ['robot.html', 'index.html', 'scan.html'])
+def test_kinect_fov_toggle_is_on_every_3d_overview(page):
+    html = (ROOT / 'slam_gui' / page).read_text()
+    for token in ('id="kinect-3d-canvas"', 'id="kinect-fov-toggle"', 'kinect_view.js'):
+        assert token in html
+    assert 'голубая пирамида' in html.lower()
+    css = (ROOT / 'slam_gui' / ('robot.css' if page == 'robot.html'
+                               else 'scan.css' if page == 'scan.html'
+                               else 'styles.css')).read_text()
+    assert 'button[hidden]' in css, 'кнопка зоны не должна оставаться в режимах 2D/только Kinect'
+
+
 def test_kinect_panel_is_included_on_robot_home():
     html = (ROOT / 'slam_gui/robot.html').read_text()
     for token in ('id="sensor-lidar"', 'id="sensor-kinect"', 'id="sensor-combined"',
                   'id="kinect-3d-canvas"', 'id="kinect-zoom-in"',
-                  'id="kinect-reset-view"', 'kinect_view.js'):
+                  'id="kinect-reset-view"', 'id="kinect-fov-toggle"',
+                  'голубая пирамида', 'kinect_view.js'):
         assert token in html
 
 

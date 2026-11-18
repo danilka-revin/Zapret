@@ -119,6 +119,31 @@ def proxy_delivery(origin: str, suffix: str):
                          timeout=8.0, control_header=marker)
 
 
+#: Совпадает с ``robot_control.track_autonomy.AUTONOMY_HEADER``.
+AUTONOMY_MARKER = "autonomy"
+
+
+def proxy_autonomy(origin: str, suffix: str):
+    """Прокси фиксированных маршрутов вкладки «Автономность» на борт.
+
+    Пуск, стоп и сухой прогон идут только с маркером ``autonomy``; тягу
+    включает бортовой процесс, а не веб-пульт (один владелец привода).
+    """
+    routes = {
+        "/status": ({"GET"}, ""),
+        "/start": ({"POST"}, AUTONOMY_MARKER),
+        "/stop": ({"POST"}, AUTONOMY_MARKER),
+        "/simulate": ({"POST"}, AUTONOMY_MARKER),
+    }
+    if suffix not in routes:
+        return jsonify(ok=False, error="Неизвестная операция автономности"), 404
+    methods, marker = routes[suffix]
+    return _forward_json(origin, "/api/autonomy" + suffix,
+                         methods=methods, limit=MAX_NAV_REPLY_BYTES,
+                         timeout=30.0 if suffix == "/simulate" else 8.0,
+                         control_header=marker)
+
+
 def proxy_exploration(origin: str, suffix: str):
     """Прокси фиксированных маршрутов автообследования на бортовой сервер."""
     routes = {

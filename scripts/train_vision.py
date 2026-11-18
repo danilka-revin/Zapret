@@ -181,10 +181,8 @@ def train(*, epochs: int, imgsz: int, batch: int, weights: str | None,
           resume: Path | None = None, deploy: bool = False,
           lr0: float = 0.001, evaluate_test: bool = True,
           warmup_bias_lr: float = 0.0) -> dict[str, Any]:
-    import torch
-    import ultralytics
-    from ultralytics import YOLO
-    import yaml
+    # Сначала проверяем аргументы: отказ «не перезаписывать рабочую модель»
+    # должен работать и на машине без torch/ultralytics (стенд/тесты).
     if epochs < 1 or imgsz < 160 or imgsz % 32 or batch < 1 or workers < 0 or patience < 0 or freeze < 0:
         raise ValueError('epochs/batch >= 1, imgsz >= 160 кратен 32, workers/patience/freeze >= 0')
     if not math.isfinite(lr0) or not 0 < lr0 <= .1:
@@ -200,6 +198,10 @@ def train(*, epochs: int, imgsz: int, batch: int, weights: str | None,
         raise ValueError('--output должен иметь расширение .pt; ONNX включается через --onnx')
     if model_file == MODEL_FILE.resolve() and not deploy:
         raise ValueError('для замены рабочей модели нужен --deploy')
+    import torch
+    import ultralytics
+    from ultralytics import YOLO
+    import yaml
     source = (data or ensure_dataset(no_download)).resolve()
     config, dataset_summary = inspect_dataset(source)
     if device == 'auto':

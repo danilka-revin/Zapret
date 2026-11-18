@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const {decodeFrame, transformLidar, transformKinect, robotParts, orbitCoordinates,
-  visionSignGeometry, signLocalShape, signPoint, visionSignFaces} = require('../../slam_gui/kinect_view.js');
+  kinectFrustum, visionSignGeometry, signLocalShape, signPoint,
+  visionSignFaces} = require('../../slam_gui/kinect_view.js');
 const payload = {available: true, oneFrameOnly: true, notForNavigation: true,
   width: 2, height: 2, stride: 2, fx: 2, fy: 2, cx: 1, cy: 1,
   data: Buffer.from([0xe8, 3, 0, 0, 0xd0, 7, 0xb8, 0x0b]).toString('base64')};
@@ -20,6 +21,18 @@ assert.ok(Math.abs(kinectPoint[2] - 1.41) < 1e-9);
 assert.equal(kinectPoint[3], 'kinect');
 assert.deepEqual(orbitCoordinates([0, 0, 0], .4, -.2), [0, 0, 0], 'robot origin is the orbit pivot');
 assert.deepEqual(orbitCoordinates([0, 0, 2], 0, 0), [0, 0, 2], 'no fixed forward offset moves the pivot');
+// Зона видимости: усечённая пирамида, дальние углы конечны и расходятся
+// ровно на заданные углы/дальность из калибровки.
+const frustum = kinectFrustum({z_m: .45, yaw_deg: 0, pitch_deg: 0},
+  {hfov_deg: 57, vfov_deg: 43, min_range_m: .45, max_range_m: 4}, .28);
+assert.equal(frustum.faces.length, 5, '4 боковые грани + дальняя плоскость');
+assert.ok(frustum.rings.length >= 3, 'метки дальности 1/2/3/4 м');
+assert.ok(frustum.farRect.every(p => p.every(Number.isFinite)), 'нет NaN в 3D-геометрии');
+assert.ok(Math.abs(frustum.far - 4) < 1e-9);
+assert.ok(Math.abs(frustum.origin[2] - .41) < 1e-9, 'Kinect на 130 мм впереди лидара');
+const farWidth = Math.hypot(frustum.farRect[1][0] - frustum.farRect[0][0],
+  frustum.farRect[1][2] - frustum.farRect[0][2]);
+assert.ok(Math.abs(farWidth - 2 * 4 * Math.tan(57 * Math.PI / 360)) < 1e-9);
 // 3D-знак 1:1: карта (X вперёд, Y влево) → вид (X вправо, Y вверх, Z вперёд).
 const signMarker = {x_m: 1.5, y_m: .5, z_m: .9, width_m: .30, height_m: .30,
   thickness_m: .02, shape: 'octagon', class: 'stop_sign', headingDeg: 18.4,
@@ -76,7 +89,8 @@ class Element {
     set textAlign(v) {}, set textBaseline(v) {}}; }
 }
 const ids = ['sensor-lidar', 'sensor-kinect', 'sensor-combined', 'sensor-lidar-view', 'sensor-kinect-view', 'lidar-meta',
-  'kinect-3d-status', 'kinect-3d-mode-note', 'kinect-3d-empty', 'kinect-3d-canvas', 'kinect-zoom-in', 'kinect-zoom-out', 'kinect-reset-view'];
+  'kinect-3d-status', 'kinect-3d-mode-note', 'kinect-3d-empty', 'kinect-3d-canvas', 'kinect-zoom-in', 'kinect-zoom-out',
+  'kinect-reset-view', 'kinect-fov-toggle'];
 const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
 const window = {
   document: {readyState: 'complete', hidden: false, getElementById: id => elements[id], addEventListener() {}},
@@ -123,8 +137,17 @@ vm.runInNewContext(source, context);
   assert.equal(elements['kinect-3d-empty'].hidden, true);
   assert.match(elements['kinect-3d-status'].textContent, /Лидар: 2 точки · Kinect:/);
   assert.match(elements['kinect-3d-mode-note'].textContent, /Модель робота · фактические углы колёс \(при свежей телеметрии\) · Лидар z=550 мм · Kinect \+130 мм вперёд, z=450 мм/);
+  assert.match(elements['kinect-3d-mode-note'].textContent, /зона Kinect 57°×43°, до 4\.0 м/);
+  assert.equal(elements['kinect-fov-toggle'].hidden, false, 'в общем обзоре доступен переключатель зоны');
+  assert.equal(elements['kinect-fov-toggle'].attrs['aria-pressed'], 'true');
   assert.ok(rectangles.length > 0, 'combined view renders the live sensor cloud');
   assert.ok(polygons >= 30, 'combined view renders the 3D robot chassis, sensors, and wheels');
+  window.RCKinectView.setKinectFov(false);
+  const withoutFov = polygons;
+  assert.equal(elements['kinect-fov-toggle'].attrs['aria-pressed'], 'false');
+  assert.match(elements['kinect-3d-mode-note'].textContent, /зона Kinect выключена/);
+  window.RCKinectView.setKinectFov(true);
+  assert.ok(polygons > withoutFov, 'пирамида видимости добавляет грани в 3D-обзор');
   const beforeSigns = polygons;
   window.RCKinectView.setVisionMarkers([signMarker]);
   assert.ok(polygons > beforeSigns, '3D-знак добавляет объёмные грани в общий обзор');

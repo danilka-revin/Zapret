@@ -304,6 +304,8 @@ kbd{background:var(--panel);border:1px solid var(--line);border-bottom-width:2px
 .sensor-switch-btn[aria-pressed="true"]{border-color:var(--accent)!important;background:var(--sidebar)!important;color:var(--accent)!important;box-shadow:0 4px 12px rgba(12,20,17,.12)}
 .sensor-switch-btn:hover{transform:translateY(-1px)}
 .lidar-body[hidden],.kinect-view[hidden]{display:none!important}
+.kinect-controls button[hidden]{display:none!important}
+.kinect-controls button#kinect-fov-toggle[aria-pressed="true"]{border-color:#52bdf4!important;color:#69d5ff!important;background:rgba(47,150,199,.18)!important}
 .kinect-view{flex:1}
 #kinect-3d-canvas:focus{outline:2px solid var(--accent);outline-offset:2px}
 
