@@ -120,6 +120,9 @@ def evaluate(*, weights: Path, data: Path, output: Path, split: str = 'test',
     if device == 'cpu':
         torch.set_num_threads(2)
     config, audit = inspect_dataset(data.resolve())
+    if len(audit['classes']) > len(TRAINING_CLASS_NAMES):
+        raise ValueError('Этот тест проверяет 5-классовый API робота, а не кочку на полу. '
+                         'Для весов Drive используйте scripts/report_drive_vision.py.')
     directory = Path(config['path']) / config[split]
     yolo = YoloDetector(str(weights), confidence=confidence, imgsz=imgsz,
                         device=device, prefer_red=prefer_red, traffic_mode=traffic_mode)

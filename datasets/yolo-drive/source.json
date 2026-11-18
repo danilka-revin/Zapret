@@ -1,0 +1,13 @@
+{
+  "parentFingerprint": "0346f1b0d8f18fcb2d0dabf0baeac799947cd16c4971a1b10635961f622803bf",
+  "folder": "yolo",
+  "inventoryDate": "2026-11-18",
+  "inventory": {"photos": 416, "videos": 12},
+  "sharedMedia": "Older photos/frames use the pinned yolo-stop-robot snapshot. All eight older MP4 digests match those reported by Drive. Extra photo 1794940326751.jpg is byte-identical to 1794903271610.jpg (SHA-256 62497dc7be3baa61ba7369b33fefaa4b3d4b768731603f2a21284e6fb418a92c). Do not count it twice.",
+  "excludedVideo": {"name": "VID_20261118_120325.mp4", "sizeBytes": 774772865, "reason": "Over the connector limit of 104857600 bytes; no frames used."},
+  "videos": {
+    "VID_20261118_115744_254.mp4": {"sha256": "95a5822d59a6ecb9db666a955b1342bed0ce41dbc5a2efec5a41cd0bdb22e1fb", "split": "train", "group": "drive-20261118-115744"},
+    "VID_20261118_124149_011.mp4": {"sha256": "919f7245ade23fea38aa29db5e5dcf268d9d56ba1089b293b494ae9123f3c46d", "split": "test", "group": "drive-20261118-124149"},
+    "VID_20261118_124149_236.mp4": {"sha256": "095645c4d4b880676cc02008a0568f281e22e3bcaa320c027a0f5cce1af7eb2e", "split": "test", "group": "drive-20261118-124149"}
+  }
+}

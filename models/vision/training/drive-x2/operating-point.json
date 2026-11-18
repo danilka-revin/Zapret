@@ -1,0 +1,378 @@
+{
+  "weights": "yolo-drive-x2.pt",
+  "sha256": "674abb15e2656ad68dad27471ef3c6cd36c04fb80b2c4b272e998223e968d644",
+  "datasetFingerprint": "9e0b63b6ccd5f46dacf8f75d99f0202fd3794686b54ccb4a65c70a2165abe078",
+  "backend": "Ultralytics predict (raw PT, no HSV)",
+  "imgsz": 416,
+  "conf": 0.25,
+  "nmsIoU": 0.7,
+  "matchIoU": 0.5,
+  "matrixOrder": [
+    "stop_sign",
+    "pedestrian_crossing",
+    "speed_bump",
+    "traffic_light",
+    "cone",
+    "traffic_light_red",
+    "traffic_light_yellow",
+    "traffic_light_green",
+    "ground_bump",
+    "background"
+  ],
+  "splits": {
+    "val": {
+      "images": 61,
+      "matrixPredictedByTrue": [
+        [
+          6,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          4
+        ],
+        [
+          0,
+          2,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          6,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          4
+        ],
+        [
+          0,
+          0,
+          0,
+          6,
+          0,
+          2,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          42,
+          0,
+          0,
+          0,
+          0,
+          14
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          3,
+          0,
+          0,
+          0,
+          2
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          2,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          1,
+          0,
+          1,
+          1,
+          4,
+          0,
+          2
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          9,
+          1
+        ],
+        [
+          1,
+          0,
+          1,
+          1,
+          21,
+          5,
+          0,
+          1,
+          3,
+          0
+        ]
+      ],
+      "perClass": {
+        "stop_sign": {
+          "correct": 6,
+          "labelled": 7,
+          "predicted": 10
+        },
+        "pedestrian_crossing": {
+          "correct": 2,
+          "labelled": 2,
+          "predicted": 2
+        },
+        "speed_bump": {
+          "correct": 6,
+          "labelled": 7,
+          "predicted": 10
+        },
+        "traffic_light": {
+          "correct": 6,
+          "labelled": 8,
+          "predicted": 8
+        },
+        "cone": {
+          "correct": 42,
+          "labelled": 63,
+          "predicted": 56
+        },
+        "traffic_light_red": {
+          "correct": 3,
+          "labelled": 11,
+          "predicted": 5
+        },
+        "traffic_light_yellow": {
+          "correct": 2,
+          "labelled": 3,
+          "predicted": 2
+        },
+        "traffic_light_green": {
+          "correct": 4,
+          "labelled": 5,
+          "predicted": 9
+        },
+        "ground_bump": {
+          "correct": 9,
+          "labelled": 12,
+          "predicted": 10
+        }
+      },
+      "lightAnyState": {
+        "correct": 20,
+        "labelled": 27,
+        "predicted": 24
+      }
+    },
+    "test": {
+      "images": 24,
+      "matrixPredictedByTrue": [
+        [
+          4,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          4,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          16,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          2,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          7,
+          1
+        ],
+        [
+          1,
+          4,
+          6,
+          5,
+          41,
+          5,
+          0,
+          2,
+          4,
+          0
+        ]
+      ],
+      "perClass": {
+        "stop_sign": {
+          "correct": 4,
+          "labelled": 5,
+          "predicted": 4
+        },
+        "pedestrian_crossing": {
+          "correct": 0,
+          "labelled": 4,
+          "predicted": 0
+        },
+        "speed_bump": {
+          "correct": 4,
+          "labelled": 10,
+          "predicted": 4
+        },
+        "traffic_light": {
+          "correct": 1,
+          "labelled": 6,
+          "predicted": 1
+        },
+        "cone": {
+          "correct": 16,
+          "labelled": 57,
+          "predicted": 16
+        },
+        "traffic_light_red": {
+          "correct": 2,
+          "labelled": 7,
+          "predicted": 2
+        },
+        "traffic_light_yellow": {
+          "correct": 0,
+          "labelled": 0,
+          "predicted": 0
+        },
+        "traffic_light_green": {
+          "correct": 1,
+          "labelled": 3,
+          "predicted": 1
+        },
+        "ground_bump": {
+          "correct": 7,
+          "labelled": 11,
+          "predicted": 8
+        }
+      },
+      "lightAnyState": {
+        "correct": 4,
+        "labelled": 16,
+        "predicted": 4
+      }
+    }
+  }
+}

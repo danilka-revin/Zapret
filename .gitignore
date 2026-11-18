@@ -42,6 +42,9 @@ datasets/yolo-stop-refined-color/**/*.cache
 datasets/yolo-stop-robot/images/
 datasets/yolo-stop-robot/raw/
 datasets/yolo-stop-robot/**/*.cache
+# Входные медиа из коннектора Drive не публикуются. Новый датасет
+# собирается из компактных проверенных рамок в .cache/vision/.
+/google_drive/
 # Deliberate portable delivery; other temporary exports remain ignored.
 !models/vision/yolo-stop-robot.onnx
 
