@@ -100,10 +100,10 @@ production-веса при реализации не изменялись.
 
 ## Результаты перед слиянием
 
-- **31 новый Python-тест** этого режима; профильный набор после интеграции:
-  **232 passed, 1 skipped**, Node `vision panel: OK`.
-- Полный pytest после включения актуального main: **2238 passed, 30 skipped,
-  1 failed**, 358.96 с. Единственное падение — прежний Kinect
+- **33 новых Python-теста** этого режима; профильный набор после интеграции:
+  **234 passed, 1 skipped**, Node `vision panel: OK`.
+- Полный pytest после включения актуального main: **2240 passed, 30 skipped,
+  1 failed**, 360.71 с. Единственное падение — прежний Kinect
   `test_depth_to_scan_wall_in_front_and_floor_filtered`. Его тест, Kinect
   и sensor-layout побайтно совпадают с main; посторонние assertions
   не менялись и не отключались. Полный набор **не объявляется полностью зелёным**.

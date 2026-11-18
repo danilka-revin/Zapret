@@ -1,28 +1,28 @@
 {
-  "checkedAt": "2026-11-18T04:21:08.446993+00:00",
-  "testedCommit": "434ce33f2f6785a25e658eeb770d5a8b2d3472ad",
+  "checkedAt": "2026-11-18T04:30:32.739580+00:00",
+  "testedCommit": "098f8ccfdb597d50136f79a028ce265b4172c243",
   "integratedMain": "de4be4d734153e5318818aa239dff0edb5d7401d",
   "pullRequest": "https://github.com/danilka-revin/Zapret/pull/158",
   "targeted": {
-    "passed": 232,
+    "passed": 234,
     "skipped": 1,
     "failed": 0,
     "log": "targeted-tests.txt",
-    "sha256": "ab210a35c1c613be973e372f0aa5b4e66dbe7804bfec42bbbc51123c6918e5f8"
+    "sha256": "a93315db9a3aa59a4c438912db4395d746e15b0bbb758e60bee259852df0f779"
   },
-  "newClosedCourseTests": 31,
+  "newClosedCourseTests": 33,
   "node": {
     "passed": true,
     "log": "js-tests.txt",
     "sha256": "74f6053fcfc3e343922c724cc0d4c6b89218722bffcef5a27c71255e042c0afc"
   },
   "full": {
-    "passed": 2238,
+    "passed": 2240,
     "skipped": 30,
     "failed": 1,
-    "durationS": 358.96,
-    "log": "full-tests.txt",
-    "sha256": "b8e1456f1a7cd509102fde20def3f5b611f6168a0eb1296e83fa9ac78a9a2dfe",
+    "durationS": 360.71,
+    "log": "full-tests-capture-expiry.txt",
+    "sha256": "7f00d92a58422401908b33ec19e35d6e95d9472f10b18025d81c776f9a079026",
     "knownFailure": "tests/test_kinect_depth.py::test_depth_to_scan_wall_in_front_and_floor_filtered",
     "unchangedEvidence": {
       "tests/test_kinect_depth.py": {
@@ -45,13 +45,15 @@
     "recommendationOnly": true,
     "unknownStateAndWaitActionPreserved": true,
     "controlsMotors": false,
-    "hardwareDriveTested": false
+    "hardwareDriveTested": false,
+    "captureAgeConsumesFreshnessBudget": true,
+    "expiredIntervalsRestartWaitWithoutApiPolling": true
   },
   "codeSha256": {
-    "robot_control/vision/closed_course.py": "b1589768a82a3e6487a20079aad769960e515849dfc5c171a61c277cc8e12596",
+    "robot_control/vision/closed_course.py": "7e67e6b61fbae9d8c3920096b3d4733f5c689ade1422df42b9dc46d31264e054",
     "robot_control/vision/service.py": "af82bb5191c650048235bbb4fb8d694f18f9716640f111e796bea752c12105ca",
     "slam_gui/vision_panel.js": "9f9ca45b454a5db16bf9f1a4e2004d1ee9774d4c2e856066cc1f4d255cd9b371",
-    "tests/test_vision_closed_course.py": "a5d9a455ea996df23c3e67e5d14a309f2ecaf065c68b7c5d506f7d514aa22bb5",
+    "tests/test_vision_closed_course.py": "1852a5dbec23c02a52b16fe44015ef70fd5c5869691584f77bae8045031bcc27",
     "tests/js/vision_panel.js": "385acfc480ba5d16e720e0525957a57410c29592a9ebb80c0820210ce2ebf4ec"
   },
   "fixedArtifactsUnchangedSha256": {
@@ -65,5 +67,28 @@
     "models/vision/training/robot/final-training.json": "de5eaece65aa7a3a67b36cd975f75095a888d3a343b014654bd39943e85da8ee"
   },
   "modelQualityAcceptanceUnchanged": false,
-  "notes": "Full suite is NOT all-green: one unchanged Kinect failure. Training gates remain failed; no production weight promotion, actual .env edit, autonomous actuation or E-STOP override."
+  "notes": "Full suite is NOT all-green: one unchanged Kinect failure. Training gates remain failed; no production weight promotion, actual .env edit, autonomous actuation or E-STOP override.",
+  "previousFullBeforeCaptureExpiryFix": {
+    "passed": 2238,
+    "skipped": 30,
+    "failed": 1,
+    "durationS": 358.96,
+    "log": "full-tests.txt",
+    "sha256": "b8e1456f1a7cd509102fde20def3f5b611f6168a0eb1296e83fa9ac78a9a2dfe",
+    "knownFailure": "tests/test_kinect_depth.py::test_depth_to_scan_wall_in_front_and_floor_filtered",
+    "unchangedEvidence": {
+      "tests/test_kinect_depth.py": {
+        "sha256": "675299ff899b3d8aa619a57c773e99657cf6956d778e967bf3e63f51eff9fe16",
+        "unchangedFromMain": true
+      },
+      "robot_control/kinect.py": {
+        "sha256": "2bd3ced4b9d90b29100c922273f7b3a06f12fb22afdce9a090b4459b4498a883",
+        "unchangedFromMain": true
+      },
+      "robot_control/sensor_layout.py": {
+        "sha256": "cc36ac8bd4b7adb96548f95600b00ea3101ea9812fd80002a77e47487e5df618",
+        "unchangedFromMain": true
+      }
+    }
+  }
 }
