@@ -45,7 +45,8 @@
 
   /* ------------------------------------------------------------ отрисовка */
   function renderLights(snapshot) {
-    const traffic = snapshot.trafficLight || {state: 'unknown', counts: {}};
+    const traffic = (snapshot.ok && snapshot.enabled && snapshot.trafficLight) ||
+      {state: 'unknown', label: 'Нет свежих данных — ждём', counts: {}};
     const counts = traffic.counts || {};
     const max = Math.max(1, ...SIGNALS.map((name) => Number(counts[name] || 0)));
     SIGNALS.forEach((name) => {
@@ -63,6 +64,20 @@
         (traffic.cameraId !== null && traffic.cameraId !== undefined
           ? ' · CAM ' + traffic.cameraId : '');
       label.dataset.state = traffic.state || 'unknown';
+      const course = traffic.closedCourse || {};
+      label.title = '';
+      if (snapshot.ok && snapshot.enabled && course.enabled && traffic.state === 'unknown') {
+        if (course.recommendation === 'proceed_closed_course' && course.phase === 'timeout_advisory') {
+          label.textContent += ' · ПОЛИГОН: рекомендация проезда по таймауту (не зелёный)';
+        } else if (course.stopLatched) {
+          label.textContent += ' · ПОЛИГОН: ожидание после красного/жёлтого';
+        } else if (course.phase === 'waiting' && Number.isFinite(course.remainingS)) {
+          label.textContent += ' · ПОЛИГОН: наблюдаем, осталось ' + course.remainingS.toFixed(1) + ' с';
+        } else {
+          label.textContent += ' · ПОЛИГОН: нет свежего неизвестного сигнала — ждём';
+        }
+        label.title = 'Только закрытый полигон. Это не команда моторам: E-STOP, препятствия и разрешение навигации проверяются отдельно.';
+      }
     }
   }
 
@@ -197,6 +212,15 @@
       emit(snapshot);
     } catch (error) {
       state.online = false;
+      // Never keep an old green lamp or timeout advice after losing the API.
+      state.snapshot = Object.assign({}, state.snapshot || {}, {
+        ok: false, counts: {}, field: [],
+        trafficLight: {state: 'unknown', label: 'Нет свежих данных — ждём',
+          action: 'wait', fresh: false, counts: {},
+          closedCourse: {enabled: false, phase: 'offline', recommendation: 'wait', controlsMotors: false}},
+      });
+      renderLights(state.snapshot);
+      emit(state.snapshot);
       const backend = $('vision-backend');
       if (backend) { backend.textContent = 'нет связи с распознаванием'; backend.dataset.state = 'off'; }
     }

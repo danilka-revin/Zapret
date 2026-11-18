@@ -1,13 +1,14 @@
-# Сгенерировано scripts/vision_dataset.py — не править вручную.
-# Ultralytics разрешает path относительно КАТАЛОГА ЗАПУСКА (корень проекта).
-# scripts/train_vision.py дополнительно создаёт runs/vision/data.yaml с
-# абсолютным путём, чтобы обучение работало из любого каталога.
+# scripts/vision_dataset.py; первые пять id совместимы со старыми весами
 path: datasets/yolo-stop
 train: images/train
 val: images/val
+test: images/test
 names:
   0: stop_sign
   1: pedestrian_crossing
   2: speed_bump
   3: traffic_light
   4: cone
+  5: traffic_light_red
+  6: traffic_light_yellow
+  7: traffic_light_green

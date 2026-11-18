@@ -1,0 +1,39 @@
+{
+  "checkedAt": "2026-11-18T04:14:24.442710+00:00",
+  "artifactIntegrityPassed": true,
+  "deploymentAccepted": false,
+  "warning": "Integrity/parity passed, QUALITY GATES FAILED. No further training, inference, relabelling, threshold/profile selection or production promotion performed by this verification.",
+  "unchangedFixedSha256": {
+    "models/vision/yolo-stop.pt": "be250cad84adf7b5b71e8e635b40508df6871fd9250a8072f4e0f4781e7d3a41",
+    "models/vision/yolo-stop-candidate.pt": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+    "models/vision/yolo-stop-improved.pt": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+    "models/vision/yolo-stop-robot.pt": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+    "models/vision/yolo-stop-robot.onnx": "c7f9c714f68d4bcada23e7e8028664f001f61b8fa5da8a466fd5431e49efdbee",
+    "models/vision/yolo-stop-robot-profile.json": "c2f2e14c4ef82113aca53dd48f439934b20d8338bc6e51015f01a8ac0a4a70e0",
+    "models/vision/training/robot/validation-selection.json": "e0122299cb0077fadc4c7b71396fb98f5cd1fb65f669daea2ce689dce2e86aa5",
+    "models/vision/training/robot/final-training.json": "de5eaece65aa7a3a67b36cd975f75095a888d3a343b014654bd39943e85da8ee"
+  },
+  "datasetFingerprints": {
+    "yolo-stop": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+    "yolo-stop-refined-color": "dd280f724628cb3aef8553aa3798bcee98138b9340d555a6091b957971d322d3",
+    "yolo-stop-robot": "0346f1b0d8f18fcb2d0dabf0baeac799947cd16c4971a1b10635961f622803bf"
+  },
+  "canonicalValidationPairsStillByteIdentical": 61,
+  "trainingEpochsCompleted": 34,
+  "validationBestEpoch": 14,
+  "newValidationProfilesTested": 8,
+  "newValidationProfilesPassingQualityGates": 0,
+  "onnxRawChecksPassed": 11,
+  "onnxRuntimeChecksPassed": 61,
+  "serviceFormatsChecked": [
+    "pt",
+    "onnx"
+  ],
+  "testBenchmarkReused": true,
+  "validationLabelConflictKeptFrozen": true,
+  "archivedLogsSha256": {
+    "selection-log.txt": "7eab9313ecedda34f2eebc6fc9c27720580ec2f0c9ad838dc2d88b1405fa900c",
+    "export-log.txt": "1cde90585d82f012c358e8ffb4f6bea65c64b59c9acdde08c606a0980d91230a",
+    "final-checks-log.txt": "1bbca694bb5197b59ecbae56cf82407003e94729df15451f1dd10fe44c0913c4"
+  }
+}

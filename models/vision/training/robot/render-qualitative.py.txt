@@ -1,0 +1,87 @@
+"""Render frozen, matched predictions with explicit current-outcome captions.
+
+Run from the repository root. No inference, evaluation, training or selection.
+The original historical captions remain in regressions.json for provenance.
+"""
+from pathlib import Path
+import hashlib
+import json
+
+import cv2
+from PIL import Image, ImageDraw, ImageFont
+
+root = Path.cwd()
+folder = root / 'docs/vision-robot'
+record_file = folder / 'regressions.json'
+record = json.loads(record_file.read_text())
+profile = record['profile']
+assert profile == json.loads((root / 'models/vision/yolo-stop-robot-profile.json').read_text())
+sources = {item['name']: item for item in json.loads((root / 'docs/vision-video-review/source.json').read_text())['videos']}
+captions = {
+    ('211', 16): 'Обувь: в этом кадре у обоих нет FP; во всём новом клипе 4 FP-кадра',
+    ('211', 44): 'Обувь: в этом кадре у обоих нет FP; во всём новом клипе 4 FP-кадра',
+    ('204', 60): 'У двери настоящий red: прежний профиль пропускает, новый находит',
+    ('865', 116): 'Видимый green: оба профиля по-прежнему ПРОПУСКАЮТ светофор',
+    ('865', 117): 'Видимый green: оба профиля по-прежнему ПРОПУСКАЮТ светофор',
+    ('865', 119): 'Видимый green: оба профиля по-прежнему ПРОПУСКАЮТ светофор',
+    ('865', 138): 'Видимый green: прежний профиль пропускает, новый находит',
+}
+frames = {}
+for name in {case['source'] for case in record['cases']}:
+    path = root / '.cache/vision/video-review' / name
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == sources[name]['sha256']
+    wanted = {case['frame'] for case in record['cases'] if case['source'] == name}
+    cap = cv2.VideoCapture(str(path))
+    index = 0
+    try:
+        while wanted:
+            ok, frame = cap.read()
+            assert ok, name
+            if index in wanted:
+                frames[name, index] = frame
+                wanted.remove(index)
+            index += 1
+    finally:
+        cap.release()
+
+font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 17)
+bold = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 21)
+colors = {'red': '#ff6287', 'yellow': '#ffdf65', 'green': '#6cf0ae',
+          'unknown': '#c3affe', 'stop_sign': '#ff6287', 'speed_bump': '#ffdf65',
+          'pedestrian_crossing': '#70c8ff', 'cone': '#ffaa75'}
+sheet = Image.new('RGB', (1304, 70 + len(record['cases']) * 438 + 50), '#0b1422')
+draw = ImageDraw.Draw(sheet)
+draw.text((16, 10), 'ДО: прежний improved / body', font=bold, fill='white')
+draw.text((668, 10), 'ПОСЛЕ: robot / ' + profile['trafficMode'], font=bold, fill='white')
+draw.text((16, 42), f'Порог {profile["confidence"]}, 512, без эвристик. TRAIN/VAL иллюстрации; агентский просмотр, не независимая оценка.', font=font, fill='#cdd9e8')
+for index, case in enumerate(record['cases']):
+    frame = frames[case['source'], case['frame']]
+    assert hashlib.sha256(frame.tobytes()).hexdigest() == case['decodedFrameSha256']
+    identifier = case['source'][-7:-4]
+    case['displayCaption'] = captions[identifier, case['frame']]
+    y = 70 + index * 438
+    draw.text((16, y + 2), f'{identifier} / {case["frame"]} / {case["originalSplit"]} | {case["displayCaption"]}', font=font, fill='white')
+    for column, key in enumerate(('before', 'after')):
+        im = Image.fromarray(cv2.cvtColor(cv2.resize(frame, (640, 360)), cv2.COLOR_BGR2RGB))
+        d = ImageDraw.Draw(im)
+        for item in case[key]:
+            b = item['box']
+            box = (b['x'] * 640, b['y'] * 360, (b['x'] + b['w']) * 640, (b['y'] + b['h']) * 360)
+            state = item['signal'] or 'unknown'
+            label = state if item['class'] == 'traffic_light' else item['class']
+            tag = label + f' {item["confidence"]:.2f}'
+            color = colors.get(label, 'white')
+            d.rectangle(box, outline=color, width=3)
+            text_position = (box[0], max(0, min(337, box[1] - 23)))
+            d.rectangle(d.textbbox(text_position, tag, font=font), fill='#0b1422')
+            d.text(text_position, tag, font=font, fill=color)
+        x = 12 + column * 652
+        sheet.paste(im, (x, y + 31))
+        states = [item['signal'] for item in case[key] if item['class'] == 'traffic_light']
+        draw.text((x, y + 398), 'Светофор: ' + (', '.join(states) if states else 'не найден'), font=font, fill='white')
+
+draw.text((16, 70 + len(record['cases']) * 438 + 8), 'Те же семь эпизодов. Три видимых green всё ещё пропущены. Кандидат НЕ прошёл VAL-допуск; тяга не включалась.', font=font, fill='#e2b6a7')
+record['displayCaptionContext'] = 'Post-freeze qualitative agent review. Historical caption fields, predictions, image hashes, labels, weights and profile remain unchanged.'
+record_file.write_text(json.dumps(record, ensure_ascii=False, indent=2) + '\n')
+sheet.save(folder / 'before-after.jpg', quality=92)
+print('Rendered the same seven matched cases from saved predictions; no inference or selection.')

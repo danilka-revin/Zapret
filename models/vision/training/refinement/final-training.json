@@ -1,0 +1,181 @@
+{
+  "model": "yolo-stop-improved.pt",
+  "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+  "createdAt": "2026-11-17T22:12:01.515335+00:00",
+  "base": "models/vision/yolo-stop-candidate.pt",
+  "baseSha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+  "baseProvenance": {
+    "source": "https://github.com/AlaynaShaheen/object_detection_using_yolov8_tflite/tree/13f2ae34cfbb40d91c1b7b0c9c36cf96342288cc/yolov8n.pt",
+    "revision": "13f2ae34cfbb40d91c1b7b0c9c36cf96342288cc",
+    "contentSha256": "4df48185493a8e5284698efc2caddd44053bb88e8ef827b4ea2e84bf502891c0",
+    "checkpointVersion": "8.0.0.dev0",
+    "checkpointDate": "2022-12-30T00:12:08.084698",
+    "originalTrainingData": "coco.yaml",
+    "licenseNote": "Ultralytics model licensing applies; see https://github.com/ultralytics/ultralytics/blob/main/LICENSE"
+  },
+  "ultralytics": "8.4.215",
+  "torch": "2.2.2+cu121",
+  "classes": [
+    "stop_sign",
+    "pedestrian_crossing",
+    "speed_bump",
+    "traffic_light",
+    "cone",
+    "traffic_light_red",
+    "traffic_light_yellow",
+    "traffic_light_green"
+  ],
+  "epochsRequested": 20,
+  "epochsCompleted": 10,
+  "bestEpoch": 2,
+  "imgsz": 512,
+  "batch": 8,
+  "device": "cpu",
+  "freeze": 10,
+  "seed": 17,
+  "trainingArgs": {
+    "optimizer": "AdamW",
+    "lr0": 0.0005,
+    "lrf": 0.01,
+    "cos_lr": true,
+    "warmup_bias_lr": 0.0,
+    "cache": false,
+    "deterministic": true,
+    "patience": 8,
+    "workers": 0
+  },
+  "durationS": 589.3,
+  "smoke": false,
+  "validation": {
+    "metrics/precision(B)": 0.585139,
+    "metrics/recall(B)": 0.674014,
+    "metrics/mAP50(B)": 0.662602,
+    "metrics/mAP50-95(B)": 0.493866,
+    "fitness": 0.493866,
+    "perClass": [
+      {
+        "id": 0,
+        "name": "stop_sign",
+        "precision": 0.773562,
+        "recall": 0.978317,
+        "mAP50": 0.932778,
+        "mAP50-95": 0.704556
+      },
+      {
+        "id": 1,
+        "name": "pedestrian_crossing",
+        "precision": 0.746023,
+        "recall": 1.0,
+        "mAP50": 0.995,
+        "mAP50-95": 0.8955
+      },
+      {
+        "id": 2,
+        "name": "speed_bump",
+        "precision": 0.706969,
+        "recall": 0.692335,
+        "mAP50": 0.7125,
+        "mAP50-95": 0.644542
+      },
+      {
+        "id": 3,
+        "name": "traffic_light",
+        "precision": 0.721066,
+        "recall": 0.64873,
+        "mAP50": 0.790833,
+        "mAP50-95": 0.405699
+      },
+      {
+        "id": 4,
+        "name": "cone",
+        "precision": 0.714655,
+        "recall": 0.666667,
+        "mAP50": 0.699463,
+        "mAP50-95": 0.499434
+      },
+      {
+        "id": 5,
+        "name": "traffic_light_red",
+        "precision": 0.500894,
+        "recall": 0.272727,
+        "mAP50": 0.275357,
+        "mAP50-95": 0.159153
+      },
+      {
+        "id": 6,
+        "name": "traffic_light_yellow",
+        "precision": 0.213463,
+        "recall": 0.333333,
+        "mAP50": 0.373824,
+        "mAP50-95": 0.295176
+      },
+      {
+        "id": 7,
+        "name": "traffic_light_green",
+        "precision": 0.304482,
+        "recall": 0.8,
+        "mAP50": 0.521061,
+        "mAP50-95": 0.346869
+      }
+    ]
+  },
+  "test": null,
+  "dataset": {
+    "splits": {
+      "train": {
+        "images": 263,
+        "counts": {
+          "cone": 209,
+          "speed_bump": 25,
+          "traffic_light_yellow": 26,
+          "stop_sign": 43,
+          "traffic_light_green": 19,
+          "traffic_light": 33,
+          "pedestrian_crossing": 11,
+          "traffic_light_red": 29
+        },
+        "missingClasses": []
+      },
+      "val": {
+        "images": 61,
+        "counts": {
+          "cone": 63,
+          "stop_sign": 7,
+          "traffic_light": 8,
+          "pedestrian_crossing": 2,
+          "speed_bump": 7,
+          "traffic_light_red": 11,
+          "traffic_light_yellow": 3,
+          "traffic_light_green": 5
+        },
+        "missingClasses": []
+      }
+    },
+    "classes": [
+      "stop_sign",
+      "pedestrian_crossing",
+      "speed_bump",
+      "traffic_light",
+      "cone",
+      "traffic_light_red",
+      "traffic_light_yellow",
+      "traffic_light_green"
+    ],
+    "fingerprint": "dd280f724628cb3aef8553aa3798bcee98138b9340d555a6091b957971d322d3",
+    "archiveSha256": "762d6fa93f6f5b8103041cfced32de30b32d752399a37742e7f05d30499a0b88",
+    "sourceRevision": "3cb277bfadf7d0034943117f9146d4b92bb773a9",
+    "annotationWarning": "Agent-assisted filtering and TRAIN-only signal review of pre-existing pseudo-labels, NOT independent human ground truth. Val has no coordinate/instance edits; color IDs are folded only for the five-class variant."
+  },
+  "augmentation": {
+    "hsv_h": 0.0,
+    "hsv_s": 0.15,
+    "hsv_v": 0.3,
+    "flipud": 0.0,
+    "fliplr": 0.0,
+    "mosaic": 0.5,
+    "close_mosaic": 10
+  },
+  "runDirectory": "runs/vision/20261117T220212Z-f3e1ad/train",
+  "trafficLight": "YOLO colour classes + conservative HSV agreement; generic = off/ambiguous",
+  "deployment": "candidate; validate on robot with wheels lifted and E-STOP available"
+}

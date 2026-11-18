@@ -1,0 +1,91 @@
+from pathlib import Path
+from datetime import datetime,timezone
+import hashlib,json,sys,shutil
+sys.path.insert(0,str(Path.cwd()))
+import cv2,torch
+from PIL import Image,ImageDraw,ImageFont
+from scripts.evaluate_vision import evaluate
+from scripts.compare_vision import compare,summarize
+from robot_control.vision.detector import YoloDetector
+from robot_control.vision.service import VisionConfig,VisionService
+
+torch.set_num_threads(2);cv2.setNumThreads(1)
+def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+folder=Path('models/vision/training/robot');out=Path('docs/vision-robot');out.mkdir(exist_ok=True)
+profile_file=Path('models/vision/yolo-stop-robot-profile.json');profile=json.loads(profile_file.read_text())
+assert sha(profile['weights'])==profile['sha256']
+assert sha(profile['selectionFile'])==profile['selectionFileSha256']
+selection=json.loads(Path(profile['selectionFile']).read_text());assert selection['selected']['sha256']==profile['sha256']
+for field in ('confidence','trafficMode'):assert selection['selected'][field]==profile[field]
+protocol={'frozenProfile':profile,'frozenProfileSha256':sha(profile_file),'evaluationStartedAt':datetime.now(timezone.utc).isoformat(),
+          'testAlreadyReused':True,'note':'Profile was frozen using VAL before this script started. This is a reused benchmark, not an independent blind holdout. No subsequent threshold/model selection from these TEST results.'}
+(folder/'test-protocol.json').write_text(json.dumps(protocol,ensure_ascii=False,indent=2)+'\n')
+reports={}
+for variant,weights,mode in [('baseline','models/vision/yolo-stop-candidate.pt','legacy'),('previous','models/vision/yolo-stop-improved.pt','body'),('robot',profile['weights'],profile['trafficMode'])]:
+ reports[variant]=evaluate(weights=Path(weights),data=Path('datasets/yolo-stop/data.yaml'),output=folder/f'test-{variant}.json',
+                         confidence=profile['confidence'],imgsz=profile['imgsz'],device='cpu',prefer_red=profile['preferRed'],
+                         traffic_mode=mode,preview_file=out/'test-preview.jpg' if variant=='robot' else None)
+shutil.copy2(folder/'test-robot.json','models/vision/yolo-stop-robot-evaluation.json')
+for variant in ('baseline','previous'):
+ (folder/f'test-comparison-{variant}.json').write_text(json.dumps(compare(reports[variant],reports['robot']),ensure_ascii=False,indent=2)+'\n')
+# Real service smoke, no camera managers/ports/motors and no start().
+first=reports['robot']['frames'][0];jpeg=Path('datasets/yolo-stop/images/test',first['image']).read_bytes();smokes={}
+for suffix in ('pt','onnx'):
+ weights=Path('models/vision/yolo-stop-robot.'+suffix)
+ cfg=VisionConfig(model_path=weights,confidence=profile['confidence'],imgsz=profile['imgsz'],device='cpu',
+                  prefer_red=profile['preferRed'],traffic_mode=profile['trafficMode'],heuristic_enabled=False)
+ service=VisionService(camera_provider=lambda:None,layout_provider=lambda:[],config=cfg)
+ backend=service.initialize();result=service.process_frame(0,jpeg)
+ assert backend==('yolo+body' if profile['trafficMode']=='body' else 'yolo')
+ assert not result['error'] and result['detections']==first['predictions']
+ assert service.state()['heuristicEnabled'] is False
+ smokes[suffix]={'backend':backend,'sha256':sha(weights),'image':first['image'],'serviceResult':result,
+                 'matchesSavedEvaluation':True,'state':service.state(),'hardwareOpened':False}
+(folder/'integration-smoke.json').write_text(json.dumps(smokes,ensure_ascii=False,indent=2)+'\n')
+# Seven historical failures were declared long before this candidate existed.
+old=json.loads(Path('docs/vision-improvement/regressions.json').read_text())
+manifest=json.loads(Path('docs/vision-video-review/source.json').read_text());sources={v['name']:v for v in manifest['videos']}
+frames={}
+for name in {r['source'] for r in old['cases']}:
+ source=Path('.cache/vision/video-review')/name;assert sha(source)==sources[name]['sha256']
+ wanted={r['frame'] for r in old['cases'] if r['source']==name};cap=cv2.VideoCapture(str(source));i=0
+ while wanted:
+  ok,frame=cap.read();assert ok,name
+  if i in wanted:frames[name,i]=frame;wanted.remove(i)
+  i+=1
+ cap.release()
+detectors={'before':YoloDetector('models/vision/yolo-stop-improved.pt',confidence=profile['confidence'],imgsz=512,device='cpu',prefer_red=False,traffic_mode='body'),
+           'after':YoloDetector(profile['weights'],confidence=profile['confidence'],imgsz=512,device='cpu',prefer_red=False,traffic_mode=profile['trafficMode'])}
+font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',17);bold=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',21)
+colors={'red':'#ff6287','yellow':'#ffdf65','green':'#6cf0ae','unknown':'#c3affe','stop_sign':'#ff6287','speed_bump':'#ffdf65','pedestrian_crossing':'#70c8ff','cone':'#ffaa75'}
+sheet=Image.new('RGB',(1304,70+len(old['cases'])*438+50),'#0b1422');draw=ImageDraw.Draw(sheet)
+draw.text((16,10),'ДО: прежний improved / body',font=bold,fill='white');draw.text((668,10),'ПОСЛЕ: robot / '+profile['trafficMode'],font=bold,fill='white')
+draw.text((16,42),f'Порог {profile["confidence"]}, 512, без эвристического ансамбля. TRAIN/VAL иллюстрации, не независимая оценка.',font=font,fill='#cdd9e8')
+rows=[]
+for index,case in enumerate(old['cases']):
+ name,number=case['source'],case['frame'];frame=frames[name,number];assert hashlib.sha256(frame.tobytes()).hexdigest()==case['decodedFrameSha256']
+ predictions={k:[d.to_dict() for d in det.detect(frame)] for k,det in detectors.items()};y=70+index*438
+ draw.text((16,y+2),f'{name[-7:-4]} / {number} / {case["originalSplit"]} | {case["caption"]}',font=font,fill='white')
+ for column,key in enumerate(('before','after')):
+  im=Image.fromarray(cv2.cvtColor(cv2.resize(frame,(640,360)),cv2.COLOR_BGR2RGB));d=ImageDraw.Draw(im)
+  for item in predictions[key]:
+   b=item['box'];x1,y1,x2,y2=b['x']*640,b['y']*360,(b['x']+b['w'])*640,(b['y']+b['h'])*360
+   c=item['signal'] or 'unknown';cls=item['class'];tag=(c if cls=='traffic_light' else cls)+f' {item["confidence"]:.2f}';color=colors.get(c if cls=='traffic_light' else cls,'white')
+   d.rectangle((x1,y1,x2,y2),outline=color,width=3);ty=max(0,min(337,y1-23));d.rectangle(d.textbbox((x1,ty),tag,font=font),fill='#0b1422');d.text((x1,ty),tag,font=font,fill=color)
+  x=12+column*652;sheet.paste(im,(x,y+31));states=[d['signal'] for d in predictions[key] if d['class']=='traffic_light']
+  draw.text((x,y+398),'Светофор: '+(', '.join(states) if states else 'не найден'),font=font,fill='white')
+ rows.append({k:case[k] for k in ('source','frame','originalSplit','caption','decodedFrameSha256')}|predictions)
+draw.text((16,70+len(rows)*438+8),'Фиксированные прежние ошибки. Совпадение цвета/число рамок не доказывают безопасность; тяга не включалась.',font=font,fill='#e2b6a7')
+sheet.save(out/'before-after.jpg',quality=92)
+(out/'regressions.json').write_text(json.dumps({'profile':profile,'cases':rows,'selection':'Same seven historical cases, fixed before this training; no new success-based selection.',
+            'beforeWeights':'models/vision/yolo-stop-improved.pt','beforeSha256':sha('models/vision/yolo-stop-improved.pt'),
+            'warning':'TRAIN/VAL qualitative illustrations; no independent boxes or accuracy claims; a missed visible light is a failure even if a false colour disappears.'},ensure_ascii=False,indent=2)+'\n')
+summary={'training':json.loads(Path('models/vision/yolo-stop-robot.json').read_text()),'profile':profile,
+         'matchedReusedTest':{k:summarize(v) for k,v in reports.items()},
+         'validation':{'selected':selection['selected'],'passesGates':selection['candidatePassesRegressionGates'],'preferredToControls':selection['candidatePreferredToControls']},
+         'onnxParity':{k:v for k,v in json.loads((folder/'onnx-parity.json').read_text()).items() if k not in ('rawTensorChecks','runtimeChecks')},
+         'warning':'No robot hardware test, no autonomous deployment, no fresh independently labelled holdout. TEST already reused; do not tune after this run.'}
+(out/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n')
+print('FINAL CHECKS COMPLETE')
+for key,report in reports.items():print(key,json.dumps(summarize(report),ensure_ascii=False))
+for row in rows:print(row['source'],row['frame'],[d['signal'] for d in row['before'] if d['class']=='traffic_light'],'->',[d['signal'] for d in row['after'] if d['class']=='traffic_light'])

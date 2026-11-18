@@ -1,0 +1,18 @@
+{
+  "test": "tests/test_kinect_depth.py::test_depth_to_scan_wall_in_front_and_floor_filtered",
+  "files": {
+    "tests/test_kinect_depth.py": {
+      "unchangedFromBase": true,
+      "sha256": "675299ff899b3d8aa619a57c773e99657cf6956d778e967bf3e63f51eff9fe16"
+    },
+    "robot_control/kinect.py": {
+      "unchangedFromBase": true,
+      "sha256": "2bd3ced4b9d90b29100c922273f7b3a06f12fb22afdce9a090b4459b4498a883"
+    },
+    "robot_control/sensor_layout.py": {
+      "unchangedFromBase": true,
+      "sha256": "cc36ac8bd4b7adb96548f95600b00ea3101ea9812fd80002a77e47487e5df618"
+    }
+  },
+  "note": "Same known failure as earlier full runs; no unrelated fix or assertion suppression."
+}

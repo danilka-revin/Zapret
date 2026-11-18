@@ -1,0 +1,47 @@
+{
+  "split": "val",
+  "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "imgsz": 512,
+  "preferRed": true,
+  "backend": "yolo+fusion",
+  "objective": "0.7*canonical_macro_F1 + 0.3*signal_balanced_recall; falseGreen==0 on val",
+  "points": [
+    {
+      "confidence": 0.15,
+      "macroF1": 0.744722,
+      "signalBalancedRecall": 0.343434,
+      "falseGreen": 0,
+      "score": 0.624336
+    },
+    {
+      "confidence": 0.25,
+      "macroF1": 0.764426,
+      "signalBalancedRecall": 0.313131,
+      "falseGreen": 0,
+      "score": 0.629038
+    },
+    {
+      "confidence": 0.35,
+      "macroF1": 0.761021,
+      "signalBalancedRecall": 0.282828,
+      "falseGreen": 0,
+      "score": 0.617563
+    },
+    {
+      "confidence": 0.45,
+      "macroF1": 0.74149,
+      "signalBalancedRecall": 0.282828,
+      "falseGreen": 0,
+      "score": 0.603891
+    }
+  ],
+  "selected": {
+    "confidence": 0.25,
+    "macroF1": 0.764426,
+    "signalBalancedRecall": 0.313131,
+    "falseGreen": 0,
+    "score": 0.629038
+  },
+  "warning": "Tiny bootstrap/agent-assisted validation set; this constraint is NOT a safety guarantee."
+}

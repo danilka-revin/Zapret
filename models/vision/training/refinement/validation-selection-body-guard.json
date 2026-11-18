@@ -1,0 +1,150 @@
+{
+  "split": "val",
+  "confidence": 0.25,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "backend": "yolo+fusion",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "points": [
+    {
+      "name": "baseline-legacy",
+      "weights": "models/vision/yolo-stop-candidate.pt",
+      "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+      "trafficMode": "legacy",
+      "macroF1": 0.7644262295081967,
+      "signalBalancedRecall": 0.34949494949494947,
+      "falseGreen": 0,
+      "score": 0.6399468455042225,
+      "negativeClip": {
+        "weights": "models/vision/yolo-stop-candidate.pt",
+        "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+        "trafficFalsePositiveBoxes": 22,
+        "framesWithTrafficFalsePositive": 21,
+        "falseTrafficSignals": {
+          "unknown": 21,
+          "red": 1
+        }
+      },
+      "eligible": true
+    },
+    {
+      "name": "baseline-body",
+      "weights": "models/vision/yolo-stop-candidate.pt",
+      "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+      "trafficMode": "body",
+      "macroF1": 0.77775956284153,
+      "signalBalancedRecall": 0.34949494949494947,
+      "falseGreen": 0,
+      "score": 0.6492801788375558,
+      "negativeClip": {
+        "framesWithTrafficFalsePositive": 0,
+        "trafficFalsePositiveBoxes": 0,
+        "falseTrafficSignals": {}
+      },
+      "eligible": true
+    },
+    {
+      "name": "baseline-verified",
+      "weights": "models/vision/yolo-stop-candidate.pt",
+      "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+      "trafficMode": "verified",
+      "macroF1": 0.77775956284153,
+      "signalBalancedRecall": 0.1414141414141414,
+      "falseGreen": 0,
+      "score": 0.5868559364133135,
+      "negativeClip": {
+        "framesWithTrafficFalsePositive": 0,
+        "trafficFalsePositiveBoxes": 0,
+        "falseTrafficSignals": {}
+      },
+      "eligible": true
+    },
+    {
+      "name": "improved-legacy",
+      "weights": "models/vision/yolo-stop-improved.pt",
+      "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+      "trafficMode": "legacy",
+      "macroF1": 0.780475628267836,
+      "signalBalancedRecall": 0.47676767676767673,
+      "falseGreen": 0,
+      "score": 0.6893632428177883,
+      "negativeClip": {
+        "weights": "models/vision/yolo-stop-improved.pt",
+        "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+        "trafficFalsePositiveBoxes": 43,
+        "framesWithTrafficFalsePositive": 38,
+        "falseTrafficSignals": {
+          "red": 30,
+          "yellow": 2,
+          "unknown": 11
+        }
+      },
+      "eligible": false
+    },
+    {
+      "name": "improved-body",
+      "weights": "models/vision/yolo-stop-improved.pt",
+      "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+      "trafficMode": "body",
+      "macroF1": 0.7778703308297119,
+      "signalBalancedRecall": 0.44646464646464645,
+      "falseGreen": 0,
+      "score": 0.6784486255201922,
+      "negativeClip": {
+        "framesWithTrafficFalsePositive": 11,
+        "trafficFalsePositiveBoxes": 11,
+        "falseTrafficSignals": {
+          "yellow": 2,
+          "red": 9
+        }
+      },
+      "eligible": true
+    },
+    {
+      "name": "improved-verified",
+      "weights": "models/vision/yolo-stop-improved.pt",
+      "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+      "trafficMode": "verified",
+      "macroF1": 0.7778703308297119,
+      "signalBalancedRecall": 0.1414141414141414,
+      "falseGreen": 0,
+      "score": 0.5869334740050407,
+      "negativeClip": {
+        "framesWithTrafficFalsePositive": 11,
+        "trafficFalsePositiveBoxes": 11,
+        "falseTrafficSignals": {
+          "yellow": 1,
+          "unknown": 10
+        }
+      },
+      "eligible": true
+    }
+  ],
+  "selected": {
+    "name": "improved-body",
+    "weights": "models/vision/yolo-stop-improved.pt",
+    "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+    "trafficMode": "body",
+    "macroF1": 0.7778703308297119,
+    "signalBalancedRecall": 0.44646464646464645,
+    "falseGreen": 0,
+    "score": 0.6784486255201922,
+    "negativeClip": {
+      "framesWithTrafficFalsePositive": 11,
+      "trafficFalsePositiveBoxes": 11,
+      "falseTrafficSignals": {
+        "yellow": 2,
+        "red": 9
+      }
+    },
+    "eligible": true
+  },
+  "weights": "models/vision/yolo-stop-improved.pt",
+  "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+  "trafficMode": "body",
+  "objective": "0.7*canonical_macro_F1 + 0.3*signal_balanced_recall_including_misses; falseGreen==0 on canonical val; no more traffic-FP frames on the agent-reviewed 98-frame VAL shoe clip than baseline (21). Matched confidence .25 for all.",
+  "validationNegativeClip": "docs/vision-improvement/negative-video-review.json",
+  "developmentProtocol": "Initial candidate test was already evaluated and is NOT a new blind holdout. Body-only guard was developed on the separate VAL shoe clip and canonical val, using pre-existing body thresholds. Test results were not used to tune its thresholds. Final profile is frozen before repeated test evaluation; all earlier results preserved.",
+  "warning": "Small noisy pseudo/agent-assisted validation labels and ONE correlated negative video, NOT independent human GT or a safety guarantee."
+}

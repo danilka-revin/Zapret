@@ -1,0 +1,34 @@
+{
+  "splits": {
+    "train": {
+      "images": 280,
+      "counts": {
+        "speed_bump": 25,
+        "traffic_light": 124,
+        "stop_sign": 43,
+        "pedestrian_crossing": 11,
+        "cone": 206
+      },
+      "missingClasses": []
+    },
+    "val": {
+      "images": 61,
+      "counts": {
+        "cone": 63,
+        "stop_sign": 7,
+        "traffic_light": 27,
+        "pedestrian_crossing": 2,
+        "speed_bump": 7
+      },
+      "missingClasses": []
+    }
+  },
+  "classes": [
+    "stop_sign",
+    "pedestrian_crossing",
+    "speed_bump",
+    "traffic_light",
+    "cone"
+  ],
+  "fingerprint": "d205cc97446e8ba6d250d63bd1b4fca8381a8069a20be9a8c5badae37da8ec78"
+}

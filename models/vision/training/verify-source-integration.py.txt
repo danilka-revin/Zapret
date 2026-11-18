@@ -1,0 +1,117 @@
+"""Executed provenance/cold-restore check; no training or model selection.
+
+Run from the repository root with the recorded Python/OpenCV environment.
+Heavy restored images/videos exist only in an ignored, temporary directory.
+"""
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import argparse
+import hashlib
+import json
+import shutil
+import sys
+
+ROOT = Path.cwd()
+sys.path.insert(0, str(ROOT))
+from scripts.restore_vision_source import metadata_hashes, verify_source
+from scripts.train_vision import inspect_dataset
+from scripts.vision_dataset import SOURCE_REPOSITORY, SOURCE_REVISION
+
+
+def sha(path):
+    return hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+
+
+def read(path):
+    return json.loads((ROOT / path).read_text())
+
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--zip', type=Path, default=ROOT / '.cache/vision/refinement/source-repo.zip')
+args = parser.parse_args()
+canonical = ROOT / 'datasets/yolo-stop'
+protected = [
+    'models/vision/yolo-stop.pt', 'models/vision/yolo-stop-candidate.pt',
+    'models/vision/yolo-stop-improved.pt', 'models/vision/yolo-stop-robot.pt',
+    'models/vision/yolo-stop-robot.onnx', 'models/vision/yolo-stop-robot-profile.json',
+    'models/vision/training/robot/validation-selection.json',
+]
+model_before = {name: sha(name) for name in protected}
+metadata_before = metadata_hashes(canonical)
+_, canonical_audit = inspect_dataset(canonical / 'data.yaml')
+with TemporaryDirectory(prefix='source-cold-restore-', dir=ROOT / '.cache/vision') as temporary:
+    temporary = Path(temporary)
+    snapshot, videos = temporary / 'dataset', temporary / 'videos'
+    snapshot.mkdir()
+    for path in list(canonical.glob('*.json')) + list(canonical.glob('*.yaml')):
+        shutil.copy2(path, snapshot / path.name)
+    shutil.copytree(canonical / 'labels', snapshot / 'labels', ignore=shutil.ignore_patterns('*.cache'))
+    # Only the temporary YAML root changes; fingerprint deliberately excludes path.
+    import yaml
+    config_file = snapshot / 'data.yaml'
+    config = yaml.safe_load(config_file.read_text())
+    config['path'] = str(snapshot)
+    config_file.write_text(yaml.safe_dump(config, sort_keys=False))
+    restored = verify_source(archive=args.zip, dataset=snapshot, video_dir=videos, restore_missing=True)
+    assert restored['restoredImages'] == 373 and restored['restoredVideos'] == 8
+    assert restored['datasetFingerprint'] == canonical_audit['fingerprint']
+    for relative in metadata_before:
+        if relative != 'data.yaml':
+            assert sha(snapshot / relative) == sha(canonical / relative), relative
+    repeated = verify_source(archive=args.zip, dataset=snapshot, video_dir=videos)
+    assert repeated['restoredImages'] == repeated['restoredVideos'] == 0
+    assert repeated['datasetFingerprint'] == restored['datasetFingerprint']
+assert metadata_hashes(canonical) == metadata_before
+assert {name: sha(name) for name in protected} == model_before
+
+# Trace both completed training paths back through the unchanged manifests.
+lineage = [{'dataset': 'datasets/yolo-stop', 'fingerprint': canonical_audit['fingerprint'],
+            'source': SOURCE_REPOSITORY, 'sourceRevision': SOURCE_REVISION}]
+parent = canonical_audit['fingerprint']
+for name in ('yolo-stop-refined-color', 'yolo-stop-robot'):
+    folder = ROOT / 'datasets' / name
+    manifest = read(folder / 'dataset.json')
+    _, audit = inspect_dataset(folder / 'data.yaml')
+    assert manifest['parentFingerprint'] == parent
+    assert manifest['fingerprint'] == audit['fingerprint']
+    assert manifest['sourceRevision'] == SOURCE_REVISION
+    lineage.append({'dataset': 'datasets/' + name, 'fingerprint': audit['fingerprint'],
+                    'parentFingerprint': parent, 'sourceRevision': SOURCE_REVISION})
+    parent = audit['fingerprint']
+receipts = []
+for model, metadata, fingerprint in (
+    ('models/vision/yolo-stop-candidate.pt', 'models/vision/yolo-stop-candidate.json', canonical_audit['fingerprint']),
+    ('models/vision/yolo-stop-robot.pt', 'models/vision/training/robot/final-training.json', parent),
+):
+    record = read(metadata)
+    assert record['sha256'] == sha(model)
+    assert record['dataset']['fingerprint'] == fingerprint
+    assert record['dataset']['sourceRevision'] == SOURCE_REVISION
+    receipts.append({'model': model, 'sha256': sha(model), 'trainingReceipt': metadata,
+                     'trainingReceiptSha256': sha(metadata), 'trainedOnFingerprint': fingerprint,
+                     'epochsCompleted': record['epochsCompleted'], 'bestEpoch': record['bestEpoch']})
+assert read('models/vision/yolo-stop-robot-profile.json')['candidatePassesRegressionGates'] is False
+
+result = {
+    'source': SOURCE_REPOSITORY, 'sourceRevision': SOURCE_REVISION,
+    'sourceVerification': 'vision-source-verification.json',
+    'sourceVerificationSha256': sha('docs/vision-source-verification.json'),
+    'sourceRestoreScriptSha256': sha('scripts/restore_vision_source.py'),
+    'coldRestore': {
+        'archiveSha256': restored['verifiedArchiveSha256'],
+        'imagesRestoredFromEmpty': 373, 'videosRestoredFromEmpty': 8,
+        'datasetFingerprint': restored['datasetFingerprint'],
+        'labelsAndSplitsByteIdentical': True,
+        'onlyTemporaryYamlRootAdjusted': True,
+        'secondPassRestoredFiles': 0, 'temporaryMediaRemoved': True,
+    },
+    'verifiedTrainingLineage': lineage,
+    'completedTrainingReceipts': receipts,
+    'unchangedWeightsAndProfileSha256': model_before,
+    'canonicalLabelsAndProvenanceUnchanged': True,
+    'newTrainingOrInferencePerformed': False,
+    'deploymentAccepted': False,
+    'warning': 'Source integration is complete; it does not fix label noise or failed quality gates. Existing training results were not retuned or promoted.',
+}
+(ROOT / 'docs/vision-source-checks.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+print(json.dumps(result, ensure_ascii=False, indent=2))

@@ -1,0 +1,35 @@
+from pathlib import Path
+import json, hashlib, sys
+sys.path.insert(0,str(Path.cwd()))
+from scripts.evaluate_vision import evaluate
+from scripts.compare_vision import summarize, compare
+out = Path('models/vision/training/refinement')
+points=[]
+reports={}
+for variant in ('baseline','improved'):
+    weights=Path('models/vision/yolo-stop-candidate.pt' if variant=='baseline' else 'models/vision/yolo-stop-improved.pt')
+    for mode in ('legacy','verified'):
+        name=f'{variant}-{mode}'
+        report=evaluate(weights=weights, data=Path('datasets/yolo-stop/data.yaml'), output=out/f'val-{name}.json',
+                        split='val', confidence=.25,imgsz=512,device='cpu',prefer_red=False,traffic_mode=mode)
+        reports[name]=report
+        summary=summarize(report)
+        points.append({'name':name,'weights':str(weights),'sha256':report['sha256'],'trafficMode':mode,
+                       'macroF1':summary['macroF1'],'signalBalancedRecall':summary['signalBalancedRecall'],
+                       'falseGreen':summary['falseGreen'],'score':summary['validationObjective'],
+                       'counts':summary['micro'],'signals':summary['signals']})
+allowed=[p for p in points if p['falseGreen']==0]
+selected=max(allowed,key=lambda p:(p['score'],p['macroF1'],p['name'])) if allowed else None
+profile={'split':'val','datasetFingerprint':reports['baseline-legacy']['datasetFingerprint'],
+         'confidence':.25,'imgsz':512,'device':'cpu','preferRed':False,'backend':'yolo+fusion',
+         'objective':'0.7*canonical_macro_F1 + 0.3*signal_balanced_recall_including_misses; falseGreen==0 on val. Matched fixed confidence .25 for both checkpoints and modes. No test used.',
+         'points':points,'selected':selected,
+         'warning':'Small/noisy agent-assisted validation labels, NOT independent GT or proof of zero false-green risk. Modes and threshold frozen before new test inference.'}
+if selected:
+    profile.update(weights=selected['weights'],sha256=selected['sha256'],trafficMode=selected['trafficMode'])
+(out/'validation-selection.json').write_text(json.dumps(profile,ensure_ascii=False,indent=2)+'\n')
+for name,report in reports.items():
+    (out/f'val-compare-{name}.json').write_text(json.dumps(compare(reports['baseline-legacy'],report),ensure_ascii=False,indent=2)+'\n')
+print('\nVALIDATION MATRIX COMPLETE')
+for p in points:print(p['name'],'F1',round(p['macroF1'],4),'signal',round(p['signalBalancedRecall'],4),'falseGreen',p['falseGreen'],'score',round(p['score'],4))
+print('SELECTED:',selected['name'] if selected else None)

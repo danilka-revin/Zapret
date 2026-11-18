@@ -1,0 +1,18 @@
+{
+  "focusedCommand": ".venv/bin/python -m pytest tests/test_vision.py tests/test_vision_training.py tests/test_road_hazards.py tests/test_road_map.py -q",
+  "focusedPassed": 74,
+  "fullSuite": {
+    "passed": 2037,
+    "skipped": 29,
+    "failed": 1
+  },
+  "knownFailure": "tests/test_kinect_depth.py::test_depth_to_scan_wall_in_front_and_floor_filtered",
+  "baselineFailureReproducedAtCommit": "304775073e49c46a919effecc7b079fb8a2cccf6",
+  "javascript": "node tests/js/vision_panel.js: OK",
+  "realWeightsSmoke": {
+    "pytorch": true,
+    "onnxruntime": true,
+    "visionService": true
+  },
+  "note": "Focused run includes the added calibration test after the full-suite run. See docs/VISION_TRAINING.md."
+}

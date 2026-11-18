@@ -130,10 +130,41 @@ bootHandlers.forEach((handler) => handler());
     'событие rc-vision-state должно доходить до карты');
   assert.equal(mapPayload.field.length, 2, 'карта получает отметки знаков');
 
+  // Closed-course timeout remains UNKNOWN and never lights the green lamp.
+  snapshot.trafficLight = {state: 'unknown', label: 'Сигнал не определён', action: 'wait', counts: {},
+    closedCourse: {enabled: true, phase: 'waiting', remainingS: 3.0, recommendation: 'wait'}};
+  await vision.refresh();
+  assert.match(elements['vision-signal'].textContent, /ПОЛИГОН.*3.0 с/);
+  snapshot.trafficLight.closedCourse = {enabled: true, phase: 'timeout_advisory',
+    recommendation: 'proceed_closed_course', remainingS: null};
+  await vision.refresh();
+  assert.match(elements['vision-signal'].textContent, /рекомендация проезда.*не зелёный/);
+  assert.equal(elements['vision-signal'].dataset.state, 'unknown');
+  assert(!lamps.green.classList.contains('is-on'));
+  assert.equal(vision.getState().trafficLight.action, 'wait');
+  snapshot.trafficLight.state = 'red';
+  snapshot.trafficLight.label = 'Красный — стоим';
+  await vision.refresh();
+  assert(!elements['vision-signal'].textContent.includes('рекомендация проезда'), 'advice cannot override a known colour');
+  snapshot.trafficLight.state = 'unknown';
+  snapshot.trafficLight.label = 'Сигнал не определён';
+  await vision.refresh();
+  ctx.fetch = () => Promise.reject(new Error('camera API offline'));
+  await vision.refresh();
+  assert.equal(vision.getState().trafficLight.action, 'wait');
+  assert.equal(vision.getState().trafficLight.closedCourse.recommendation, 'wait');
+  assert(!elements['vision-signal'].textContent.includes('рекомендация проезда'));
+  assert(!lamps.green.classList.contains('is-on'));
+  assert.match(elements['vision-signal'].textContent, /Нет свежих данных/);
+  assert.equal(mapPayload.field.length, 0, 'offline does not preserve old field/advice events');
+  ctx.fetch = () => Promise.resolve({ok: true, json: () => Promise.resolve(snapshot)});
+
   // Выключенный сервис не подменяет кадры: панель остаётся, но рамок нет.
   snapshot.ok = false;
   await vision.refresh();
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(vision.frameUrl(0), /api\/camera\/0\/frame\?t=/);
+  assert.equal(elements['vision-signal'].dataset.state, 'unknown');
+  assert(!lamps.green.classList.contains('is-on'));
   console.log('vision panel: OK');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

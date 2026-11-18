@@ -1,0 +1,810 @@
+{
+  "weights": "/home/user/Zapret/models/vision/yolo-stop-candidate.pt",
+  "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+  "createdAt": "2026-11-17T23:57:41.274335+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "backend": "yolo+fusion",
+  "confidence": 0.25,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "legacy",
+  "counts": {
+    "stop_sign": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "pedestrian_crossing": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 6,
+      "fp": 3,
+      "fn": 1,
+      "precision": 0.6667,
+      "recall": 0.8571
+    },
+    "traffic_light": {
+      "tp": 15,
+      "fp": 8,
+      "fn": 12,
+      "precision": 0.6522,
+      "recall": 0.5556
+    },
+    "cone": {
+      "tp": 41,
+      "fp": 18,
+      "fn": 22,
+      "precision": 0.6949,
+      "recall": 0.6508
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->unknown": 5,
+    "red->unknown": 1,
+    "red->red": 2,
+    "background->yellow": 2,
+    "yellow->missed": 1,
+    "green->unknown": 2,
+    "green->green": 1,
+    "red->missed": 8,
+    "yellow->yellow": 2,
+    "background->unknown": 2,
+    "green->missed": 2,
+    "background->red": 4,
+    "unknown->missed": 1,
+    "unknown->yellow": 1
+  },
+  "falseGreen": 0,
+  "latencyMedianMs": 66.27,
+  "latencyP95Ms": 81.77,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+POINT baseline-legacy-0.25 score 0.6399468455042225 eligible True
+{
+  "weights": "/home/user/Zapret/models/vision/yolo-stop-candidate.pt",
+  "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+  "createdAt": "2026-11-17T23:57:50.637166+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "backend": "yolo+fusion",
+  "confidence": 0.25,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "body",
+  "counts": {
+    "stop_sign": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "pedestrian_crossing": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 6,
+      "fp": 3,
+      "fn": 1,
+      "precision": 0.6667,
+      "recall": 0.8571
+    },
+    "traffic_light": {
+      "tp": 15,
+      "fp": 3,
+      "fn": 12,
+      "precision": 0.8333,
+      "recall": 0.5556
+    },
+    "cone": {
+      "tp": 41,
+      "fp": 18,
+      "fn": 22,
+      "precision": 0.6949,
+      "recall": 0.6508
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->unknown": 5,
+    "red->unknown": 1,
+    "red->red": 2,
+    "background->yellow": 1,
+    "yellow->missed": 1,
+    "green->unknown": 2,
+    "green->green": 1,
+    "red->missed": 8,
+    "yellow->yellow": 2,
+    "background->unknown": 1,
+    "green->missed": 2,
+    "background->red": 1,
+    "unknown->missed": 1,
+    "unknown->yellow": 1
+  },
+  "falseGreen": 0,
+  "latencyMedianMs": 61.53,
+  "latencyP95Ms": 97.01,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+POINT baseline-body-0.25 score 0.6492801788375558 eligible True
+{
+  "weights": "/home/user/Zapret/models/vision/yolo-stop-improved.pt",
+  "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+  "createdAt": "2026-11-17T23:57:59.838489+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "backend": "yolo+fusion",
+  "confidence": 0.25,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "body",
+  "counts": {
+    "stop_sign": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "pedestrian_crossing": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 5,
+      "fp": 2,
+      "fn": 2,
+      "precision": 0.7143,
+      "recall": 0.7143
+    },
+    "traffic_light": {
+      "tp": 16,
+      "fp": 4,
+      "fn": 11,
+      "precision": 0.8,
+      "recall": 0.5926
+    },
+    "cone": {
+      "tp": 42,
+      "fp": 16,
+      "fn": 21,
+      "precision": 0.7241,
+      "recall": 0.6667
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->unknown": 3,
+    "red->unknown": 1,
+    "background->yellow": 3,
+    "red->red": 3,
+    "yellow->missed": 1,
+    "green->unknown": 2,
+    "green->green": 2,
+    "red->missed": 7,
+    "yellow->yellow": 2,
+    "green->missed": 1,
+    "unknown->missed": 2,
+    "background->red": 1,
+    "unknown->yellow": 2
+  },
+  "falseGreen": 0,
+  "latencyMedianMs": 63.81,
+  "latencyP95Ms": 99.9,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+POINT previous-body-0.25 score 0.6784486255201922 eligible False
+{
+  "weights": "/home/user/Zapret/models/vision/yolo-stop-robot.pt",
+  "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "createdAt": "2026-11-17T23:58:09.343831+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "backend": "yolo+fusion",
+  "confidence": 0.15,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "legacy",
+  "counts": {
+    "stop_sign": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "pedestrian_crossing": {
+      "tp": 2,
+      "fp": 1,
+      "fn": 0,
+      "precision": 0.6667,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "traffic_light": {
+      "tp": 20,
+      "fp": 7,
+      "fn": 7,
+      "precision": 0.7407,
+      "recall": 0.7407
+    },
+    "cone": {
+      "tp": 44,
+      "fp": 12,
+      "fn": 19,
+      "precision": 0.7857,
+      "recall": 0.6984
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->unknown": 5,
+    "red->unknown": 1,
+    "red->red": 5,
+    "background->yellow": 1,
+    "yellow->missed": 1,
+    "green->unknown": 3,
+    "green->green": 1,
+    "red->missed": 4,
+    "yellow->yellow": 2,
+    "background->red": 6,
+    "green->missed": 1,
+    "unknown->missed": 1,
+    "red->green": 1,
+    "unknown->yellow": 1
+  },
+  "falseGreen": 1,
+  "latencyMedianMs": 63.73,
+  "latencyP95Ms": 74.76,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+POINT robot-legacy-0.15 score 0.6753543275896217 eligible False
+{
+  "weights": "/home/user/Zapret/models/vision/yolo-stop-robot.pt",
+  "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "createdAt": "2026-11-17T23:58:18.500481+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "backend": "yolo+fusion",
+  "confidence": 0.15,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "body",
+  "counts": {
+    "stop_sign": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "pedestrian_crossing": {
+      "tp": 2,
+      "fp": 1,
+      "fn": 0,
+      "precision": 0.6667,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "traffic_light": {
+      "tp": 19,
+      "fp": 2,
+      "fn": 8,
+      "precision": 0.9048,
+      "recall": 0.7037
+    },
+    "cone": {
+      "tp": 44,
+      "fp": 12,
+      "fn": 19,
+      "precision": 0.7857,
+      "recall": 0.6984
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->unknown": 5,
+    "red->unknown": 1,
+    "red->red": 4,
+    "yellow->missed": 1,
+    "green->unknown": 3,
+    "green->green": 1,
+    "red->missed": 5,
+    "yellow->yellow": 2,
+    "background->red": 2,
+    "green->missed": 1,
+    "unknown->missed": 1,
+    "red->green": 1,
+    "unknown->yellow": 1
+  },
+  "falseGreen": 1,
+  "latencyMedianMs": 61.86,
+  "latencyP95Ms": 89.9,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+POINT robot-body-0.15 score 0.6733930481283422 eligible False
+{
+  "weights": "/home/user/Zapret/models/vision/yolo-stop-robot.pt",
+  "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "createdAt": "2026-11-17T23:58:27.072660+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "backend": "yolo+fusion",
+  "confidence": 0.25,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "legacy",
+  "counts": {
+    "stop_sign": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "pedestrian_crossing": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "traffic_light": {
+      "tp": 20,
+      "fp": 5,
+      "fn": 7,
+      "precision": 0.8,
+      "recall": 0.7407
+    },
+    "cone": {
+      "tp": 43,
+      "fp": 9,
+      "fn": 20,
+      "precision": 0.8269,
+      "recall": 0.6825
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->unknown": 5,
+    "red->unknown": 1,
+    "red->red": 5,
+    "background->yellow": 2,
+    "yellow->missed": 1,
+    "green->unknown": 3,
+    "green->green": 1,
+    "red->missed": 4,
+    "yellow->yellow": 2,
+    "background->red": 3,
+    "green->missed": 1,
+    "unknown->missed": 1,
+    "red->green": 1,
+    "unknown->yellow": 1
+  },
+  "falseGreen": 1,
+  "latencyMedianMs": 59.77,
+  "latencyP95Ms": 77.32,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+POINT robot-legacy-0.25 score 0.7085091719874327 eligible False
+{
+  "weights": "/home/user/Zapret/models/vision/yolo-stop-robot.pt",
+  "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "createdAt": "2026-11-17T23:58:36.210111+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "backend": "yolo+fusion",
+  "confidence": 0.25,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "body",
+  "counts": {
+    "stop_sign": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "pedestrian_crossing": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "traffic_light": {
+      "tp": 19,
+      "fp": 2,
+      "fn": 8,
+      "precision": 0.9048,
+      "recall": 0.7037
+    },
+    "cone": {
+      "tp": 43,
+      "fp": 9,
+      "fn": 20,
+      "precision": 0.8269,
+      "recall": 0.6825
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->unknown": 5,
+    "red->unknown": 1,
+    "red->red": 4,
+    "yellow->missed": 1,
+    "green->unknown": 3,
+    "green->green": 1,
+    "red->missed": 5,
+    "yellow->yellow": 2,
+    "background->red": 2,
+    "green->missed": 1,
+    "unknown->missed": 1,
+    "red->green": 1,
+    "unknown->yellow": 1
+  },
+  "falseGreen": 1,
+  "latencyMedianMs": 60.25,
+  "latencyP95Ms": 91.03,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+POINT robot-body-0.25 score 0.7025592885375493 eligible False
+{
+  "weights": "/home/user/Zapret/models/vision/yolo-stop-robot.pt",
+  "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "createdAt": "2026-11-17T23:58:44.709806+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "backend": "yolo+fusion",
+  "confidence": 0.35,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "legacy",
+  "counts": {
+    "stop_sign": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "pedestrian_crossing": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "traffic_light": {
+      "tp": 20,
+      "fp": 2,
+      "fn": 7,
+      "precision": 0.9091,
+      "recall": 0.7407
+    },
+    "cone": {
+      "tp": 41,
+      "fp": 7,
+      "fn": 22,
+      "precision": 0.8542,
+      "recall": 0.6508
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->unknown": 5,
+    "red->unknown": 1,
+    "red->red": 5,
+    "background->yellow": 1,
+    "yellow->missed": 1,
+    "green->unknown": 2,
+    "green->green": 2,
+    "red->missed": 4,
+    "yellow->yellow": 2,
+    "green->missed": 1,
+    "background->red": 1,
+    "unknown->missed": 1,
+    "red->green": 1,
+    "unknown->yellow": 1
+  },
+  "falseGreen": 1,
+  "latencyMedianMs": 54.04,
+  "latencyP95Ms": 66.95,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+POINT robot-legacy-0.35 score 0.7338303498303498 eligible False
+{
+  "weights": "/home/user/Zapret/models/vision/yolo-stop-robot.pt",
+  "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "createdAt": "2026-11-17T23:58:53.864915+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "backend": "yolo+fusion",
+  "confidence": 0.35,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "body",
+  "counts": {
+    "stop_sign": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "pedestrian_crossing": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "traffic_light": {
+      "tp": 19,
+      "fp": 1,
+      "fn": 8,
+      "precision": 0.95,
+      "recall": 0.7037
+    },
+    "cone": {
+      "tp": 41,
+      "fp": 7,
+      "fn": 22,
+      "precision": 0.8542,
+      "recall": 0.6508
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->unknown": 5,
+    "red->unknown": 1,
+    "red->red": 4,
+    "yellow->missed": 1,
+    "green->unknown": 2,
+    "green->green": 2,
+    "red->missed": 5,
+    "yellow->yellow": 2,
+    "green->missed": 1,
+    "background->red": 1,
+    "unknown->missed": 1,
+    "red->green": 1,
+    "unknown->yellow": 1
+  },
+  "falseGreen": 1,
+  "latencyMedianMs": 62.02,
+  "latencyP95Ms": 94.48,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+POINT robot-body-0.35 score 0.7236452158154285 eligible False
+{
+  "weights": "/home/user/Zapret/models/vision/yolo-stop-robot.pt",
+  "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "createdAt": "2026-11-17T23:59:02.689523+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "backend": "yolo+fusion",
+  "confidence": 0.45,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "legacy",
+  "counts": {
+    "stop_sign": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "pedestrian_crossing": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "traffic_light": {
+      "tp": 20,
+      "fp": 2,
+      "fn": 7,
+      "precision": 0.9091,
+      "recall": 0.7407
+    },
+    "cone": {
+      "tp": 38,
+      "fp": 5,
+      "fn": 25,
+      "precision": 0.8837,
+      "recall": 0.6032
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->unknown": 5,
+    "red->unknown": 1,
+    "red->red": 5,
+    "background->yellow": 1,
+    "yellow->missed": 1,
+    "green->unknown": 2,
+    "green->green": 2,
+    "red->missed": 4,
+    "yellow->yellow": 2,
+    "green->missed": 1,
+    "background->red": 1,
+    "unknown->missed": 1,
+    "red->green": 1,
+    "unknown->yellow": 1
+  },
+  "falseGreen": 1,
+  "latencyMedianMs": 61.51,
+  "latencyP95Ms": 72.19,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+POINT robot-legacy-0.45 score 0.7307842848974924 eligible False
+{
+  "weights": "/home/user/Zapret/models/vision/yolo-stop-robot.pt",
+  "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "createdAt": "2026-11-17T23:59:11.360640+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "backend": "yolo+fusion",
+  "confidence": 0.45,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "body",
+  "counts": {
+    "stop_sign": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "pedestrian_crossing": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "traffic_light": {
+      "tp": 19,
+      "fp": 1,
+      "fn": 8,
+      "precision": 0.95,
+      "recall": 0.7037
+    },
+    "cone": {
+      "tp": 38,
+      "fp": 5,
+      "fn": 25,
+      "precision": 0.8837,
+      "recall": 0.6032
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->unknown": 5,
+    "red->unknown": 1,
+    "red->red": 4,
+    "yellow->missed": 1,
+    "green->unknown": 2,
+    "green->green": 2,
+    "red->missed": 5,
+    "yellow->yellow": 2,
+    "green->missed": 1,
+    "background->red": 1,
+    "unknown->missed": 1,
+    "red->green": 1,
+    "unknown->yellow": 1
+  },
+  "falseGreen": 1,
+  "latencyMedianMs": 60.7,
+  "latencyP95Ms": 90.5,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+POINT robot-body-0.45 score 0.7205991508825711 eligible False
+SELECTED robot-legacy-0.35 passes False preferred to controls False

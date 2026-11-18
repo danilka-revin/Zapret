@@ -1,0 +1,196 @@
+{
+  "split": "test",
+  "images": 52,
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "profile": {
+    "confidence": 0.35,
+    "imgsz": 512,
+    "device": "cpu",
+    "preferRed": false,
+    "iouMatch": 0.5,
+    "backend": "yolo+fusion"
+  },
+  "before": {
+    "weights": "models/vision/yolo-stop-improved.pt",
+    "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+    "trafficMode": "body",
+    "micro": {
+      "tp": 57,
+      "fp": 21,
+      "fn": 41,
+      "precision": 0.7307692307692307,
+      "recall": 0.5816326530612245,
+      "f1": 0.6477272727272727
+    },
+    "classes": {
+      "stop_sign": {
+        "tp": 8,
+        "fp": 1,
+        "fn": 1,
+        "precision": 0.8888888888888888,
+        "recall": 0.8888888888888888,
+        "f1": 0.8888888888888888
+      },
+      "pedestrian_crossing": {
+        "tp": 3,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.75,
+        "recall": 1.0,
+        "f1": 0.8571428571428571
+      },
+      "speed_bump": {
+        "tp": 5,
+        "fp": 2,
+        "fn": 2,
+        "precision": 0.7142857142857143,
+        "recall": 0.7142857142857143,
+        "f1": 0.7142857142857143
+      },
+      "traffic_light": {
+        "tp": 8,
+        "fp": 3,
+        "fn": 11,
+        "precision": 0.7272727272727273,
+        "recall": 0.42105263157894735,
+        "f1": 0.5333333333333333
+      },
+      "cone": {
+        "tp": 33,
+        "fp": 14,
+        "fn": 27,
+        "precision": 0.7021276595744681,
+        "recall": 0.55,
+        "f1": 0.616822429906542
+      }
+    },
+    "macroF1": 0.7220946447114671,
+    "signals": {
+      "red": {
+        "correct": 1,
+        "support": 7,
+        "predictions": 3,
+        "recallIncludingMisses": 0.14285714285714285,
+        "precision": 0.3333333333333333
+      },
+      "yellow": {
+        "correct": 1,
+        "support": 4,
+        "predictions": 2,
+        "recallIncludingMisses": 0.25,
+        "precision": 0.5
+      },
+      "green": {
+        "correct": 2,
+        "support": 3,
+        "predictions": 2,
+        "recallIncludingMisses": 0.6666666666666666,
+        "precision": 1.0
+      }
+    },
+    "signalBalancedRecall": 0.3531746031746032,
+    "falseGreen": 0,
+    "validationObjective": 0.6114186322504078,
+    "latencyMedianMs": 62.39,
+    "latencyP95Ms": 80.23
+  },
+  "after": {
+    "weights": "models/vision/yolo-stop-robot.pt",
+    "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+    "trafficMode": "legacy",
+    "micro": {
+      "tp": 58,
+      "fp": 21,
+      "fn": 40,
+      "precision": 0.7341772151898734,
+      "recall": 0.5918367346938775,
+      "f1": 0.655367231638418
+    },
+    "classes": {
+      "stop_sign": {
+        "tp": 8,
+        "fp": 2,
+        "fn": 1,
+        "precision": 0.8,
+        "recall": 0.8888888888888888,
+        "f1": 0.8421052631578947
+      },
+      "pedestrian_crossing": {
+        "tp": 3,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.75,
+        "recall": 1.0,
+        "f1": 0.8571428571428571
+      },
+      "speed_bump": {
+        "tp": 5,
+        "fp": 2,
+        "fn": 2,
+        "precision": 0.7142857142857143,
+        "recall": 0.7142857142857143,
+        "f1": 0.7142857142857143
+      },
+      "traffic_light": {
+        "tp": 10,
+        "fp": 5,
+        "fn": 9,
+        "precision": 0.6666666666666666,
+        "recall": 0.5263157894736842,
+        "f1": 0.5882352941176471
+      },
+      "cone": {
+        "tp": 32,
+        "fp": 11,
+        "fn": 28,
+        "precision": 0.7441860465116279,
+        "recall": 0.5333333333333333,
+        "f1": 0.6213592233009708
+      }
+    },
+    "macroF1": 0.7246256704010168,
+    "signals": {
+      "red": {
+        "correct": 0,
+        "support": 7,
+        "predictions": 4,
+        "recallIncludingMisses": 0.0,
+        "precision": 0.0
+      },
+      "yellow": {
+        "correct": 1,
+        "support": 4,
+        "predictions": 3,
+        "recallIncludingMisses": 0.25,
+        "precision": 0.3333333333333333
+      },
+      "green": {
+        "correct": 3,
+        "support": 3,
+        "predictions": 3,
+        "recallIncludingMisses": 1.0,
+        "precision": 1.0
+      }
+    },
+    "signalBalancedRecall": 0.4166666666666667,
+    "falseGreen": 0,
+    "validationObjective": 0.6322379692807117,
+    "latencyMedianMs": 60.28,
+    "latencyP95Ms": 74.17
+  },
+  "delta": {
+    "macroF1": 0.0025310256895496597,
+    "signalBalancedRecall": 0.06349206349206349,
+    "falseGreen": 0,
+    "validationObjective": 0.02081933703030392,
+    "micro": {
+      "tp": 1,
+      "fp": 0,
+      "fn": -1,
+      "precision": 0.003407984420642718,
+      "recall": 0.010204081632653073,
+      "f1": 0.007639958911145328
+    }
+  },
+  "warning": "Same saved images/agent-assisted labels, NOT independent human ground truth. Signal recall includes missed bodies. Confidence is not calibrated correctness. No model selection on test is performed here. Zero observed false-green is not safety proof."
+}

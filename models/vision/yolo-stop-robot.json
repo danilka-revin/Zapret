@@ -1,0 +1,200 @@
+{
+  "model": "yolo-stop-robot.pt",
+  "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "createdAt": "2026-11-17T23:57:16.054935+00:00",
+  "base": "models/vision/training/robot/housing-audit-warmstart.pt",
+  "baseSha256": "162fa656785e01259763d13c91e823782f637689de00eb7ae38481504fbb6eb6",
+  "baseProvenance": {
+    "source": "https://github.com/AlaynaShaheen/object_detection_using_yolov8_tflite/tree/13f2ae34cfbb40d91c1b7b0c9c36cf96342288cc/yolov8n.pt",
+    "revision": "13f2ae34cfbb40d91c1b7b0c9c36cf96342288cc",
+    "contentSha256": "4df48185493a8e5284698efc2caddd44053bb88e8ef827b4ea2e84bf502891c0",
+    "checkpointVersion": "8.0.0.dev0",
+    "checkpointDate": "2022-12-30T00:12:08.084698",
+    "originalTrainingData": "coco.yaml",
+    "licenseNote": "Ultralytics model licensing applies; see https://github.com/ultralytics/ultralytics/blob/main/LICENSE"
+  },
+  "ultralytics": "8.4.215",
+  "torch": "2.2.2+cu121",
+  "classes": [
+    "stop_sign",
+    "pedestrian_crossing",
+    "speed_bump",
+    "traffic_light",
+    "cone",
+    "traffic_light_red",
+    "traffic_light_yellow",
+    "traffic_light_green"
+  ],
+  "epochsRequested": 150,
+  "epochsCompleted": 34,
+  "bestEpoch": 14,
+  "imgsz": 512,
+  "batch": 8,
+  "device": "cpu",
+  "freeze": 0,
+  "seed": 17,
+  "trainingArgs": {
+    "optimizer": "AdamW",
+    "lr0": 0.00015,
+    "lrf": 0.01,
+    "cos_lr": true,
+    "warmup_bias_lr": 0.0,
+    "cache": false,
+    "deterministic": true,
+    "patience": 20,
+    "workers": 0
+  },
+  "durationS": 3010.9,
+  "smoke": false,
+  "validation": {
+    "metrics/precision(B)": 0.678154,
+    "metrics/recall(B)": 0.67639,
+    "metrics/mAP50(B)": 0.658005,
+    "metrics/mAP50-95(B)": 0.509983,
+    "fitness": 0.509983,
+    "perClass": [
+      {
+        "id": 0,
+        "name": "stop_sign",
+        "precision": 0.693386,
+        "recall": 0.857143,
+        "mAP50": 0.863571,
+        "mAP50-95": 0.650554
+      },
+      {
+        "id": 1,
+        "name": "pedestrian_crossing",
+        "precision": 0.821266,
+        "recall": 1.0,
+        "mAP50": 0.995,
+        "mAP50-95": 0.995
+      },
+      {
+        "id": 2,
+        "name": "speed_bump",
+        "precision": 0.720131,
+        "recall": 0.737669,
+        "mAP50": 0.785,
+        "mAP50-95": 0.66925
+      },
+      {
+        "id": 3,
+        "name": "traffic_light",
+        "precision": 0.698601,
+        "recall": 0.75,
+        "mAP50": 0.706029,
+        "mAP50-95": 0.455851
+      },
+      {
+        "id": 4,
+        "name": "cone",
+        "precision": 0.874017,
+        "recall": 0.660797,
+        "mAP50": 0.693904,
+        "mAP50-95": 0.519708
+      },
+      {
+        "id": 5,
+        "name": "traffic_light_red",
+        "precision": 0.749498,
+        "recall": 0.27218,
+        "mAP50": 0.42375,
+        "mAP50-95": 0.240572
+      },
+      {
+        "id": 6,
+        "name": "traffic_light_yellow",
+        "precision": 0.359586,
+        "recall": 0.333333,
+        "mAP50": 0.1675,
+        "mAP50-95": 0.134
+      },
+      {
+        "id": 7,
+        "name": "traffic_light_green",
+        "precision": 0.508751,
+        "recall": 0.8,
+        "mAP50": 0.629286,
+        "mAP50-95": 0.414929
+      }
+    ]
+  },
+  "test": null,
+  "dataset": {
+    "splits": {
+      "train": {
+        "images": 297,
+        "counts": {
+          "cone": 208,
+          "speed_bump": 24,
+          "traffic_light_yellow": 26,
+          "stop_sign": 44,
+          "traffic_light_green": 19,
+          "traffic_light": 33,
+          "pedestrian_crossing": 11,
+          "traffic_light_red": 29
+        },
+        "missingClasses": []
+      },
+      "val": {
+        "images": 61,
+        "counts": {
+          "cone": 63,
+          "stop_sign": 7,
+          "traffic_light": 8,
+          "pedestrian_crossing": 2,
+          "speed_bump": 7,
+          "traffic_light_red": 11,
+          "traffic_light_yellow": 3,
+          "traffic_light_green": 5
+        },
+        "missingClasses": []
+      }
+    },
+    "classes": [
+      "stop_sign",
+      "pedestrian_crossing",
+      "speed_bump",
+      "traffic_light",
+      "cone",
+      "traffic_light_red",
+      "traffic_light_yellow",
+      "traffic_light_green"
+    ],
+    "fingerprint": "0346f1b0d8f18fcb2d0dabf0baeac799947cd16c4971a1b10635961f622803bf",
+    "archiveSha256": "762d6fa93f6f5b8103041cfced32de30b32d752399a37742e7f05d30499a0b88",
+    "sourceRevision": "3cb277bfadf7d0034943117f9146d4b92bb773a9",
+    "annotationWarning": "TRAIN-only agent-assisted coordinate review and visually reviewed negatives, not independent human ground truth. Inherits remaining pseudo-label noise and already-reused validation/test from its parent."
+  },
+  "augmentation": {
+    "hsv_h": 0.0,
+    "hsv_s": 0.15,
+    "hsv_v": 0.3,
+    "flipud": 0.0,
+    "fliplr": 0.0,
+    "mosaic": 0.5,
+    "close_mosaic": 10
+  },
+  "runDirectory": "runs/vision/20261117T230705Z-0fc4b9/train",
+  "trafficLight": "YOLO colour classes + conservative HSV agreement; generic = off/ambiguous",
+  "deployment": "NOT ACCEPTED for robot deployment; offline/isolated-bench experimental weights only; production unchanged",
+  "trainingRecord": "models/vision/training/robot/final-training.json",
+  "trainingRecordSha256": "de5eaece65aa7a3a67b36cd975f75095a888d3a343b014654bd39943e85da8ee",
+  "runtimeProfile": "yolo-stop-robot-profile.json",
+  "runtimeAcceptance": {
+    "candidatePassesRegressionGates": false,
+    "candidatePreferredToControls": false,
+    "decision": "NOT ACCEPTED for robot deployment. Offline/isolated-bench experimental artifact only.",
+    "reason": "All eight predeclared VAL profiles record one red-label to green prediction. Selected offline legacy/.35 also has four specific false-red shoe frames (limit one). A post-freeze visual review suggests the VAL red label is wrong; neither truth nor gates/profile were changed to make it pass.",
+    "labelConflictEvidence": "../../docs/vision-robot/validation-label-conflict.json",
+    "productionWeightsReplaced": false
+  },
+  "onnx": {
+    "file": "yolo-stop-robot.onnx",
+    "sha256": "c7f9c714f68d4bcada23e7e8028664f001f61b8fa5da8a466fd5431e49efdbee",
+    "bytes": 12606676,
+    "parityReport": "training/robot/onnx-parity.json",
+    "parityPassed": true,
+    "note": "Numerical/adapter parity is not accuracy or deployment acceptance. Same rejection applies to PT and ONNX."
+  }
+}

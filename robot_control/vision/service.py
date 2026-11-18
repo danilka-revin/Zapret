@@ -20,6 +20,7 @@ from .classes import CLASS_INFO, CLASS_NAMES, TRAFFIC_LIGHT_LABELS
 from .detector import (Detection, EnsembleDetector, HeuristicDetector, YoloDetector,
                        cv2_available)
 from .traffic import TrafficLightTracker
+from .closed_course import ClosedCourseWaitPolicy
 
 log = logging.getLogger("robot_control.vision")
 
@@ -77,6 +78,11 @@ class VisionConfig:
     max_field_m: float = 6.0
     traffic_stale_s: float = 2.0
     sign_scale: float = 1.0
+    imgsz: int = 416
+    device: str = "cpu"
+    traffic_mode: str = "legacy"  # verified is explicit bench opt-in, never a new default
+    heuristic_enabled: bool = True  # False reproduces the YOLO-only bench profile, no fallback
+    closed_course_unknown_timeout: bool = False  # advisory only, NEVER implicit motor permission
 
     @classmethod
     def from_env(cls) -> "VisionConfig":
@@ -91,6 +97,11 @@ class VisionConfig:
             max_field_m=_env_float("RC_VISION_MAX_FIELD_M", 6.0, 1.0, 30.0),
             traffic_stale_s=_env_float("RC_VISION_TRAFFIC_STALE_S", 2.0, 0.2, 30.0),
             sign_scale=_env_float("RC_VISION_SIGN_SCALE", 1.0, 0.25, 4.0),
+            imgsz=int(_env_float("RC_VISION_IMGSZ", 416, 160, 1280)) // 32 * 32,
+            device=(os.environ.get("RC_VISION_DEVICE") or "cpu").strip() or "cpu",
+            traffic_mode=(os.environ.get("RC_VISION_TRAFFIC_MODE") or "legacy").strip().lower() or "legacy",
+            heuristic_enabled=_env_flag("RC_VISION_HEURISTIC", True),
+            closed_course_unknown_timeout=_env_flag("RC_VISION_CLOSED_COURSE_TIMEOUT", False),
         )
 
 
@@ -100,6 +111,7 @@ class CameraVision:
 
     cam_id: int
     stamp: float = 0.0
+    evidence_stamp: float = 0.0
     width: int = 0
     height: int = 0
     detections: list[Detection] = field(default_factory=list)
@@ -112,6 +124,7 @@ class CameraVision:
             "id": self.cam_id,
             "active": bool(self.jpeg) and now - self.stamp <= 2.0,
             "ageS": round(max(0.0, now - self.stamp), 3) if self.stamp else None,
+            "captureAgeS": round(max(0.0, now - self.evidence_stamp), 3) if self.evidence_stamp else None,
             "width": self.width,
             "height": self.height,
             "detections": [d.to_dict() for d in self.detections],
@@ -139,7 +152,10 @@ class VisionService:
         self._backend = "unavailable"
         self._reason = "сервис ещё не инициализирован"
         self._cameras: dict[int, CameraVision] = {cid: CameraVision(cid) for cid in range(4)}
-        self._traffic = TrafficLightTracker(stale_s=self.config.traffic_stale_s)
+        self._traffic = TrafficLightTracker(stale_s=self.config.traffic_stale_s,
+                                            prefer_red=self.config.prefer_red)
+        self._closed_course = ClosedCourseWaitPolicy(
+            enabled=self.config.closed_course_unknown_timeout, stale_s=self.config.traffic_stale_s)
         self._stamps: dict[int, float] = {}
         self._field: list[dict[str, Any]] = []
         self._frames = 0
@@ -153,8 +169,14 @@ class VisionService:
             if model.is_file():
                 try:
                     yolo = YoloDetector(str(model), confidence=self.config.confidence,
-                                        prefer_red=self.config.prefer_red)
-                    if cv2_available():
+                                        prefer_red=self.config.prefer_red,
+                                        imgsz=self.config.imgsz, device=self.config.device,
+                                        traffic_mode=self.config.traffic_mode)
+                    if self.config.traffic_mode in ("body", "verified"):
+                        self._detector = yolo
+                        self._backend = "yolo+" + self.config.traffic_mode
+                        self._reason = f"модель {model.name}; режим {self.config.traffic_mode}, без эвристического ансамбля"
+                    elif cv2_available() and self.config.heuristic_enabled:
                         heuristic = HeuristicDetector(
                             min_confidence=max(0.5, self.config.confidence),
                             prefer_red=self.config.prefer_red)
@@ -169,6 +191,14 @@ class VisionService:
                 except Exception as exc:  # noqa: BLE001 - битые веса не роняют экран
                     log.warning("не удалось загрузить YOLO %s: %s", model, exc)
                     self._reason = f"модель не загрузилась: {exc}"
+            if self.config.traffic_mode != "legacy" or not self.config.heuristic_enabled:
+                # Missing/bad weights or an invalid mode must not silently
+                # fall back to unverified HSV/heuristic green.
+                # Disabling heuristics disables BOTH extras and fallback.
+                self._detector = None
+                self._backend = "unavailable"
+                self._reason = "требуются корректные веса YOLO; резерв отключён; " + self._reason
+                return self._backend
             if cv2_available():
                 self._detector = HeuristicDetector(
                     min_confidence=max(0.5, self.config.confidence),
@@ -222,6 +252,8 @@ class VisionService:
         if thread and thread.is_alive():
             thread.join(timeout=1.5)
         self._thread = None
+        with self._lock:
+            self._closed_course.invalidate("stopped")
 
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -259,8 +291,9 @@ class VisionService:
         if cam_id not in range(4):
             raise ValueError("id камеры должен быть 0…3")
         # ``frame_stamp`` — время получения кадра (ключ дедупликации); свежесть
-        # результата считаем уже ПОСЛЕ вывода модели: первый запуск YOLO на CPU
-        # может занять больше секунды, и иначе отметки поля сразу бы старели.
+        # визуальных отметок считаем уже ПОСЛЕ вывода модели: первый запуск
+        # YOLO на CPU может занять больше секунды. Но для разрешающего сигнала
+        # отдельно сохраняем время самого кадра, не завершающего inference.
         frame_stamp = time.time() if stamp is None else float(stamp)
         with self._lock:
             detector = self._detector
@@ -274,6 +307,8 @@ class VisionService:
             state.stamp, state.jpeg, state.detections = finished, jpeg, []
             state.error = self._reason
             self._stamps[cam_id] = frame_stamp
+            with self._lock:
+                self._closed_course.invalidate("frame_error")
             return state.to_dict(finished)
         import cv2
         import numpy as np
@@ -293,12 +328,15 @@ class VisionService:
             state.annotated = None
             state.error = str(exc)
             self._stamps[cam_id] = frame_stamp
+            with self._lock:
+                self._closed_course.invalidate("frame_error")
             return state.to_dict(finished)
         ok, encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
         h, w = frame.shape[:2]
         finished = time.time()
         with self._lock:
             state.stamp, state.jpeg = finished, jpeg
+            state.evidence_stamp = frame_stamp
             state.width, state.height = w, h
             state.detections = detections
             state.annotated = encoded.tobytes() if ok else jpeg
@@ -346,17 +384,50 @@ class VisionService:
                 for name in totals:
                     totals[name] += int(det.color_counts.get(name, 0))
                 score = det.confidence
+                if self.config.prefer_red:
+                    # Более уверенный green с другой камеры не отменяет red.
+                    score += {"red": 3, "yellow": 2, "unknown": 1, "green": 0}.get(det.color or "unknown", 1)
                 if best is None or score > best[0]:
                     best = (score, cam_id, det)
         self._traffic.set_counts(totals)
         if best is None:
             self._traffic.update("unknown", 0.0, 0, stamp=now)
+        else:
+            _, cam_id, det = best
+            counts = det.color_counts or {}
+            total = sum(counts.values())
+            confidence = (counts.get(det.color or "", 0) / total) if total else 0.0
+            self._traffic.update(det.color or "unknown", confidence, cam_id, stamp=now,
+                                 evidence_stamp=self._cameras[cam_id].evidence_stamp or self._cameras[cam_id].stamp)
+        self._update_closed_course(now)
+
+    def _update_closed_course(self, now: float) -> None:
+        if not self._closed_course.enabled:
             return
-        _, cam_id, det = best
-        counts = det.color_counts or {}
-        total = sum(counts.values())
-        confidence = (counts.get(det.color or "", 0) / total) if total else 0.0
-        self._traffic.update(det.color or "unknown", confidence, cam_id, stamp=now)
+        if not self.config.enabled or self._detector is None:
+            self._closed_course.invalidate("unavailable")
+            return
+        candidates = []
+        for cam_id in self.config.cameras:
+            state = self._cameras[cam_id]
+            observed = state.evidence_stamp
+            age = now - observed
+            if (state.error or not state.jpeg or observed <= 0 or
+                    not math.isfinite(age) or not 0 <= age <= self._closed_course.stale_s or
+                    not 0 <= now - state.stamp <= 1.0):
+                continue
+            for det in state.detections:
+                if (det.cls == "traffic_light" and math.isfinite(det.confidence) and
+                        det.confidence >= self.config.confidence):
+                    candidates.append((det.confidence, cam_id, det, observed, age))
+        if not candidates:
+            self._closed_course.invalidate("no_fresh_light")
+            return
+        _, cam_id, det, observed, age = max(candidates, key=lambda item: (item[0], -item[1]))
+        self._closed_course.update(
+            camera_id=cam_id, box=det.box, frame_stamp=observed, frame_age_s=age,
+            signal=det.color or "unknown", confirmed_signal=self._traffic.snapshot(now=now)["state"],
+            stop_signal_present=any(item[2].color in ("red", "yellow") for item in candidates))
 
     def _build_field(self) -> list[dict[str, Any]]:
         """Спроецировать рамки на плоскость поля в системе координат робота."""
@@ -438,6 +509,9 @@ class VisionService:
                 for det in value["detections"]:
                     counts[det["class"]] += 1
             traffic = self._traffic.snapshot(now=now)
+            if not self.config.enabled or self._detector is None:
+                self._closed_course.invalidate("unavailable")
+            traffic["closedCourse"] = self._closed_course.snapshot()
             # Отметки поля живут не дольше кадров, на которых они найдены:
             # иначе при потере камеры на карте останутся «призрачные» знаки.
             field = [dict(marker, ageS=round(max(0.0, now - self._cameras[marker["cameraId"]].stamp), 3))
@@ -448,6 +522,10 @@ class VisionService:
                 "enabled": bool(self.config.enabled and self._detector is not None),
                 "backend": self._backend,
                 "model": str(self.config.model_path) if self._backend.startswith("yolo") else None,
+                "imgsz": self.config.imgsz,
+                "device": self.config.device,
+                "trafficMode": self.config.traffic_mode,
+                "heuristicEnabled": self._backend in ("heuristic", "yolo+heuristic"),
                 "reason": self._reason,
                 "cameras": cameras,
                 "counts": counts,
@@ -481,7 +559,9 @@ class VisionService:
                         state.detections = []
                     self._field = []
                     self._traffic.reset()
+                    self._closed_course.invalidate("disabled")
             if confidence is not None:
+                self._closed_course.invalidate("configuration_changed")
                 self.config.confidence = max(0.05, min(0.95, float(confidence)))
                 setter = getattr(self._detector, "set_confidence", None)
                 if callable(setter):
@@ -504,6 +584,7 @@ class VisionService:
             self._field = []
             self._frames = 0
             self._traffic.reset()
+            self._closed_course.reset()
 
 
 _service: Optional[VisionService] = None

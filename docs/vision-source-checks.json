@@ -1,0 +1,70 @@
+{
+  "source": "https://github.com/p25543770-lang/yolo-stop",
+  "sourceRevision": "3cb277bfadf7d0034943117f9146d4b92bb773a9",
+  "sourceVerification": "vision-source-verification.json",
+  "sourceVerificationSha256": "6d0b64b740a9e225f317d8cddc8b5d6f7ea153ec793bc1fa68e9cdcb221bce40",
+  "sourceRestoreScriptSha256": "f9639d1ababfb992510ea73616e930bcf8b42099b4e070a77402a7ba456d5308",
+  "coldRestore": {
+    "archiveSha256": "464f43a9042be1e802745b7f00c8c44074b51d5bea8c4611eb4553afa5f55c70",
+    "imagesRestoredFromEmpty": 373,
+    "videosRestoredFromEmpty": 8,
+    "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+    "labelsAndSplitsByteIdentical": true,
+    "onlyTemporaryYamlRootAdjusted": true,
+    "secondPassRestoredFiles": 0,
+    "temporaryMediaRemoved": true
+  },
+  "verifiedTrainingLineage": [
+    {
+      "dataset": "datasets/yolo-stop",
+      "fingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+      "source": "https://github.com/p25543770-lang/yolo-stop",
+      "sourceRevision": "3cb277bfadf7d0034943117f9146d4b92bb773a9"
+    },
+    {
+      "dataset": "datasets/yolo-stop-refined-color",
+      "fingerprint": "dd280f724628cb3aef8553aa3798bcee98138b9340d555a6091b957971d322d3",
+      "parentFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+      "sourceRevision": "3cb277bfadf7d0034943117f9146d4b92bb773a9"
+    },
+    {
+      "dataset": "datasets/yolo-stop-robot",
+      "fingerprint": "0346f1b0d8f18fcb2d0dabf0baeac799947cd16c4971a1b10635961f622803bf",
+      "parentFingerprint": "dd280f724628cb3aef8553aa3798bcee98138b9340d555a6091b957971d322d3",
+      "sourceRevision": "3cb277bfadf7d0034943117f9146d4b92bb773a9"
+    }
+  ],
+  "completedTrainingReceipts": [
+    {
+      "model": "models/vision/yolo-stop-candidate.pt",
+      "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+      "trainingReceipt": "models/vision/yolo-stop-candidate.json",
+      "trainingReceiptSha256": "8c0ab11a847e736d3e99c93b780aa1b48e28904eab571aa98b54671d42c90c3a",
+      "trainedOnFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+      "epochsCompleted": 25,
+      "bestEpoch": 17
+    },
+    {
+      "model": "models/vision/yolo-stop-robot.pt",
+      "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+      "trainingReceipt": "models/vision/training/robot/final-training.json",
+      "trainingReceiptSha256": "de5eaece65aa7a3a67b36cd975f75095a888d3a343b014654bd39943e85da8ee",
+      "trainedOnFingerprint": "0346f1b0d8f18fcb2d0dabf0baeac799947cd16c4971a1b10635961f622803bf",
+      "epochsCompleted": 34,
+      "bestEpoch": 14
+    }
+  ],
+  "unchangedWeightsAndProfileSha256": {
+    "models/vision/yolo-stop.pt": "be250cad84adf7b5b71e8e635b40508df6871fd9250a8072f4e0f4781e7d3a41",
+    "models/vision/yolo-stop-candidate.pt": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+    "models/vision/yolo-stop-improved.pt": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+    "models/vision/yolo-stop-robot.pt": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+    "models/vision/yolo-stop-robot.onnx": "c7f9c714f68d4bcada23e7e8028664f001f61b8fa5da8a466fd5431e49efdbee",
+    "models/vision/yolo-stop-robot-profile.json": "c2f2e14c4ef82113aca53dd48f439934b20d8338bc6e51015f01a8ac0a4a70e0",
+    "models/vision/training/robot/validation-selection.json": "e0122299cb0077fadc4c7b71396fb98f5cd1fb65f669daea2ce689dce2e86aa5"
+  },
+  "canonicalLabelsAndProvenanceUnchanged": true,
+  "newTrainingOrInferencePerformed": false,
+  "deploymentAccepted": false,
+  "warning": "Source integration is complete; it does not fix label noise or failed quality gates. Existing training results were not retuned or promoted."
+}

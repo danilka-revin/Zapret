@@ -1,0 +1,14 @@
+{
+  "source": "VID_20261117_223120_211.mp4",
+  "sourceSha256": "8ad1e05abf7bf4fc7cd64c2246ef0cf4986d1b48e36ca687bbc3f3c02203def8",
+  "sourceRevision": "3cb277bfadf7d0034943117f9146d4b92bb773a9",
+  "originalSplit": "val",
+  "frames": 98,
+  "reviewedFrameRangeInclusive": [0, 97],
+  "reviewMethod": "Agent visual inspection of ALL 98 decoded frames in two contact sheets, 49 frames per sheet, before improved-model inference. Shoes/trousers, tiled floor, advertising poster edges, doors and a stand/tripod leg; no visible traffic-light housing/lamp in any frame.",
+  "reviewedTarget": "traffic_light",
+  "expectedTrafficLightsPerFrame": 0,
+  "otherClassGroundTruth": "not independently annotated; do not calculate overall object accuracy from this clip",
+  "use": "Fixed qualitative/false-positive regression after model/profile selection on the canonical validation set. No frames from this validation video added to training. Not a new independent test set.",
+  "warning": "Agent-assisted negative review, NOT independent human ground truth. All 98 frames are correlated observations from ONE 4.5-second video. A lower false-positive count here does not prove real-world specificity or traffic-signal safety."
+}

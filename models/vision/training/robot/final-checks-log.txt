@@ -1,0 +1,236 @@
+{
+  "weights": "models/vision/yolo-stop-candidate.pt",
+  "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+  "createdAt": "2026-11-17T23:59:34.041986+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "test",
+  "images": 52,
+  "backend": "yolo+fusion",
+  "confidence": 0.35,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "legacy",
+  "counts": {
+    "stop_sign": {
+      "tp": 8,
+      "fp": 1,
+      "fn": 1,
+      "precision": 0.8889,
+      "recall": 0.8889
+    },
+    "pedestrian_crossing": {
+      "tp": 3,
+      "fp": 2,
+      "fn": 0,
+      "precision": 0.6,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 5,
+      "fp": 4,
+      "fn": 2,
+      "precision": 0.5556,
+      "recall": 0.7143
+    },
+    "traffic_light": {
+      "tp": 7,
+      "fp": 4,
+      "fn": 12,
+      "precision": 0.6364,
+      "recall": 0.3684
+    },
+    "cone": {
+      "tp": 33,
+      "fp": 16,
+      "fn": 27,
+      "precision": 0.6735,
+      "recall": 0.55
+    }
+  },
+  "signalConfusion": {
+    "unknown->unknown": 3,
+    "unknown->yellow": 1,
+    "red->unknown": 1,
+    "yellow->yellow": 1,
+    "yellow->missed": 3,
+    "red->missed": 6,
+    "background->red": 3,
+    "unknown->missed": 1,
+    "background->unknown": 1,
+    "green->missed": 2,
+    "green->unknown": 1
+  },
+  "falseGreen": 0,
+  "latencyMedianMs": 61.98,
+  "latencyP95Ms": 72.05,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+{
+  "weights": "models/vision/yolo-stop-improved.pt",
+  "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+  "createdAt": "2026-11-17T23:59:38.156076+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "test",
+  "images": 52,
+  "backend": "yolo+fusion",
+  "confidence": 0.35,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "body",
+  "counts": {
+    "stop_sign": {
+      "tp": 8,
+      "fp": 1,
+      "fn": 1,
+      "precision": 0.8889,
+      "recall": 0.8889
+    },
+    "pedestrian_crossing": {
+      "tp": 3,
+      "fp": 1,
+      "fn": 0,
+      "precision": 0.75,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 5,
+      "fp": 2,
+      "fn": 2,
+      "precision": 0.7143,
+      "recall": 0.7143
+    },
+    "traffic_light": {
+      "tp": 8,
+      "fp": 3,
+      "fn": 11,
+      "precision": 0.7273,
+      "recall": 0.4211
+    },
+    "cone": {
+      "tp": 33,
+      "fp": 14,
+      "fn": 27,
+      "precision": 0.7021,
+      "recall": 0.55
+    }
+  },
+  "signalConfusion": {
+    "unknown->yellow": 1,
+    "unknown->missed": 2,
+    "red->missed": 6,
+    "yellow->yellow": 1,
+    "yellow->missed": 3,
+    "background->red": 2,
+    "background->unknown": 1,
+    "green->green": 2,
+    "green->unknown": 1,
+    "unknown->unknown": 2,
+    "red->red": 1
+  },
+  "falseGreen": 0,
+  "latencyMedianMs": 62.39,
+  "latencyP95Ms": 80.23,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode."
+}
+{
+  "weights": "models/vision/yolo-stop-robot.pt",
+  "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "createdAt": "2026-11-17T23:59:41.992849+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "test",
+  "images": 52,
+  "backend": "yolo+fusion",
+  "confidence": 0.35,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "legacy",
+  "counts": {
+    "stop_sign": {
+      "tp": 8,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.8,
+      "recall": 0.8889
+    },
+    "pedestrian_crossing": {
+      "tp": 3,
+      "fp": 1,
+      "fn": 0,
+      "precision": 0.75,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 5,
+      "fp": 2,
+      "fn": 2,
+      "precision": 0.7143,
+      "recall": 0.7143
+    },
+    "traffic_light": {
+      "tp": 10,
+      "fp": 5,
+      "fn": 9,
+      "precision": 0.6667,
+      "recall": 0.5263
+    },
+    "cone": {
+      "tp": 32,
+      "fp": 11,
+      "fn": 28,
+      "precision": 0.7442,
+      "recall": 0.5333
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->yellow": 1,
+    "red->unknown": 1,
+    "yellow->yellow": 1,
+    "yellow->missed": 3,
+    "red->missed": 6,
+    "background->red": 3,
+    "background->yellow": 1,
+    "unknown->unknown": 3,
+    "background->unknown": 1,
+    "green->green": 3
+  },
+  "falseGreen": 0,
+  "latencyMedianMs": 60.28,
+  "latencyP95Ms": 74.17,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode.",
+  "previewImages": [
+    "1794903271212.jpg",
+    "1794903271445.jpg",
+    "1794903271167.jpg",
+    "1794940327385.jpg",
+    "1794903271283.jpg",
+    "1794940325439.jpg",
+    "1794940325585.jpg",
+    "1794940327480.jpg",
+    "1794903271610.jpg",
+    "1794940325740.jpg",
+    "1794940326034.jpg",
+    "1794940326191.jpg"
+  ]
+}
+Loading models/vision/yolo-stop-robot.onnx for ONNX Runtime inference...
+Using ONNX Runtime 1.20.1 with CPUExecutionProvider
+Loading models/vision/yolo-stop-robot.onnx for ONNX Runtime inference...
+Using ONNX Runtime 1.20.1 with CPUExecutionProvider
+FINAL CHECKS COMPLETE
+baseline {"micro": {"tp": 56, "fp": 27, "fn": 42, "precision": 0.6746987951807228, "recall": 0.5714285714285714, "f1": 0.6187845303867403}, "classes": {"stop_sign": {"tp": 8, "fp": 1, "fn": 1, "precision": 0.8888888888888888, "recall": 0.8888888888888888, "f1": 0.8888888888888888}, "pedestrian_crossing": {"tp": 3, "fp": 2, "fn": 0, "precision": 0.6, "recall": 1.0, "f1": 0.75}, "speed_bump": {"tp": 5, "fp": 4, "fn": 2, "precision": 0.5555555555555556, "recall": 0.7142857142857143, "f1": 0.625}, "traffic_light": {"tp": 7, "fp": 4, "fn": 12, "precision": 0.6363636363636364, "recall": 0.3684210526315789, "f1": 0.4666666666666667}, "cone": {"tp": 33, "fp": 16, "fn": 27, "precision": 0.673469387755102, "recall": 0.55, "f1": 0.6055045871559633}}, "macroF1": 0.6672120285423038, "signals": {"red": {"correct": 0, "support": 7, "predictions": 3, "recallIncludingMisses": 0.0, "precision": 0.0}, "yellow": {"correct": 1, "support": 4, "predictions": 2, "recallIncludingMisses": 0.25, "precision": 0.5}, "green": {"correct": 0, "support": 3, "predictions": 0, "recallIncludingMisses": 0.0, "precision": 0.0}}, "signalBalancedRecall": 0.08333333333333333, "falseGreen": 0, "validationObjective": 0.49204841997961263, "latencyMedianMs": 61.98, "latencyP95Ms": 72.05}
+previous {"micro": {"tp": 57, "fp": 21, "fn": 41, "precision": 0.7307692307692307, "recall": 0.5816326530612245, "f1": 0.6477272727272727}, "classes": {"stop_sign": {"tp": 8, "fp": 1, "fn": 1, "precision": 0.8888888888888888, "recall": 0.8888888888888888, "f1": 0.8888888888888888}, "pedestrian_crossing": {"tp": 3, "fp": 1, "fn": 0, "precision": 0.75, "recall": 1.0, "f1": 0.8571428571428571}, "speed_bump": {"tp": 5, "fp": 2, "fn": 2, "precision": 0.7142857142857143, "recall": 0.7142857142857143, "f1": 0.7142857142857143}, "traffic_light": {"tp": 8, "fp": 3, "fn": 11, "precision": 0.7272727272727273, "recall": 0.42105263157894735, "f1": 0.5333333333333333}, "cone": {"tp": 33, "fp": 14, "fn": 27, "precision": 0.7021276595744681, "recall": 0.55, "f1": 0.616822429906542}}, "macroF1": 0.7220946447114671, "signals": {"red": {"correct": 1, "support": 7, "predictions": 3, "recallIncludingMisses": 0.14285714285714285, "precision": 0.3333333333333333}, "yellow": {"correct": 1, "support": 4, "predictions": 2, "recallIncludingMisses": 0.25, "precision": 0.5}, "green": {"correct": 2, "support": 3, "predictions": 2, "recallIncludingMisses": 0.6666666666666666, "precision": 1.0}}, "signalBalancedRecall": 0.3531746031746032, "falseGreen": 0, "validationObjective": 0.6114186322504078, "latencyMedianMs": 62.39, "latencyP95Ms": 80.23}
+robot {"micro": {"tp": 58, "fp": 21, "fn": 40, "precision": 0.7341772151898734, "recall": 0.5918367346938775, "f1": 0.655367231638418}, "classes": {"stop_sign": {"tp": 8, "fp": 2, "fn": 1, "precision": 0.8, "recall": 0.8888888888888888, "f1": 0.8421052631578947}, "pedestrian_crossing": {"tp": 3, "fp": 1, "fn": 0, "precision": 0.75, "recall": 1.0, "f1": 0.8571428571428571}, "speed_bump": {"tp": 5, "fp": 2, "fn": 2, "precision": 0.7142857142857143, "recall": 0.7142857142857143, "f1": 0.7142857142857143}, "traffic_light": {"tp": 10, "fp": 5, "fn": 9, "precision": 0.6666666666666666, "recall": 0.5263157894736842, "f1": 0.5882352941176471}, "cone": {"tp": 32, "fp": 11, "fn": 28, "precision": 0.7441860465116279, "recall": 0.5333333333333333, "f1": 0.6213592233009708}}, "macroF1": 0.7246256704010168, "signals": {"red": {"correct": 0, "support": 7, "predictions": 4, "recallIncludingMisses": 0.0, "precision": 0.0}, "yellow": {"correct": 1, "support": 4, "predictions": 3, "recallIncludingMisses": 0.25, "precision": 0.3333333333333333}, "green": {"correct": 3, "support": 3, "predictions": 3, "recallIncludingMisses": 1.0, "precision": 1.0}}, "signalBalancedRecall": 0.4166666666666667, "falseGreen": 0, "validationObjective": 0.6322379692807117, "latencyMedianMs": 60.28, "latencyP95Ms": 74.17}
+VID_20261117_223120_211.mp4 16 [] -> []
+VID_20261117_223120_211.mp4 44 [] -> []
+VID_20261117_223120_204.mp4 60 [] -> ['red']
+VID_20261117_223120_865.mp4 116 [] -> []
+VID_20261117_223120_865.mp4 117 [] -> []
+VID_20261117_223120_865.mp4 119 [] -> []
+VID_20261117_223120_865.mp4 138 [] -> ['green']

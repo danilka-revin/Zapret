@@ -1,0 +1,20 @@
+{
+  "weights": "models/vision/yolo-stop-improved.pt",
+  "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+  "confidence": 0.25,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "backend": "yolo+fusion",
+  "trafficMode": "body",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "selectedAt": "2026-11-17T22:20:28.470178+00:00",
+  "selectedOn": "canonical val plus agent-reviewed negative VAL video; no test-based threshold/model selection",
+  "testAlreadyObservedInThisCycle": true,
+  "testReuseNote": "Initial candidate test was already evaluated and is NOT a new blind holdout. Body-only guard was developed on the separate VAL shoe clip and canonical val, using pre-existing body thresholds. Test results were not used to tune its thresholds. Final profile is frozen before repeated test evaluation; all earlier results preserved.",
+  "heuristicEnabled": false,
+  "selectionFile": "models/vision/training/refinement/validation-selection-body-guard.json",
+  "selectionFileSha256": "cda8f31e0195bb9e29187a06f7119836892c0aa15c61e41f8ccad54851bacdf4",
+  "objective": "0.7*canonical_macro_F1 + 0.3*signal_balanced_recall_including_misses; falseGreen==0 on canonical val; no more traffic-FP frames on the agent-reviewed 98-frame VAL shoe clip than baseline (21). Matched confidence .25 for all.",
+  "warning": "Bench only, not autonomous-ready. Body mode only deletes post-NMS boxes; it cannot create or recolour green. Some shoe false positives remain. Test is REUSED, not an independent new safety benchmark."
+}

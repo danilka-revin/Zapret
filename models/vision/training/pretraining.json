@@ -1,0 +1,9 @@
+{
+  "source": "https://github.com/AlaynaShaheen/object_detection_using_yolov8_tflite/tree/13f2ae34cfbb40d91c1b7b0c9c36cf96342288cc/yolov8n.pt",
+  "revision": "13f2ae34cfbb40d91c1b7b0c9c36cf96342288cc",
+  "contentSha256": "4df48185493a8e5284698efc2caddd44053bb88e8ef827b4ea2e84bf502891c0",
+  "checkpointVersion": "8.0.0.dev0",
+  "checkpointDate": "2022-12-30T00:12:08.084698",
+  "originalTrainingData": "coco.yaml",
+  "licenseNote": "Ultralytics model licensing applies; see https://github.com/ultralytics/ultralytics/blob/main/LICENSE"
+}

@@ -1,0 +1,320 @@
+[
+  {
+    "image": "1794903271314.jpg",
+    "row": 0,
+    "original": "4 0.863200 0.538700 0.026400 0.114400",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794903271337.jpg",
+    "row": 2,
+    "original": "4 0.569400 0.090400 0.050000 0.180800",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794903271388.jpg",
+    "row": 1,
+    "original": "4 0.423600 0.116250 0.030600 0.232500",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794903271397.jpg",
+    "row": 0,
+    "original": "4 0.544400 0.109800 0.025000 0.219600",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794903271520.jpg",
+    "row": 0,
+    "original": "4 0.652750 0.755550 0.061100 0.488900",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794903271574.jpg",
+    "row": 0,
+    "original": "4 0.356950 0.124550 0.041700 0.215900",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940325257.jpg",
+    "row": 0,
+    "original": "4 0.345834 0.843707 0.008333 0.060858",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940325384.jpg",
+    "row": 0,
+    "original": "4 0.267708 0.076072 0.050000 0.152144",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940325419.jpg",
+    "row": 0,
+    "original": "4 0.988021 0.056708 0.023958 0.113416",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940325527.jpg",
+    "row": 0,
+    "original": "4 0.615625 0.177040 0.025000 0.210235",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940325790.jpg",
+    "row": 1,
+    "original": "4 0.775000 0.172199 0.025000 0.078838",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940325790.jpg",
+    "row": 2,
+    "original": "4 0.826562 0.316736 0.078125 0.434302",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940326241.jpg",
+    "row": 1,
+    "original": "4 0.740625 0.354772 0.050000 0.145228",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940326790.jpg",
+    "row": 0,
+    "original": "4 0.135416 0.162518 0.020833 0.134163",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940326871.jpg",
+    "row": 0,
+    "original": "4 0.170833 0.211618 0.018750 0.091286",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940326975.jpg",
+    "row": 0,
+    "original": "4 0.242188 0.299447 0.069792 0.186722",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940326983.jpg",
+    "row": 0,
+    "original": "4 0.264063 0.237898 0.082292 0.237898",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940326983.jpg",
+    "row": 2,
+    "original": "4 0.623437 0.063624 0.034375 0.127248",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940326992.jpg",
+    "row": 0,
+    "original": "4 0.118750 0.273859 0.056250 0.185339",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940326992.jpg",
+    "row": 1,
+    "original": "4 0.135938 0.445366 0.009375 0.077455",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327001.jpg",
+    "row": 0,
+    "original": "4 0.321354 0.044952 0.011458 0.073306",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327040.jpg",
+    "row": 1,
+    "original": "4 0.504167 0.038036 0.018750 0.076072",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327441.jpg",
+    "row": 2,
+    "original": "4 0.397396 0.479945 0.040625 0.135546",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327441.jpg",
+    "row": 3,
+    "original": "4 0.902083 0.049101 0.008333 0.076072",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327494.jpg",
+    "row": 2,
+    "original": "4 0.753646 0.067773 0.032292 0.135546",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327494.jpg",
+    "row": 3,
+    "original": "4 0.774479 0.339558 0.013542 0.183956",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327494.jpg",
+    "row": 4,
+    "original": "4 0.798438 0.325034 0.028125 0.113416",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327505.jpg",
+    "row": 2,
+    "original": "4 0.768229 0.232365 0.036458 0.376210",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327505.jpg",
+    "row": 3,
+    "original": "4 0.822396 0.232366 0.080208 0.365145",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327513.jpg",
+    "row": 2,
+    "original": "4 0.734375 0.435684 0.006250 0.091286",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327541.jpg",
+    "row": 2,
+    "original": "4 0.770313 0.266251 0.032292 0.333333",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327541.jpg",
+    "row": 3,
+    "original": "4 0.817188 0.253804 0.069792 0.358230",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327549.jpg",
+    "row": 0,
+    "original": "4 0.696875 0.205394 0.020833 0.139696",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327549.jpg",
+    "row": 1,
+    "original": "4 0.711458 0.354080 0.027083 0.179806",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327549.jpg",
+    "row": 2,
+    "original": "4 0.734375 0.394191 0.016667 0.107884",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327569.jpg",
+    "row": 2,
+    "original": "4 0.709374 0.121716 0.008333 0.052559",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327577.jpg",
+    "row": 2,
+    "original": "4 0.847916 0.188105 0.008333 0.060858",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327648.jpg",
+    "row": 0,
+    "original": "4 0.663021 0.393500 0.028125 0.172891",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327713.jpg",
+    "row": 0,
+    "original": "4 0.313541 0.781466 0.022917 0.102351",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327778.jpg",
+    "row": 0,
+    "original": "4 0.138542 0.569156 0.081250 0.427386",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327842.jpg",
+    "row": 2,
+    "original": "4 0.777605 0.149378 0.021875 0.149378",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327842.jpg",
+    "row": 3,
+    "original": "4 0.821354 0.082297 0.055208 0.150761",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327870.jpg",
+    "row": 2,
+    "original": "4 0.821876 0.049793 0.022917 0.099585",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327906.jpg",
+    "row": 1,
+    "original": "4 0.505729 0.455048 0.019792 0.080221",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940327944.jpg",
+    "row": 0,
+    "original": "4 0.496354 0.320194 0.011458 0.087137",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940328244.jpg",
+    "row": 1,
+    "original": "4 0.459896 0.863071 0.015625 0.149378",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940328299.jpg",
+    "row": 0,
+    "original": "4 0.307292 0.653527 0.031250 0.103734",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940328408.jpg",
+    "row": 0,
+    "original": "4 0.005729 0.713001 0.011458 0.059474",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940328533.jpg",
+    "row": 0,
+    "original": "4 0.017188 0.660443 0.034375 0.117566",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "1794940328777.jpg",
+    "row": 1,
+    "original": "4 0.507812 0.134163 0.017708 0.052559",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "VID_20261117_223120_293_f000066.jpg",
+    "row": 2,
+    "original": "4 0.446876 0.656481 0.035417 0.183333",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "VID_20261117_223120_495_f000135.jpg",
+    "row": 0,
+    "original": "4 0.365625 0.768519 0.008333 0.055556",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  },
+  {
+    "image": "VID_20261117_223120_495_f000225.jpg",
+    "row": 1,
+    "original": "4 0.560417 0.611111 0.043750 0.185185",
+    "reason": "train-only orange/white shape quality filter; not independent GT"
+  }
+]

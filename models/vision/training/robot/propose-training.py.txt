@@ -1,0 +1,92 @@
+from pathlib import Path
+import cv2,numpy as np,json,hashlib
+from PIL import Image,ImageDraw,ImageFont,ImageOps
+cv2.setNumThreads(1)
+root=Path('datasets/yolo-stop-refined-color');samples=json.loads((root/'samples.json').read_text())
+out=Path('.cache/vision/robot');out.mkdir(exist_ok=True)
+font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',14)
+proposals=[]
+for name,s in sorted(samples.items()):
+ if s['split']!='train' or s['kind']!='photo' and s['kind']!='video':continue
+ lines=(root/'labels/train'/Path(name).with_suffix('.txt')).read_text().splitlines()
+ frame=cv2.imread(str(root/'images/train'/name));H,W=frame.shape[:2]
+ for ri,line in enumerate(lines):
+  c,cx,cy,bw,bh=map(float,line.split())
+  if int(c) not in (3,5,6,7):continue
+  old=[(cx-bw/2)*W,(cy-bh/2)*H,(cx+bw/2)*W,(cy+bh/2)*H]
+  x1=max(0,int((cx-bw*1.5)*W));x2=min(W,int((cx+bw*1.5)*W))
+  y1=max(0,int((cy-bh*.95)*H));y2=min(H,int((cy+bh*.95)*H))
+  roi=frame[y1:y2,x1:x2];hsv=cv2.cvtColor(roi,cv2.COLOR_BGR2HSV)
+  mask=((hsv[...,2]<125)&(hsv[...,1]<145)).astype(np.uint8)
+  n,lab,stats,centers=cv2.connectedComponentsWithStats(mask,8)
+  candidates=[]
+  for k,(x,y,w,h,area) in enumerate(stats[1:],1):
+   if area<max(20,bw*W*bh*H*.04) or w<4 or h<12:continue
+   comp=lab==k;rows=comp.sum(axis=1);dense=rows>=max(3,float(rows.max())*.43)
+   yy=np.flatnonzero(dense)
+   if not len(yy):continue
+   a,b=int(yy[0]),int(yy[-1])+1
+   xx=np.flatnonzero(comp[a:b].any(axis=0))
+   if len(xx)<4:continue
+   l,r=int(xx[0]),int(xx[-1])+1
+   height=b-a;width=r-l
+   if not 1.35<height/width<6.5:continue
+   box=[x1+l,y1+a,x1+r,y1+b]
+   ox,oy,ex,ey=old;ax,ay,bx,by=box
+   inter=max(0,min(ex,bx)-max(ox,ax))*max(0,min(ey,by)-max(oy,ay))
+   iou=inter/((ex-ox)*(ey-oy)+(bx-ax)*(by-ay)-inter)
+   distance=(( (ax+bx)/2-cx*W)/(bw*W))**2+(((ay+by)/2-cy*H)/(bh*H))**2
+   candidates.append((iou-distance*.12,box,float(iou)))
+  best=max(candidates,default=None)
+  if best:
+   _,box,iou=best;l,t,r,b=box;pad=max(1,round((r-l)*.025));box=[max(0,l-pad),max(0,t-pad),min(W,r+pad),min(H,b+pad)]
+  else:box=old;iou=1.
+  nbox=[box[0]/W,box[1]/H,(box[2]-box[0])/W,(box[3]-box[1])/H]
+  proposal={'image':name,'row':ri,'class':int(c),'old':old,'box':nbox,'originalIou':iou,'found':bool(best),'size':[W,H]}
+  # Show context around BOTH boxes, not an isolated truncated new ROI.
+  l=max(0,int(min(old[0],box[0])-bw*W*.4));r=min(W,int(max(old[2],box[2])+bw*W*.4))
+  t=max(0,int(min(old[1],box[1])-bh*H*.12));b=min(H,int(max(old[3],box[3])+bh*H*.12))
+  im=Image.fromarray(cv2.cvtColor(frame[t:b,l:r],cv2.COLOR_BGR2RGB));d=ImageDraw.Draw(im)
+  d.rectangle((old[0]-l,old[1]-t,old[2]-l,old[3]-t),outline='cyan',width=3)
+  d.rectangle((box[0]-l,box[1]-t,box[2]-l,box[3]-t),outline='#ff56b8',width=3)
+  proposal['auditCrop']=[l,t,r,b]
+  im.save(out/f'proposal-{len(proposals):03}.jpg',quality=92)
+  proposals.append(proposal)
+for page in range((len(proposals)+19)//20):
+ sheet=Image.new('RGB',(1400,5*270),'#0b1422');d=ImageDraw.Draw(sheet)
+ for k,rec in enumerate(proposals[page*20:(page+1)*20]):
+  idx=page*20+k;im=ImageOps.contain(Image.open(out/f'proposal-{idx:03}.jpg'),(268,235));x=k%5*280;y=k//5*270
+  sheet.paste(im,(x+(280-im.width)//2,y+28));d.text((x+4,y+4),f'{idx} {rec["image"][-13:-4]} IoU{rec["originalIou"]:.2f}',font=font,fill='white')
+ sheet.save(out/f'proposals-{page}.jpg',quality=91)
+(out/'proposals.json').write_text(json.dumps(proposals,indent=2)+'\n')
+# Independent TRAIN-video background proposals. ALL must be visually approved.
+neg=[]
+def add(src,ids,box):
+ for i in ids:neg.append({'source':f'VID_20261117_223120_{src}.mp4','frame':i,'box':box,'reason':'Pending agent visual review, not yet training data'})
+add('760',[105,120,135,150,165,180,195,210],[0,.55,.42,.45])
+add('760',[135,150,165,180],[0,.2,.25,.8])
+add('293',[0,8,16,24],[0,.1,.28,.9])
+add('865',[55,65,75,85,95,105,115],[.79,0,.21,1])
+add('495',[145,175,205,235,265,295,325,355,385,415],[.79,0,.21,1])
+for src in sorted({r['source'] for r in neg}):
+ cap=cv2.VideoCapture(str(Path('.cache/vision/video-review')/src));i=0;need={r['frame'] for r in neg if r['source']==src}
+ while need:
+  ok,f=cap.read()
+  if not ok:raise ValueError(src)
+  if i in need:
+   H,W=f.shape[:2]
+   for idx,r in enumerate(neg):
+    if r['source']!=src or r['frame']!=i:continue
+    x,y,w,h=r['box'];roi=f[round(y*H):round((y+h)*H),round(x*W):round((x+w)*W)]
+    cv2.imwrite(str(out/f'negative-{idx:03}.jpg'),roi,[cv2.IMWRITE_JPEG_QUALITY,92])
+   need.remove(i)
+  i+=1
+ cap.release()
+for page in range((len(neg)+19)//20):
+ sheet=Image.new('RGB',(1400,4*288),'#0b1422');d=ImageDraw.Draw(sheet)
+ for k,r in enumerate(neg[page*20:(page+1)*20]):
+  idx=page*20+k;im=ImageOps.contain(Image.open(out/f'negative-{idx:03}.jpg'),(270,253));x=k%5*280;y=k//5*288
+  sheet.paste(im,(x+(280-im.width)//2,y+28));d.text((x+4,y+4),f'{idx} {r["source"][-7:-4]} frame{r["frame"]}',font=font,fill='white')
+ sheet.save(out/f'negatives-{page}.jpg',quality=92)
+(out/'negative-proposals.json').write_text(json.dumps(neg,indent=2)+'\n')
+print('Traffic proposals',len(proposals),'negative crops',len(neg))

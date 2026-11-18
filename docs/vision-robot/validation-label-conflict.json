@@ -1,0 +1,107 @@
+{
+  "image": "1794940327787.jpg",
+  "imageSha256": "9e068e320b9cb58c8ab89b98ee842eee4616d737617ee0b2287bc37a7feb07d8",
+  "split": "val",
+  "frozenLabelText": "4 0.106771 0.733749 0.046875 0.222683\n4 0.167187 0.712311 0.042708 0.204703\n5 0.580000 0.295000 0.080000 0.290000\n",
+  "prediction": {
+    "image": "1794940327787.jpg",
+    "groundTruthClasses": [
+      "cone",
+      "cone",
+      "traffic_light_red"
+    ],
+    "predictions": [
+      {
+        "class": "cone",
+        "label": "Конус / столбик",
+        "short": "КОНУС",
+        "action": "avoid",
+        "color": "#ff7a29",
+        "confidence": 0.912,
+        "box": {
+          "x": 0.0828,
+          "y": 0.621,
+          "w": 0.052,
+          "h": 0.2241
+        },
+        "signal": null,
+        "signalCounts": {},
+        "source": "yolo"
+      },
+      {
+        "class": "cone",
+        "label": "Конус / столбик",
+        "short": "КОНУС",
+        "action": "avoid",
+        "color": "#ff7a29",
+        "confidence": 0.877,
+        "box": {
+          "x": 0.1457,
+          "y": 0.6105,
+          "w": 0.049,
+          "h": 0.2062
+        },
+        "signal": null,
+        "signalCounts": {},
+        "source": "yolo"
+      },
+      {
+        "class": "traffic_light",
+        "label": "Светофор",
+        "short": "СВЕТОФОР",
+        "action": "signal",
+        "color": "#a78bfa",
+        "confidence": 0.548,
+        "box": {
+          "x": 0.5449,
+          "y": 0.2407,
+          "w": 0.0866,
+          "h": 0.2502
+        },
+        "signal": "green",
+        "signalCounts": {
+          "red": 0,
+          "yellow": 0,
+          "green": 21
+        },
+        "source": "yolo"
+      }
+    ],
+    "counts": {
+      "stop_sign": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "pedestrian_crossing": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "speed_bump": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      },
+      "traffic_light": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0
+      },
+      "cone": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0
+      }
+    },
+    "signalConfusion": {
+      "red->green": 1
+    },
+    "falseGreen": 1
+  },
+  "review": "Agent visual inspection after profile freeze: bottom green LED section appears illuminated while the frozen label is red and its housing box is vertically displaced. Requires independent adjudication; this observation did NOT change labels, scores, gates, weights or profile.",
+  "formalResult": "red->green = 1 in ALL eight predeclared candidate profiles; no candidate passes falseGreen==0.",
+  "labelsChanged": false,
+  "profileChanged": false,
+  "independentHumanGroundTruth": false
+}
