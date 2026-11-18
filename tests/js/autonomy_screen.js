@@ -127,13 +127,18 @@ async function flush(times = 8) {
 
   global.RCAutonomy.renderLive(Object.assign({}, global.RCAutonomy._state.status, { phase: 'obstacle_approach' }));
   const approachPhase = byId('aut-phase').textContent;
+  // Пауза у препятствия: поездка не завершена, экран объясняет, что робот стоит.
+  global.RCAutonomy.renderLive(Object.assign({}, global.RCAutonomy._state.status, {
+    phase: 'obstacle_hold', message: 'Препятствие впереди: стою, ещё 3 с.', percent: 0}));
+  const holdPhase = byId('aut-phase').textContent;
+  const holdMessage = byId('aut-message').textContent;
   global.RCAutonomy.renderLive(global.RCAutonomy._state.status);
   const find = (needle) => calls.filter((call) => call.url.indexOf(needle) !== -1);
   const cam = byId('aut-cam-0'), cameraSrc = cam.src;
   cam.onerror();  // no fresh annotation for this input
   const result = {
     calls,
-    beforeBlind, afterBlind, initial, approachPhase, simSummary: byId('aut-sim-summary').textContent,
+    beforeBlind, afterBlind, initial, approachPhase, holdPhase, holdMessage, simSummary: byId('aut-sim-summary').textContent,
     checks: byId('aut-checks').children.length,
     warnings: byId('aut-warnings').children.length,
     events: byId('aut-events').children.length,

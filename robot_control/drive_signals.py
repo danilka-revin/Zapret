@@ -22,12 +22,27 @@
 ------------------------
 Свежий скан лидара (не старше ``scan_age_s``), полоса по направлению движения
 шириной корпуса. Препятствие ближе ``near_m`` (по умолчанию 0,5 м) при
-ненулевой тяге включает передние фары, оба поворотника и прерывистый зуммер.
-Тревога не даёт тяги и не заменяет тормоз — только предупреждает. Без свежего
-скана тревога не выдумывается, причина видна в ``reason``.
+ненулевой тяге включает передние фары, **мигающие** поворотники и прерывистый
+зуммер. Тревога не даёт тяги и не заменяет тормоз — только предупреждает. Без
+свежего скана тревога не выдумывается, причина видна в ``reason``.
+
+Пока идёт остановка (``hold``), предупреждение не гаснет, хотя тяги уже нет:
+робот стоит у препятствия, и оператор должен видеть, почему. После возврата
+управления всё возвращается к обычному правилу «тревога про движение».
 
 Направление берётся из знака команды: вперёд — сектор 0 ± полширины, назад —
-сектор π. Стоящий робот тревогу не включает: она про движение.
+сектор π. Стоящий робот тревогу не включает: она про движение. Пока тяга не
+снята, порог один для любой скорости: «ползком подъехать в стену» — не режим.
+
+Остановка у препятствия (умный круиз-контроль)
+---------------------------------------------
+Та же тревога даёт «мягкую» остановку на ``hold_s`` (по умолчанию 5 с): пока
+робот едет, тяга снимается, робот стоит и ждёт, затем управление возвращается
+само. Это не E-STOP и не блокировка: следующая команда с клавиатуры или из
+режима «Скан» принимается сразу, если препятствие уже не ближе ``near_m``;
+новая попытка тронуться при всё ещё близком препятствии снова упирается в
+остановку. Без свежего скана остановка не выдумывается — работает только
+предупреждение, причина видна в ``reason``.
 """
 from __future__ import annotations
 
@@ -51,11 +66,16 @@ DEFAULT_TICK_S = 0.1
 DEFAULT_SCAN_AGE_S = 1.0
 #: Хвост стоп-сигнала после прекращения торможения.
 DEFAULT_TAIL_S = 1.2
+#: Остановка у препятствия: сколько секунд стоять, прежде чем вернуть управление.
+DEFAULT_HOLD_S = 5.0
 #: Снижение скорости, которое считаем торможением, м/с за тик.
 DEFAULT_DECEL_MPS = 0.15
 #: Прерывистый зуммер: 0,4 с звук, 0,4 с тишина.
 BUZZ_PERIOD_S = 0.8
 BUZZ_ON_S = 0.4
+#: Мигание поворотников при тревоге: 0,35 с горят, 0,35 с погашены. Симметрично,
+#: чтобы «аварийка» читалась, а не сливалась в постоянный свет.
+BLINK_ON_S = 0.35
 #: Длина посылки зуммера на плате; тон короче периода, поэтому он «дробится».
 BUZZ_ALERT_MS = 380
 #: Пока автоматика владеет битом, его состояние подтверждается заново не чаще
@@ -97,6 +117,11 @@ class SignalConfig:
     enabled: bool = True
     #: Зуммер тревоги можно отключить отдельно (площадка, ночь).
     buzzer: bool = True
+    #: Остановка у препятствия и её длительность; 0 — только предупреждать.
+    hold: bool = True
+    hold_s: float = DEFAULT_HOLD_S
+    #: Мигать поворотниками, а не держать их постоянно.
+    blink: bool = True
 
     @classmethod
     def from_env(cls) -> "SignalConfig":
@@ -110,6 +135,9 @@ class SignalConfig:
             decel_mps=_env_float("RC_BRAKE_DECEL_MPS", DEFAULT_DECEL_MPS, 0.02, 2.0),
             enabled=_env_flag("RC_SIGNALS_ENABLED", True),
             buzzer=_env_flag("RC_SAFETY_BUZZER", True),
+            hold=_env_flag("RC_SAFETY_OBSTACLE_HOLD", True),
+            hold_s=_env_float("RC_SAFETY_HOLD_S", DEFAULT_HOLD_S, 0.0, 60.0),
+            blink=_env_flag("RC_SAFETY_BLINK", True),
         )
 
 
@@ -218,6 +246,10 @@ class SignalController:
         #: Биты, которые включила автоматика; только их она и снимает.
         self._owned = 0
         self._alert = False
+        #: Свет тревоги горит (мигающая фаза) — то, что реально уходит на плату.
+        self._alert_lights = False
+        self._blink_on = False
+        self._blink_at = 0.0
         self._buzz_on = False
         self._buzz_at = 0.0
         self._buzz_sent = float("-inf")
@@ -227,6 +259,20 @@ class SignalController:
         #: Состояние, рассчитанное последним ``update`` (в т.ч. стоп-сигнал).
         self._stop_on = False
         self.distance_m: Optional[float] = None
+        #: Пока идёт остановка у препятствия: до какого времени робот стоит и
+        #: чем она вызвана. Тягу робот снимает сам — этот модуль только решает.
+        self._hold_until = 0.0
+        self._hold_since: Optional[float] = None
+        self._hold_trigger_distance: Optional[float] = None
+        self._hold_count = 0
+        self._hold_direction = 0
+        #: Последний свежий скан: нужен проверке «тронуться в стену?».
+        self._points: Any = None
+        self._scan_age: Optional[float] = None
+        self._scan_at = 0.0
+        self._offset_m = 0.0
+        #: Защита от состояния, посчитанного из двух снимков сразу.
+        self._lock = threading.RLock()
         self.reason = "ещё не опрашивался"
         self.error = ""
         self.facts = DriveFacts()
@@ -234,13 +280,23 @@ class SignalController:
     # ------------------------------------------------------------- решение --
     def update(self, facts: DriveFacts, *, points: Any = None, scan_age: Optional[float] = None,
                offset_m: float = 0.0) -> dict[str, Any]:
+        with self._lock:
+            return self._update(facts, points=points, scan_age=scan_age, offset_m=offset_m)
+
+    def _update(self, facts: DriveFacts, *, points: Any = None,
+                scan_age: Optional[float] = None, offset_m: float = 0.0) -> dict[str, Any]:
         now = self._clock()
+        if scan_age is not None and points:
+            # Скан запоминаем для проверки перед выдачей тяги: она приходит
+            # между тактами фоновой нити и должна видеть ту же обстановку.
+            self._points, self._scan_age = points, float(scan_age)
+            self._scan_at, self._offset_m = now, float(offset_m or 0.0)
         self.facts = facts
         cfg = self.config
         if not cfg.enabled:
             self._alert = False
             self._stop_until = 0.0
-            self.reason = "автосигналы выключены (RC_SIGNALS_ENABLED=0)"
+            self._release_hold(now, "автосигналы выключены (RC_SIGNALS_ENABLED=0)")
             return self.snapshot()
 
         # --- стоп-сигнал: реальное торможение, а не каждая пауза
@@ -264,17 +320,22 @@ class SignalController:
         stop_on = braking or now < self._stop_until
         self._stop_on = stop_on
 
-        # --- тревога: только в движении и только по свежему скану
+        # --- тревога: по свежему скану, в движении или во время самой паузы
         self.distance_m = None
         alert = False
-        if not facts.direction:
+        holding = self._hold_since is not None
+        if not facts.direction and not holding:
             self.reason = "нет тяги — тревога не нужна"
         elif scan_age is None:
             self.reason = "нет скана лидара — тревога не выдумывается"
         elif scan_age > cfg.scan_age_s:
             self.reason = "скан устарел (%.1f с)" % scan_age
         else:
-            near = nearest_ahead(points, direction=facts.direction, config=cfg, offset_m=offset_m)
+            # Во время паузы тяги нет, но направление последнего хода помним:
+            # иначе предупреждение погасло бы именно тогда, когда робот стоит
+            # у препятствия и оператор ждёт объяснения.
+            direction = facts.direction or (self._hold_direction if holding else 0)
+            near = nearest_ahead(points, direction=direction, config=cfg, offset_m=offset_m)
             self.distance_m = near
             if near is not None and near <= cfg.near_m:
                 alert = True
@@ -284,9 +345,19 @@ class SignalController:
             else:
                 self.reason = "по курсу точек нет"
         self._alert = alert
+        was_holding = self._hold_since is not None
+        triggered = self._update_hold(now, facts, alert)
+        if was_holding and self._hold_since is None and not facts.direction:
+            # Пауза кончилась, а тяги нет: предупреждение снова про движение и
+            # не должно остаться гореть на стоянке из-за прошлого хода.
+            self._alert = False
+        # Предупреждение не гаснет во время паузы: робот стоит у препятствия.
+        lights_on = bool(self._alert or self._hold_since is not None) and scan_age is not None
+        self._blink_on = self._blink_phase(now, lights_on, cfg)
+        self._alert_lights = lights_on and self._blink_on
 
         # --- зуммер: прерывистый, чтобы не сливаться в постоянный вой
-        if alert and cfg.buzzer:
+        if (alert or self._hold_since is not None) and cfg.buzzer:
             if not self._buzz_on and now - self._buzz_at >= BUZZ_PERIOD_S - BUZZ_ON_S:
                 self._buzz_on, self._buzz_at = True, now
             elif self._buzz_on and now - self._buzz_at >= BUZZ_ON_S:
@@ -295,17 +366,132 @@ class SignalController:
             self._buzz_on = False
 
         self._last_percent = facts.percent
-        return self.snapshot(stop_on=stop_on)
+        return self.snapshot(stop_on=stop_on, triggered=triggered)
 
-    def snapshot(self, *, stop_on: Optional[bool] = None) -> dict[str, Any]:
+    def _blink_phase(self, now: float, active: bool, cfg: SignalConfig) -> bool:
+        """Мигание «аварийки»: 0,35 с горит, 0,35 с погашено.
+
+        Мигает сам контроллер, поэтому реле переключаются с такта опроса
+        (10 Гц), а не от каждого кадра лидара. Без ``blink`` свет горит ровно.
+        """
+        if not active:
+            self._blink_at = 0.0
+            return False
+        if not cfg.blink:
+            return True
+        if self._blink_at <= 0.0:
+            self._blink_at = now
+            return True
+        elapsed = now - self._blink_at
+        if elapsed >= 2 * BLINK_ON_S:
+            self._blink_at = now + (elapsed % (2 * BLINK_ON_S)) - BLINK_ON_S
+            elapsed = now - self._blink_at
+        return elapsed < BLINK_ON_S
+
+    # ------------------------------------------------- остановка у препятствия --
+    def _start_hold(self, now: float, distance: Optional[float], direction: int = 0) -> bool:
+        cfg = self.config
+        self._hold_since = now
+        if direction:
+            self._hold_direction = 1 if direction > 0 else -1
+        # Пауза не продлевается сама: иначе близкая стена держала бы робота
+        # вечно, и «вернуть управление» было бы нечем.
+        self._hold_until = now + max(0.1, cfg.hold_s)
+        self._hold_trigger_distance = distance
+        self._hold_count += 1
+        self.reason = "препятствие %s м по курсу — остановка на %.0f с" % (
+            "%.2f" % distance if distance is not None else "?", cfg.hold_s)
+        self._alert = True
+        return True
+
+    def _update_hold(self, now: float, facts: DriveFacts, alert: bool) -> bool:
+        """Решить, нужна ли остановка у препятствия. ``True`` — она началась сейчас."""
+        cfg = self.config
+        if not cfg.enabled or not cfg.hold:
+            self._release_hold(now, self.reason)
+            return False
+        if self._hold_since is not None:
+            if now >= self._hold_until:
+                # Пауза вышла: управление возвращается независимо от того, что
+                # впереди. Следующая попытка тяги проверит обстановку заново.
+                self._release_hold(now, "остановка окончена — управление вернулось")
+            return False
+        if facts.direction and alert:
+            return self._start_hold(now, self.distance_m, facts.direction)
+        return False
+
+    def obstacle(self, direction: int, *, now: Optional[float] = None) -> Optional[float]:
+        """Ближайшая точка по курсу из последнего свежего скана, м (или ``None``)."""
+        if not direction or not self._points:
+            return None
+        now = self._clock() if now is None else float(now)
+        age = self._scan_age
+        if age is not None:
+            age += max(0.0, now - self._scan_at)
+        if age is None or age > self.config.scan_age_s:
+            return None
+        return nearest_ahead(self._points, direction=direction, config=self.config,
+                             offset_m=self._offset_m)
+
+    def request_hold(self, direction: int, *, now: Optional[float] = None) -> dict[str, Any]:
+        """Проверка перед выдачей тяги: не начинать ход в близкое препятствие.
+
+        Вызывается ручным управлением (клавиатура, режим «Скан») до того, как
+        тяга уйдёт на платы, поэтому рывка в сторону стены не бывает даже на
+        десятые доли секунды. Если препятствие близко, пауза начинается здесь
+        же; если нет — она не начинается вовсе.
+        """
+        now = self._clock() if now is None else float(now)
+        with self._lock:
+            if self._hold_since is not None and now < self._hold_until:
+                return self.snapshot(now=now)
+            if self._hold_since is not None:
+                self._release_hold(now, "остановка окончена — управление вернулось")
+            if not self.config.enabled or not self.config.hold or not direction:
+                return self.snapshot(now=now, triggered=False)
+            near = self.obstacle(direction, now=now)
+            if near is not None and near <= self.config.near_m:
+                self.distance_m = near
+                triggered = self._start_hold(now, near, direction)
+                return self.snapshot(now=now, triggered=triggered)
+            return self.snapshot(now=now, triggered=False)
+
+    def _release_hold(self, now: float, reason: str) -> None:
+        if self._hold_since is not None:
+            self.reason = reason
+        self._hold_since = None
+        self._hold_until = 0.0
+        self._hold_trigger_distance = None
+
+    def clear_hold(self, reason: str = "оператор снял паузу") -> None:
+        """Снять паузу досрочно: тяга снова разрешена (E-STOP снимают отдельно)."""
+        with self._lock:
+            self._release_hold(self._clock(), reason)
+
+    def snapshot(self, *, stop_on: Optional[bool] = None,
+                 triggered: Optional[bool] = None,
+                 now: Optional[float] = None) -> dict[str, Any]:
         brake = self._stop_on if stop_on is None else stop_on
+        now = self._clock() if now is None else float(now)
+        holding = self._hold_since is not None
+        remaining = 0.0
+        if holding:
+            remaining = round(max(0.0, self._hold_until - now), 1)
         return {
             "enabled": self.config.enabled,
             "brakeLight": brake,
             "alert": self._alert,
             "buzz": bool(self._buzz_on),
+            #: Предупреждение включено (не гаснет во время паузы).
+            "lightsOn": self._alert_lights,
+            "blink": self.config.blink,
             "distanceM": None if self.distance_m is None else round(self.distance_m, 3),
             "nearM": self.config.near_m,
+            "hold": holding,
+            "holdRemainingS": remaining,
+            "holdTriggered": bool(triggered) if triggered is not None else None,
+            "holdCount": self._hold_count,
+            "holdS": self.config.hold_s if self.config.hold else 0.0,
             "reason": self.reason,
             "error": self.error,
         }
@@ -318,7 +504,10 @@ class SignalController:
         if stop_on:
             wanted["stop"] = True
         if self._alert:
-            wanted.update(head=True, left=True, right=True)
+            # Фары горят всё время тревоги, поворотники — по фазе мигания.
+            wanted["head"] = True
+            if self._alert_lights:
+                wanted.update(left=True, right=True)
         return wanted
 
     # -------------------------------------------------------------- вывод --
@@ -385,9 +574,15 @@ class SignalController:
         except Exception as exc:  # noqa: BLE001
             self.error = str(exc) or type(exc).__name__
         self._alert = False
+        self._alert_lights = False
+        self._blink_on = False
+        self._blink_at = 0.0
         self._buzz_on = False
         self._stop_until = 0.0
         self._stop_on = False
+        self._hold_since = None
+        self._hold_until = 0.0
+        self._hold_trigger_distance = None
 
 
 class DriveSignalService:

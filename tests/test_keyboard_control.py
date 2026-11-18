@@ -6,6 +6,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from robot_control.keyboard import KeyboardControl, MODULES
 from robot_control import maneuvers, slam
 
@@ -1155,3 +1157,186 @@ def test_sign_appearing_between_permit_and_first_packet_still_caps_speed():
     assert send(ctl, token, 2, "live", percent=100, angles=straight(),
                 permit=arm["permit"])[0]["ok"]
     assert source.commanded == 80
+
+
+# ------------------------------- умный круиз-контроль: пауза у препятствия
+class Safety:
+    """Подставной контроллер препятствий: пауза и близкое препятствие."""
+
+    def __init__(self, near=None, hold_s=5.0, clock=None):
+        self.near = near
+        self.hold_s = hold_s
+        self.until = 0.0
+        self.calls = []
+        # Свой снимок паузы считается по тем же часам, что и у клавиатуры.
+        self.clock = clock
+
+    def _now(self):
+        return float(self.clock()) if self.clock is not None else getattr(self, "now", 0.0)
+
+    def request_hold(self, direction, now=None):
+        self.calls.append((direction, now))
+        now = getattr(self, "now", 0.0) if now is None else now
+        self.now = now
+        if now < self.until:
+            return {"hold": True, "holdRemainingS": round(self.until - now, 1)}
+        if self.near is not None and direction and self.near <= 0.5:
+            self.until = now + self.hold_s
+            return {"hold": True, "holdRemainingS": self.hold_s, "holdTriggered": True}
+        return {"hold": False, "holdRemainingS": 0.0}
+
+    def snapshot(self, **_):
+        now = self._now()
+        return {"hold": self.until > now, "holdRemainingS": max(0.0, self.until - now)}
+
+    def state(self):
+        return self.snapshot()
+
+    def clear_hold(self, reason=""):
+        # Как настоящий контроллер: оператор снимает паузу досрочно.
+        self.calls.append(("clear", reason))
+        self.until = 0.0
+
+
+def guarded_safety(source, clock, safety):
+    def drive(src, payload):
+        return src.drive(payload["percent"]), 200
+
+    def steer(src, payload):
+        return src.steer_module(payload["module"], payload["angle"]), 200
+
+    return KeyboardControl(lambda: source, drive, steer, lambda: None, clock,
+                           safety_provider=lambda: safety)
+
+
+def test_obstacle_hold_stops_traction_and_refuses_to_restart_into_the_wall():
+    clock, source = Clock(), Wheels()
+    safety = Safety(near=0.4, clock=clock)
+    ctl = guarded_safety(source, clock, safety)
+    token = begin(ctl)
+
+    # Тронуться в стену нельзя: пауза начинается до выдачи тяги, тяга не уходит.
+    result, status = send(ctl, token, 1, "arm", direction=1, angles=straight())
+    assert status == 409 and result["reason"] == "obstacle_hold"
+    assert result["holdRemainingS"] == pytest.approx(5.0, abs=0.1)
+    assert source.commanded == 0
+    assert ctl.hold_snapshot()["hold"] is True
+
+    # Паузу нельзя обойти удержанием клавиши: каждая попытка — отказ.
+    for seq in (2, 3, 4):
+        result, _ = send(ctl, token, seq, "arm", direction=1, angles=straight())
+        assert result["reason"] == "obstacle_hold"
+        assert source.commanded == 0
+
+    # Пауза вышла, но стена всё ещё близко — новая попытка снова упирается.
+    clock.now += 6.0
+    result, _ = send(ctl, token, 5, "arm", direction=1, angles=straight())
+    assert result["reason"] == "obstacle_hold" and source.commanded == 0
+
+    # Путь свободен — ход разрешён без перезапуска режима.
+    safety.near = 2.0
+    clock.now += 6.0
+    assert start_drive(ctl, token, 6, 8, straight())[0]["ok"]
+    assert source.commanded == 8
+
+
+def test_obstacle_hold_never_blocks_braking_or_steering():
+    clock, source = Clock(), Wheels()
+    safety = Safety(near=0.3, clock=clock)
+    ctl = guarded_safety(source, clock, safety)
+    token = begin(ctl)
+    result, _ = send(ctl, token, 1, "arm", direction=1, angles=straight())
+    assert result["reason"] == "obstacle_hold"
+    assert send(ctl, token, 2, "stop")[0]["ok"]
+    assert send(ctl, token, 3, "steer", module="FR", angle=0)[0]["ok"]
+    # Явный STOP и 0 % проходят всегда: пауза — про тягу, не про тормоз.
+    assert send(ctl, token, 4, "live", percent=0, angles=straight())[0]["ok"] is True
+
+
+def test_dead_safety_controller_does_not_allow_drive():
+    clock, source = Clock(), Wheels()
+
+    class Broken:
+        def state(self):
+            return self.snapshot()
+
+        def snapshot(self, **_):
+            raise RuntimeError("лидар отвалился")
+
+        def request_hold(self, direction, now=None):
+            raise RuntimeError("лидар отвалился")
+
+    ctl = guarded_safety(source, clock, Broken())
+    token = begin(ctl)
+    result, _ = send(ctl, token, 1, "arm", direction=1, angles=straight())
+    assert result["reason"] == "obstacle_hold" and source.commanded == 0
+    assert ctl.hold_snapshot()["hold"] is True
+
+
+def test_driving_into_an_object_pauses_five_seconds_then_driving_returns_by_itself():
+    """Главный сценарий: ехали, объект ближе 0,5 м — стоп на 5 с и возврат хода."""
+    clock, source = Clock(), LiveWheels()
+    safety = Safety(near=None, clock=clock)
+    ctl = guarded_safety(source, clock, safety)
+    token = begin(ctl)
+    assert start_live(ctl, token, percent=20)[0]["ok"]
+    assert source.commanded == 20
+
+    # На ходу объект оказался ближе полуметра: тяга снимается сразу, ещё до
+    # отправки следующего пакета на платы.
+    safety.near = 0.42
+    clock.now += 0.2
+    source.pulses()
+    result, status = send(ctl, token, 3, "live", percent=20, angles=straight())
+    assert status == 409 and result["reason"] == "obstacle_hold"
+    assert result["holdRemainingS"] == pytest.approx(5.0, abs=0.1)
+    assert result["retryable"] is False
+    assert source.commanded == 0
+
+    # Удержание клавиши паузу не пробивает: каждый пакет получает отказ.
+    for seq in (4, 5, 6):
+        clock.now += 0.2
+        source.pulses()
+        result, _ = send(ctl, token, seq, "live", percent=20, angles=straight())
+        assert result["reason"] == "obstacle_hold" and source.commanded == 0
+    assert ctl.hold_snapshot()["hold"] is True
+
+    # Пять секунд вышло, объект убрали: ход возвращается сам, без перезапуска.
+    # Браузер присылает следующий пакет с новым номером, а экран уже показывает,
+    # что пауза кончилась.
+    safety.near = None
+    clock.now += 5.2
+    for motor in source.motors.values():
+        motor.update(angle=0.0, moving=False, scRpm=0.0, scRecent=False)
+    assert ctl.hold_snapshot()["hold"] is False
+    arm, status = send(ctl, token, 7, "arm", direction=1, angles=straight())
+    assert status == 200 and arm["ok"]
+    assert send(ctl, token, 8, "live", percent=20, angles=straight(),
+                permit=arm["permit"])[0]["ok"]
+    assert source.commanded == 20
+
+
+def test_stop_and_steering_stay_available_during_the_obstacle_pause():
+    clock, source = Clock(), Wheels()
+    safety = Safety(near=0.3, clock=clock)
+    ctl = guarded_safety(source, clock, safety)
+    token = begin(ctl)
+    assert send(ctl, token, 1, "arm", direction=1, angles=straight())[0]["reason"] == "obstacle_hold"
+    # Пауза — про тягу: тормоз, руль и 0 % доступны, сессия не закрывается.
+    assert send(ctl, token, 2, "stop")[0]["ok"]
+    assert send(ctl, token, 3, "steer", module="FR", angle=12)[0]["ok"]
+    assert source.motors["FR"]["angle"] == 12
+    assert send(ctl, token, 4, "live", percent=0, angles=straight())[0]["ok"]
+
+
+def test_obstacle_pause_can_be_cancelled_early_by_the_operator():
+    clock, source = Clock(), Wheels()
+    safety = Safety(near=None, hold_s=5.0, clock=clock)
+    ctl = guarded_safety(source, clock, safety)
+    token = begin(ctl)
+    safety.near = 0.3
+    assert send(ctl, token, 1, "arm", direction=1, angles=straight())[0]["reason"] == "obstacle_hold"
+    safety.near = None
+    ctl.clear_hold("оператор")
+    assert ctl.hold_snapshot()["hold"] is False
+    assert start_drive(ctl, token, 2, 8, straight())[0]["ok"]

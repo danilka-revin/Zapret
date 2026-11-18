@@ -1402,6 +1402,9 @@ def create_blueprint(state, guard=None, *, csrf_header_ok=None,
     for operation, endpoint in (("enable", "api_scan_mode_enable"),
                                 ("disable", "api_scan_mode_disable"),
                                 ("heartbeat", "api_scan_mode_heartbeat"),
+                                # Паузу у препятствия снимает оператор с того же
+                                # экрана: это часть управления, не движение.
+                                ("hold/clear", "api_scan_mode_hold_clear"),
                                 ("map/load", "api_scan_mode_map_load")):
         def scan_action(operation=operation):
             if not scan_control_allowed():
