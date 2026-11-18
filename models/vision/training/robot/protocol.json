@@ -1,0 +1,33 @@
+{
+  "startedAt": "2026-11-17T22:52:06.455829+00:00",
+  "epochsCap": 150,
+  "patience": 20,
+  "freeze": 0,
+  "lr0": 0.0003,
+  "imgsz": 512,
+  "batch": 8,
+  "seed": 17,
+  "trainingSelection": "Ultralytics best checkpoint by VAL mAP50-95; max 150 epochs, early stopping after 20 epochs without improvement. Full-network fine-tune, not only the head.",
+  "runtimeSelection": "VAL only: confidence 0.15,0.25,0.35,0.45, trafficMode legacy or body; 0.7*macroF1+0.3*balanced signal recall INCLUDING misses. Require observed falseGreen=0 and no more than 21 traffic-FP frames and 1 specific-colour FP box on the already-reviewed 98-frame VAL shoe clip. Historical baseline/improved included as controls; no tuning on TEST.",
+  "testProtocol": "TEST is a previously reused benchmark, not a blind holdout. Choose and freeze weights/profile on VAL before computing the new TEST results. No test-based model or threshold selection.",
+  "preTrainingHashes": {
+    "models/vision/yolo-stop.pt": "be250cad84adf7b5b71e8e635b40508df6871fd9250a8072f4e0f4781e7d3a41",
+    "models/vision/yolo-stop-candidate.pt": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+    "models/vision/yolo-stop-improved.pt": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6"
+  },
+  "deployment": "Never replace production weights or enable motors; bench-only candidate until robot validation.",
+  "verificationScriptsSha256": {
+    "scripts/prepare_robot_vision_dataset.py": "7e1b73a398363cb485ec2a4973408b70851e720cc3281a67b134982bc782ed45",
+    "scripts/select_robot_vision_profile.py": "10097b34a3f299ee49f039855c5573371335cd3b86454c69428ec18637441a6d",
+    "scripts/export_robot_vision.py": "38c7b5fcf975ecb920a7b0c7122a5d15433fbf559b6af75d9264e069206ced6c"
+  },
+  "interruptedPreparationRun": "housing-audit-warmstart.json",
+  "continuation": {
+    "weights": "models/vision/training/robot/housing-audit-warmstart.pt",
+    "epochsCap": 150,
+    "patience": 20,
+    "freeze": 0,
+    "lr0": 0.00015,
+    "reason": "Correct one enlarged-review TRAIN coordinate, reset optimizer after warm-start from VAL best; lower LR for full-network refinement. No TEST consumed/used to decide this."
+  }
+}

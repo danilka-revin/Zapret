@@ -1,0 +1,150 @@
+{
+  "method": "Agent visual audit of all 260 training and 61 validation thumbnails plus 139 traffic crops. Canonical labels/test are NOT edited.",
+  "exclusionReason": "Obvious displaced traffic boxes or false STOP boxes; exclude TRAIN sources rather than silently fabricate coordinates.",
+  "excludeTrainImages": [
+    "1794903271159.jpg",
+    "1794903271185.jpg",
+    "1794903271290.jpg",
+    "1794903271329.jpg",
+    "1794903271433.jpg",
+    "1794903271567.jpg",
+    "1794940325487.jpg",
+    "1794940325834.jpg",
+    "1794940325862.jpg",
+    "1794940325874.jpg",
+    "1794940325924.jpg",
+    "1794940325940.jpg",
+    "1794940325959.jpg",
+    "1794940325985.jpg",
+    "1794940325995.jpg",
+    "1794940326005.jpg",
+    "1794940326013.jpg",
+    "1794940326024.jpg",
+    "1794940326073.jpg",
+    "1794940326084.jpg",
+    "1794940326103.jpg",
+    "1794940326137.jpg",
+    "1794940326160.jpg",
+    "1794940326170.jpg",
+    "1794940326181.jpg",
+    "1794940327395.jpg",
+    "1794940327466.jpg",
+    "1794940327524.jpg",
+    "1794940328280.jpg",
+    "1794940328386.jpg",
+    "1794940328847.jpg"
+  ],
+  "negativeCrops": [
+    {
+      "image": "1794940325419.jpg",
+      "box": [
+        0,
+        0.1,
+        0.65,
+        0.9
+      ],
+      "reason": "Foot, trouser leg, luggage and floor; no target in this crop."
+    },
+    {
+      "image": "1794940326790.jpg",
+      "box": [
+        0,
+        0.05,
+        0.35,
+        0.9
+      ],
+      "reason": "Person, hand and furniture to the left of the only bollard."
+    },
+    {
+      "image": "1794940326975.jpg",
+      "box": [
+        0,
+        0.05,
+        0.35,
+        0.9
+      ],
+      "reason": "Chairs and box to the left of the bollard."
+    },
+    {
+      "image": "1794940326983.jpg",
+      "box": [
+        0,
+        0.05,
+        0.52,
+        0.9
+      ],
+      "reason": "People and chairs; the only bollard is outside to the right."
+    },
+    {
+      "image": "1794940326992.jpg",
+      "box": [
+        0,
+        0.05,
+        0.35,
+        0.9
+      ],
+      "reason": "Purple shirt, arm and furniture, outside the bollard."
+    },
+    {
+      "image": "1794940327648.jpg",
+      "box": [
+        0.67,
+        0,
+        0.33,
+        1
+      ],
+      "reason": "Brown door and paper, not a traffic light or cone."
+    },
+    {
+      "image": "1794940327549.jpg",
+      "box": [
+        0.68,
+        0.05,
+        0.32,
+        0.95
+      ],
+      "reason": "Door with false source cone boxes; no physical cone in this crop."
+    },
+    {
+      "image": "1794940327494.jpg",
+      "box": [
+        0.72,
+        0,
+        0.28,
+        1
+      ],
+      "reason": "Door, paper and handle only."
+    },
+    {
+      "image": "1794940327541.jpg",
+      "box": [
+        0.7,
+        0,
+        0.3,
+        1
+      ],
+      "reason": "Door area to the right of the real traffic light."
+    },
+    {
+      "image": "VID_20261117_223120_293_f000000.jpg",
+      "box": [
+        0,
+        0.18,
+        0.28,
+        0.82
+      ],
+      "reason": "Walking person, black shoes and floor; signs are outside crop."
+    },
+    {
+      "image": "VID_20261117_223120_760_f000160.jpg",
+      "box": [
+        0,
+        0.3,
+        0.27,
+        0.7
+      ],
+      "reason": "Foreground trouser legs, shoes and hand; no sign or bollard."
+    }
+  ],
+  "warning": "All exclusions and additions are training-only, agent-assisted. Remaining pseudo-label errors and incomplete instances exist."
+}

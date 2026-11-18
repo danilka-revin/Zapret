@@ -1,0 +1,672 @@
+{
+  "training": {
+    "model": "yolo-stop-robot.pt",
+    "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+    "createdAt": "2026-11-17T23:57:16.054935+00:00",
+    "base": "models/vision/training/robot/housing-audit-warmstart.pt",
+    "baseSha256": "162fa656785e01259763d13c91e823782f637689de00eb7ae38481504fbb6eb6",
+    "baseProvenance": {
+      "source": "https://github.com/AlaynaShaheen/object_detection_using_yolov8_tflite/tree/13f2ae34cfbb40d91c1b7b0c9c36cf96342288cc/yolov8n.pt",
+      "revision": "13f2ae34cfbb40d91c1b7b0c9c36cf96342288cc",
+      "contentSha256": "4df48185493a8e5284698efc2caddd44053bb88e8ef827b4ea2e84bf502891c0",
+      "checkpointVersion": "8.0.0.dev0",
+      "checkpointDate": "2022-12-30T00:12:08.084698",
+      "originalTrainingData": "coco.yaml",
+      "licenseNote": "Ultralytics model licensing applies; see https://github.com/ultralytics/ultralytics/blob/main/LICENSE"
+    },
+    "ultralytics": "8.4.215",
+    "torch": "2.2.2+cu121",
+    "classes": [
+      "stop_sign",
+      "pedestrian_crossing",
+      "speed_bump",
+      "traffic_light",
+      "cone",
+      "traffic_light_red",
+      "traffic_light_yellow",
+      "traffic_light_green"
+    ],
+    "epochsRequested": 150,
+    "epochsCompleted": 34,
+    "bestEpoch": 14,
+    "imgsz": 512,
+    "batch": 8,
+    "device": "cpu",
+    "freeze": 0,
+    "seed": 17,
+    "trainingArgs": {
+      "optimizer": "AdamW",
+      "lr0": 0.00015,
+      "lrf": 0.01,
+      "cos_lr": true,
+      "warmup_bias_lr": 0.0,
+      "cache": false,
+      "deterministic": true,
+      "patience": 20,
+      "workers": 0
+    },
+    "durationS": 3010.9,
+    "smoke": false,
+    "validation": {
+      "metrics/precision(B)": 0.678154,
+      "metrics/recall(B)": 0.67639,
+      "metrics/mAP50(B)": 0.658005,
+      "metrics/mAP50-95(B)": 0.509983,
+      "fitness": 0.509983,
+      "perClass": [
+        {
+          "id": 0,
+          "name": "stop_sign",
+          "precision": 0.693386,
+          "recall": 0.857143,
+          "mAP50": 0.863571,
+          "mAP50-95": 0.650554
+        },
+        {
+          "id": 1,
+          "name": "pedestrian_crossing",
+          "precision": 0.821266,
+          "recall": 1.0,
+          "mAP50": 0.995,
+          "mAP50-95": 0.995
+        },
+        {
+          "id": 2,
+          "name": "speed_bump",
+          "precision": 0.720131,
+          "recall": 0.737669,
+          "mAP50": 0.785,
+          "mAP50-95": 0.66925
+        },
+        {
+          "id": 3,
+          "name": "traffic_light",
+          "precision": 0.698601,
+          "recall": 0.75,
+          "mAP50": 0.706029,
+          "mAP50-95": 0.455851
+        },
+        {
+          "id": 4,
+          "name": "cone",
+          "precision": 0.874017,
+          "recall": 0.660797,
+          "mAP50": 0.693904,
+          "mAP50-95": 0.519708
+        },
+        {
+          "id": 5,
+          "name": "traffic_light_red",
+          "precision": 0.749498,
+          "recall": 0.27218,
+          "mAP50": 0.42375,
+          "mAP50-95": 0.240572
+        },
+        {
+          "id": 6,
+          "name": "traffic_light_yellow",
+          "precision": 0.359586,
+          "recall": 0.333333,
+          "mAP50": 0.1675,
+          "mAP50-95": 0.134
+        },
+        {
+          "id": 7,
+          "name": "traffic_light_green",
+          "precision": 0.508751,
+          "recall": 0.8,
+          "mAP50": 0.629286,
+          "mAP50-95": 0.414929
+        }
+      ]
+    },
+    "test": null,
+    "dataset": {
+      "splits": {
+        "train": {
+          "images": 297,
+          "counts": {
+            "cone": 208,
+            "speed_bump": 24,
+            "traffic_light_yellow": 26,
+            "stop_sign": 44,
+            "traffic_light_green": 19,
+            "traffic_light": 33,
+            "pedestrian_crossing": 11,
+            "traffic_light_red": 29
+          },
+          "missingClasses": []
+        },
+        "val": {
+          "images": 61,
+          "counts": {
+            "cone": 63,
+            "stop_sign": 7,
+            "traffic_light": 8,
+            "pedestrian_crossing": 2,
+            "speed_bump": 7,
+            "traffic_light_red": 11,
+            "traffic_light_yellow": 3,
+            "traffic_light_green": 5
+          },
+          "missingClasses": []
+        }
+      },
+      "classes": [
+        "stop_sign",
+        "pedestrian_crossing",
+        "speed_bump",
+        "traffic_light",
+        "cone",
+        "traffic_light_red",
+        "traffic_light_yellow",
+        "traffic_light_green"
+      ],
+      "fingerprint": "0346f1b0d8f18fcb2d0dabf0baeac799947cd16c4971a1b10635961f622803bf",
+      "archiveSha256": "762d6fa93f6f5b8103041cfced32de30b32d752399a37742e7f05d30499a0b88",
+      "sourceRevision": "3cb277bfadf7d0034943117f9146d4b92bb773a9",
+      "annotationWarning": "TRAIN-only agent-assisted coordinate review and visually reviewed negatives, not independent human ground truth. Inherits remaining pseudo-label noise and already-reused validation/test from its parent."
+    },
+    "augmentation": {
+      "hsv_h": 0.0,
+      "hsv_s": 0.15,
+      "hsv_v": 0.3,
+      "flipud": 0.0,
+      "fliplr": 0.0,
+      "mosaic": 0.5,
+      "close_mosaic": 10
+    },
+    "runDirectory": "runs/vision/20261117T230705Z-0fc4b9/train",
+    "trafficLight": "YOLO colour classes + conservative HSV agreement; generic = off/ambiguous",
+    "deployment": "NOT ACCEPTED for robot deployment; offline/isolated-bench experimental weights only; production unchanged",
+    "trainingRecord": "models/vision/training/robot/final-training.json",
+    "trainingRecordSha256": "de5eaece65aa7a3a67b36cd975f75095a888d3a343b014654bd39943e85da8ee",
+    "runtimeProfile": "yolo-stop-robot-profile.json",
+    "runtimeAcceptance": {
+      "candidatePassesRegressionGates": false,
+      "candidatePreferredToControls": false,
+      "decision": "NOT ACCEPTED for robot deployment. Offline/isolated-bench experimental artifact only.",
+      "reason": "All eight predeclared VAL profiles record one red-label to green prediction. Selected offline legacy/.35 also has four specific false-red shoe frames (limit one). A post-freeze visual review suggests the VAL red label is wrong; neither truth nor gates/profile were changed to make it pass.",
+      "labelConflictEvidence": "../../docs/vision-robot/validation-label-conflict.json",
+      "productionWeightsReplaced": false
+    },
+    "onnx": {
+      "file": "yolo-stop-robot.onnx",
+      "sha256": "c7f9c714f68d4bcada23e7e8028664f001f61b8fa5da8a466fd5431e49efdbee",
+      "bytes": 12606676,
+      "parityReport": "training/robot/onnx-parity.json",
+      "parityPassed": true,
+      "note": "Numerical/adapter parity is not accuracy or deployment acceptance. Same rejection applies to PT and ONNX."
+    }
+  },
+  "profile": {
+    "weights": "models/vision/yolo-stop-robot.pt",
+    "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+    "confidence": 0.35,
+    "trafficMode": "legacy",
+    "imgsz": 512,
+    "device": "cpu",
+    "preferRed": false,
+    "backend": "yolo+fusion",
+    "heuristicEnabled": false,
+    "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+    "selectedAt": "2026-11-17T23:59:16.096032+00:00",
+    "selectedOn": "VAL only",
+    "candidatePassesRegressionGates": false,
+    "candidatePreferredToControls": false,
+    "selectionFile": "models/vision/training/robot/validation-selection.json",
+    "selectionFileSha256": "e0122299cb0077fadc4c7b71396fb98f5cd1fb65f669daea2ce689dce2e86aa5",
+    "testIsReusedBenchmark": true,
+    "deployment": "bench only; no automatic production replacement",
+    "warning": "Bench selection only, not autonomous-ready; small noisy/agent-assisted labels and ONE correlated VAL negative clip, not independent ground truth or proof of safety."
+  },
+  "matchedReusedTest": {
+    "baseline": {
+      "micro": {
+        "tp": 56,
+        "fp": 27,
+        "fn": 42,
+        "precision": 0.6746987951807228,
+        "recall": 0.5714285714285714,
+        "f1": 0.6187845303867403
+      },
+      "classes": {
+        "stop_sign": {
+          "tp": 8,
+          "fp": 1,
+          "fn": 1,
+          "precision": 0.8888888888888888,
+          "recall": 0.8888888888888888,
+          "f1": 0.8888888888888888
+        },
+        "pedestrian_crossing": {
+          "tp": 3,
+          "fp": 2,
+          "fn": 0,
+          "precision": 0.6,
+          "recall": 1.0,
+          "f1": 0.75
+        },
+        "speed_bump": {
+          "tp": 5,
+          "fp": 4,
+          "fn": 2,
+          "precision": 0.5555555555555556,
+          "recall": 0.7142857142857143,
+          "f1": 0.625
+        },
+        "traffic_light": {
+          "tp": 7,
+          "fp": 4,
+          "fn": 12,
+          "precision": 0.6363636363636364,
+          "recall": 0.3684210526315789,
+          "f1": 0.4666666666666667
+        },
+        "cone": {
+          "tp": 33,
+          "fp": 16,
+          "fn": 27,
+          "precision": 0.673469387755102,
+          "recall": 0.55,
+          "f1": 0.6055045871559633
+        }
+      },
+      "macroF1": 0.6672120285423038,
+      "signals": {
+        "red": {
+          "correct": 0,
+          "support": 7,
+          "predictions": 3,
+          "recallIncludingMisses": 0.0,
+          "precision": 0.0
+        },
+        "yellow": {
+          "correct": 1,
+          "support": 4,
+          "predictions": 2,
+          "recallIncludingMisses": 0.25,
+          "precision": 0.5
+        },
+        "green": {
+          "correct": 0,
+          "support": 3,
+          "predictions": 0,
+          "recallIncludingMisses": 0.0,
+          "precision": 0.0
+        }
+      },
+      "signalBalancedRecall": 0.08333333333333333,
+      "falseGreen": 0,
+      "validationObjective": 0.49204841997961263,
+      "latencyMedianMs": 61.98,
+      "latencyP95Ms": 72.05
+    },
+    "previous": {
+      "micro": {
+        "tp": 57,
+        "fp": 21,
+        "fn": 41,
+        "precision": 0.7307692307692307,
+        "recall": 0.5816326530612245,
+        "f1": 0.6477272727272727
+      },
+      "classes": {
+        "stop_sign": {
+          "tp": 8,
+          "fp": 1,
+          "fn": 1,
+          "precision": 0.8888888888888888,
+          "recall": 0.8888888888888888,
+          "f1": 0.8888888888888888
+        },
+        "pedestrian_crossing": {
+          "tp": 3,
+          "fp": 1,
+          "fn": 0,
+          "precision": 0.75,
+          "recall": 1.0,
+          "f1": 0.8571428571428571
+        },
+        "speed_bump": {
+          "tp": 5,
+          "fp": 2,
+          "fn": 2,
+          "precision": 0.7142857142857143,
+          "recall": 0.7142857142857143,
+          "f1": 0.7142857142857143
+        },
+        "traffic_light": {
+          "tp": 8,
+          "fp": 3,
+          "fn": 11,
+          "precision": 0.7272727272727273,
+          "recall": 0.42105263157894735,
+          "f1": 0.5333333333333333
+        },
+        "cone": {
+          "tp": 33,
+          "fp": 14,
+          "fn": 27,
+          "precision": 0.7021276595744681,
+          "recall": 0.55,
+          "f1": 0.616822429906542
+        }
+      },
+      "macroF1": 0.7220946447114671,
+      "signals": {
+        "red": {
+          "correct": 1,
+          "support": 7,
+          "predictions": 3,
+          "recallIncludingMisses": 0.14285714285714285,
+          "precision": 0.3333333333333333
+        },
+        "yellow": {
+          "correct": 1,
+          "support": 4,
+          "predictions": 2,
+          "recallIncludingMisses": 0.25,
+          "precision": 0.5
+        },
+        "green": {
+          "correct": 2,
+          "support": 3,
+          "predictions": 2,
+          "recallIncludingMisses": 0.6666666666666666,
+          "precision": 1.0
+        }
+      },
+      "signalBalancedRecall": 0.3531746031746032,
+      "falseGreen": 0,
+      "validationObjective": 0.6114186322504078,
+      "latencyMedianMs": 62.39,
+      "latencyP95Ms": 80.23
+    },
+    "robot": {
+      "micro": {
+        "tp": 58,
+        "fp": 21,
+        "fn": 40,
+        "precision": 0.7341772151898734,
+        "recall": 0.5918367346938775,
+        "f1": 0.655367231638418
+      },
+      "classes": {
+        "stop_sign": {
+          "tp": 8,
+          "fp": 2,
+          "fn": 1,
+          "precision": 0.8,
+          "recall": 0.8888888888888888,
+          "f1": 0.8421052631578947
+        },
+        "pedestrian_crossing": {
+          "tp": 3,
+          "fp": 1,
+          "fn": 0,
+          "precision": 0.75,
+          "recall": 1.0,
+          "f1": 0.8571428571428571
+        },
+        "speed_bump": {
+          "tp": 5,
+          "fp": 2,
+          "fn": 2,
+          "precision": 0.7142857142857143,
+          "recall": 0.7142857142857143,
+          "f1": 0.7142857142857143
+        },
+        "traffic_light": {
+          "tp": 10,
+          "fp": 5,
+          "fn": 9,
+          "precision": 0.6666666666666666,
+          "recall": 0.5263157894736842,
+          "f1": 0.5882352941176471
+        },
+        "cone": {
+          "tp": 32,
+          "fp": 11,
+          "fn": 28,
+          "precision": 0.7441860465116279,
+          "recall": 0.5333333333333333,
+          "f1": 0.6213592233009708
+        }
+      },
+      "macroF1": 0.7246256704010168,
+      "signals": {
+        "red": {
+          "correct": 0,
+          "support": 7,
+          "predictions": 4,
+          "recallIncludingMisses": 0.0,
+          "precision": 0.0
+        },
+        "yellow": {
+          "correct": 1,
+          "support": 4,
+          "predictions": 3,
+          "recallIncludingMisses": 0.25,
+          "precision": 0.3333333333333333
+        },
+        "green": {
+          "correct": 3,
+          "support": 3,
+          "predictions": 3,
+          "recallIncludingMisses": 1.0,
+          "precision": 1.0
+        }
+      },
+      "signalBalancedRecall": 0.4166666666666667,
+      "falseGreen": 0,
+      "validationObjective": 0.6322379692807117,
+      "latencyMedianMs": 60.28,
+      "latencyP95Ms": 74.17
+    }
+  },
+  "validation": {
+    "selected": {
+      "name": "robot-legacy-0.35",
+      "variant": "robot",
+      "weights": "models/vision/yolo-stop-robot.pt",
+      "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+      "confidence": 0.35,
+      "trafficMode": "legacy",
+      "macroF1": 0.8310130538701967,
+      "signalBalancedRecall": 0.507070707070707,
+      "falseGreen": 1,
+      "score": 0.7338303498303498,
+      "summary": {
+        "micro": {
+          "tp": 75,
+          "fp": 13,
+          "fn": 31,
+          "precision": 0.8522727272727273,
+          "recall": 0.7075471698113207,
+          "f1": 0.7731958762886598
+        },
+        "classes": {
+          "stop_sign": {
+            "tp": 6,
+            "fp": 2,
+            "fn": 1,
+            "precision": 0.75,
+            "recall": 0.8571428571428571,
+            "f1": 0.8
+          },
+          "pedestrian_crossing": {
+            "tp": 2,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0
+          },
+          "speed_bump": {
+            "tp": 6,
+            "fp": 2,
+            "fn": 1,
+            "precision": 0.75,
+            "recall": 0.8571428571428571,
+            "f1": 0.8
+          },
+          "traffic_light": {
+            "tp": 20,
+            "fp": 2,
+            "fn": 7,
+            "precision": 0.9090909090909091,
+            "recall": 0.7407407407407407,
+            "f1": 0.8163265306122449
+          },
+          "cone": {
+            "tp": 41,
+            "fp": 7,
+            "fn": 22,
+            "precision": 0.8541666666666666,
+            "recall": 0.6507936507936508,
+            "f1": 0.7387387387387387
+          }
+        },
+        "macroF1": 0.8310130538701967,
+        "signals": {
+          "red": {
+            "correct": 5,
+            "support": 11,
+            "predictions": 7,
+            "recallIncludingMisses": 0.45454545454545453,
+            "precision": 0.7142857142857143
+          },
+          "yellow": {
+            "correct": 2,
+            "support": 3,
+            "predictions": 4,
+            "recallIncludingMisses": 0.6666666666666666,
+            "precision": 0.5
+          },
+          "green": {
+            "correct": 2,
+            "support": 5,
+            "predictions": 3,
+            "recallIncludingMisses": 0.4,
+            "precision": 0.6666666666666666
+          }
+        },
+        "signalBalancedRecall": 0.507070707070707,
+        "falseGreen": 1,
+        "validationObjective": 0.7338303498303498,
+        "latencyMedianMs": 54.04,
+        "latencyP95Ms": 66.95
+      },
+      "negativeClip": {
+        "frames": 98,
+        "framesWithTrafficFalsePositive": 4,
+        "trafficFalsePositiveBoxes": 4,
+        "specificColourFalsePositiveBoxes": 4,
+        "falseTrafficSignals": {
+          "red": 4
+        }
+      },
+      "eligible": false
+    },
+    "passesGates": false,
+    "preferredToControls": false
+  },
+  "onnxParity": {
+    "createdAt": "2026-11-17T23:59:27.922836+00:00",
+    "weights": "models/vision/yolo-stop-robot.pt",
+    "weightsSha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+    "profileSha256": "c2f2e14c4ef82113aca53dd48f439934b20d8338bc6e51015f01a8ac0a4a70e0",
+    "onnx": "/home/user/Zapret/models/vision/yolo-stop-robot.onnx",
+    "onnxSha256": "c7f9c714f68d4bcada23e7e8028664f001f61b8fa5da8a466fd5431e49efdbee",
+    "onnxBytes": 12606676,
+    "format": "ONNX FP32, opset 17, dynamic batch/height/width, no embedded NMS",
+    "input": {
+      "name": "images",
+      "layout": "NCHW",
+      "dtype": "float32",
+      "preprocessing": "BGR -> RGB, stride-32 LetterBox, scale /255, batch dimension"
+    },
+    "outputs": [
+      {
+        "name": "output0",
+        "shape": [
+          "batch",
+          "Concatoutput0_dim_1",
+          "anchors"
+        ],
+        "dtype": "tensor(float)"
+      }
+    ],
+    "classes": [
+      "stop_sign",
+      "pedestrian_crossing",
+      "speed_bump",
+      "traffic_light",
+      "cone",
+      "traffic_light_red",
+      "traffic_light_yellow",
+      "traffic_light_green"
+    ],
+    "onnxVersion": "1.17.0",
+    "onnxRuntime": "1.20.1",
+    "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+    "split": "val",
+    "images": 61,
+    "passed": true,
+    "runtimeProfile": {
+      "confidence": 0.35,
+      "imgsz": 512,
+      "preferRed": false,
+      "trafficMode": "legacy",
+      "heuristicEnabled": false
+    },
+    "warning": "Numerical/adapter parity, NOT independent accuracy or safety validation. Raw ONNX does not include colour fusion, body guard, NMS or temporal logic. Robot hardware not benchmarked. No TEST-based tuning."
+  },
+  "warning": "No robot hardware test, no autonomous deployment, no fresh independently labelled holdout. TEST already reused; do not tune after this run.",
+  "matchedNegativeClip": {
+    "baseline": {
+      "weights": "models/vision/yolo-stop-candidate.pt",
+      "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+      "confidence": 0.35,
+      "trafficMode": "legacy",
+      "frames": 98,
+      "framesWithTrafficFalsePositive": 13,
+      "trafficFalsePositiveBoxes": 13,
+      "specificColourFalsePositiveBoxes": 1,
+      "falseTrafficSignals": {
+        "unknown": 12,
+        "red": 1
+      }
+    },
+    "previous": {
+      "weights": "models/vision/yolo-stop-improved.pt",
+      "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+      "confidence": 0.35,
+      "trafficMode": "body",
+      "frames": 98,
+      "framesWithTrafficFalsePositive": 8,
+      "trafficFalsePositiveBoxes": 8,
+      "specificColourFalsePositiveBoxes": 8,
+      "falseTrafficSignals": {
+        "yellow": 1,
+        "red": 7
+      }
+    },
+    "robot": {
+      "weights": "models/vision/yolo-stop-robot.pt",
+      "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+      "confidence": 0.35,
+      "trafficMode": "legacy",
+      "frames": 98,
+      "framesWithTrafficFalsePositive": 4,
+      "trafficFalsePositiveBoxes": 4,
+      "specificColourFalsePositiveBoxes": 4,
+      "falseTrafficSignals": {
+        "red": 4
+      }
+    }
+  },
+  "validationLabelConflict": "validation-label-conflict.json",
+  "deploymentAccepted": false
+}

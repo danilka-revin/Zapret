@@ -7,9 +7,10 @@
 #   .venv/bin/pip install -r requirements-vision.txt
 #   # ultralytics тянет opencv-python с libGL; на безголовом роботе:
 #   .venv/bin/pip uninstall -y opencv-python
-#   .venv/bin/pip install "opencv-python-headless<5"
+#   .venv/bin/pip install --force-reinstall --no-deps "opencv-python-headless<5"
 #
-# Обучение:  .venv/bin/python scripts/train_vision.py --epochs 150 --imgsz 416
+# Обучение: .venv/bin/python scripts/train_vision.py --weights yolov8n.pt --epochs 150 --imgsz 640
+# Версии выполненного CPU-прогона: requirements-vision-training.txt; отчёт: docs/VISION_TRAINING.md
 # Проверка (pytest из requirements-dev.txt):
 #   .venv/bin/python -m pytest tests/test_vision.py
 

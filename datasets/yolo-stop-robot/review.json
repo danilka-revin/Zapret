@@ -1,0 +1,1545 @@
+{
+  "schemaVersion": 1,
+  "parentFingerprint": "dd280f724628cb3aef8553aa3798bcee98138b9340d555a6091b957971d322d3",
+  "annotator": "agent-assisted visual review, not an independent human annotator",
+  "scope": "TRAIN only; no class changes. VAL/TEST immutable. Proposal rejection is explicit; no unreviewed background crops.",
+  "housingBoxes": [
+    {
+      "image": "1794903271152.jpg",
+      "row": 4,
+      "original": "6 0.485000 0.500000 0.210000 0.580000",
+      "box": [
+        0.396875,
+        0.24049793,
+        0.19359375,
+        0.54970954
+      ],
+      "approved": true,
+      "proposalIndex": 0,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794903271177.jpg",
+      "row": 3,
+      "original": "6 0.500000 0.470000 0.220000 0.620000",
+      "box": [
+        0.4375,
+        0.22406639,
+        0.20703125,
+        0.54045643
+      ],
+      "approved": true,
+      "proposalIndex": 1,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794903271202.jpg",
+      "row": 3,
+      "original": "7 0.554296 0.490145 0.217969 0.604772",
+      "box": [
+        0.3875,
+        0.1846473,
+        0.28359375,
+        0.6026971
+      ],
+      "approved": true,
+      "proposalIndex": 2,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794903271219.jpg",
+      "row": 1,
+      "original": "3 0.615000 0.545000 0.250000 0.570000",
+      "box": [
+        0.45284375,
+        0.25100622,
+        0.207,
+        0.53767635
+      ],
+      "approved": true,
+      "proposalIndex": 3,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794903271234.jpg",
+      "row": 2,
+      "original": "7 0.505000 0.495000 0.230000 0.610000",
+      "box": [
+        0.39179687,
+        0.18688797,
+        0.23034375,
+        0.63634855
+      ],
+      "approved": true,
+      "proposalIndex": 4,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794903271251.jpg",
+      "row": 2,
+      "original": "3 0.490000 0.520000 0.200000 0.580000",
+      "box": [
+        0.38140625,
+        0.231639,
+        0.19088281,
+        0.53197095
+      ],
+      "approved": true,
+      "proposalIndex": 5,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794903271259.jpg",
+      "row": 3,
+      "original": "6 0.590000 0.415000 0.180000 0.570000",
+      "box": [
+        0.5403125,
+        0.09211618,
+        0.21125,
+        0.5526971
+      ],
+      "approved": true,
+      "proposalIndex": 6,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794903271388.jpg",
+      "row": 2,
+      "original": "5 0.620000 0.510000 0.220000 0.580000",
+      "box": [
+        0.52084375,
+        0.2223029,
+        0.21365625,
+        0.58340249
+      ],
+      "approved": true,
+      "proposalIndex": 7,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794903271397.jpg",
+      "row": 1,
+      "original": "5 0.540000 0.510000 0.220000 0.620000",
+      "box": [
+        0.4515625,
+        0.20746888,
+        0.2421875,
+        0.58195021
+      ],
+      "approved": true,
+      "proposalIndex": 8,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794903271405.jpg",
+      "row": 0,
+      "original": "5 0.390000 0.670000 0.220000 0.640000",
+      "box": [
+        0.31023438,
+        0.38917012,
+        0.20596875,
+        0.61082988
+      ],
+      "approved": true,
+      "proposalIndex": 9,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940325507.jpg",
+      "row": 1,
+      "original": "6 0.583203 0.277490 0.297656 0.554979",
+      "box": [
+        0.434375,
+        5e-07,
+        0.297656,
+        0.554979
+      ],
+      "approved": true,
+      "proposalIndex": 10,
+      "method": "retained-original",
+      "reason": "Visually reviewed existing housing, retained; ambiguous/multi-lit colour unchanged."
+    },
+    {
+      "image": "1794940325527.jpg",
+      "row": 0,
+      "original": "6 0.415000 0.340000 0.110000 0.280000",
+      "box": [
+        0.36484375,
+        0.23340249,
+        0.0953125,
+        0.2219917
+      ],
+      "approved": true,
+      "proposalIndex": 11,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940325547.jpg",
+      "row": 1,
+      "original": "5 0.943750 0.128631 0.112500 0.257261",
+      "box": [
+        0.88203125,
+        0.01037344,
+        0.11796875,
+        0.23340249
+      ],
+      "approved": true,
+      "proposalIndex": 12,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940325574.jpg",
+      "row": 1,
+      "original": "5 0.435000 0.320000 0.070000 0.200000",
+      "box": [
+        0.42265625,
+        0.26452282,
+        0.06171875,
+        0.13174274
+      ],
+      "approved": true,
+      "proposalIndex": 13,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940325718.jpg",
+      "row": 1,
+      "original": "6 0.545000 0.315000 0.130000 0.330000",
+      "box": [
+        0.49414062,
+        0.1473029,
+        0.1546875,
+        0.37655602
+      ],
+      "approved": true,
+      "proposalIndex": 14,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940325790.jpg",
+      "row": 1,
+      "original": "6 0.545000 0.380000 0.090000 0.280000",
+      "box": [
+        0.51640625,
+        0.28941909,
+        0.0859375,
+        0.18879668
+      ],
+      "approved": true,
+      "proposalIndex": 15,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940325967.jpg",
+      "row": 2,
+      "original": "7 0.559766 0.436722 0.342969 0.873444",
+      "box": [
+        0.3882815,
+        0,
+        0.342969,
+        0.873444
+      ],
+      "approved": true,
+      "proposalIndex": 16,
+      "method": "retained-original",
+      "reason": "Visually reviewed existing housing, retained; ambiguous/multi-lit colour unchanged."
+    },
+    {
+      "image": "1794940326232.jpg",
+      "row": 4,
+      "original": "5 0.765625 0.310684 0.314063 0.621369",
+      "box": [
+        0.6085,
+        0.0,
+        0.33644531,
+        0.61356846
+      ],
+      "approved": true,
+      "proposalIndex": 17,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940326241.jpg",
+      "row": 1,
+      "original": "5 0.449609 0.587656 0.100781 0.218880",
+      "box": [
+        0.41171875,
+        0.47717842,
+        0.090625,
+        0.21887967
+      ],
+      "approved": true,
+      "proposalIndex": 18,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327373.jpg",
+      "row": 0,
+      "original": "3 0.550000 0.390000 0.120000 0.380000",
+      "box": [
+        0.496875,
+        0.26244813,
+        0.16953125,
+        0.35892116
+      ],
+      "approved": true,
+      "proposalIndex": 19,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327414.jpg",
+      "row": 2,
+      "original": "5 0.480000 0.320000 0.100000 0.240000",
+      "box": [
+        0.44140625,
+        0.14834025,
+        0.0890625,
+        0.2406639
+      ],
+      "approved": true,
+      "proposalIndex": 20,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327441.jpg",
+      "row": 2,
+      "original": "6 0.549609 0.329875 0.149219 0.381743",
+      "box": [
+        0.47109375,
+        0.1379668,
+        0.15859375,
+        0.38278008
+      ],
+      "approved": true,
+      "proposalIndex": 21,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327494.jpg",
+      "row": 2,
+      "original": "6 0.495000 0.350000 0.150000 0.400000",
+      "box": [
+        0.415625,
+        0.10995851,
+        0.134375,
+        0.33817427
+      ],
+      "approved": true,
+      "proposalIndex": 22,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327505.jpg",
+      "row": 2,
+      "original": "6 0.525390 0.287345 0.107031 0.298755",
+      "box": [
+        0.4703125,
+        0.14004149,
+        0.1109375,
+        0.29460581
+      ],
+      "approved": true,
+      "proposalIndex": 23,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327513.jpg",
+      "row": 2,
+      "original": "6 0.541406 0.392117 0.071875 0.213693",
+      "box": [
+        0.50390625,
+        0.28630705,
+        0.07578125,
+        0.21058091
+      ],
+      "approved": true,
+      "proposalIndex": 24,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327541.jpg",
+      "row": 2,
+      "original": "6 0.580000 0.340000 0.120000 0.260000",
+      "box": [
+        0.50078125,
+        0.1659751,
+        0.10078125,
+        0.2686722
+      ],
+      "approved": true,
+      "proposalIndex": 25,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327549.jpg",
+      "row": 0,
+      "original": "5 0.505000 0.355000 0.090000 0.210000",
+      "box": [
+        0.440625,
+        0.26348548,
+        0.1078125,
+        0.27074689
+      ],
+      "approved": true,
+      "proposalIndex": 26,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327569.jpg",
+      "row": 2,
+      "original": "5 0.522656 0.287344 0.087500 0.259336",
+      "box": [
+        0.47109375,
+        0.15767635,
+        0.09765625,
+        0.25829876
+      ],
+      "approved": true,
+      "proposalIndex": 27,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327577.jpg",
+      "row": 2,
+      "original": "3 0.520000 0.380000 0.120000 0.300000",
+      "box": [
+        0.47209375,
+        0.26006224,
+        0.135,
+        0.32022822
+      ],
+      "approved": true,
+      "proposalIndex": 28,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940327589.jpg",
+      "row": 2,
+      "original": "6 0.526563 0.364108 0.081250 0.215768",
+      "box": [
+        0.48359375,
+        0.25414938,
+        0.08671875,
+        0.21680498
+      ],
+      "approved": true,
+      "proposalIndex": 29,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327605.jpg",
+      "row": 2,
+      "original": "3 0.578906 0.255187 0.075000 0.217842",
+      "box": [
+        0.53984375,
+        0.14626556,
+        0.078125,
+        0.21680498
+      ],
+      "approved": true,
+      "proposalIndex": 30,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327624.jpg",
+      "row": 0,
+      "original": "3 0.603125 0.245332 0.079687 0.220954",
+      "box": [
+        0.56015625,
+        0.13381743,
+        0.0859375,
+        0.2219917
+      ],
+      "approved": true,
+      "proposalIndex": 31,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327638.jpg",
+      "row": 0,
+      "original": "3 0.583203 0.149377 0.133594 0.298755",
+      "box": [
+        0.51328125,
+        0.0,
+        0.14609375,
+        0.30082988
+      ],
+      "approved": true,
+      "proposalIndex": 32,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327648.jpg",
+      "row": 0,
+      "original": "5 0.385938 0.445021 0.123438 0.396266",
+      "box": [
+        0.3203125,
+        0.24896266,
+        0.13046875,
+        0.39211618
+      ],
+      "approved": true,
+      "proposalIndex": 33,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327660.jpg",
+      "row": 3,
+      "original": "5 0.490000 0.320000 0.080000 0.240000",
+      "box": [
+        0.46171875,
+        0.19294606,
+        0.08359375,
+        0.22614108
+      ],
+      "approved": true,
+      "proposalIndex": 34,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327728.jpg",
+      "row": 0,
+      "original": "5 0.562110 0.281640 0.086719 0.270747",
+      "box": [
+        0.51640625,
+        0.14522822,
+        0.08984375,
+        0.22925311
+      ],
+      "approved": true,
+      "proposalIndex": 35,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327798.jpg",
+      "row": 2,
+      "original": "7 0.495000 0.265000 0.090000 0.290000",
+      "box": [
+        0.45,
+        0.13070539,
+        0.06640625,
+        0.19087137
+      ],
+      "approved": true,
+      "proposalIndex": 36,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327826.jpg",
+      "row": 2,
+      "original": "7 0.475000 0.290000 0.110000 0.340000",
+      "box": [
+        0.42234375,
+        0.10134855,
+        0.15742187,
+        0.34549793
+      ],
+      "approved": true,
+      "proposalIndex": 37,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940327842.jpg",
+      "row": 2,
+      "original": "7 0.568750 0.362552 0.067187 0.262448",
+      "box": [
+        0.51015625,
+        0.2313278,
+        0.0953125,
+        0.26141079
+      ],
+      "approved": true,
+      "proposalIndex": 38,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940327870.jpg",
+      "row": 2,
+      "original": "7 0.531250 0.242220 0.104688 0.320539",
+      "box": [
+        0.4796875,
+        0.08246888,
+        0.1,
+        0.3155083
+      ],
+      "approved": true,
+      "proposalIndex": 39,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940327881.jpg",
+      "row": 2,
+      "original": "7 0.538671 0.355810 0.094531 0.267635",
+      "box": [
+        0.4890625,
+        0.22302905,
+        0.1,
+        0.26556017
+      ],
+      "approved": true,
+      "proposalIndex": 40,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940328266.jpg",
+      "row": 2,
+      "original": "7 0.565000 0.430000 0.270000 0.740000",
+      "box": [
+        0.42392188,
+        0.10655602,
+        0.26240625,
+        0.74589212
+      ],
+      "approved": true,
+      "proposalIndex": 41,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328291.jpg",
+      "row": 1,
+      "original": "3 0.503516 0.339211 0.164844 0.356846",
+      "box": [
+        0.42340625,
+        0.16585062,
+        0.1396875,
+        0.35257261
+      ],
+      "approved": true,
+      "proposalIndex": 42,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328311.jpg",
+      "row": 2,
+      "original": "3 0.500390 0.450726 0.205469 0.546680",
+      "box": [
+        0.40952344,
+        0.18371369,
+        0.19469531,
+        0.53850622
+      ],
+      "approved": true,
+      "proposalIndex": 43,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328362.jpg",
+      "row": 0,
+      "original": "3 0.350000 0.395000 0.120000 0.290000",
+      "box": [
+        0.3296875,
+        0.25414938,
+        0.10546875,
+        0.26037344
+      ],
+      "approved": true,
+      "proposalIndex": 44,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940328370.jpg",
+      "row": 0,
+      "original": "5 0.478125 0.463174 0.300000 0.864108",
+      "box": [
+        0.31875,
+        0.04149378,
+        0.33046875,
+        0.85892116
+      ],
+      "approved": true,
+      "proposalIndex": 45,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940328378.jpg",
+      "row": 0,
+      "original": "3 0.460547 0.399378 0.189844 0.632780",
+      "box": [
+        0.33913281,
+        0.08516598,
+        0.214875,
+        0.63153527
+      ],
+      "approved": true,
+      "proposalIndex": 46,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328396.jpg",
+      "row": 0,
+      "original": "3 0.372657 0.447615 0.196875 0.584025",
+      "box": [
+        0.27667969,
+        0.16268672,
+        0.19675,
+        0.57967842
+      ],
+      "approved": true,
+      "proposalIndex": 47,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328408.jpg",
+      "row": 0,
+      "original": "3 0.401563 0.540975 0.231250 0.693983",
+      "box": [
+        0.2828125,
+        0.19294606,
+        0.23984375,
+        0.68153527
+      ],
+      "approved": true,
+      "proposalIndex": 48,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "1794940328436.jpg",
+      "row": 0,
+      "original": "3 0.437890 0.583506 0.292969 0.832988",
+      "box": [
+        0.2914055,
+        0.167012,
+        0.292969,
+        0.832988
+      ],
+      "approved": true,
+      "proposalIndex": 49,
+      "method": "retained-original",
+      "reason": "Visually reviewed existing housing, retained; ambiguous/multi-lit colour unchanged."
+    },
+    {
+      "image": "1794940328453.jpg",
+      "row": 1,
+      "original": "3 0.416797 0.387449 0.282031 0.741701",
+      "box": [
+        0.29617188,
+        0.02116183,
+        0.26414062,
+        0.74489627
+      ],
+      "approved": true,
+      "proposalIndex": 50,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328467.jpg",
+      "row": 1,
+      "original": "3 0.403124 0.596472 0.284375 0.684647",
+      "box": [
+        0.296875,
+        0.25404564,
+        0.2284375,
+        0.68793568
+      ],
+      "approved": true,
+      "proposalIndex": 51,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328502.jpg",
+      "row": 0,
+      "original": "3 0.340235 0.500000 0.371094 1.000000",
+      "box": [
+        0.154688,
+        0,
+        0.371094,
+        1.0
+      ],
+      "approved": true,
+      "proposalIndex": 52,
+      "method": "retained-original",
+      "reason": "Visually reviewed existing housing, retained; ambiguous/multi-lit colour unchanged."
+    },
+    {
+      "image": "1794940328533.jpg",
+      "row": 1,
+      "original": "3 0.539844 0.288382 0.293750 0.576763",
+      "box": [
+        0.392969,
+        5e-07,
+        0.29375,
+        0.576763
+      ],
+      "approved": true,
+      "proposalIndex": 53,
+      "method": "retained-original",
+      "reason": "Visually reviewed existing housing, retained; ambiguous/multi-lit colour unchanged."
+    },
+    {
+      "image": "1794940328565.jpg",
+      "row": 1,
+      "original": "3 0.398828 0.514004 0.235156 0.669087",
+      "box": [
+        0.26703125,
+        0.18153527,
+        0.20290625,
+        0.66390041
+      ],
+      "approved": true,
+      "proposalIndex": 54,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328590.jpg",
+      "row": 2,
+      "original": "3 0.430468 0.520747 0.229687 0.651452",
+      "box": [
+        0.309375,
+        0.19989627,
+        0.24023438,
+        0.64897303
+      ],
+      "approved": true,
+      "proposalIndex": 55,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328613.jpg",
+      "row": 1,
+      "original": "3 0.447656 0.557053 0.254688 0.659751",
+      "box": [
+        0.32563281,
+        0.22977178,
+        0.24970312,
+        0.65897303
+      ],
+      "approved": true,
+      "proposalIndex": 56,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328625.jpg",
+      "row": 1,
+      "original": "3 0.385000 0.585000 0.250000 0.690000",
+      "box": [
+        0.17297656,
+        0.16068465,
+        0.28917969,
+        0.783361
+      ],
+      "approved": true,
+      "proposalIndex": 57,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328662.jpg",
+      "row": 0,
+      "original": "3 0.503516 0.312760 0.346094 0.625519",
+      "box": [
+        0.330469,
+        5e-07,
+        0.346094,
+        0.625519
+      ],
+      "approved": true,
+      "proposalIndex": 58,
+      "method": "retained-original",
+      "reason": "Visually reviewed existing housing, retained; ambiguous/multi-lit colour unchanged."
+    },
+    {
+      "image": "1794940328690.jpg",
+      "row": 1,
+      "original": "3 0.413672 0.451245 0.252344 0.715768",
+      "box": [
+        0.28859375,
+        0.10093361,
+        0.26009375,
+        0.70926349
+      ],
+      "approved": true,
+      "proposalIndex": 59,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328703.jpg",
+      "row": 2,
+      "original": "3 0.485000 0.515000 0.230000 0.610000",
+      "box": [
+        0.33040625,
+        0.20975104,
+        0.25175,
+        0.4859751
+      ],
+      "approved": true,
+      "proposalIndex": 60,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328724.jpg",
+      "row": 2,
+      "original": "3 0.519531 0.467843 0.237500 0.628631",
+      "box": [
+        0.402125,
+        0.1653527,
+        0.21675,
+        0.62134855
+      ],
+      "approved": true,
+      "proposalIndex": 61,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328736.jpg",
+      "row": 2,
+      "original": "7 0.464843 0.353216 0.260937 0.706432",
+      "box": [
+        0.334375,
+        0.0,
+        0.26414063,
+        0.70016598
+      ],
+      "approved": true,
+      "proposalIndex": 62,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "1794940328757.jpg",
+      "row": 1,
+      "original": "5 0.610000 0.365000 0.100000 0.370000",
+      "box": [
+        0.59057813,
+        0.19802905,
+        0.11760937,
+        0.32850622
+      ],
+      "approved": true,
+      "proposalIndex": 63,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    },
+    {
+      "image": "VID_20261117_223120_293_f000088.jpg",
+      "row": 2,
+      "original": "6 0.345312 0.341666 0.048958 0.164815",
+      "box": [
+        0.31796875,
+        0.25555556,
+        0.05390625,
+        0.17083333
+      ],
+      "approved": true,
+      "proposalIndex": 64,
+      "method": "visually-approved-proposal",
+      "reason": "Connected-component proposal visually approved against original pixels: full dark housing, not the stand or adjacent person."
+    },
+    {
+      "image": "VID_20261117_223120_495_f000360.jpg",
+      "row": 2,
+      "original": "5 0.678125 0.202778 0.083333 0.294444",
+      "box": [
+        0.6364585,
+        0.055556,
+        0.083333,
+        0.294444
+      ],
+      "approved": true,
+      "proposalIndex": 65,
+      "method": "retained-original",
+      "reason": "Enlarged visual re-review: reject the new manual right-wall extension and retain the better original housing box. No class change."
+    },
+    {
+      "image": "VID_20261117_223120_495_f000405.jpg",
+      "row": 1,
+      "original": "5 0.525000 0.681481 0.216667 0.637037",
+      "box": [
+        0.41694531,
+        0.36463889,
+        0.16111719,
+        0.52113889
+      ],
+      "approved": true,
+      "proposalIndex": 66,
+      "method": "manual",
+      "reason": "Manually corrected after visual context review: full dark housing, including tilt/clipping; exclude pole, people and wall."
+    }
+  ],
+  "videoNegatives": [
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 120,
+      "box": [
+        0,
+        0.55,
+        0.42,
+        0.45
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-1",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef"
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 135,
+      "box": [
+        0,
+        0.55,
+        0.42,
+        0.45
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-2",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef"
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 150,
+      "box": [
+        0,
+        0.55,
+        0.42,
+        0.45
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-3",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef"
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 180,
+      "box": [
+        0,
+        0.55,
+        0.42,
+        0.45
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-5",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef"
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 195,
+      "box": [
+        0,
+        0.55,
+        0.42,
+        0.45
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-6",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef"
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 135,
+      "box": [
+        0,
+        0.2,
+        0.25,
+        0.8
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-8",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef"
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 150,
+      "box": [
+        0,
+        0.2,
+        0.25,
+        0.8
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-9",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef"
+    },
+    {
+      "source": "VID_20261117_223120_293.mp4",
+      "frame": 0,
+      "box": [
+        0,
+        0.1,
+        0.28,
+        0.9
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-12",
+      "group": "5f6c92c6ef5b1381",
+      "sourceSha256": "105204a7c1e117ebb5810dec383e9dcf2d9908a2b5e651211e21d05f6a51ee85"
+    },
+    {
+      "source": "VID_20261117_223120_293.mp4",
+      "frame": 8,
+      "box": [
+        0,
+        0.1,
+        0.28,
+        0.9
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-13",
+      "group": "5f6c92c6ef5b1381",
+      "sourceSha256": "105204a7c1e117ebb5810dec383e9dcf2d9908a2b5e651211e21d05f6a51ee85"
+    },
+    {
+      "source": "VID_20261117_223120_293.mp4",
+      "frame": 16,
+      "box": [
+        0,
+        0.1,
+        0.28,
+        0.9
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-14",
+      "group": "5f6c92c6ef5b1381",
+      "sourceSha256": "105204a7c1e117ebb5810dec383e9dcf2d9908a2b5e651211e21d05f6a51ee85"
+    },
+    {
+      "source": "VID_20261117_223120_293.mp4",
+      "frame": 24,
+      "box": [
+        0,
+        0.1,
+        0.28,
+        0.9
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-15",
+      "group": "5f6c92c6ef5b1381",
+      "sourceSha256": "105204a7c1e117ebb5810dec383e9dcf2d9908a2b5e651211e21d05f6a51ee85"
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 55,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-16",
+      "group": "5f6c92c6ef5b1381",
+      "sourceSha256": "77c10bc166dbe8f6dd0a4f3c435359073f1eb0eb1aaea918223f5aa67fe3c553"
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 65,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-17",
+      "group": "5f6c92c6ef5b1381",
+      "sourceSha256": "77c10bc166dbe8f6dd0a4f3c435359073f1eb0eb1aaea918223f5aa67fe3c553"
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 75,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-18",
+      "group": "5f6c92c6ef5b1381",
+      "sourceSha256": "77c10bc166dbe8f6dd0a4f3c435359073f1eb0eb1aaea918223f5aa67fe3c553"
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 95,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-20",
+      "group": "5f6c92c6ef5b1381",
+      "sourceSha256": "77c10bc166dbe8f6dd0a4f3c435359073f1eb0eb1aaea918223f5aa67fe3c553"
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 105,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-21",
+      "group": "5f6c92c6ef5b1381",
+      "sourceSha256": "77c10bc166dbe8f6dd0a4f3c435359073f1eb0eb1aaea918223f5aa67fe3c553"
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 115,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-22",
+      "group": "5f6c92c6ef5b1381",
+      "sourceSha256": "77c10bc166dbe8f6dd0a4f3c435359073f1eb0eb1aaea918223f5aa67fe3c553"
+    },
+    {
+      "source": "VID_20261117_223120_495.mp4",
+      "frame": 145,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-23",
+      "group": "821de1e9b6138215",
+      "sourceSha256": "4acd5763cf4d8f3f5589c4afcdf8438213cd72cf6ed02b1acebcbb2f482eb691"
+    },
+    {
+      "source": "VID_20261117_223120_495.mp4",
+      "frame": 175,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-24",
+      "group": "821de1e9b6138215",
+      "sourceSha256": "4acd5763cf4d8f3f5589c4afcdf8438213cd72cf6ed02b1acebcbb2f482eb691"
+    },
+    {
+      "source": "VID_20261117_223120_495.mp4",
+      "frame": 205,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-25",
+      "group": "821de1e9b6138215",
+      "sourceSha256": "4acd5763cf4d8f3f5589c4afcdf8438213cd72cf6ed02b1acebcbb2f482eb691"
+    },
+    {
+      "source": "VID_20261117_223120_495.mp4",
+      "frame": 235,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-26",
+      "group": "821de1e9b6138215",
+      "sourceSha256": "4acd5763cf4d8f3f5589c4afcdf8438213cd72cf6ed02b1acebcbb2f482eb691"
+    },
+    {
+      "source": "VID_20261117_223120_495.mp4",
+      "frame": 295,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-28",
+      "group": "821de1e9b6138215",
+      "sourceSha256": "4acd5763cf4d8f3f5589c4afcdf8438213cd72cf6ed02b1acebcbb2f482eb691"
+    },
+    {
+      "source": "VID_20261117_223120_495.mp4",
+      "frame": 325,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-29",
+      "group": "821de1e9b6138215",
+      "sourceSha256": "4acd5763cf4d8f3f5589c4afcdf8438213cd72cf6ed02b1acebcbb2f482eb691"
+    },
+    {
+      "source": "VID_20261117_223120_495.mp4",
+      "frame": 355,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-30",
+      "group": "821de1e9b6138215",
+      "sourceSha256": "4acd5763cf4d8f3f5589c4afcdf8438213cd72cf6ed02b1acebcbb2f482eb691"
+    },
+    {
+      "source": "VID_20261117_223120_495.mp4",
+      "frame": 385,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-31",
+      "group": "821de1e9b6138215",
+      "sourceSha256": "4acd5763cf4d8f3f5589c4afcdf8438213cd72cf6ed02b1acebcbb2f482eb691"
+    },
+    {
+      "source": "VID_20261117_223120_495.mp4",
+      "frame": 415,
+      "box": [
+        0.79,
+        0,
+        0.21,
+        1
+      ],
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class.",
+      "approved": true,
+      "proposal": "background-32",
+      "group": "821de1e9b6138215",
+      "sourceSha256": "4acd5763cf4d8f3f5589c4afcdf8438213cd72cf6ed02b1acebcbb2f482eb691"
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 130,
+      "box": [
+        0.06,
+        0.58,
+        0.28,
+        0.42
+      ],
+      "approved": true,
+      "proposal": "foot-0",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef",
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class."
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 135,
+      "box": [
+        0.06,
+        0.58,
+        0.28,
+        0.42
+      ],
+      "approved": true,
+      "proposal": "foot-1",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef",
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class."
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 140,
+      "box": [
+        0.06,
+        0.58,
+        0.28,
+        0.42
+      ],
+      "approved": true,
+      "proposal": "foot-2",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef",
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class."
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 145,
+      "box": [
+        0.06,
+        0.58,
+        0.28,
+        0.42
+      ],
+      "approved": true,
+      "proposal": "foot-3",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef",
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class."
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 150,
+      "box": [
+        0.06,
+        0.58,
+        0.28,
+        0.42
+      ],
+      "approved": true,
+      "proposal": "foot-4",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef",
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class."
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 185,
+      "box": [
+        0.06,
+        0.58,
+        0.28,
+        0.42
+      ],
+      "approved": true,
+      "proposal": "foot-11",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef",
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class."
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 190,
+      "box": [
+        0.06,
+        0.58,
+        0.28,
+        0.42
+      ],
+      "approved": true,
+      "proposal": "foot-12",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef",
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class."
+    },
+    {
+      "source": "VID_20261117_223120_760.mp4",
+      "frame": 195,
+      "box": [
+        0.06,
+        0.58,
+        0.28,
+        0.42
+      ],
+      "approved": true,
+      "proposal": "foot-13",
+      "group": "545d06cef10a1ede",
+      "sourceSha256": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef",
+      "reason": "Visually checked complete crop: shoes/person, wall, door or floor; no STOP/pedestrian/bump SIGN, traffic housing or cone/bollard. Floor relief is not the bump-sign class."
+    }
+  ],
+  "rejectedNegativeProposals": {
+    "background": [
+      4,
+      7,
+      10,
+      11,
+      19,
+      27,
+      0
+    ],
+    "foot": [
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ]
+  },
+  "rejectionReason": "Visible/possible target bollards/signs; do not train them as target-free backgrounds. Background 0: a thin, partially visible red bollard behind the ankle at the top edge."
+}

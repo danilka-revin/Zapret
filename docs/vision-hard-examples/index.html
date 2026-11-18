@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Как видит модель — 6 сложных кадров</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #0a111d; color: #edf2fa; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1440px; margin: auto; padding: 40px 24px; }
+    .eyebrow { color: #97b6e3; font-size: .8rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { font-size: clamp(1.8rem, 4vw, 3rem); letter-spacing: -.04em; margin: 12px 0; }
+    .intro { color: #b8c5d9; max-width: 820px; line-height: 1.7; margin-bottom: 20px; }
+    a { color: #b3d1ff; text-underline-offset: 4px; }
+    a:focus-visible, button:focus-visible { outline: 3px solid #b3d1ff; outline-offset: 5px; }
+    .notice { border-left: 3px solid #eab86a; background: #19202c; padding: 14px 18px; color: #f4d8aa; line-height: 1.6; margin: 24px 0 30px; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+    .card { background: #111c2d; border: 1px solid #26364e; border-radius: 14px; overflow: hidden; }
+    .photo-link { display: block; position: relative; }
+    .photo-link img { display: block; width: 100%; height: auto; }
+    .zoom { position: absolute; right: 10px; bottom: 10px; background: #0a111de8; border: 1px solid #465c7d; border-radius: 20px; padding: 6px 12px; font-size: .8rem; }
+    .caption { padding: 18px; }
+    .caption h2 { font-size: 1.03rem; margin: 0 0 8px; }
+    .caption p { font-size: .92rem; line-height: 1.6; color: #b8c5d9; margin: 0; }
+    footer { color: #a2b2c9; font-size: .88rem; line-height: 1.7; margin-top: 30px; max-width: 950px; }
+    dialog { width: min(1400px, 98vw); max-height: 96dvh; padding: 0; border: 1px solid #465c7d; border-radius: 12px; background: #0a111d; color: #edf2fa; }
+    dialog::backdrop { background: #02060ded; }
+    .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; position: sticky; top: 0; padding: 12px 16px; background: #111c2df5; border-bottom: 1px solid #26364e; }
+    .toolbar h2 { flex: 1 1 240px; margin: 0; font-size: 1rem; }
+    button { font: inherit; color: inherit; background: #24364f; border: 1px solid #4a6282; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+    button:hover { background: #334d70; }
+    #large-photo { display: block; width: 100%; height: auto; }
+    .viewer-footer { padding: 16px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 14px; align-items: center; }
+    .viewer-nav { display: flex; gap: 8px; }
+    @media (max-width: 1050px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 620px) { main { padding: 28px 14px; } .grid { grid-template-columns: 1fr; } .toolbar { padding: 10px; } }
+    @media (prefers-reduced-motion: no-preference) { .photo-link img { transition: filter .15s; } .photo-link:hover img { filter: brightness(1.08); } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">YOLO · проверка на сложных кадрах</div>
+      <h1>Как видит модель</h1>
+      <p class="intro">Шесть реальных тестовых фотографий: дальние объекты, обрезанный знак, неудобный ракурс и сложный фон. Нажми на фото, чтобы рассмотреть рамки крупно. Стрелки ← → переключают кадры, Esc закрывает просмотр.</p>
+      <a href="overview.jpg" target="_blank" rel="noopener">Все 6 кадров на одном изображении ↗</a>
+      <div class="notice"><strong>Показываю и ошибки.</strong> Это сохранённые предсказания обученного кандидата, не новый прогон. Ложные рамки и пропуски оставлены как есть. Для автономной езды модель пока не готова.</div>
+    </header>
+    <section class="grid" aria-label="Шесть фотографий с рамками модели">
+      <article class="card">
+        <a class="photo-link" href="01-distant-stop.jpg" data-photo="0" aria-label="Увеличить: дальний STOP">
+          <img src="01-distant-stop.jpg" width="1280" height="1112" alt="Модель нашла дальний STOP с оценкой 0.87; синий знак и дальние столбики без рамок.">
+          <span class="zoom" aria-hidden="true">Увеличить ↗</span>
+        </a>
+        <div class="caption"><h2>01 · Дальний STOP</h2><p>STOP найден: 0.87. Другие объекты на заднем плане остались без рамок.</p></div>
+      </article>
+      <article class="card">
+        <a class="photo-link" href="02-cropped-stop.jpg" data-photo="1" aria-label="Увеличить: обрезанный STOP">
+          <img src="02-cropped-stop.jpg" width="1280" height="1112" alt="Часть STOP за границей кадра; модель нашла знак с оценкой 0.52.">
+          <span class="zoom" aria-hidden="true">Увеличить ↗</span>
+        </a>
+        <div class="caption"><h2>02 · Знак обрезан краем кадра</h2><p>Часть STOP не видна, но знак найден: 0.52.</p></div>
+      </article>
+      <article class="card">
+        <a class="photo-link" href="03-edge-on-bump.jpg" data-photo="2" aria-label="Увеличить: знак неровности почти ребром">
+          <img src="03-edge-on-bump.jpg" width="1280" height="1112" alt="Узкий знак неровности под острым углом найден с низкой оценкой 0.32.">
+          <span class="zoom" aria-hidden="true">Увеличить ↗</span>
+        </a>
+        <div class="caption"><h2>03 · Неровность почти ребром</h2><p>Класс определён правильно, но оценка низкая: 0.32. Речь о знаке, не о рельефе пола.</p></div>
+      </article>
+      <article class="card">
+        <a class="photo-link" href="04-clutter-and-false-positive.jpg" data-photo="3" aria-label="Увеличить: сложный фон и ложная рамка">
+          <img src="04-clutter-and-false-positive.jpg" width="1280" height="1112" loading="lazy" alt="Столбик найден с оценкой 0.82, но на фоне людей и стульев есть ложная рамка конус с оценкой 0.26.">
+          <span class="zoom" aria-hidden="true">Увеличить ↗</span>
+        </a>
+        <div class="caption"><h2>04 · Люди, стулья и лишняя рамка</h2><p>Столбик найден: 0.82. На фоне есть ошибка — лишний «конус» с оценкой 0.26.</p></div>
+      </article>
+      <article class="card">
+        <a class="photo-link" href="05-unknown-green.jpg" data-photo="4" aria-label="Увеличить: цвет светофора неизвестен">
+          <img src="05-unknown-green.jpg" width="1280" height="1112" loading="lazy" alt="На светофоре виден зелёный, но модель нашла только корпус и не подтвердила цвет.">
+          <span class="zoom" aria-hidden="true">Увеличить ↗</span>
+        </a>
+        <div class="caption"><h2>05 · Зелёный не подтверждён</h2><p>Корпус светофора найден, итоговый цвет — «неизвестно», хотя визуально горит зелёная секция.</p></div>
+      </article>
+      <article class="card">
+        <a class="photo-link" href="06-missed-traffic-light.jpg" data-photo="5" aria-label="Увеличить: пропущенный светофор">
+          <img src="06-missed-traffic-light.jpg" width="1280" height="1112" loading="lazy" alt="Наклонённая сцена: светофор полностью пропущен, рамка есть только у столбика.">
+          <span class="zoom" aria-hidden="true">Увеличить ↗</span>
+        </a>
+        <div class="caption"><h2>06 · Светофор пропущен</h2><p>При наклоне сцены светофор остался совсем без рамки. Найден только столбик.</p></div>
+      </article>
+    </section>
+    <footer>Рамки взяты без изменений из сохранённого тестового прогона YOLO + HSV fusion: вход 512 px, порог 0.25. Число у рамки — score детектора, не измеренная точность и не вероятность правильного цвета. Подписи под фото — пояснения к результатам. Рабочие веса робота не менялись.</footer>
+  </main>
+  <dialog id="photo-viewer" aria-labelledby="photo-title">
+    <div class="toolbar">
+      <h2 id="photo-title">Фото</h2>
+      <button type="button" id="close-viewer" aria-label="Закрыть просмотр фотографии">Закрыть ✕</button>
+    </div>
+    <img id="large-photo" alt="">
+    <div class="viewer-footer">
+      <a id="original-photo" href="01-distant-stop.jpg" target="_blank" rel="noopener">Открыть JPG в полном размере ↗</a>
+      <div class="viewer-nav"><button type="button" id="previous-photo" aria-label="Предыдущее фото">← Назад</button><button type="button" id="next-photo" aria-label="Следующее фото">Далее →</button></div>
+    </div>
+  </dialog>
+  <script>
+    (() => {
+      const viewer = document.getElementById('photo-viewer');
+      const links = Array.from(document.querySelectorAll('[data-photo]'));
+      const largePhoto = document.getElementById('large-photo');
+      const title = document.getElementById('photo-title');
+      const original = document.getElementById('original-photo');
+      let current = 0;
+      function show(index) {
+        current = (index + links.length) % links.length;
+        const link = links[current];
+        largePhoto.src = link.getAttribute('href');
+        largePhoto.alt = link.querySelector('img').alt;
+        title.textContent = link.closest('article').querySelector('h2').textContent;
+        original.href = link.getAttribute('href');
+        viewer.scrollTop = 0;
+      }
+      links.forEach((link, index) => link.addEventListener('click', (event) => {
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || typeof viewer.showModal !== 'function') return;
+        event.preventDefault();
+        show(index);
+        viewer.showModal();
+      }));
+      document.getElementById('close-viewer').addEventListener('click', () => viewer.close());
+      document.getElementById('previous-photo').addEventListener('click', () => show(current - 1));
+      document.getElementById('next-photo').addEventListener('click', () => show(current + 1));
+      viewer.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+          event.preventDefault();
+          show(current + (event.key === 'ArrowRight' ? 1 : -1));
+        }
+      });
+      viewer.addEventListener('click', (event) => {
+        if (event.target !== viewer) return;
+        const bounds = viewer.getBoundingClientRect();
+        if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) viewer.close();
+      });
+    })();
+  </script>
+</body>
+</html>

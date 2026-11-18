@@ -1,0 +1,4136 @@
+{
+  "weights": "/home/user/Zapret/models/vision/yolo-stop-robot.pt",
+  "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "createdAt": "2026-11-17T23:58:18.500481+00:00",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "backend": "yolo+fusion",
+  "confidence": 0.15,
+  "iouMatch": 0.5,
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "trafficMode": "body",
+  "counts": {
+    "stop_sign": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "pedestrian_crossing": {
+      "tp": 2,
+      "fp": 1,
+      "fn": 0,
+      "precision": 0.6667,
+      "recall": 1.0
+    },
+    "speed_bump": {
+      "tp": 6,
+      "fp": 2,
+      "fn": 1,
+      "precision": 0.75,
+      "recall": 0.8571
+    },
+    "traffic_light": {
+      "tp": 19,
+      "fp": 2,
+      "fn": 8,
+      "precision": 0.9048,
+      "recall": 0.7037
+    },
+    "cone": {
+      "tp": 44,
+      "fp": 12,
+      "fn": 19,
+      "precision": 0.7857,
+      "recall": 0.6984
+    }
+  },
+  "signalConfusion": {
+    "unknown->red": 1,
+    "unknown->unknown": 5,
+    "red->unknown": 1,
+    "red->red": 4,
+    "yellow->missed": 1,
+    "green->unknown": 3,
+    "green->green": 1,
+    "red->missed": 5,
+    "yellow->yellow": 2,
+    "background->red": 2,
+    "green->missed": 1,
+    "unknown->missed": 1,
+    "red->green": 1,
+    "unknown->yellow": 1
+  },
+  "falseGreen": 1,
+  "latencyMedianMs": 61.86,
+  "latencyP95Ms": 89.9,
+  "warning": "Bootstrap/agent-assisted labels, NOT independent ground truth or a safety guarantee. Latency measured in this environment, not on robot hardware; excludes JPEG decode.",
+  "frames": [
+    {
+      "image": "1794903271194.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "stop_sign",
+        "traffic_light"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.92,
+          "box": {
+            "x": 0.4202,
+            "y": 0.0634,
+            "w": 0.2568,
+            "h": 0.6392
+          },
+          "signal": "red",
+          "signalCounts": {
+            "red": 764,
+            "yellow": 2,
+            "green": 84
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "stop_sign",
+          "label": "Знак «Стоп»",
+          "short": "STOP",
+          "action": "stop",
+          "color": "#ff3d71",
+          "confidence": 0.956,
+          "box": {
+            "x": 0.1123,
+            "y": 0.2589,
+            "w": 0.1493,
+            "h": 0.1914
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1
+        }
+      },
+      "signalConfusion": {
+        "unknown->red": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794903271267.jpg",
+      "groundTruthClasses": [
+        "stop_sign",
+        "traffic_light"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.715,
+          "box": {
+            "x": 0.4356,
+            "y": 0.1884,
+            "w": 0.2628,
+            "h": 0.6389
+          },
+          "signal": "unknown",
+          "signalCounts": {
+            "red": 1769,
+            "yellow": 862,
+            "green": 42
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "stop_sign",
+          "label": "Знак «Стоп»",
+          "short": "STOP",
+          "action": "stop",
+          "color": "#ff3d71",
+          "confidence": 0.945,
+          "box": {
+            "x": 0.1715,
+            "y": 0.2404,
+            "w": 0.1427,
+            "h": 0.1825
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "pedestrian_crossing",
+          "label": "Пешеходный переход",
+          "short": "ПЕШ",
+          "action": "slow",
+          "color": "#2f9bff",
+          "confidence": 0.167,
+          "box": {
+            "x": 0.0,
+            "y": 0.1541,
+            "w": 0.0808,
+            "h": 0.2417
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "unknown->unknown": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794903271415.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "pedestrian_crossing"
+      ],
+      "predictions": [
+        {
+          "class": "pedestrian_crossing",
+          "label": "Пешеходный переход",
+          "short": "ПЕШ",
+          "action": "slow",
+          "color": "#2f9bff",
+          "confidence": 0.963,
+          "box": {
+            "x": 0.5947,
+            "y": 0.2303,
+            "w": 0.1411,
+            "h": 0.1874
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794903271464.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone"
+      ],
+      "predictions": [],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 2
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794903271585.jpg",
+      "groundTruthClasses": [
+        "pedestrian_crossing",
+        "speed_bump"
+      ],
+      "predictions": [
+        {
+          "class": "pedestrian_crossing",
+          "label": "Пешеходный переход",
+          "short": "ПЕШ",
+          "action": "slow",
+          "color": "#2f9bff",
+          "confidence": 0.974,
+          "box": {
+            "x": 0.5581,
+            "y": 0.2043,
+            "w": 0.2512,
+            "h": 0.3548
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "action": "slow",
+          "color": "#ffb020",
+          "confidence": 0.506,
+          "box": {
+            "x": 0.2654,
+            "y": 0.3154,
+            "w": 0.1409,
+            "h": 0.2651
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794903271593.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "speed_bump"
+      ],
+      "predictions": [
+        {
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "action": "slow",
+          "color": "#ffb020",
+          "confidence": 0.85,
+          "box": {
+            "x": 0.4542,
+            "y": 0.3933,
+            "w": 0.144,
+            "h": 0.1893
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794903271601.jpg",
+      "groundTruthClasses": [
+        "speed_bump"
+      ],
+      "predictions": [
+        {
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "action": "slow",
+          "color": "#ffb020",
+          "confidence": 0.526,
+          "box": {
+            "x": 0.2419,
+            "y": 0.2112,
+            "w": 0.4797,
+            "h": 0.5524
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794903271618.jpg",
+      "groundTruthClasses": [
+        "stop_sign"
+      ],
+      "predictions": [
+        {
+          "class": "stop_sign",
+          "label": "Знак «Стоп»",
+          "short": "STOP",
+          "action": "stop",
+          "color": "#ff3d71",
+          "confidence": 0.968,
+          "box": {
+            "x": 0.288,
+            "y": 0.1472,
+            "w": 0.3531,
+            "h": 0.4866
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940325188.jpg",
+      "groundTruthClasses": [
+        "traffic_light_red"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.91,
+          "box": {
+            "x": 0.2559,
+            "y": 0.0505,
+            "w": 0.4137,
+            "h": 0.9495
+          },
+          "signal": "unknown",
+          "signalCounts": {
+            "red": 1516,
+            "yellow": 2163,
+            "green": 0
+          },
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "red->unknown": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940325199.jpg",
+      "groundTruthClasses": [
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.907,
+          "box": {
+            "x": 0.4496,
+            "y": 0.2254,
+            "w": 0.0953,
+            "h": 0.5117
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940325210.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.861,
+          "box": {
+            "x": 0.4325,
+            "y": 0.176,
+            "w": 0.0744,
+            "h": 0.3613
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.788,
+          "box": {
+            "x": 0.5112,
+            "y": 0.1985,
+            "w": 0.0513,
+            "h": 0.196
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940325244.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "traffic_light_red"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.918,
+          "box": {
+            "x": 0.2227,
+            "y": 0.0663,
+            "w": 0.3383,
+            "h": 0.8435
+          },
+          "signal": "red",
+          "signalCounts": {
+            "red": 12,
+            "yellow": 4,
+            "green": 0
+          },
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1
+        }
+      },
+      "signalConfusion": {
+        "red->red": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940325323.jpg",
+      "groundTruthClasses": [
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.866,
+          "box": {
+            "x": 0.5206,
+            "y": 0.2102,
+            "w": 0.0926,
+            "h": 0.4734
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940325375.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.852,
+          "box": {
+            "x": 0.4886,
+            "y": 0.2139,
+            "w": 0.0937,
+            "h": 0.4829
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 1
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940325429.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone",
+        "traffic_light_yellow"
+      ],
+      "predictions": [],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 2
+        }
+      },
+      "signalConfusion": {
+        "yellow->missed": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940325615.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone",
+        "cone",
+        "traffic_light_green"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.948,
+          "box": {
+            "x": 0.4403,
+            "y": 0.1057,
+            "w": 0.1161,
+            "h": 0.2901
+          },
+          "signal": "unknown",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 0,
+            "green": 6
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.819,
+          "box": {
+            "x": 0.0064,
+            "y": 0.6175,
+            "w": 0.0585,
+            "h": 0.2406
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.2,
+          "box": {
+            "x": 0.3481,
+            "y": 0.577,
+            "w": 0.0286,
+            "h": 0.1744
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 1,
+          "fn": 2
+        }
+      },
+      "signalConfusion": {
+        "green->unknown": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940325668.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "traffic_light_green"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.994,
+          "box": {
+            "x": 0.4522,
+            "y": 0.0,
+            "w": 0.3596,
+            "h": 0.9316
+          },
+          "signal": "green",
+          "signalCounts": {
+            "red": 716,
+            "yellow": 7,
+            "green": 2961
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.91,
+          "box": {
+            "x": 0.3926,
+            "y": 0.6882,
+            "w": 0.05,
+            "h": 0.2422
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "green->green": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940325901.jpg",
+      "groundTruthClasses": [
+        "traffic_light_red"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.728,
+          "box": {
+            "x": 0.1847,
+            "y": 0.8264,
+            "w": 0.0225,
+            "h": 0.0917
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "action": "slow",
+          "color": "#ffb020",
+          "confidence": 0.561,
+          "box": {
+            "x": 0.4819,
+            "y": 0.4843,
+            "w": 0.0609,
+            "h": 0.0833
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "red->missed": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940325912.jpg",
+      "groundTruthClasses": [
+        "traffic_light_yellow"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.763,
+          "box": {
+            "x": 0.1141,
+            "y": 0.0002,
+            "w": 0.4417,
+            "h": 0.9998
+          },
+          "signal": "yellow",
+          "signalCounts": {
+            "red": 46,
+            "yellow": 3357,
+            "green": 0
+          },
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "yellow->yellow": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940325976.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "traffic_light_red"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.279,
+          "box": {
+            "x": 0.4824,
+            "y": 0.2604,
+            "w": 0.0442,
+            "h": 0.1079
+          },
+          "signal": "red",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 0,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.529,
+          "box": {
+            "x": 0.2572,
+            "y": 0.5313,
+            "w": 0.0256,
+            "h": 0.1132
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 1
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "background->red": 1,
+        "red->missed": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940326047.jpg",
+      "groundTruthClasses": [
+        "traffic_light_red"
+      ],
+      "predictions": [
+        {
+          "class": "stop_sign",
+          "label": "Знак «Стоп»",
+          "short": "STOP",
+          "action": "stop",
+          "color": "#ff3d71",
+          "confidence": 0.948,
+          "box": {
+            "x": 0.5995,
+            "y": 0.1421,
+            "w": 0.1171,
+            "h": 0.1591
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "red->missed": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940326126.jpg",
+      "groundTruthClasses": [
+        "speed_bump",
+        "traffic_light_green"
+      ],
+      "predictions": [
+        {
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "action": "slow",
+          "color": "#ffb020",
+          "confidence": 0.937,
+          "box": {
+            "x": 0.4844,
+            "y": 0.4745,
+            "w": 0.0947,
+            "h": 0.1221
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.856,
+          "box": {
+            "x": 0.1754,
+            "y": 0.77,
+            "w": 0.0272,
+            "h": 0.126
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "green->missed": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940326199.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "traffic_light_red"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.891,
+          "box": {
+            "x": 0.5101,
+            "y": 0.3063,
+            "w": 0.0644,
+            "h": 0.3186
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "red->missed": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940326207.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.883,
+          "box": {
+            "x": 0.522,
+            "y": 0.287,
+            "w": 0.0944,
+            "h": 0.4226
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.869,
+          "box": {
+            "x": 0.6106,
+            "y": 0.2771,
+            "w": 0.0978,
+            "h": 0.4149
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940326224.jpg",
+      "groundTruthClasses": [
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.834,
+          "box": {
+            "x": 0.4097,
+            "y": 0.3631,
+            "w": 0.1149,
+            "h": 0.5253
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.432,
+          "box": {
+            "x": 0.8364,
+            "y": 0.5992,
+            "w": 0.1636,
+            "h": 0.4008
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 1,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940326954.jpg",
+      "groundTruthClasses": [
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.872,
+          "box": {
+            "x": 0.4851,
+            "y": 0.2986,
+            "w": 0.1136,
+            "h": 0.5569
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940327087.jpg",
+      "groundTruthClasses": [
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.818,
+          "box": {
+            "x": 0.4808,
+            "y": 0.3088,
+            "w": 0.143,
+            "h": 0.6434
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940327109.jpg",
+      "groundTruthClasses": [
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.865,
+          "box": {
+            "x": 0.393,
+            "y": 0.3377,
+            "w": 0.0498,
+            "h": 0.2581
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940327185.jpg",
+      "groundTruthClasses": [
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.678,
+          "box": {
+            "x": 0.5363,
+            "y": 0.1395,
+            "w": 0.1436,
+            "h": 0.6573
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940327313.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.896,
+          "box": {
+            "x": 0.4323,
+            "y": 0.3013,
+            "w": 0.0773,
+            "h": 0.3882
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.8,
+          "box": {
+            "x": 0.5609,
+            "y": 0.313,
+            "w": 0.0503,
+            "h": 0.2031
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940327326.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone",
+        "cone",
+        "cone",
+        "cone",
+        "traffic_light"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.786,
+          "box": {
+            "x": 0.4857,
+            "y": 0.2547,
+            "w": 0.152,
+            "h": 0.3938
+          },
+          "signal": "unknown",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 0,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.791,
+          "box": {
+            "x": 0.0575,
+            "y": 0.6534,
+            "w": 0.0569,
+            "h": 0.2481
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.416,
+          "box": {
+            "x": 0.1329,
+            "y": 0.6627,
+            "w": 0.0403,
+            "h": 0.2009
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 3
+        }
+      },
+      "signalConfusion": {
+        "unknown->unknown": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940327456.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone",
+        "cone",
+        "traffic_light_yellow"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.98,
+          "box": {
+            "x": 0.4454,
+            "y": 0.003,
+            "w": 0.1799,
+            "h": 0.4712
+          },
+          "signal": "yellow",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 985,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.785,
+          "box": {
+            "x": 0.1653,
+            "y": 0.5792,
+            "w": 0.0527,
+            "h": 0.232
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.33,
+          "box": {
+            "x": 0.231,
+            "y": 0.567,
+            "w": 0.0475,
+            "h": 0.2159
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 1
+        }
+      },
+      "signalConfusion": {
+        "yellow->yellow": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940327533.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone",
+        "traffic_light"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.955,
+          "box": {
+            "x": 0.5193,
+            "y": 0.1791,
+            "w": 0.088,
+            "h": 0.2202
+          },
+          "signal": "red",
+          "signalCounts": {
+            "red": 7,
+            "yellow": 0,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.546,
+          "box": {
+            "x": 0.2529,
+            "y": 0.5534,
+            "w": 0.0411,
+            "h": 0.1771
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.419,
+          "box": {
+            "x": 0.2012,
+            "y": 0.5616,
+            "w": 0.0455,
+            "h": 0.1922
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 1
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "background->red": 1,
+        "unknown->missed": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940327745.jpg",
+      "groundTruthClasses": [
+        "traffic_light_red"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.967,
+          "box": {
+            "x": 0.5221,
+            "y": 0.1624,
+            "w": 0.0895,
+            "h": 0.2287
+          },
+          "signal": "red",
+          "signalCounts": {
+            "red": 33,
+            "yellow": 0,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.242,
+          "box": {
+            "x": 0.2893,
+            "y": 0.5383,
+            "w": 0.0368,
+            "h": 0.1697
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.175,
+          "box": {
+            "x": 0.2409,
+            "y": 0.553,
+            "w": 0.0381,
+            "h": 0.1747
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 2,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "red->red": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940327787.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone",
+        "traffic_light_red"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.912,
+          "box": {
+            "x": 0.0828,
+            "y": 0.621,
+            "w": 0.052,
+            "h": 0.2241
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.877,
+          "box": {
+            "x": 0.1457,
+            "y": 0.6105,
+            "w": 0.049,
+            "h": 0.2062
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.548,
+          "box": {
+            "x": 0.5449,
+            "y": 0.2407,
+            "w": 0.0866,
+            "h": 0.2502
+          },
+          "signal": "green",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 0,
+            "green": 21
+          },
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "red->green": 1
+      },
+      "falseGreen": 1
+    },
+    {
+      "image": "1794940327807.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone",
+        "traffic_light_green"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.734,
+          "box": {
+            "x": 0.6456,
+            "y": 0.1677,
+            "w": 0.0874,
+            "h": 0.2347
+          },
+          "signal": "unknown",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 0,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.868,
+          "box": {
+            "x": 0.2425,
+            "y": 0.501,
+            "w": 0.0415,
+            "h": 0.1875
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.79,
+          "box": {
+            "x": 0.191,
+            "y": 0.5117,
+            "w": 0.0438,
+            "h": 0.2007
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "green->unknown": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940327858.jpg",
+      "groundTruthClasses": [
+        "speed_bump"
+      ],
+      "predictions": [
+        {
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "action": "slow",
+          "color": "#ffb020",
+          "confidence": 0.513,
+          "box": {
+            "x": 0.4574,
+            "y": 0.3219,
+            "w": 0.0806,
+            "h": 0.2002
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 1
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940327981.jpg",
+      "groundTruthClasses": [
+        "stop_sign"
+      ],
+      "predictions": [
+        {
+          "class": "stop_sign",
+          "label": "Знак «Стоп»",
+          "short": "STOP",
+          "action": "stop",
+          "color": "#ff3d71",
+          "confidence": 0.917,
+          "box": {
+            "x": 0.5574,
+            "y": 0.1928,
+            "w": 0.153,
+            "h": 0.2463
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.642,
+          "box": {
+            "x": 0.0351,
+            "y": 0.5177,
+            "w": 0.0241,
+            "h": 0.0947
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940327999.jpg",
+      "groundTruthClasses": [
+        "stop_sign"
+      ],
+      "predictions": [
+        {
+          "class": "stop_sign",
+          "label": "Знак «Стоп»",
+          "short": "STOP",
+          "action": "stop",
+          "color": "#ff3d71",
+          "confidence": 0.965,
+          "box": {
+            "x": 0.5381,
+            "y": 0.0747,
+            "w": 0.1842,
+            "h": 0.3086
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940328128.jpg",
+      "groundTruthClasses": [
+        "stop_sign"
+      ],
+      "predictions": [
+        {
+          "class": "stop_sign",
+          "label": "Знак «Стоп»",
+          "short": "STOP",
+          "action": "stop",
+          "color": "#ff3d71",
+          "confidence": 0.697,
+          "box": {
+            "x": 0.3971,
+            "y": 0.247,
+            "w": 0.0873,
+            "h": 0.1893
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940328153.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "speed_bump"
+      ],
+      "predictions": [
+        {
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "action": "slow",
+          "color": "#ffb020",
+          "confidence": 0.776,
+          "box": {
+            "x": 0.2493,
+            "y": 0.3068,
+            "w": 0.0742,
+            "h": 0.0995
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940328231.jpg",
+      "groundTruthClasses": [
+        "stop_sign"
+      ],
+      "predictions": [
+        {
+          "class": "stop_sign",
+          "label": "Знак «Стоп»",
+          "short": "STOP",
+          "action": "stop",
+          "color": "#ff3d71",
+          "confidence": 0.711,
+          "box": {
+            "x": 0.5092,
+            "y": 0.3895,
+            "w": 0.0587,
+            "h": 0.0964
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 1
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940328341.jpg",
+      "groundTruthClasses": [
+        "speed_bump"
+      ],
+      "predictions": [
+        {
+          "class": "speed_bump",
+          "label": "Искусственная неровность",
+          "short": "НЕРОВН",
+          "action": "slow",
+          "color": "#ffb020",
+          "confidence": 0.86,
+          "box": {
+            "x": 0.2927,
+            "y": 0.2841,
+            "w": 0.098,
+            "h": 0.1472
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940328484.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "traffic_light"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.875,
+          "box": {
+            "x": 0.3025,
+            "y": 0.0925,
+            "w": 0.2098,
+            "h": 0.5719
+          },
+          "signal": "yellow",
+          "signalCounts": {
+            "red": 247,
+            "yellow": 1295,
+            "green": 0
+          },
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1
+        }
+      },
+      "signalConfusion": {
+        "unknown->yellow": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940328517.jpg",
+      "groundTruthClasses": [
+        "traffic_light"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.899,
+          "box": {
+            "x": 0.2471,
+            "y": 0.013,
+            "w": 0.3753,
+            "h": 0.9034
+          },
+          "signal": "unknown",
+          "signalCounts": {
+            "red": 3410,
+            "yellow": 9028,
+            "green": 3248
+          },
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "unknown->unknown": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940328577.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "traffic_light"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.908,
+          "box": {
+            "x": 0.3021,
+            "y": 0.0143,
+            "w": 0.2833,
+            "h": 0.7911
+          },
+          "signal": "unknown",
+          "signalCounts": {
+            "red": 3872,
+            "yellow": 5054,
+            "green": 1678
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.851,
+          "box": {
+            "x": 0.1317,
+            "y": 0.5743,
+            "w": 0.0958,
+            "h": 0.4074
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "unknown->unknown": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940328650.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "traffic_light"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.921,
+          "box": {
+            "x": 0.2094,
+            "y": 0.1491,
+            "w": 0.245,
+            "h": 0.6818
+          },
+          "signal": "unknown",
+          "signalCounts": {
+            "red": 656,
+            "yellow": 2461,
+            "green": 1648
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.907,
+          "box": {
+            "x": 0.0381,
+            "y": 0.6659,
+            "w": 0.0899,
+            "h": 0.3339
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "unknown->unknown": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940328714.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone",
+        "traffic_light_red"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.861,
+          "box": {
+            "x": 0.4077,
+            "y": 0.2044,
+            "w": 0.1736,
+            "h": 0.479
+          },
+          "signal": "red",
+          "signalCounts": {
+            "red": 730,
+            "yellow": 6,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.293,
+          "box": {
+            "x": 0.3432,
+            "y": 0.6405,
+            "w": 0.0394,
+            "h": 0.2112
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.155,
+          "box": {
+            "x": 0.3896,
+            "y": 0.6486,
+            "w": 0.0384,
+            "h": 0.1902
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "red->red": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940328797.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone",
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.913,
+          "box": {
+            "x": 0.3656,
+            "y": 0.2344,
+            "w": 0.1286,
+            "h": 0.5837
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.412,
+          "box": {
+            "x": 0.4779,
+            "y": 0.1589,
+            "w": 0.1302,
+            "h": 0.5623
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 1
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "1794940328836.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone",
+        "traffic_light_green"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.29,
+          "box": {
+            "x": 0.3712,
+            "y": 0.0363,
+            "w": 0.216,
+            "h": 0.602
+          },
+          "signal": "unknown",
+          "signalCounts": {
+            "red": 3,
+            "yellow": 0,
+            "green": 246
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.727,
+          "box": {
+            "x": 0.2821,
+            "y": 0.609,
+            "w": 0.0456,
+            "h": 0.222
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.456,
+          "box": {
+            "x": 0.3307,
+            "y": 0.597,
+            "w": 0.045,
+            "h": 0.2211
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "green->unknown": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "VID_20261117_223120_204_f000000.jpg",
+      "groundTruthClasses": [
+        "traffic_light_red"
+      ],
+      "predictions": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.839,
+          "box": {
+            "x": 0.5543,
+            "y": 0.0435,
+            "w": 0.0442,
+            "h": 0.1442
+          },
+          "signal": "red",
+          "signalCounts": {
+            "red": 26,
+            "yellow": 0,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.438,
+          "box": {
+            "x": 0.3512,
+            "y": 0.3314,
+            "w": 0.0282,
+            "h": 0.1545
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.34,
+          "box": {
+            "x": 0.4335,
+            "y": 0.3159,
+            "w": 0.0298,
+            "h": 0.154
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 2,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "red->red": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "VID_20261117_223120_204_f000044.jpg",
+      "groundTruthClasses": [
+        "traffic_light_red"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.625,
+          "box": {
+            "x": 0.3782,
+            "y": 0.3493,
+            "w": 0.0311,
+            "h": 0.176
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.535,
+          "box": {
+            "x": 0.4714,
+            "y": 0.3256,
+            "w": 0.0306,
+            "h": 0.1799
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 2,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {
+        "red->missed": 1
+      },
+      "falseGreen": 0
+    },
+    {
+      "image": "VID_20261117_223120_204_f000088.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.918,
+          "box": {
+            "x": 0.3364,
+            "y": 0.3546,
+            "w": 0.0411,
+            "h": 0.2233
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.569,
+          "box": {
+            "x": 0.4545,
+            "y": 0.3379,
+            "w": 0.0358,
+            "h": 0.2367
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "VID_20261117_223120_204_f000132.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.862,
+          "box": {
+            "x": 0.2862,
+            "y": 0.3433,
+            "w": 0.0597,
+            "h": 0.3144
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.727,
+          "box": {
+            "x": 0.4497,
+            "y": 0.3199,
+            "w": 0.0489,
+            "h": 0.2693
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.316,
+          "box": {
+            "x": 0.6061,
+            "y": 0.2982,
+            "w": 0.0478,
+            "h": 0.2489
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 2,
+          "fp": 1,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "VID_20261117_223120_204_f000176.jpg",
+      "groundTruthClasses": [
+        "cone",
+        "cone",
+        "cone",
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.884,
+          "box": {
+            "x": 0.1832,
+            "y": 0.4705,
+            "w": 0.1104,
+            "h": 0.5295
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.832,
+          "box": {
+            "x": 0.6827,
+            "y": 0.3168,
+            "w": 0.0653,
+            "h": 0.3648
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.817,
+          "box": {
+            "x": 0.4582,
+            "y": 0.3753,
+            "w": 0.0724,
+            "h": 0.4222
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 3,
+          "fp": 0,
+          "fn": 1
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "VID_20261117_223120_204_f000220.jpg",
+      "groundTruthClasses": [
+        "cone"
+      ],
+      "predictions": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.786,
+          "box": {
+            "x": 0.62,
+            "y": 0.674,
+            "w": 0.1401,
+            "h": 0.3248
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "VID_20261117_223120_211_f000000.jpg",
+      "groundTruthClasses": [],
+      "predictions": [],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "VID_20261117_223120_211_f000022.jpg",
+      "groundTruthClasses": [],
+      "predictions": [],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "VID_20261117_223120_211_f000044.jpg",
+      "groundTruthClasses": [],
+      "predictions": [],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "VID_20261117_223120_211_f000066.jpg",
+      "groundTruthClasses": [],
+      "predictions": [],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    },
+    {
+      "image": "VID_20261117_223120_211_f000088.jpg",
+      "groundTruthClasses": [],
+      "predictions": [],
+      "counts": {
+        "stop_sign": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "pedestrian_crossing": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "speed_bump": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "traffic_light": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        },
+        "cone": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "signalConfusion": {},
+      "falseGreen": 0
+    }
+  ]
+}

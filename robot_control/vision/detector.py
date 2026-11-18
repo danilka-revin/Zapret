@@ -2,8 +2,8 @@
 
 ``HeuristicDetector`` нужен не «для галочки»: он
 
-1. автоматически размечает 54 фотографии из архива ``yolo-stop`` (в архиве
-   есть только JPEG, без ``.txt``), то есть готовит обучающую выборку;
+1. служит основой предложений разметки; актуальный расширенный датасет
+   собирают ``scripts/vision_dataset.py`` и ``scripts/vision_bootstrap.py``;
 2. работает на роботе прямо сейчас, даже если PyTorch/веса YOLO не установлены;
 3. выдаёт ровно тот же список ``Detection``, что и обученная модель.
 
@@ -23,8 +23,8 @@ try:  # OpenCV уже используется camera.py; отсутствие �
 except ImportError:  # pragma: no cover - на роботе без cv2 сервис честно выключен
     cv2 = None  # type: ignore[assignment]
 
-from .classes import CLASS_INFO, CLASS_NAMES, class_id, normalize_class
-from .traffic import classify_traffic_light
+from .classes import CLASS_INFO, CLASS_NAMES, class_id, normalize_class, signal_from_class
+from .traffic import classify_traffic_light, fuse_signal, verify_traffic_light
 
 
 def cv2_available() -> bool:
@@ -88,10 +88,21 @@ def iou(a: Detection, b: Detection) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def non_max_suppression(items: Iterable[Detection], threshold: float = 0.45) -> list[Detection]:
-    """Оставляет самую уверенную рамку в каждом классе среди пересекающихся."""
+def non_max_suppression(items: Iterable[Detection], threshold: float = 0.45, *,
+                        conservative_signals: bool = False) -> list[Detection]:
+    """Подавить дубли одного класса; конфликтующие сигналы не выбирают green.
+
+    YOLO делает NMS по восьми исходным классам. После свёртки в публичные
+    пять один корпус может иметь и red, и более уверенный green. Для новой
+    цветовой модели red/yellow/unknown должны пережить такой конфликт.
+    """
+    def priority(det: Detection) -> tuple[int, float]:
+        signal = {"red": 3, "yellow": 2, "unknown": 1, "green": 0}
+        rank = signal.get(det.color or "unknown", 1) if conservative_signals and det.cls == "traffic_light" else 0
+        return rank, det.confidence
+
     kept: list[Detection] = []
-    for candidate in sorted(items, key=lambda d: d.confidence, reverse=True):
+    for candidate in sorted(items, key=priority, reverse=True):
         if any(candidate.cls == other.cls and iou(candidate, other) > threshold for other in kept):
             continue
         kept.append(candidate)
@@ -342,27 +353,46 @@ class YoloDetector:
     """Обёртка над Ultralytics YOLO; маппит ``model.names`` в наши классы."""
 
     def __init__(self, model_path: str, *, confidence: float = 0.45,
-                 iou: float = 0.45, prefer_red: bool = False) -> None:
+                 iou: float = 0.45, prefer_red: bool = False,
+                 imgsz: int = 416, device: str = "cpu",
+                 traffic_mode: str = "legacy") -> None:
+        if traffic_mode not in ("legacy", "body", "verified"):
+            raise ValueError("traffic_mode must be legacy, body or verified")
+        self.traffic_mode = traffic_mode
         from ultralytics import YOLO  # импорт только когда веса реально есть
 
         self.model_path = str(model_path)
         self.confidence = float(confidence)
         self.iou = float(iou)
         self.prefer_red = bool(prefer_red)
+        self.imgsz = max(160, min(1280, int(imgsz) // 32 * 32))
+        self.device = device
         self.model = YOLO(self.model_path)
         self.names: dict[int, str] = {}
-        for key, value in (getattr(self.model, "names", None) or {}).items():
+        self.signals: dict[int, str] = {}
+        names = getattr(self.model, "names", None) or {}
+        entries = names.items() if isinstance(names, dict) else enumerate(names)
+        for key, value in entries:
             canonical = normalize_class(value)
             if canonical:
                 self.names[int(key)] = canonical
+            signal = signal_from_class(value)
+            if signal:
+                self.signals[int(key)] = signal
+        self.has_signal_classes = bool(self.signals)
+        if not self.names:
+            raise ValueError("модель не содержит поддерживаемых классов знаков")
 
     def set_confidence(self, value: float) -> None:
         self.confidence = max(0.05, min(0.95, float(value)))
 
     def detect(self, frame_bgr: Any) -> list[Detection]:
         frame = np.asarray(frame_bgr)
+        if frame.ndim != 3 or frame.shape[2] < 3 or not frame.size:
+            return []
+        frame = frame[..., :3]
         results = self.model.predict(frame, conf=self.confidence, iou=self.iou,
-                                     verbose=False, device="cpu")
+                                     imgsz=self.imgsz, verbose=False, device=self.device)
         h, w = frame.shape[:2]
         found: list[Detection] = []
         for result in results:
@@ -375,29 +405,63 @@ class YoloDetector:
                 if cls is None:
                     continue
                 x1, y1, x2, y2 = (float(v) for v in box.xyxy[0].tolist())
+                confidence = float(box.conf.item())
+                if not all(math.isfinite(v) for v in (x1, y1, x2, y2, confidence)):
+                    continue
+                x1, x2 = max(0.0, min(w, x1)), max(0.0, min(w, x2))
+                y1, y2 = max(0.0, min(h, y1)), max(0.0, min(h, y2))
+                if x2 <= x1 or y2 <= y1:
+                    continue
                 det = Detection(cls, (x1 / w, y1 / h, (x2 - x1) / w, (y2 - y1) / h),
-                                float(box.conf.item()), source="yolo")
+                                confidence, color=self.signals.get(cls_id), source="yolo")
                 found.append(det)
-        kept = non_max_suppression(found, self.iou)
         coloured: list[Detection] = []
-        for det in kept:
+        for det in found:
             if det.cls != "traffic_light":
                 coloured.append(det)
                 continue
             x, y, bw, bh = det.box
             roi = frame[int(y * h):int((y + bh) * h), int(x * w):int((x + bw) * w)]
-            signal = classify_traffic_light(roi, prefer_red=self.prefer_red)
+            if self.traffic_mode == "verified":
+                signal = verify_traffic_light(roi, prefer_red=self.prefer_red)
+                if not signal["validBody"]:
+                    continue
+                # Section geometry is additional evidence, not a replacement
+                # for learned green agreement. A 5-class localizer cannot
+                # grant green in this mode; dark/ambiguous evidence never
+                # falls back to the colour head's guess either.
+                state = (fuse_signal(det.color, signal["state"], colour_model=True)
+                         if signal["state"] != "unknown" else "unknown")
+            else:
+                signal = classify_traffic_light(roi, prefer_red=self.prefer_red)
+                state = fuse_signal(det.color, signal["state"], colour_model=self.has_signal_classes)
             coloured.append(Detection(det.cls, det.box, det.confidence,
-                                      signal["state"], signal["counts"], "yolo"))
-        return coloured
+                                      state, signal["counts"], "yolo"))
+        merged = non_max_suppression(coloured, self.iou,
+                                     conservative_signals=self.has_signal_classes or self.traffic_mode == "verified")
+        if self.traffic_mode != "body":
+            return merged
+        # Body-only guard is a POST-NMS filter: it can only DELETE legacy
+        # outputs, never add a green or let a previously suppressed green
+        # escape a conflicting red/unknown. Colour fusion stays identical.
+        guarded: list[Detection] = []
+        for det in merged:
+            if det.cls != "traffic_light":
+                guarded.append(det)
+                continue
+            x, y, bw, bh = det.box
+            roi = frame[int(y*h):int((y+bh)*h), int(x*w):int((x+bw)*w)]
+            if verify_traffic_light(roi, prefer_red=self.prefer_red)["validBody"]:
+                guarded.append(det)
+        return guarded
 
 
 class EnsembleDetector:
     """YOLO + встроенный детектор: берём сильное, не теряем дальние объекты.
 
-    На 54 кадрах модель учится уверенно находить знаки, а эвристика лучше
-    ловит мелкие конусы и секции светодиодного табло. При пересечении рамок
-    одного класса побеждает YOLO; остальные находки добавляются как есть.
+    Эвристика дополняет пропуски (это не гарантия качества на новой сцене).
+    При пересечении рамок одного класса побеждает YOLO; остальные находки
+    добавляются как есть, но не обходят проверку согласия для green.
     """
 
     def __init__(self, yolo: YoloDetector, heuristic: HeuristicDetector) -> None:
@@ -413,10 +477,18 @@ class EnsembleDetector:
         extra = self.heuristic.detect(frame_bgr)
         merged = list(primary)
         for candidate in extra:
+            # Extra heuristic boxes cannot bypass verified body/section checks.
+            if getattr(self.yolo, "traffic_mode", "legacy") in ("body", "verified") and candidate.cls == "traffic_light":
+                continue
             threshold = 0.25 if candidate.cls == "traffic_light" else 0.40
             if any(other.cls == candidate.cls and iou(candidate, other) > threshold
                    for other in primary):
                 continue
+            # Эвристика не должна обходить проверку YOLO+HSV для green.
+            if (getattr(self.yolo, "has_signal_classes", False) and
+                    candidate.cls == "traffic_light" and candidate.color == "green"):
+                candidate = Detection(candidate.cls, candidate.box, candidate.confidence,
+                                      "unknown", candidate.color_counts, candidate.source)
             merged.append(candidate)
         return non_max_suppression(merged, 0.45)
 

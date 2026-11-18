@@ -1,0 +1,304 @@
+{
+  "method": "Agent visual audit of all 260 training and 61 validation thumbnails plus 139 traffic crops. Canonical labels/test are NOT edited. Second pass inspected all 84 retained TRAIN traffic frames at full-scene and crop scale; 17 more shifted-box sources excluded. Signal-only TRAIN corrections: 3=off/ambiguous/multiple, 5=red, 6=yellow, 7=green. No new coordinates fabricated. All 66 proposed cone deletions visually audited: retain 13 real/partial/grouped bollard rows, remove only the other 53. Existing partial/grouped box quality is still imperfect.",
+  "exclusionReason": "Obvious displaced/oversized traffic boxes or false STOP boxes. Only TRAIN excluded; canonical coordinates and splits unchanged.",
+  "excludeTrainImages": [
+    "1794903271159.jpg",
+    "1794903271185.jpg",
+    "1794903271290.jpg",
+    "1794903271329.jpg",
+    "1794903271433.jpg",
+    "1794903271567.jpg",
+    "1794940325232.jpg",
+    "1794940325291.jpg",
+    "1794940325449.jpg",
+    "1794940325460.jpg",
+    "1794940325473.jpg",
+    "1794940325487.jpg",
+    "1794940325636.jpg",
+    "1794940325692.jpg",
+    "1794940325834.jpg",
+    "1794940325844.jpg",
+    "1794940325862.jpg",
+    "1794940325874.jpg",
+    "1794940325924.jpg",
+    "1794940325940.jpg",
+    "1794940325950.jpg",
+    "1794940325959.jpg",
+    "1794940325985.jpg",
+    "1794940325995.jpg",
+    "1794940326005.jpg",
+    "1794940326013.jpg",
+    "1794940326024.jpg",
+    "1794940326073.jpg",
+    "1794940326084.jpg",
+    "1794940326103.jpg",
+    "1794940326137.jpg",
+    "1794940326160.jpg",
+    "1794940326170.jpg",
+    "1794940326181.jpg",
+    "1794940327348.jpg",
+    "1794940327395.jpg",
+    "1794940327423.jpg",
+    "1794940327432.jpg",
+    "1794940327466.jpg",
+    "1794940327524.jpg",
+    "1794940327893.jpg",
+    "1794940328280.jpg",
+    "1794940328351.jpg",
+    "1794940328386.jpg",
+    "1794940328544.jpg",
+    "1794940328602.jpg",
+    "1794940328847.jpg",
+    "VID_20261117_223120_293_f000132.jpg"
+  ],
+  "negativeCrops": [
+    {
+      "image": "1794940325419.jpg",
+      "box": [
+        0,
+        0.1,
+        0.65,
+        0.9
+      ],
+      "reason": "Foot, trouser leg, luggage and floor; no target in this crop."
+    },
+    {
+      "image": "1794940326790.jpg",
+      "box": [
+        0,
+        0.05,
+        0.35,
+        0.9
+      ],
+      "reason": "Person, hand and furniture to the left of the only bollard."
+    },
+    {
+      "image": "1794940326975.jpg",
+      "box": [
+        0,
+        0.05,
+        0.35,
+        0.9
+      ],
+      "reason": "Chairs and box to the left of the bollard."
+    },
+    {
+      "image": "1794940326983.jpg",
+      "box": [
+        0,
+        0.05,
+        0.52,
+        0.9
+      ],
+      "reason": "People and chairs; the only bollard is outside to the right."
+    },
+    {
+      "image": "1794940326992.jpg",
+      "box": [
+        0,
+        0.05,
+        0.35,
+        0.9
+      ],
+      "reason": "Purple shirt, arm and furniture, outside the bollard."
+    },
+    {
+      "image": "1794940327648.jpg",
+      "box": [
+        0.67,
+        0,
+        0.33,
+        1
+      ],
+      "reason": "Brown door and paper, not a traffic light or cone."
+    },
+    {
+      "image": "1794940327549.jpg",
+      "box": [
+        0.68,
+        0.05,
+        0.32,
+        0.95
+      ],
+      "reason": "Door with false source cone boxes; no physical cone in this crop."
+    },
+    {
+      "image": "1794940327494.jpg",
+      "box": [
+        0.72,
+        0,
+        0.28,
+        1
+      ],
+      "reason": "Door, paper and handle only."
+    },
+    {
+      "image": "1794940327541.jpg",
+      "box": [
+        0.7,
+        0,
+        0.3,
+        1
+      ],
+      "reason": "Door area to the right of the real traffic light."
+    },
+    {
+      "image": "VID_20261117_223120_293_f000000.jpg",
+      "box": [
+        0,
+        0.18,
+        0.28,
+        0.82
+      ],
+      "reason": "Walking person, black shoes and floor; signs are outside crop."
+    },
+    {
+      "image": "VID_20261117_223120_760_f000160.jpg",
+      "box": [
+        0,
+        0.3,
+        0.27,
+        0.7
+      ],
+      "reason": "Foreground trouser legs, shoes and hand; no sign or bollard."
+    }
+  ],
+  "warning": "All exclusions and additions are training-only, agent-assisted. Remaining pseudo-label errors and incomplete instances exist.",
+  "trainSignalClasses": {
+    "1794903271152.jpg": 6,
+    "1794903271177.jpg": 6,
+    "1794903271202.jpg": 7,
+    "1794903271219.jpg": 3,
+    "1794903271234.jpg": 7,
+    "1794903271251.jpg": 3,
+    "1794903271259.jpg": 6,
+    "1794903271388.jpg": 5,
+    "1794903271397.jpg": 5,
+    "1794903271405.jpg": 5,
+    "1794940325507.jpg": 6,
+    "1794940325527.jpg": 6,
+    "1794940325547.jpg": 5,
+    "1794940325574.jpg": 5,
+    "1794940325718.jpg": 6,
+    "1794940325790.jpg": 6,
+    "1794940325967.jpg": 7,
+    "1794940326232.jpg": 5,
+    "1794940326241.jpg": 5,
+    "1794940327373.jpg": 3,
+    "1794940327414.jpg": 5,
+    "1794940327441.jpg": 6,
+    "1794940327494.jpg": 6,
+    "1794940327505.jpg": 6,
+    "1794940327513.jpg": 6,
+    "1794940327541.jpg": 6,
+    "1794940327549.jpg": 5,
+    "1794940327569.jpg": 5,
+    "1794940327577.jpg": 3,
+    "1794940327589.jpg": 6,
+    "1794940327605.jpg": 3,
+    "1794940327624.jpg": 3,
+    "1794940327638.jpg": 3,
+    "1794940327648.jpg": 5,
+    "1794940327660.jpg": 5,
+    "1794940327728.jpg": 5,
+    "1794940327798.jpg": 7,
+    "1794940327826.jpg": 7,
+    "1794940327842.jpg": 7,
+    "1794940327870.jpg": 7,
+    "1794940327881.jpg": 7,
+    "1794940328266.jpg": 7,
+    "1794940328291.jpg": 3,
+    "1794940328311.jpg": 3,
+    "1794940328362.jpg": 3,
+    "1794940328370.jpg": 5,
+    "1794940328378.jpg": 3,
+    "1794940328396.jpg": 3,
+    "1794940328408.jpg": 3,
+    "1794940328436.jpg": 3,
+    "1794940328453.jpg": 3,
+    "1794940328467.jpg": 3,
+    "1794940328502.jpg": 3,
+    "1794940328533.jpg": 3,
+    "1794940328565.jpg": 3,
+    "1794940328590.jpg": 3,
+    "1794940328613.jpg": 3,
+    "1794940328625.jpg": 3,
+    "1794940328662.jpg": 3,
+    "1794940328690.jpg": 3,
+    "1794940328703.jpg": 3,
+    "1794940328724.jpg": 3,
+    "1794940328736.jpg": 7,
+    "1794940328757.jpg": 5,
+    "VID_20261117_223120_293_f000088.jpg": 6,
+    "VID_20261117_223120_495_f000360.jpg": 5,
+    "VID_20261117_223120_495_f000405.jpg": 5
+  },
+  "signalReviewWarning": "Manual agent-assisted signal review, not independent human GT. Weak/off and simultaneously bright sections mapped to ambiguous, not a permissive green. Validation signal labels unchanged, including known noise.",
+  "keepTrainConeLabels": [
+    {
+      "image": "1794903271152.jpg",
+      "row": 0,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    },
+    {
+      "image": "1794903271152.jpg",
+      "row": 1,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    },
+    {
+      "image": "1794903271152.jpg",
+      "row": 2,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    },
+    {
+      "image": "1794903271177.jpg",
+      "row": 0,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    },
+    {
+      "image": "1794903271202.jpg",
+      "row": 0,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    },
+    {
+      "image": "1794903271202.jpg",
+      "row": 1,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    },
+    {
+      "image": "1794903271234.jpg",
+      "row": 0,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    },
+    {
+      "image": "1794903271251.jpg",
+      "row": 0,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    },
+    {
+      "image": "1794903271298.jpg",
+      "row": 0,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    },
+    {
+      "image": "1794903271321.jpg",
+      "row": 0,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    },
+    {
+      "image": "1794903271344.jpg",
+      "row": 0,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    },
+    {
+      "image": "1794903271388.jpg",
+      "row": 0,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    },
+    {
+      "image": "1794903271544.jpg",
+      "row": 0,
+      "reason": "Agent visual second pass: real cone/bollard (occasionally partial/grouped). Do NOT erase a real object solely on the orange/white shape filter."
+    }
+  ]
+}

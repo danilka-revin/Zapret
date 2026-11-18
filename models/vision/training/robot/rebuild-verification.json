@@ -1,0 +1,9 @@
+{
+  "exactRebuild": true,
+  "fingerprint": "0346f1b0d8f18fcb2d0dabf0baeac799947cd16c4971a1b10635961f622803bf",
+  "comparedImageAndLabelFiles": 716,
+  "canonicalValidationByteIdenticalImagesAndLabels": 61,
+  "canonicalFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "parentFingerprint": "dd280f724628cb3aef8553aa3798bcee98138b9340d555a6091b957971d322d3",
+  "sourceAndTrainingDatasetUntouched": true
+}

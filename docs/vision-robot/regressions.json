@@ -1,0 +1,532 @@
+{
+  "profile": {
+    "weights": "models/vision/yolo-stop-robot.pt",
+    "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+    "confidence": 0.35,
+    "trafficMode": "legacy",
+    "imgsz": 512,
+    "device": "cpu",
+    "preferRed": false,
+    "backend": "yolo+fusion",
+    "heuristicEnabled": false,
+    "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+    "selectedAt": "2026-11-17T23:59:16.096032+00:00",
+    "selectedOn": "VAL only",
+    "candidatePassesRegressionGates": false,
+    "candidatePreferredToControls": false,
+    "selectionFile": "models/vision/training/robot/validation-selection.json",
+    "selectionFileSha256": "e0122299cb0077fadc4c7b71396fb98f5cd1fb65f669daea2ce689dce2e86aa5",
+    "testIsReusedBenchmark": true,
+    "deployment": "bench only; no automatic production replacement",
+    "warning": "Bench selection only, not autonomous-ready; small noisy/agent-assisted labels and ONE correlated VAL negative clip, not independent ground truth or proof of safety."
+  },
+  "cases": [
+    {
+      "source": "VID_20261117_223120_211.mp4",
+      "frame": 16,
+      "originalSplit": "val",
+      "caption": "Обувь: ложный светофор",
+      "decodedFrameSha256": "d3940e8678d0f2d2ec6260fb570528f81fb251251e7d81ee1eb90e386e0f2c64",
+      "before": [],
+      "after": [],
+      "displayCaption": "Обувь: в этом кадре у обоих нет FP; во всём новом клипе 4 FP-кадра"
+    },
+    {
+      "source": "VID_20261117_223120_211.mp4",
+      "frame": 44,
+      "originalSplit": "val",
+      "caption": "Обувь: уверенная ложная рамка",
+      "decodedFrameSha256": "8c595161b8493d180ddc81e0f1cfb5fd706592ff906cea29cc2e6f84967b804b",
+      "before": [],
+      "after": [],
+      "displayCaption": "Обувь: в этом кадре у обоих нет FP; во всём новом клипе 4 FP-кадра"
+    },
+    {
+      "source": "VID_20261117_223120_204.mp4",
+      "frame": 60,
+      "originalSplit": "val",
+      "caption": "Лишняя рамка на двери/фоне",
+      "decodedFrameSha256": "9281a986b3ec1ad637a960f5384237447442adb299c2cb15384be9c15c05340c",
+      "before": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.826,
+          "box": {
+            "x": 0.3557,
+            "y": 0.3937,
+            "w": 0.035,
+            "h": 0.1917
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.569,
+          "box": {
+            "x": 0.4526,
+            "y": 0.3633,
+            "w": 0.0407,
+            "h": 0.2522
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "after": [
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.672,
+          "box": {
+            "x": 0.6469,
+            "y": 0.0,
+            "w": 0.0647,
+            "h": 0.2009
+          },
+          "signal": "red",
+          "signalCounts": {
+            "red": 83,
+            "yellow": 0,
+            "green": 0
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.857,
+          "box": {
+            "x": 0.3563,
+            "y": 0.3927,
+            "w": 0.0334,
+            "h": 0.1929
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.593,
+          "box": {
+            "x": 0.4596,
+            "y": 0.3764,
+            "w": 0.0326,
+            "h": 0.2078
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "displayCaption": "У двери настоящий red: прежний профиль пропускает, новый находит"
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 116,
+      "originalSplit": "train",
+      "caption": "Видимый зелёный: прежняя ошибка red",
+      "decodedFrameSha256": "fb760dba81479521367d71a956c542afc8eb67969150589c69eb5566f5f5743c",
+      "before": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.939,
+          "box": {
+            "x": 0.2244,
+            "y": 0.4303,
+            "w": 0.0377,
+            "h": 0.2174
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.903,
+          "box": {
+            "x": 0.3016,
+            "y": 0.4014,
+            "w": 0.0812,
+            "h": 0.2938
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "after": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.904,
+          "box": {
+            "x": 0.2246,
+            "y": 0.4281,
+            "w": 0.0398,
+            "h": 0.217
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.805,
+          "box": {
+            "x": 0.2964,
+            "y": 0.3978,
+            "w": 0.0838,
+            "h": 0.2996
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "displayCaption": "Видимый green: оба профиля по-прежнему ПРОПУСКАЮТ светофор"
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 117,
+      "originalSplit": "train",
+      "caption": "Видимый зелёный: прежняя ошибка yellow",
+      "decodedFrameSha256": "2ec90a64c2229bb23c007c5d793a83669700be1099a389c7b940a63a31abc2c8",
+      "before": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.915,
+          "box": {
+            "x": 0.2362,
+            "y": 0.4328,
+            "w": 0.0396,
+            "h": 0.2145
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.855,
+          "box": {
+            "x": 0.3128,
+            "y": 0.4117,
+            "w": 0.0767,
+            "h": 0.2828
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "after": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.886,
+          "box": {
+            "x": 0.2349,
+            "y": 0.4326,
+            "w": 0.0401,
+            "h": 0.2139
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.648,
+          "box": {
+            "x": 0.3134,
+            "y": 0.4037,
+            "w": 0.0758,
+            "h": 0.2948
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.563,
+          "box": {
+            "x": 0.354,
+            "y": 0.4094,
+            "w": 0.0361,
+            "h": 0.1952
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "displayCaption": "Видимый green: оба профиля по-прежнему ПРОПУСКАЮТ светофор"
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 119,
+      "originalSplit": "train",
+      "caption": "Видимый зелёный: прежний пропуск",
+      "decodedFrameSha256": "265661c554c57eb1a32ee45ef9ae792ae9dd99510e09343d34cb2a3901a99699",
+      "before": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.944,
+          "box": {
+            "x": 0.244,
+            "y": 0.4395,
+            "w": 0.0405,
+            "h": 0.2209
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.941,
+          "box": {
+            "x": 0.3219,
+            "y": 0.4106,
+            "w": 0.0823,
+            "h": 0.3031
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "after": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.906,
+          "box": {
+            "x": 0.2453,
+            "y": 0.4376,
+            "w": 0.0383,
+            "h": 0.2186
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.852,
+          "box": {
+            "x": 0.3209,
+            "y": 0.4077,
+            "w": 0.0843,
+            "h": 0.305
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "displayCaption": "Видимый green: оба профиля по-прежнему ПРОПУСКАЮТ светофор"
+    },
+    {
+      "source": "VID_20261117_223120_865.mp4",
+      "frame": 138,
+      "originalSplit": "train",
+      "caption": "Видимый зелёный: прежний верный ответ",
+      "decodedFrameSha256": "8e9a464bf37d56eea21019131341c34d9c767d5b26f12f9828ae9e9e868e1ac2",
+      "before": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.95,
+          "box": {
+            "x": 0.1694,
+            "y": 0.4386,
+            "w": 0.0556,
+            "h": 0.2994
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.825,
+          "box": {
+            "x": 0.2673,
+            "y": 0.3971,
+            "w": 0.1187,
+            "h": 0.4646
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.494,
+          "box": {
+            "x": 0.4967,
+            "y": 0.3919,
+            "w": 0.0454,
+            "h": 0.2332
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "after": [
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.907,
+          "box": {
+            "x": 0.1712,
+            "y": 0.4361,
+            "w": 0.0519,
+            "h": 0.3008
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        },
+        {
+          "class": "traffic_light",
+          "label": "Светофор",
+          "short": "СВЕТОФОР",
+          "action": "signal",
+          "color": "#a78bfa",
+          "confidence": 0.614,
+          "box": {
+            "x": 0.6944,
+            "y": 0.0005,
+            "w": 0.1547,
+            "h": 0.3336
+          },
+          "signal": "green",
+          "signalCounts": {
+            "red": 0,
+            "yellow": 2,
+            "green": 307
+          },
+          "source": "yolo"
+        },
+        {
+          "class": "cone",
+          "label": "Конус / столбик",
+          "short": "КОНУС",
+          "action": "avoid",
+          "color": "#ff7a29",
+          "confidence": 0.6,
+          "box": {
+            "x": 0.2704,
+            "y": 0.3997,
+            "w": 0.1146,
+            "h": 0.4721
+          },
+          "signal": null,
+          "signalCounts": {},
+          "source": "yolo"
+        }
+      ],
+      "displayCaption": "Видимый green: прежний профиль пропускает, новый находит"
+    }
+  ],
+  "selection": "Same seven historical cases, fixed before this training; no new success-based selection.",
+  "beforeWeights": "models/vision/yolo-stop-improved.pt",
+  "beforeSha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+  "warning": "TRAIN/VAL qualitative illustrations; no independent boxes or accuracy claims; a missed visible light is a failure even if a false colour disappears.",
+  "postFreezeVisualReview": {
+    "204/60": "There is a real red traffic light next to the door. At matched .35 the old improved/body misses it; the new tighter box covers the actual red housing. Do NOT call this new red detection a false door signal. Agent visual observation only, not independent box ground truth.",
+    "865/116,117,119": "Visible green still missed by both profiles.",
+    "865/138": "Visible green recovered by the new candidate; historical improved/body misses it.",
+    "211/16,44": "No false traffic box in either profile at matched .35; not proof that the full shoe clip is clear."
+  },
+  "displayCaptionContext": "Post-freeze qualitative agent review. Historical caption fields, predictions, image hashes, labels, weights and profile remain unchanged."
+}

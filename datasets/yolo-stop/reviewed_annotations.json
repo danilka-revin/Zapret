@@ -1,0 +1,5449 @@
+{
+  "1794903271152.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0236,
+        0.8192,
+        0.0472,
+        0.1808
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.0167,
+        0.6513,
+        0.0444,
+        0.1642
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.0792,
+        0.4815,
+        0.1097,
+        0.5184
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.1556,
+        0.393,
+        0.1306,
+        0.1974
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.38,
+        0.21,
+        0.21,
+        0.58
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271159.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.1194,
+        0.6753,
+        0.0958,
+        0.3247
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.2,
+        0.4502,
+        0.0875,
+        0.5498
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.2347,
+        0.3506,
+        0.1306,
+        0.1863
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.5903,
+        0.4299,
+        0.1208,
+        0.1882
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.38,
+        0.12,
+        0.22,
+        0.63
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271167.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0931,
+        0.5996,
+        0.0986,
+        0.2509
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.1556,
+        0.1882,
+        0.1708,
+        0.2417
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.4,
+        0.17,
+        0.24,
+        0.66
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271177.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.1694,
+        0.5627,
+        0.1597,
+        0.4373
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.2819,
+        0.3708,
+        0.1222,
+        0.179
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.0,
+        0.3653,
+        0.1403,
+        0.2103
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.39,
+        0.16,
+        0.22,
+        0.62
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271185.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.1292,
+        0.7565,
+        0.0958,
+        0.2435
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.2264,
+        0.5793,
+        0.0819,
+        0.4207
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.2486,
+        0.3524,
+        0.1319,
+        0.1919
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.5958,
+        0.4336,
+        0.1486,
+        0.2048
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.38,
+        0.09,
+        0.22,
+        0.68
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271194.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.3139,
+        0.6328,
+        0.0778,
+        0.3672
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.1139,
+        0.262,
+        0.1458,
+        0.1845
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.44,
+        0.11,
+        0.24,
+        0.65
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271202.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.1333,
+        0.714,
+        0.0625,
+        0.286
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.2069,
+        0.2989,
+        0.0792,
+        0.7011
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.0,
+        0.4446,
+        0.1222,
+        0.2232
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.445312,
+        0.187759,
+        0.217969,
+        0.604772
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271212.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.3958,
+        0.6052,
+        0.1847,
+        0.3948
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.2181,
+        0.297,
+        0.1292,
+        0.1679
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.52,
+        0.18,
+        0.24,
+        0.59
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271219.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.1917,
+        0.5111,
+        0.1181,
+        0.1937
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.49,
+        0.26,
+        0.25,
+        0.57
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271226.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.3694,
+        0.0904,
+        0.3806,
+        0.4945
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271234.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.4982,
+        0.0875,
+        0.5018
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.0944,
+        0.4096,
+        0.1458,
+        0.2214
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.39,
+        0.19,
+        0.23,
+        0.61
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271242.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.3708,
+        0.345,
+        0.3,
+        0.3782
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271251.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.5941,
+        0.1139,
+        0.4059
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.0708,
+        0.3727,
+        0.1431,
+        0.2066
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.39,
+        0.23,
+        0.2,
+        0.58
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271259.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.3417,
+        0.1771,
+        0.1194,
+        0.19
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.0444,
+        0.1863,
+        0.1653,
+        0.2159
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.7361,
+        0.2472,
+        0.0417,
+        0.0978
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.5,
+        0.13,
+        0.18,
+        0.57
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271267.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.1722,
+        0.2435,
+        0.1403,
+        0.179
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.51,
+        0.17,
+        0.23,
+        0.64
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271275.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.3167,
+        0.1273,
+        0.4792,
+        0.5221
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271283.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.5847,
+        0.8487,
+        0.075,
+        0.1513
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271290.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.5319,
+        0.6255,
+        0.1014,
+        0.3745
+      ],
+      "signal": null
+    },
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.1944,
+        0.2712,
+        0.2528,
+        0.3708
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.5042,
+        0.4483,
+        0.1083,
+        0.2177
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.7722,
+        0.5572,
+        0.2278,
+        0.2841
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271298.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.9542,
+        0.7546,
+        0.0458,
+        0.155
+      ],
+      "signal": null
+    },
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.1556,
+        0.0,
+        0.4681,
+        0.4723
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.8194,
+        0.1162,
+        0.1806,
+        0.4244
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271306.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.4667,
+        0.2196,
+        0.1903,
+        0.2989
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.7792,
+        0.3118,
+        0.2208,
+        0.3413
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271314.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.85,
+        0.4815,
+        0.0264,
+        0.1144
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.3153,
+        0.4151,
+        0.1306,
+        0.2343
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271321.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.7083,
+        0.5517,
+        0.1167,
+        0.2712
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.2431,
+        0.0738,
+        0.3236,
+        0.3985
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271329.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.4014,
+        0.572,
+        0.0931,
+        0.428
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.4819,
+        0.559,
+        0.0931,
+        0.441
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.1722,
+        0.393,
+        0.1444,
+        0.1808
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.6583,
+        0.4391,
+        0.3417,
+        0.3339
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.48,
+        0,
+        0.29,
+        0.7
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271337.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.7653,
+        0.8727,
+        0.0625,
+        0.1273
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.975,
+        0.8137,
+        0.025,
+        0.0886
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.5444,
+        0.0,
+        0.05,
+        0.1808
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.6014,
+        0.2454,
+        0.3403,
+        0.5
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.2931,
+        0.2934,
+        0.1292,
+        0.2417
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271344.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.5431,
+        0.0,
+        0.1653,
+        1.0
+      ],
+      "signal": null
+    },
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.0319,
+        0.2288,
+        0.2986,
+        0.3487
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.7292,
+        0.3081,
+        0.1389,
+        0.2232
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.4347,
+        0.3229,
+        0.1486,
+        0.2325
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271357.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.6639,
+        0.0,
+        0.1583,
+        0.1292
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271363.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.5833,
+        0.107,
+        0.1236,
+        0.1697
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271382.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.1778,
+        0.2768,
+        0.2403,
+        0.2897
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.5167,
+        0.3653,
+        0.1556,
+        0.2214
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271388.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.4153,
+        0.5646,
+        0.0736,
+        0.4354
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.4083,
+        0.0,
+        0.0306,
+        0.2325
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.1583,
+        0.3985,
+        0.1375,
+        0.1808
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.51,
+        0.22,
+        0.22,
+        0.58
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271397.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.5319,
+        0.0,
+        0.025,
+        0.2196
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.2347,
+        0.3745,
+        0.1222,
+        0.1587
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.43,
+        0.2,
+        0.22,
+        0.62
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271405.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.28,
+        0.35,
+        0.22,
+        0.64
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794903271415.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.6056,
+        0.7306,
+        0.0958,
+        0.2694
+      ],
+      "signal": null
+    },
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.5958,
+        0.2306,
+        0.1375,
+        0.1882
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271423.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.6292,
+        0.2731,
+        0.1708,
+        0.2306
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271433.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.5042,
+        0.6199,
+        0.3028,
+        0.2878
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271445.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.6333,
+        0.6808,
+        0.0431,
+        0.3192
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.6208,
+        0.5203,
+        0.0319,
+        0.1531
+      ],
+      "signal": null
+    },
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.6194,
+        0.2528,
+        0.1944,
+        0.262
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271455.jpg": [],
+  "1794903271464.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.4556,
+        0.4742,
+        0.1153,
+        0.3081
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.7625,
+        0.428,
+        0.0875,
+        0.2085
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271474.jpg": [],
+  "1794903271484.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.6069,
+        0.5978,
+        0.1167,
+        0.4022
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.4,
+        0.0,
+        0.0167,
+        0.2841
+      ],
+      "signal": null
+    },
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.5736,
+        0.2472,
+        0.3444,
+        0.3708
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.0222,
+        0.2934,
+        0.2778,
+        0.4041
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271496.jpg": [],
+  "1794903271510.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.2903,
+        0.7048,
+        0.0417,
+        0.0867
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.8181,
+        0.5314,
+        0.1819,
+        0.4686
+      ],
+      "signal": null
+    },
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.7181,
+        0.0295,
+        0.2333,
+        0.3524
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.1625,
+        0.0,
+        0.3764,
+        0.5406
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271520.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.6222,
+        0.5111,
+        0.0611,
+        0.4889
+      ],
+      "signal": null
+    },
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.6167,
+        0.1937,
+        0.2264,
+        0.31
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271530.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.6069,
+        0.2491,
+        0.1472,
+        0.2011
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271544.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.5361,
+        0.5867,
+        0.1972,
+        0.4133
+      ],
+      "signal": null
+    },
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.6431,
+        0.2749,
+        0.3569,
+        0.3266
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.0486,
+        0.3727,
+        0.3194,
+        0.3653
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271551.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.4069,
+        0.1661,
+        0.2403,
+        0.3229
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271559.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.3028,
+        0.2934,
+        0.4792,
+        0.4576
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271567.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.9014,
+        0.7472,
+        0.0986,
+        0.2159
+      ],
+      "signal": null
+    },
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.16,
+        0.02,
+        0.72,
+        0.91
+      ]
+    }
+  ],
+  "1794903271574.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.3361,
+        0.0166,
+        0.0417,
+        0.2159
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.3778,
+        0.2343,
+        0.2931,
+        0.4336
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271579.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.08,
+        0.03,
+        0.7,
+        0.94
+      ]
+    }
+  ],
+  "1794903271585.jpg": [
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.5597,
+        0.203,
+        0.2472,
+        0.3616
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.2694,
+        0.321,
+        0.1306,
+        0.262
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271593.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.1625,
+        0.5517,
+        0.0361,
+        0.1494
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.4556,
+        0.3948,
+        0.1389,
+        0.1827
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271601.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.2556,
+        0.214,
+        0.4597,
+        0.6236
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271610.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.4958,
+        0.1771,
+        0.1333,
+        0.1642
+      ],
+      "signal": null
+    }
+  ],
+  "1794903271618.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.2972,
+        0.1587,
+        0.3333,
+        0.476
+      ],
+      "signal": null
+    }
+  ],
+  "1794940325188.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.270313,
+        0.051867,
+        0.382812,
+        0.948133
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325232.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.059375,
+        0.68603,
+        0.055208,
+        0.248963
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.59,
+        0.27,
+        0.12,
+        0.34
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325244.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.977083,
+        0.294606,
+        0.022917,
+        0.705394
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.260156,
+        0.064315,
+        0.290625,
+        0.841286
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325291.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.02,
+        0.02,
+        0.15,
+        0.39
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325429.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.390625,
+        0.204703,
+        0.026042,
+        0.143845
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.457292,
+        0.829876,
+        0.022917,
+        0.106501
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.08,
+        0.1,
+        0.17,
+        0.48
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940325439.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.70625,
+        0.529737,
+        0.034375,
+        0.100968
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.116406,
+        0.0,
+        0.527344,
+        0.958506
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325449.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.213542,
+        0.439834,
+        0.032292,
+        0.15491
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.66875,
+        0.0,
+        0.11875,
+        0.699862
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.55,
+        0.17,
+        0.08,
+        0.24
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325460.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.034375,
+        0.695712,
+        0.057292,
+        0.258645
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.47,
+        0.2,
+        0.1,
+        0.39
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325473.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.014583,
+        0.672199,
+        0.058333,
+        0.250346
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.46,
+        0.18,
+        0.1,
+        0.32
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940325487.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.06875,
+        0.573997,
+        0.038542,
+        0.178423
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.5,
+        0.18,
+        0.08,
+        0.26
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325507.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.410417,
+        0.618257,
+        0.067708,
+        0.232365
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.434375,
+        0.0,
+        0.297656,
+        0.554979
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940325527.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.603125,
+        0.071923,
+        0.025,
+        0.210235
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.36,
+        0.2,
+        0.11,
+        0.28
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940325547.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.559375,
+        0.417704,
+        0.035417,
+        0.153527
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.8875,
+        0.0,
+        0.1125,
+        0.257261
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325574.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.125,
+        0.49101,
+        0.032292,
+        0.156293
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.4,
+        0.22,
+        0.07,
+        0.2
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325585.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.515906,
+        0.011458,
+        0.092669
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.591667,
+        0.124481,
+        0.025,
+        0.157676
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.323437,
+        0.202282,
+        0.110156,
+        0.255187
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940325615.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.010417,
+        0.616874,
+        0.054167,
+        0.240664
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.759375,
+        0.0,
+        0.01875,
+        0.091286
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.765625,
+        0.843707,
+        0.016667,
+        0.071923
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.444531,
+        0.108921,
+        0.108594,
+        0.287344
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940325636.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.603125,
+        0.38036,
+        0.0125,
+        0.228216
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.6125,
+        0.248963,
+        0.00625,
+        0.053942
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.45,
+        0.25,
+        0.08,
+        0.24
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940325668.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.394792,
+        0.687414,
+        0.04375,
+        0.242047
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.4375,
+        0.0,
+        0.353906,
+        0.921162
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940325692.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.044792,
+        0.506224,
+        0.045833,
+        0.207469
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.095833,
+        0.500692,
+        0.044792,
+        0.196404
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.5625,
+        0.26971,
+        0.014583,
+        0.163209
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.29,
+        0.08,
+        0.1,
+        0.28
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940325718.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.067708,
+        0.5574,
+        0.053125,
+        0.239281
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.48,
+        0.15,
+        0.13,
+        0.33
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940325740.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.64375,
+        0.174274,
+        0.008333,
+        0.067773
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.37,
+        0.22,
+        0.09,
+        0.28
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940325770.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.45,
+        0.2,
+        0.07,
+        0.23
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940325790.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.190625,
+        0.560166,
+        0.035417,
+        0.17704
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.7625,
+        0.13278,
+        0.025,
+        0.078838
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.7875,
+        0.099585,
+        0.078125,
+        0.434302
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.5,
+        0.24,
+        0.09,
+        0.28
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940325810.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.520055,
+        0.017708,
+        0.081604
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.06,
+        0.29,
+        0.05,
+        0.15
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325834.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.792708,
+        0.153527,
+        0.109375,
+        0.153527
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.48,
+        0.3,
+        0.04,
+        0.14
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325844.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.1875,
+        0.593361,
+        0.0375,
+        0.193638
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.48,
+        0.17,
+        0.08,
+        0.25
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325862.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.621875,
+        0.189488,
+        0.113542,
+        0.15491
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.37,
+        0.27,
+        0.04,
+        0.14
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325874.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.036458,
+        0.762102,
+        0.035417,
+        0.170124
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.28,
+        0.37,
+        0.05,
+        0.16
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325891.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.317708,
+        0.640387,
+        0.038542,
+        0.20332
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.3625,
+        0.632089,
+        0.0375,
+        0.196404
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.41,
+        0.02,
+        0.13,
+        0.39
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325901.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.33,
+        0.44,
+        0.04,
+        0.12
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325912.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.139063,
+        0.0,
+        0.419531,
+        1.0
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940325924.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.546875,
+        0.078838,
+        0.069792,
+        0.099585
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.3,
+        0.27,
+        0.05,
+        0.18
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325940.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.14375,
+        0.788382,
+        0.025,
+        0.08852
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.573958,
+        0.279391,
+        0.101042,
+        0.114799
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.12,
+        0.29,
+        0.04,
+        0.16
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325950.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0375,
+        0.482711,
+        0.042708,
+        0.19917
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.73125,
+        0.315353,
+        0.009375,
+        0.056708
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.48,
+        0.25,
+        0.07,
+        0.22
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940325959.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.484375,
+        0.31397,
+        0.061458,
+        0.084371
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.24,
+        0.36,
+        0.03,
+        0.11
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325967.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.335417,
+        0.676349,
+        0.04375,
+        0.242047
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.171875,
+        0.825726,
+        0.075,
+        0.058091
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.388281,
+        0.0,
+        0.342969,
+        0.873444
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940325976.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.255208,
+        0.514523,
+        0.029167,
+        0.128631
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.29,
+        0.32,
+        0.04,
+        0.13
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940325985.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.513542,
+        0.217151,
+        0.160417,
+        0.207469
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.28,
+        0.3,
+        0.04,
+        0.16
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940325995.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.352083,
+        0.437068,
+        0.026042,
+        0.113416
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.3,
+        0.26,
+        0.06,
+        0.18
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940326005.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.113542,
+        0.61964,
+        0.029167,
+        0.141079
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.759375,
+        0.284924,
+        0.203125,
+        0.293223
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.35,
+        0.31,
+        0.04,
+        0.14
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940326013.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.203125,
+        0.717842,
+        0.025,
+        0.107884
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.516667,
+        0.757953,
+        0.0125,
+        0.071923
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.435417,
+        0.237898,
+        0.172917,
+        0.218534
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.22,
+        0.3,
+        0.05,
+        0.17
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940326024.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.310417,
+        0.056708,
+        0.163542,
+        0.232365
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.24,
+        0.29,
+        0.03,
+        0.11
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940326034.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.135417,
+        0.598893,
+        0.069792,
+        0.22545
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.52,
+        0.19,
+        0.12,
+        0.33
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940326047.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.31,
+        0.27,
+        0.04,
+        0.14
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940326073.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.141667,
+        0.818811,
+        0.029167,
+        0.152144
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.322917,
+        0.130014,
+        0.23125,
+        0.26556
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.24,
+        0.3,
+        0.04,
+        0.16
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940326084.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.661134,
+        0.094792,
+        0.283541
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.401042,
+        0.195021,
+        0.29375,
+        0.466113
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.21,
+        0.28,
+        0.04,
+        0.19
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940326103.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.344792,
+        0.145228,
+        0.202083,
+        0.279391
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.25,
+        0.24,
+        0.06,
+        0.18
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940326126.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.484375,
+        0.475795,
+        0.095833,
+        0.120332
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.28,
+        0.31,
+        0.04,
+        0.17
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940326137.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.1625,
+        0.28769,
+        0.039583,
+        0.13278
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.363542,
+        0.863071,
+        0.007292,
+        0.136929
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.377083,
+        0.196404,
+        0.335417,
+        0.430152
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.23,
+        0.29,
+        0.04,
+        0.17
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940326160.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.356846,
+        0.15,
+        0.463347
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.697917,
+        0.298755,
+        0.090625,
+        0.421853
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.791667,
+        0.297372,
+        0.109375,
+        0.428769
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.54,
+        0.01,
+        0.08,
+        0.18
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940326170.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.028125,
+        0.886584,
+        0.017708,
+        0.113416
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.43,
+        0.41,
+        0.06,
+        0.18
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940326181.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.072917,
+        0.229599,
+        0.148958,
+        0.441217
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.482292,
+        0.204703,
+        0.146875,
+        0.416321
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.8375,
+        0.20332,
+        0.142708,
+        0.435685
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.7,
+        0,
+        0.11,
+        0.17
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940326191.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.094792,
+        0.261411,
+        0.10625,
+        0.42462
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.440625,
+        0.264177,
+        0.073958,
+        0.35823
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.734375,
+        0.280775,
+        0.094792,
+        0.3361
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.72,
+        0.03,
+        0.1,
+        0.19
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940326199.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.508333,
+        0.305671,
+        0.059375,
+        0.318119
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.48,
+        0.04,
+        0.06,
+        0.13
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940326232.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.179806,
+        0.010417,
+        0.056708
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.016667,
+        0.60166,
+        0.065625,
+        0.289073
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.423958,
+        0.600277,
+        0.042708,
+        0.224066
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.472917,
+        0.603043,
+        0.04375,
+        0.219917
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.608594,
+        0.0,
+        0.314063,
+        0.621369
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940326241.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.122917,
+        0.865837,
+        0.016667,
+        0.134163
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.715625,
+        0.282158,
+        0.05,
+        0.145228
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.399219,
+        0.478216,
+        0.100781,
+        0.21888
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327326.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.059375,
+        0.656985,
+        0.052083,
+        0.244813
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.133333,
+        0.640387,
+        0.038542,
+        0.224066
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.879167,
+        0.3361,
+        0.025,
+        0.145228
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.892708,
+        0.0,
+        0.042708,
+        0.315353
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.9125,
+        0.390041,
+        0.009375,
+        0.074689
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.52,
+        0.21,
+        0.12,
+        0.35
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940327348.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.796875,
+        0.268326,
+        0.034375,
+        0.196404
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.835417,
+        0.33195,
+        0.020833,
+        0.099585
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.54,
+        0.2,
+        0.12,
+        0.35
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940327373.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.49,
+        0.2,
+        0.12,
+        0.38
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940327385.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.659751,
+        0.101042,
+        0.340249
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.8375,
+        0.078838,
+        0.052083,
+        0.460581
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.882292,
+        0.105118,
+        0.117708,
+        0.44675
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.479687,
+        0.258299,
+        0.132031,
+        0.392116
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940327395.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.738542,
+        0.233748,
+        0.0375,
+        0.264177
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.65,
+        0.21,
+        0.08,
+        0.28
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940327406.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.282292,
+        0.547718,
+        0.0375,
+        0.185339
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.33125,
+        0.536653,
+        0.036458,
+        0.175657
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.52,
+        0.21,
+        0.08,
+        0.26
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327414.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.600277,
+        0.052083,
+        0.226833
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.064583,
+        0.583679,
+        0.047917,
+        0.207469
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.43,
+        0.2,
+        0.1,
+        0.24
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327423.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.51,
+        0.17,
+        0.1,
+        0.31
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327432.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.46,
+        0.25,
+        0.1,
+        0.24
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327441.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.173958,
+        0.694329,
+        0.045833,
+        0.233748
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.241667,
+        0.679115,
+        0.042708,
+        0.214385
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.377083,
+        0.412172,
+        0.040625,
+        0.135546
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.897917,
+        0.011065,
+        0.008333,
+        0.076072
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.475,
+        0.139004,
+        0.149219,
+        0.381743
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940327456.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.165625,
+        0.580913,
+        0.046875,
+        0.229599
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.233333,
+        0.568465,
+        0.042708,
+        0.213001
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.390625,
+        0.300138,
+        0.046875,
+        0.147994
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.45625,
+        0.0,
+        0.157031,
+        0.470954
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940327466.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.067708,
+        0.679115,
+        0.05,
+        0.233748
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.133333,
+        0.661134,
+        0.045833,
+        0.214385
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.75625,
+        0.333333,
+        0.027083,
+        0.153527
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.761458,
+        0.149378,
+        0.007292,
+        0.055325
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.47,
+        0.17,
+        0.09,
+        0.29
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940327480.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.065625,
+        0.586445,
+        0.048958,
+        0.22545
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.1375,
+        0.573997,
+        0.04375,
+        0.208852
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.684375,
+        0.006916,
+        0.028125,
+        0.124481
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.299219,
+        0.114108,
+        0.133594,
+        0.411826
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940327494.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.029167,
+        0.661134,
+        0.057292,
+        0.242047
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.102083,
+        0.64177,
+        0.052083,
+        0.219917
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.7375,
+        0.0,
+        0.032292,
+        0.135546
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.767708,
+        0.24758,
+        0.013542,
+        0.183956
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.784375,
+        0.268326,
+        0.028125,
+        0.113416
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.42,
+        0.15,
+        0.15,
+        0.4
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940327505.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.051042,
+        0.636238,
+        0.052083,
+        0.235131
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.11875,
+        0.618257,
+        0.047917,
+        0.214385
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.75,
+        0.04426,
+        0.036458,
+        0.37621
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.782292,
+        0.049793,
+        0.080208,
+        0.365145
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.471875,
+        0.137967,
+        0.107031,
+        0.298755
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940327513.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.077083,
+        0.658368,
+        0.044792,
+        0.215768
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.136458,
+        0.644537,
+        0.041667,
+        0.197787
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.73125,
+        0.390041,
+        0.00625,
+        0.091286
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.505469,
+        0.28527,
+        0.071875,
+        0.213693
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940327524.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.135417,
+        0.538036,
+        0.047917,
+        0.237898
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.209375,
+        0.540802,
+        0.045833,
+        0.219917
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.28,
+        0,
+        0.25,
+        0.5
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940327533.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.205208,
+        0.564315,
+        0.0375,
+        0.186722
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.257292,
+        0.554633,
+        0.034375,
+        0.174274
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.43,
+        0.25,
+        0.08,
+        0.21
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940327541.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.072917,
+        0.632089,
+        0.052083,
+        0.228216
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.138542,
+        0.614108,
+        0.046875,
+        0.208852
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.754167,
+        0.099585,
+        0.032292,
+        0.333333
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.782292,
+        0.074689,
+        0.069792,
+        0.35823
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.52,
+        0.21,
+        0.12,
+        0.26
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940327549.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.686458,
+        0.135546,
+        0.020833,
+        0.139696
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.697917,
+        0.264177,
+        0.027083,
+        0.179806
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.726042,
+        0.340249,
+        0.016667,
+        0.107884
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.46,
+        0.25,
+        0.09,
+        0.21
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327561.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.635417,
+        0.135546,
+        0.026042,
+        0.188105
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.669792,
+        0.330567,
+        0.01875,
+        0.091286
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.39,
+        0.23,
+        0.11,
+        0.31
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327569.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.004167,
+        0.655602,
+        0.057292,
+        0.236515
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.071875,
+        0.637621,
+        0.052083,
+        0.215768
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.705208,
+        0.095436,
+        0.008333,
+        0.052559
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.478906,
+        0.157676,
+        0.0875,
+        0.259336
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327577.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.2375,
+        0.670816,
+        0.040625,
+        0.211618
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.297917,
+        0.659751,
+        0.022917,
+        0.197787
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.84375,
+        0.157676,
+        0.008333,
+        0.060858
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.46,
+        0.23,
+        0.12,
+        0.3
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327589.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.178125,
+        0.62379,
+        0.038542,
+        0.192254
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.230208,
+        0.611342,
+        0.036458,
+        0.179806
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.485938,
+        0.256224,
+        0.08125,
+        0.215768
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940327605.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.197917,
+        0.53112,
+        0.038542,
+        0.185339
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.247917,
+        0.521438,
+        0.036458,
+        0.172891
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.541406,
+        0.146266,
+        0.075,
+        0.217842
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940327624.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.563281,
+        0.134855,
+        0.079687,
+        0.220954
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940327638.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.516406,
+        0.0,
+        0.133594,
+        0.298755
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327648.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.648958,
+        0.307054,
+        0.028125,
+        0.172891
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.324219,
+        0.246888,
+        0.123438,
+        0.396266
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327660.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.079167,
+        0.593361,
+        0.044792,
+        0.208852
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.139583,
+        0.580913,
+        0.039583,
+        0.193638
+      ],
+      "signal": null
+    },
+    {
+      "class": "pedestrian_crossing",
+      "box": [
+        0.95625,
+        0.063624,
+        0.04375,
+        0.112033
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.45,
+        0.2,
+        0.08,
+        0.24
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327728.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.51875,
+        0.146266,
+        0.086719,
+        0.270747
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327745.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.527344,
+        0.1639,
+        0.079687,
+        0.26971
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327787.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.083333,
+        0.622407,
+        0.046875,
+        0.222683
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.145833,
+        0.609959,
+        0.042708,
+        0.204703
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.54,
+        0.15,
+        0.08,
+        0.29
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327798.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.1,
+        0.449516,
+        0.04375,
+        0.182573
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.15,
+        0.439834,
+        0.040625,
+        0.170124
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.45,
+        0.12,
+        0.09,
+        0.29
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940327807.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.190625,
+        0.511757,
+        0.040625,
+        0.19917
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.242708,
+        0.502075,
+        0.0375,
+        0.185339
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.66,
+        0.18,
+        0.09,
+        0.3
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940327816.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.207292,
+        0.558783,
+        0.039583,
+        0.197787
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.265625,
+        0.550484,
+        0.036458,
+        0.186722
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.5,
+        0.161826,
+        0.10625,
+        0.35166
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940327826.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.2125,
+        0.55325,
+        0.039583,
+        0.20332
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.272917,
+        0.546335,
+        0.0375,
+        0.192254
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.42,
+        0.12,
+        0.11,
+        0.34
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940327842.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.102083,
+        0.64177,
+        0.046875,
+        0.219917
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.165625,
+        0.627939,
+        0.041667,
+        0.201936
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.766667,
+        0.074689,
+        0.021875,
+        0.149378
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.79375,
+        0.006916,
+        0.055208,
+        0.150761
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.535156,
+        0.231328,
+        0.067187,
+        0.262448
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940327870.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.207292,
+        0.517289,
+        0.039583,
+        0.19917
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.266667,
+        0.515906,
+        0.0375,
+        0.186722
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.810417,
+        0.0,
+        0.022917,
+        0.099585
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.478906,
+        0.08195,
+        0.104688,
+        0.320539
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940327881.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.138542,
+        0.603043,
+        0.04375,
+        0.208852
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.2,
+        0.594744,
+        0.040625,
+        0.195021
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.491406,
+        0.221992,
+        0.094531,
+        0.267635
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940327893.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.170833,
+        0.609959,
+        0.05625,
+        0.182573
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.02,
+        0.3,
+        0.06,
+        0.18
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328266.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.73029,
+        0.053125,
+        0.26971
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.380208,
+        0.647303,
+        0.040625,
+        0.22545
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.43,
+        0.06,
+        0.27,
+        0.74
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940328280.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.46,
+        0.23,
+        0.07,
+        0.28
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940328291.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.086458,
+        0.591978,
+        0.057292,
+        0.226833
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.421094,
+        0.160788,
+        0.164844,
+        0.356846
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328311.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.744122,
+        0.038542,
+        0.239281
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.359375,
+        0.621024,
+        0.040625,
+        0.215768
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.397656,
+        0.177386,
+        0.205469,
+        0.54668
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940328351.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.33,
+        0.2,
+        0.09,
+        0.25
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328362.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.29,
+        0.25,
+        0.12,
+        0.29
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328370.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.328125,
+        0.03112,
+        0.3,
+        0.864108
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940328378.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.365625,
+        0.082988,
+        0.189844,
+        0.63278
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940328386.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.157292,
+        0.507607,
+        0.064583,
+        0.100968
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.296094,
+        0.201245,
+        0.33125,
+        0.798755
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940328396.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.274219,
+        0.155602,
+        0.196875,
+        0.584025
+      ],
+      "signal": "yellow"
+    }
+  ],
+  "1794940328408.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.683264,
+        0.011458,
+        0.059474
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.285938,
+        0.193983,
+        0.23125,
+        0.693983
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328436.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.291406,
+        0.167012,
+        0.292969,
+        0.832988
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328453.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.019792,
+        0.586445,
+        0.138542,
+        0.413555
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.275781,
+        0.016598,
+        0.282031,
+        0.741701
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328467.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.072917,
+        0.724758,
+        0.055208,
+        0.258645
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.260937,
+        0.254149,
+        0.284375,
+        0.684647
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940328484.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.16875,
+        0.879668,
+        0.016667,
+        0.084371
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.310156,
+        0.0861,
+        0.204687,
+        0.615145
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328502.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.154688,
+        0.0,
+        0.371094,
+        1.0
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328517.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.213281,
+        0.0,
+        0.430469,
+        1.0
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328533.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.60166,
+        0.034375,
+        0.117566
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.14375,
+        0.408022,
+        0.120833,
+        0.395574
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.392969,
+        0.0,
+        0.29375,
+        0.576763
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328544.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.795297,
+        0.042708,
+        0.204703
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.1625,
+        0.369295,
+        0.080208,
+        0.383126
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.44,
+        0,
+        0.26,
+        0.61
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328555.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.157292,
+        0.669433,
+        0.069792,
+        0.330567
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.33125,
+        0.205394,
+        0.215625,
+        0.621369
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328565.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.038542,
+        0.676349,
+        0.119792,
+        0.323651
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.28125,
+        0.179461,
+        0.235156,
+        0.669087
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328577.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.14375,
+        0.576763,
+        0.08125,
+        0.423237
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.317969,
+        0.0,
+        0.272656,
+        0.797718
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328590.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.133333,
+        0.721992,
+        0.051042,
+        0.251729
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.157292,
+        0.70816,
+        0.082292,
+        0.29184
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.315625,
+        0.195021,
+        0.229687,
+        0.651452
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328602.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.079167,
+        0.647303,
+        0.046875,
+        0.230982
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.133333,
+        0.636238,
+        0.044792,
+        0.217151
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.35,
+        0.01,
+        0.13,
+        0.61
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328613.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.1375,
+        0.677732,
+        0.061458,
+        0.322268
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.320312,
+        0.227178,
+        0.254688,
+        0.659751
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328625.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.076042,
+        0.687414,
+        0.085417,
+        0.312586
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.26,
+        0.24,
+        0.25,
+        0.69
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328638.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.114583,
+        0.863071,
+        0.026042,
+        0.114799
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.305469,
+        0.220954,
+        0.328125,
+        0.779046
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328650.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.046875,
+        0.66805,
+        0.077083,
+        0.33195
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.214062,
+        0.130705,
+        0.235937,
+        0.701245
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328662.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.330469,
+        0.0,
+        0.346094,
+        0.625519
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328676.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.341667,
+        0.636238,
+        0.038542,
+        0.206086
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.385417,
+        0.630705,
+        0.038542,
+        0.19917
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.41,
+        0.19,
+        0.14,
+        0.39
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940328690.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.090625,
+        0.607192,
+        0.13125,
+        0.392808
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.2875,
+        0.093361,
+        0.252344,
+        0.715768
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328703.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.109375,
+        0.688797,
+        0.05,
+        0.242047
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.165625,
+        0.676349,
+        0.047917,
+        0.228216
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.37,
+        0.21,
+        0.23,
+        0.61
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328714.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.344792,
+        0.643154,
+        0.0375,
+        0.208852
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.389583,
+        0.634855,
+        0.039583,
+        0.204703
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.407031,
+        0.204357,
+        0.183594,
+        0.475104
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940328724.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.322917,
+        0.654219,
+        0.041667,
+        0.224066
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.370833,
+        0.647303,
+        0.041667,
+        0.217151
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.400781,
+        0.153527,
+        0.2375,
+        0.628631
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940328736.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.251042,
+        0.611342,
+        0.044792,
+        0.232365
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.302083,
+        0.603043,
+        0.04375,
+        0.224066
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.334375,
+        0.0,
+        0.260937,
+        0.706432
+      ],
+      "signal": "unknown"
+    }
+  ],
+  "1794940328757.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0625,
+        0.674965,
+        0.055208,
+        0.254495
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.56,
+        0.18,
+        0.1,
+        0.37
+      ],
+      "signal": "red"
+    }
+  ],
+  "1794940328836.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.283333,
+        0.609959,
+        0.041667,
+        0.219917
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.33125,
+        0.603043,
+        0.041667,
+        0.211618
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.42,
+        0.08,
+        0.17,
+        0.6
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940328847.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.314583,
+        0.630705,
+        0.038542,
+        0.206086
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.36,
+        0.18,
+        0.17,
+        0.55
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940328877.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.327083,
+        0.578147,
+        0.038542,
+        0.204703
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.370833,
+        0.572614,
+        0.038542,
+        0.197787
+      ],
+      "signal": null
+    },
+    {
+      "class": "traffic_light",
+      "box": [
+        0.45,
+        0.16,
+        0.16,
+        0.61
+      ],
+      "signal": "green"
+    }
+  ],
+  "1794940326064.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.21,
+        0.2,
+        0.43,
+        0.5
+      ]
+    }
+  ],
+  "1794940325651.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.33,
+        0.29,
+        0.08,
+        0.15
+      ]
+    }
+  ],
+  "1794940328043.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.45,
+        0.2,
+        0.08,
+        0.15
+      ]
+    }
+  ],
+  "1794940328112.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.43,
+        0,
+        0.11,
+        0.2
+      ]
+    }
+  ],
+  "1794940328128.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.4,
+        0.27,
+        0.1,
+        0.21
+      ]
+    }
+  ],
+  "1794940328144.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.37,
+        0.17,
+        0.09,
+        0.22
+      ]
+    }
+  ],
+  "1794940328168.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.4,
+        0.18,
+        0.11,
+        0.22
+      ]
+    }
+  ],
+  "1794940328231.jpg": [
+    {
+      "class": "stop_sign",
+      "box": [
+        0.48,
+        0.34,
+        0.08,
+        0.14
+      ]
+    }
+  ],
+  "1794940327758.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.49,
+        0.3,
+        0.08,
+        0.23
+      ]
+    }
+  ],
+  "1794940327834.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.54,
+        0.28,
+        0.06,
+        0.25
+      ]
+    }
+  ],
+  "1794940327849.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.48,
+        0.28,
+        0.07,
+        0.21
+      ]
+    }
+  ],
+  "1794940327858.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.5,
+        0.28,
+        0.08,
+        0.22
+      ]
+    }
+  ],
+  "1794940328214.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.26,
+        0.3,
+        0.07,
+        0.16
+      ]
+    }
+  ],
+  "1794940328244.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.0,
+        0.926694,
+        0.0125,
+        0.073306
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.452083,
+        0.788382,
+        0.015625,
+        0.149378
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.19,
+        0.25,
+        0.08,
+        0.17
+      ]
+    }
+  ],
+  "1794940327684.jpg": [
+    {
+      "class": "speed_bump",
+      "box": [
+        0.45,
+        0.248963,
+        0.098958,
+        0.204703
+      ],
+      "signal": null
+    }
+  ],
+  "1794940327713.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.302083,
+        0.73029,
+        0.022917,
+        0.102351
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.507292,
+        0.450899,
+        0.123958,
+        0.196404
+      ],
+      "signal": null
+    }
+  ],
+  "1794940327778.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.097917,
+        0.355463,
+        0.08125,
+        0.427386
+      ],
+      "signal": null
+    },
+    {
+      "class": "speed_bump",
+      "box": [
+        0.477083,
+        0.260028,
+        0.110417,
+        0.213001
+      ],
+      "signal": null
+    }
+  ],
+  "1794940327906.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.153125,
+        0.387275,
+        0.027083,
+        0.102351
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.495833,
+        0.414938,
+        0.019792,
+        0.080221
+      ],
+      "signal": null
+    }
+  ],
+  "1794940328027.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.24375,
+        0.648686,
+        0.05,
+        0.343015
+      ],
+      "signal": null
+    },
+    {
+      "class": "stop_sign",
+      "box": [
+        0.426042,
+        0.125864,
+        0.190625,
+        0.374827
+      ],
+      "signal": null
+    }
+  ],
+  "VID_20261117_223120_204_f000000.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.557292,
+        0.048148,
+        0.035417,
+        0.137037
+      ],
+      "signal": "red"
+    }
+  ],
+  "VID_20261117_223120_204_f000044.jpg": [
+    {
+      "class": "traffic_light",
+      "box": [
+        0.634375,
+        0.0,
+        0.04375,
+        0.151852
+      ],
+      "signal": "red"
+    }
+  ],
+  "VID_20261117_223120_293_f000066.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.084375,
+        0.572222,
+        0.028125,
+        0.172222
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.173958,
+        0.542593,
+        0.035417,
+        0.211111
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.429167,
+        0.564815,
+        0.035417,
+        0.183333
+      ],
+      "signal": null
+    }
+  ],
+  "VID_20261117_223120_495_f000225.jpg": [
+    {
+      "class": "cone",
+      "box": [
+        0.29375,
+        0.457407,
+        0.033333,
+        0.203704
+      ],
+      "signal": null
+    },
+    {
+      "class": "cone",
+      "box": [
+        0.538542,
+        0.518519,
+        0.04375,
+        0.185185
+      ],
+      "signal": null
+    }
+  ],
+  "VID_20261117_223120_495_f000270.jpg": [],
+  "VID_20261117_223120_760_f000128.jpg": []
+}

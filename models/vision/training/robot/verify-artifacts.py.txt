@@ -1,0 +1,171 @@
+"""Verify the delivered artifacts without training, inference or selection.
+
+Run with .venv/bin/python from the repository root after the final checks.
+A passed integrity check is NOT a passed quality/deployment acceptance gate.
+"""
+from datetime import datetime, timezone
+from pathlib import Path
+import csv
+import hashlib
+import json
+import re
+import subprocess
+import sys
+
+ROOT = Path.cwd()
+sys.path.insert(0, str(ROOT))
+from scripts.train_vision import inspect_dataset
+
+FOLDER = ROOT / 'models/vision/training/robot'
+
+
+def sha(path):
+    return hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+
+
+def read(path):
+    return json.loads((ROOT / path).read_text())
+
+
+expected = {
+    'models/vision/yolo-stop.pt': 'be250cad84adf7b5b71e8e635b40508df6871fd9250a8072f4e0f4781e7d3a41',
+    'models/vision/yolo-stop-candidate.pt': 'fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c',
+    'models/vision/yolo-stop-improved.pt': '80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6',
+    'models/vision/yolo-stop-robot.pt': 'ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe',
+    'models/vision/yolo-stop-robot.onnx': 'c7f9c714f68d4bcada23e7e8028664f001f61b8fa5da8a466fd5431e49efdbee',
+    'models/vision/yolo-stop-robot-profile.json': 'c2f2e14c4ef82113aca53dd48f439934b20d8338bc6e51015f01a8ac0a4a70e0',
+    'models/vision/training/robot/validation-selection.json': 'e0122299cb0077fadc4c7b71396fb98f5cd1fb65f669daea2ce689dce2e86aa5',
+    'models/vision/training/robot/final-training.json': 'de5eaece65aa7a3a67b36cd975f75095a888d3a343b014654bd39943e85da8ee',
+}
+for name, digest in expected.items():
+    assert sha(name) == digest, name
+
+model = read('models/vision/yolo-stop-robot.json')
+profile = read('models/vision/yolo-stop-robot-profile.json')
+selection = read(profile['selectionFile'])
+protocol = read(FOLDER / 'test-protocol.json')
+parity = read(FOLDER / 'onnx-parity.json')
+smoke = read(FOLDER / 'integration-smoke.json')
+negative = read(FOLDER / 'negative-matched-profiles.json')
+summary = read('docs/vision-robot/summary.json')
+assert model['sha256'] == profile['sha256'] == parity['weightsSha256']
+assert sha(model['trainingRecord']) == model['trainingRecordSha256']
+assert sha(profile['selectionFile']) == profile['selectionFileSha256']
+assert sha('models/vision/yolo-stop-robot-profile.json') == protocol['frozenProfileSha256'] == parity['profileSha256']
+assert protocol['frozenProfile'] == profile
+assert datetime.fromisoformat(profile['selectedAt']) < datetime.fromisoformat(protocol['evaluationStartedAt'])
+assert profile['confidence'] == 0.35 and profile['imgsz'] == 512 and profile['trafficMode'] == 'legacy'
+assert profile['preferRed'] is False and profile['heuristicEnabled'] is False
+assert all(selection[field] is False and profile[field] is False for field in ('candidatePassesRegressionGates', 'candidatePreferredToControls'))
+candidates = [point for point in selection['points'] if point['variant'] == 'robot']
+assert len(candidates) == 8 and all(not point['eligible'] and point['falseGreen'] == 1 for point in candidates)
+assert model['runtimeAcceptance']['candidatePassesRegressionGates'] is False
+assert model['runtimeAcceptance']['productionWeightsReplaced'] is False
+assert summary['deploymentAccepted'] is False
+assert summary['profile'] == profile and summary['training'] == model
+
+with (FOLDER / 'final.csv').open() as stream:
+    rows = list(csv.DictReader(stream, skipinitialspace=True))
+best = max(rows, key=lambda row: float(row['metrics/mAP50-95(B)']))
+assert len(rows) == model['epochsCompleted'] == 34
+assert int(best['epoch']) == model['bestEpoch'] == 14
+assert model['test'] is None  # Training receipt only; runtime TEST is separate.
+assert model['dataset']['splits']['train']['images'] == 297
+assert sum(model['dataset']['splits']['train']['counts'].values()) == 394
+assert 'test' not in model['dataset']['splits']
+
+fingerprints = {}
+for variant, expected_fingerprint in (
+    ('yolo-stop', '19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276'),
+    ('yolo-stop-refined-color', 'dd280f724628cb3aef8553aa3798bcee98138b9340d555a6091b957971d322d3'),
+    ('yolo-stop-robot', '0346f1b0d8f18fcb2d0dabf0baeac799947cd16c4971a1b10635961f622803bf'),
+):
+    _, audit = inspect_dataset(ROOT / 'datasets' / variant / 'data.yaml')
+    assert audit['fingerprint'] == expected_fingerprint, variant
+    fingerprints[variant] = audit['fingerprint']
+canonical = ROOT / 'datasets/yolo-stop'
+robot = ROOT / 'datasets/yolo-stop-robot'
+val = sorted((canonical / 'images/val').glob('*.jpg'))
+assert len(val) == 61
+for image in val:
+    for relative in (Path('images/val') / image.name, Path('labels/val') / (image.stem + '.txt')):
+        assert sha(canonical / relative) == sha(robot / relative), str(relative)
+
+assert parity['passed'] and len(parity['rawTensorChecks']) == 11 and len(parity['runtimeChecks']) == 61
+assert all(item['passed'] for item in parity['rawTensorChecks'] + parity['runtimeChecks'])
+assert sha('models/vision/yolo-stop-robot.onnx') == parity['onnxSha256'] == model['onnx']['sha256']
+assert (ROOT / 'models/vision/yolo-stop-robot.onnx').stat().st_size == parity['onnxBytes'] == 12606676
+runtime_test = read('models/vision/yolo-stop-robot-evaluation.json')
+assert sha('models/vision/yolo-stop-robot-evaluation.json') == sha(FOLDER / 'test-robot.json')
+assert len(runtime_test['frames']) == 52
+for suffix, item in smoke.items():
+    assert suffix in ('pt', 'onnx') and item['backend'] == 'yolo'
+    assert item['matchesSavedEvaluation'] is True and item['hardwareOpened'] is False
+    assert item['sha256'] == sha('models/vision/yolo-stop-robot.' + suffix)
+    assert item['state']['heuristicEnabled'] is False and not item['serviceResult']['error']
+    frame = next(frame for frame in runtime_test['frames'] if frame['image'] == item['image'])
+    assert frame['predictions'] == item['serviceResult']['detections']
+assert set(smoke) == {'pt', 'onnx'}
+assert negative['confidence'] == 0.35 and negative['frames'] == 98
+assert negative['profileSha256'] == sha('models/vision/yolo-stop-robot-profile.json')
+assert negative['results']['robot']['framesWithTrafficFalsePositive'] == 4
+conflict = read('docs/vision-robot/validation-label-conflict.json')
+assert sha(canonical / 'images/val' / conflict['image']) == conflict['imageSha256']
+assert (canonical / 'labels/val' / Path(conflict['image']).with_suffix('.txt')).read_text() == conflict['frozenLabelText']
+assert conflict['labelsChanged'] is False and conflict['profileChanged'] is False
+
+# Keep executed verification logs outside the ignored temporary cache.
+logs = {}
+for stem in ('selection', 'export', 'final-checks'):
+    source = ROOT / '.cache/vision/robot' / (stem + '.log')
+    destination = FOLDER / (stem + '-log.txt')
+    if source.exists():
+        text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', source.read_text(errors='replace')).replace('\r', '\n')
+        destination.write_text(text)
+    assert destination.is_file(), str(destination)
+    logs[destination.name] = sha(destination)
+
+# Do not hide the unrelated failure; verify the archived unchanged-file evidence.
+previous_failure = read(FOLDER / 'pre-existing-failure.json')
+for name, evidence in previous_failure['files'].items():
+    assert sha(name) == evidence['sha256']
+    base = subprocess.check_output(['git', 'show', '304775073e49c46a919effecc7b079fb8a2cccf6:' + name], cwd=ROOT)
+    assert hashlib.sha256(base).hexdigest() == sha(name), name
+subprocess.run(['git', 'diff', '--check'], cwd=ROOT, check=True)
+
+report = {
+    'checkedAt': datetime.now(timezone.utc).isoformat(),
+    'artifactIntegrityPassed': True,
+    'deploymentAccepted': False,
+    'warning': 'Integrity/parity passed, QUALITY GATES FAILED. No further training, inference, relabelling, threshold/profile selection or production promotion performed by this verification.',
+    'unchangedFixedSha256': expected,
+    'datasetFingerprints': fingerprints,
+    'canonicalValidationPairsStillByteIdentical': 61,
+    'trainingEpochsCompleted': 34,
+    'validationBestEpoch': 14,
+    'newValidationProfilesTested': 8,
+    'newValidationProfilesPassingQualityGates': 0,
+    'onnxRawChecksPassed': 11,
+    'onnxRuntimeChecksPassed': 61,
+    'serviceFormatsChecked': ['pt', 'onnx'],
+    'testBenchmarkReused': True,
+    'validationLabelConflictKeptFrozen': True,
+    'archivedLogsSha256': logs,
+}
+(FOLDER / 'artifact-verification.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
+checks_file = FOLDER / 'checks.json'
+checks = json.loads(checks_file.read_text())
+checks['finalArtifacts'] = {
+    'integrityReport': 'artifact-verification.json',
+    'integrityPassed': True,
+    'qualityGatesPassed': False,
+    'deploymentAccepted': False,
+    'onnxParityReport': 'onnx-parity.json',
+    'onnxParityPassed': True,
+    'integrationSmoke': 'integration-smoke.json',
+    'formats': ['pt', 'onnx'],
+    'noRobotHardwareTest': True,
+    'verificationLogsSha256': logs,
+}
+checks_file.write_text(json.dumps(checks, ensure_ascii=False, indent=2) + '\n')
+print(json.dumps(report, ensure_ascii=False, indent=2))

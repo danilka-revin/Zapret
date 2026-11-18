@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 3,
+  "variant": "five-class-localizer-training-only-cleanup",
+  "parentFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "fingerprint": "d205cc97446e8ba6d250d63bd1b4fca8381a8069a20be9a8c5badae37da8ec78",
+  "sourceRevision": "3cb277bfadf7d0034943117f9146d4b92bb773a9",
+  "excludedTrainImages": [
+    "1794903271159.jpg",
+    "1794903271185.jpg",
+    "1794903271290.jpg",
+    "1794903271329.jpg",
+    "1794903271433.jpg",
+    "1794903271567.jpg",
+    "1794940325487.jpg",
+    "1794940325834.jpg",
+    "1794940325862.jpg",
+    "1794940325874.jpg",
+    "1794940325924.jpg",
+    "1794940325940.jpg",
+    "1794940325959.jpg",
+    "1794940325985.jpg",
+    "1794940325995.jpg",
+    "1794940326005.jpg",
+    "1794940326013.jpg",
+    "1794940326024.jpg",
+    "1794940326073.jpg",
+    "1794940326084.jpg",
+    "1794940326103.jpg",
+    "1794940326137.jpg",
+    "1794940326160.jpg",
+    "1794940326170.jpg",
+    "1794940326181.jpg",
+    "1794940327395.jpg",
+    "1794940327466.jpg",
+    "1794940327524.jpg",
+    "1794940328280.jpg",
+    "1794940328386.jpg",
+    "1794940328847.jpg"
+  ],
+  "removedTrainConeLabels": 75,
+  "negativeCrops": 11,
+  "trafficCrops": 40,
+  "splits": {
+    "train": {
+      "images": 280,
+      "counts": {
+        "speed_bump": 25,
+        "traffic_light": 124,
+        "stop_sign": 43,
+        "pedestrian_crossing": 11,
+        "cone": 206
+      },
+      "missingClasses": []
+    },
+    "val": {
+      "images": 61,
+      "counts": {
+        "cone": 63,
+        "stop_sign": 7,
+        "traffic_light": 27,
+        "pedestrian_crossing": 2,
+        "speed_bump": 7
+      },
+      "missingClasses": []
+    }
+  },
+  "test": "Original canonical test is untouched and absent from this training variant.",
+  "warning": "Agent-assisted filtering of pre-existing pseudo-labels, NOT independent human ground truth. Val labels only fold color IDs to body ID; no coordinate/instance edits."
+}

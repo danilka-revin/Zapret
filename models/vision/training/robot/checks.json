@@ -1,0 +1,43 @@
+{
+  "targeted": {
+    "passed": 165,
+    "skipped": 1,
+    "failed": 0,
+    "log": "targeted-tests.txt"
+  },
+  "full": {
+    "passed": 2145,
+    "skipped": 30,
+    "failed": 1,
+    "durationS": 342.23,
+    "log": "full-tests.txt",
+    "knownFailure": "tests/test_kinect_depth.py::test_depth_to_scan_wall_in_front_and_floor_filtered",
+    "unchangedEvidence": "pre-existing-failure.json"
+  },
+  "productionBaselinePreviousWeightsUnchanged": {
+    "models/vision/yolo-stop.pt": "be250cad84adf7b5b71e8e635b40508df6871fd9250a8072f4e0f4781e7d3a41",
+    "models/vision/yolo-stop-candidate.pt": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+    "models/vision/yolo-stop-improved.pt": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6"
+  },
+  "newTests": 44,
+  "exportProbe": "Baseline-only temporary portability probe passed raw tensors at square/landscape/portrait shapes and actual adapter parity on 61 VAL images; NOT a parity result for the new candidate.",
+  "finalArtifacts": {
+    "integrityReport": "artifact-verification.json",
+    "integrityPassed": true,
+    "qualityGatesPassed": false,
+    "deploymentAccepted": false,
+    "onnxParityReport": "onnx-parity.json",
+    "onnxParityPassed": true,
+    "integrationSmoke": "integration-smoke.json",
+    "formats": [
+      "pt",
+      "onnx"
+    ],
+    "noRobotHardwareTest": true,
+    "verificationLogsSha256": {
+      "selection-log.txt": "7eab9313ecedda34f2eebc6fc9c27720580ec2f0c9ad838dc2d88b1405fa900c",
+      "export-log.txt": "1cde90585d82f012c358e8ffb4f6bea65c64b59c9acdde08c606a0980d91230a",
+      "final-checks-log.txt": "1bbca694bb5197b59ecbae56cf82407003e94729df15451f1dd10fe44c0913c4"
+    }
+  }
+}

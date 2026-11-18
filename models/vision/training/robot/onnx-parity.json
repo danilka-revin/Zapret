@@ -1,0 +1,719 @@
+{
+  "createdAt": "2026-11-17T23:59:27.922836+00:00",
+  "weights": "models/vision/yolo-stop-robot.pt",
+  "weightsSha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "profileSha256": "c2f2e14c4ef82113aca53dd48f439934b20d8338bc6e51015f01a8ac0a4a70e0",
+  "onnx": "/home/user/Zapret/models/vision/yolo-stop-robot.onnx",
+  "onnxSha256": "c7f9c714f68d4bcada23e7e8028664f001f61b8fa5da8a466fd5431e49efdbee",
+  "onnxBytes": 12606676,
+  "format": "ONNX FP32, opset 17, dynamic batch/height/width, no embedded NMS",
+  "input": {
+    "name": "images",
+    "layout": "NCHW",
+    "dtype": "float32",
+    "preprocessing": "BGR -> RGB, stride-32 LetterBox, scale /255, batch dimension"
+  },
+  "outputs": [
+    {
+      "name": "output0",
+      "shape": [
+        "batch",
+        "Concatoutput0_dim_1",
+        "anchors"
+      ],
+      "dtype": "tensor(float)"
+    }
+  ],
+  "classes": [
+    "stop_sign",
+    "pedestrian_crossing",
+    "speed_bump",
+    "traffic_light",
+    "cone",
+    "traffic_light_red",
+    "traffic_light_yellow",
+    "traffic_light_green"
+  ],
+  "onnxVersion": "1.17.0",
+  "onnxRuntime": "1.20.1",
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "split": "val",
+  "images": 61,
+  "rawTensorChecks": [
+    {
+      "image": "synthetic-512x512",
+      "inputShape": [
+        1,
+        3,
+        512,
+        512
+      ],
+      "outputShape": [
+        1,
+        12,
+        5376
+      ],
+      "maximumAbsoluteError": 0.000335693359375,
+      "passed": true
+    },
+    {
+      "image": "synthetic-320x512",
+      "inputShape": [
+        1,
+        3,
+        320,
+        512
+      ],
+      "outputShape": [
+        1,
+        12,
+        3360
+      ],
+      "maximumAbsoluteError": 0.000518798828125,
+      "passed": true
+    },
+    {
+      "image": "synthetic-512x320",
+      "inputShape": [
+        1,
+        3,
+        512,
+        320
+      ],
+      "outputShape": [
+        1,
+        12,
+        3360
+      ],
+      "maximumAbsoluteError": 0.00054931640625,
+      "passed": true
+    },
+    {
+      "image": "1794903271194.jpg",
+      "inputShape": [
+        1,
+        3,
+        416,
+        512
+      ],
+      "outputShape": [
+        1,
+        12,
+        4368
+      ],
+      "maximumAbsoluteError": 0.00048828125,
+      "passed": true
+    },
+    {
+      "image": "1794903271618.jpg",
+      "inputShape": [
+        1,
+        3,
+        416,
+        512
+      ],
+      "outputShape": [
+        1,
+        12,
+        4368
+      ],
+      "maximumAbsoluteError": 0.00067138671875,
+      "passed": true
+    },
+    {
+      "image": "1794940325429.jpg",
+      "inputShape": [
+        1,
+        3,
+        416,
+        512
+      ],
+      "outputShape": [
+        1,
+        12,
+        4368
+      ],
+      "maximumAbsoluteError": 0.0005340576171875,
+      "passed": true
+    },
+    {
+      "image": "1794940326126.jpg",
+      "inputShape": [
+        1,
+        3,
+        416,
+        512
+      ],
+      "outputShape": [
+        1,
+        12,
+        4368
+      ],
+      "maximumAbsoluteError": 0.000457763671875,
+      "passed": true
+    },
+    {
+      "image": "1794940327185.jpg",
+      "inputShape": [
+        1,
+        3,
+        416,
+        512
+      ],
+      "outputShape": [
+        1,
+        12,
+        4368
+      ],
+      "maximumAbsoluteError": 0.00103759765625,
+      "passed": true
+    },
+    {
+      "image": "1794940327807.jpg",
+      "inputShape": [
+        1,
+        3,
+        416,
+        512
+      ],
+      "outputShape": [
+        1,
+        12,
+        4368
+      ],
+      "maximumAbsoluteError": 0.00067138671875,
+      "passed": true
+    },
+    {
+      "image": "1794940328341.jpg",
+      "inputShape": [
+        1,
+        3,
+        416,
+        512
+      ],
+      "outputShape": [
+        1,
+        12,
+        4368
+      ],
+      "maximumAbsoluteError": 0.0008544921875,
+      "passed": true
+    },
+    {
+      "image": "1794940328836.jpg",
+      "inputShape": [
+        1,
+        3,
+        416,
+        512
+      ],
+      "outputShape": [
+        1,
+        12,
+        4368
+      ],
+      "maximumAbsoluteError": 0.000701904296875,
+      "passed": true
+    }
+  ],
+  "runtimeChecks": [
+    {
+      "image": "1794903271194.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.9999968712308109,
+      "maximumConfidenceError": 5.960464477539063e-08
+    },
+    {
+      "image": "1794903271267.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 1.0,
+      "maximumConfidenceError": 5.960464477539063e-08
+    },
+    {
+      "image": "1794903271415.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999999999999994,
+      "maximumConfidenceError": 1.1920928955078125e-07
+    },
+    {
+      "image": "1794903271464.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 0,
+      "minimumIoU": null,
+      "maximumConfidenceError": 0.0
+    },
+    {
+      "image": "1794903271585.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.9999858096650369,
+      "maximumConfidenceError": 2.384185791015625e-07
+    },
+    {
+      "image": "1794903271593.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0,
+      "maximumConfidenceError": 2.384185791015625e-07
+    },
+    {
+      "image": "1794903271601.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0,
+      "maximumConfidenceError": 1.0132789611816406e-06
+    },
+    {
+      "image": "1794903271618.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999979448141486,
+      "maximumConfidenceError": 1.1920928955078125e-07
+    },
+    {
+      "image": "1794940325188.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999999999999997,
+      "maximumConfidenceError": 5.960464477539063e-08
+    },
+    {
+      "image": "1794940325199.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0000000000000002,
+      "maximumConfidenceError": 1.7881393432617188e-07
+    },
+    {
+      "image": "1794940325210.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.999999999999999,
+      "maximumConfidenceError": 2.384185791015625e-07
+    },
+    {
+      "image": "1794940325244.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999976288062106,
+      "maximumConfidenceError": 0.0
+    },
+    {
+      "image": "1794940325323.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999957751447535,
+      "maximumConfidenceError": 5.960464477539063e-08
+    },
+    {
+      "image": "1794940325375.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0,
+      "maximumConfidenceError": 2.384185791015625e-07
+    },
+    {
+      "image": "1794940325429.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999999999999997,
+      "maximumConfidenceError": 0.0
+    },
+    {
+      "image": "1794940325615.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.9999999999999998,
+      "maximumConfidenceError": 1.7881393432617188e-07
+    },
+    {
+      "image": "1794940325668.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.999994438264739,
+      "maximumConfidenceError": 5.960464477539063e-08
+    },
+    {
+      "image": "1794940325901.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.9999999999999983,
+      "maximumConfidenceError": 4.76837158203125e-07
+    },
+    {
+      "image": "1794940325912.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0,
+      "maximumConfidenceError": 5.960464477539062e-07
+    },
+    {
+      "image": "1794940325976.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999999999999994,
+      "maximumConfidenceError": 2.384185791015625e-07
+    },
+    {
+      "image": "1794940326047.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0,
+      "maximumConfidenceError": 5.960464477539063e-08
+    },
+    {
+      "image": "1794940326126.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 1.0000000000000002,
+      "maximumConfidenceError": 1.7881393432617188e-07
+    },
+    {
+      "image": "1794940326199.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999999999999983,
+      "maximumConfidenceError": 5.960464477539063e-08
+    },
+    {
+      "image": "1794940326207.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 1.0,
+      "maximumConfidenceError": 1.7881393432617188e-07
+    },
+    {
+      "image": "1794940326224.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 1.0,
+      "maximumConfidenceError": 8.046627044677734e-07
+    },
+    {
+      "image": "1794940326954.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999999999999996,
+      "maximumConfidenceError": 1.1920928955078125e-07
+    },
+    {
+      "image": "1794940327087.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0000000000000002,
+      "maximumConfidenceError": 2.384185791015625e-07
+    },
+    {
+      "image": "1794940327109.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999999999999989,
+      "maximumConfidenceError": 1.7881393432617188e-07
+    },
+    {
+      "image": "1794940327185.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0000000000000002,
+      "maximumConfidenceError": 6.556510925292969e-07
+    },
+    {
+      "image": "1794940327313.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 1.0,
+      "maximumConfidenceError": 1.1920928955078125e-07
+    },
+    {
+      "image": "1794940327326.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 3,
+      "minimumIoU": 0.9999999999999996,
+      "maximumConfidenceError": 5.364418029785156e-07
+    },
+    {
+      "image": "1794940327456.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.9999999999999997,
+      "maximumConfidenceError": 3.5762786865234375e-07
+    },
+    {
+      "image": "1794940327533.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 3,
+      "minimumIoU": 1.0,
+      "maximumConfidenceError": 2.1457672119140625e-06
+    },
+    {
+      "image": "1794940327745.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0000000000000004,
+      "maximumConfidenceError": 5.960464477539063e-08
+    },
+    {
+      "image": "1794940327787.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 3,
+      "minimumIoU": 1.0,
+      "maximumConfidenceError": 9.5367431640625e-07
+    },
+    {
+      "image": "1794940327807.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 3,
+      "minimumIoU": 0.9999950171162069,
+      "maximumConfidenceError": 9.5367431640625e-07
+    },
+    {
+      "image": "1794940327858.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0000000000000018,
+      "maximumConfidenceError": 2.384185791015625e-07
+    },
+    {
+      "image": "1794940327981.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.9999999999999984,
+      "maximumConfidenceError": 5.960464477539062e-07
+    },
+    {
+      "image": "1794940327999.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0000000000000007,
+      "maximumConfidenceError": 5.960464477539063e-08
+    },
+    {
+      "image": "1794940328128.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0000000000000009,
+      "maximumConfidenceError": 5.960464477539063e-08
+    },
+    {
+      "image": "1794940328153.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999999999999991,
+      "maximumConfidenceError": 1.7881393432617188e-07
+    },
+    {
+      "image": "1794940328231.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0000000000000009,
+      "maximumConfidenceError": 0.0
+    },
+    {
+      "image": "1794940328341.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999999999999993,
+      "maximumConfidenceError": 0.0
+    },
+    {
+      "image": "1794940328484.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999999999999996,
+      "maximumConfidenceError": 2.980232238769531e-07
+    },
+    {
+      "image": "1794940328517.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999999999999997,
+      "maximumConfidenceError": 2.980232238769531e-07
+    },
+    {
+      "image": "1794940328577.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.9999999999999997,
+      "maximumConfidenceError": 4.76837158203125e-07
+    },
+    {
+      "image": "1794940328650.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 1.0,
+      "maximumConfidenceError": 1.7881393432617188e-07
+    },
+    {
+      "image": "1794940328714.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 0.9999999999999997,
+      "maximumConfidenceError": 2.384185791015625e-07
+    },
+    {
+      "image": "1794940328797.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.9999999999999997,
+      "maximumConfidenceError": 1.1920928955078125e-07
+    },
+    {
+      "image": "1794940328836.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 3,
+      "minimumIoU": 0.9999955587335284,
+      "maximumConfidenceError": 5.066394805908203e-07
+    },
+    {
+      "image": "VID_20261117_223120_204_f000000.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.9999999999999984,
+      "maximumConfidenceError": 1.8775463104248047e-06
+    },
+    {
+      "image": "VID_20261117_223120_204_f000044.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 3,
+      "minimumIoU": 1.0000000000000002,
+      "maximumConfidenceError": 4.76837158203125e-07
+    },
+    {
+      "image": "VID_20261117_223120_204_f000088.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.9999999999999984,
+      "maximumConfidenceError": 2.980232238769531e-07
+    },
+    {
+      "image": "VID_20261117_223120_204_f000132.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 2,
+      "minimumIoU": 0.9999665064558811,
+      "maximumConfidenceError": 4.172325134277344e-07
+    },
+    {
+      "image": "VID_20261117_223120_204_f000176.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 3,
+      "minimumIoU": 0.9999909422751199,
+      "maximumConfidenceError": 7.152557373046875e-07
+    },
+    {
+      "image": "VID_20261117_223120_204_f000220.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 1,
+      "minimumIoU": 1.0000000000000007,
+      "maximumConfidenceError": 5.960464477539063e-08
+    },
+    {
+      "image": "VID_20261117_223120_211_f000000.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 0,
+      "minimumIoU": null,
+      "maximumConfidenceError": 0.0
+    },
+    {
+      "image": "VID_20261117_223120_211_f000022.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 0,
+      "minimumIoU": null,
+      "maximumConfidenceError": 0.0
+    },
+    {
+      "image": "VID_20261117_223120_211_f000044.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 0,
+      "minimumIoU": null,
+      "maximumConfidenceError": 0.0
+    },
+    {
+      "image": "VID_20261117_223120_211_f000066.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 0,
+      "minimumIoU": null,
+      "maximumConfidenceError": 0.0
+    },
+    {
+      "image": "VID_20261117_223120_211_f000088.jpg",
+      "passed": true,
+      "issues": [],
+      "matched": 0,
+      "minimumIoU": null,
+      "maximumConfidenceError": 0.0
+    }
+  ],
+  "passed": true,
+  "runtimeProfile": {
+    "confidence": 0.35,
+    "imgsz": 512,
+    "preferRed": false,
+    "trafficMode": "legacy",
+    "heuristicEnabled": false
+  },
+  "warning": "Numerical/adapter parity, NOT independent accuracy or safety validation. Raw ONNX does not include colour fusion, body guard, NMS or temporal logic. Robot hardware not benchmarked. No TEST-based tuning."
+}

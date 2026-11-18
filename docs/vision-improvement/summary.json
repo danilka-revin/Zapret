@@ -1,0 +1,235 @@
+{
+  "test": {
+    "split": "test",
+    "images": 52,
+    "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+    "profile": {
+      "confidence": 0.25,
+      "imgsz": 512,
+      "device": "cpu",
+      "preferRed": false,
+      "iouMatch": 0.5,
+      "backend": "yolo+fusion"
+    },
+    "before": {
+      "weights": "models/vision/yolo-stop-candidate.pt",
+      "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+      "trafficMode": "legacy",
+      "micro": {
+        "tp": 61,
+        "fp": 35,
+        "fn": 37,
+        "precision": 0.6354166666666666,
+        "recall": 0.6224489795918368,
+        "f1": 0.6288659793814433
+      },
+      "classes": {
+        "stop_sign": {
+          "tp": 8,
+          "fp": 1,
+          "fn": 1,
+          "precision": 0.8888888888888888,
+          "recall": 0.8888888888888888,
+          "f1": 0.8888888888888888
+        },
+        "pedestrian_crossing": {
+          "tp": 3,
+          "fp": 2,
+          "fn": 0,
+          "precision": 0.6,
+          "recall": 1.0,
+          "f1": 0.75
+        },
+        "speed_bump": {
+          "tp": 6,
+          "fp": 4,
+          "fn": 1,
+          "precision": 0.6,
+          "recall": 0.8571428571428571,
+          "f1": 0.7058823529411765
+        },
+        "traffic_light": {
+          "tp": 8,
+          "fp": 6,
+          "fn": 11,
+          "precision": 0.5714285714285714,
+          "recall": 0.42105263157894735,
+          "f1": 0.48484848484848486
+        },
+        "cone": {
+          "tp": 36,
+          "fp": 22,
+          "fn": 24,
+          "precision": 0.6206896551724138,
+          "recall": 0.6,
+          "f1": 0.6101694915254238
+        }
+      },
+      "macroF1": 0.6879578436407948,
+      "signals": {
+        "red": {
+          "correct": 1,
+          "support": 7,
+          "predictions": 6,
+          "recallIncludingMisses": 0.14285714285714285,
+          "precision": 0.16666666666666666
+        },
+        "yellow": {
+          "correct": 1,
+          "support": 4,
+          "predictions": 2,
+          "recallIncludingMisses": 0.25,
+          "precision": 0.5
+        },
+        "green": {
+          "correct": 0,
+          "support": 3,
+          "predictions": 0,
+          "recallIncludingMisses": 0.0,
+          "precision": 0.0
+        }
+      },
+      "signalBalancedRecall": 0.13095238095238096,
+      "falseGreen": 0,
+      "validationObjective": 0.5208562048342706,
+      "latencyMedianMs": 62.06,
+      "latencyP95Ms": 74.29
+    },
+    "after": {
+      "weights": "models/vision/yolo-stop-improved.pt",
+      "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+      "trafficMode": "body",
+      "micro": {
+        "tp": 60,
+        "fp": 29,
+        "fn": 38,
+        "precision": 0.6741573033707865,
+        "recall": 0.6122448979591837,
+        "f1": 0.6417112299465241
+      },
+      "classes": {
+        "stop_sign": {
+          "tp": 8,
+          "fp": 1,
+          "fn": 1,
+          "precision": 0.8888888888888888,
+          "recall": 0.8888888888888888,
+          "f1": 0.8888888888888888
+        },
+        "pedestrian_crossing": {
+          "tp": 3,
+          "fp": 2,
+          "fn": 0,
+          "precision": 0.6,
+          "recall": 1.0,
+          "f1": 0.75
+        },
+        "speed_bump": {
+          "tp": 5,
+          "fp": 3,
+          "fn": 2,
+          "precision": 0.625,
+          "recall": 0.7142857142857143,
+          "f1": 0.6666666666666666
+        },
+        "traffic_light": {
+          "tp": 9,
+          "fp": 5,
+          "fn": 10,
+          "precision": 0.6428571428571429,
+          "recall": 0.47368421052631576,
+          "f1": 0.5454545454545454
+        },
+        "cone": {
+          "tp": 35,
+          "fp": 18,
+          "fn": 25,
+          "precision": 0.660377358490566,
+          "recall": 0.5833333333333334,
+          "f1": 0.6194690265486725
+        }
+      },
+      "macroF1": 0.6940958255117546,
+      "signals": {
+        "red": {
+          "correct": 1,
+          "support": 7,
+          "predictions": 6,
+          "recallIncludingMisses": 0.14285714285714285,
+          "precision": 0.16666666666666666
+        },
+        "yellow": {
+          "correct": 1,
+          "support": 4,
+          "predictions": 2,
+          "recallIncludingMisses": 0.25,
+          "precision": 0.5
+        },
+        "green": {
+          "correct": 2,
+          "support": 3,
+          "predictions": 2,
+          "recallIncludingMisses": 0.6666666666666666,
+          "precision": 1.0
+        }
+      },
+      "signalBalancedRecall": 0.3531746031746032,
+      "falseGreen": 0,
+      "validationObjective": 0.5918194588106092,
+      "latencyMedianMs": 60.64,
+      "latencyP95Ms": 79.5
+    },
+    "delta": {
+      "macroF1": 0.006137981870959819,
+      "signalBalancedRecall": 0.22222222222222224,
+      "falseGreen": 0,
+      "validationObjective": 0.07096325397633851,
+      "micro": {
+        "tp": -1,
+        "fp": -6,
+        "fn": 1,
+        "precision": 0.03874063670411987,
+        "recall": -0.010204081632653073,
+        "f1": 0.01284525056508079
+      }
+    },
+    "warning": "Same saved images/agent-assisted labels, NOT independent human ground truth. Signal recall includes missed bodies. Confidence is not calibrated correctness. No model selection on test is performed here. Zero observed false-green is not safety proof.",
+    "frozenProfileFile": "models/vision/yolo-stop-improved-profile.json",
+    "frozenProfileSha256": "60b3a909c0843276584a2cae10fd45527c48187b971f22ad544b679f6bb1d46c",
+    "testProtocol": "Initial candidate test was already evaluated and is NOT a new blind holdout. Body-only guard was developed on the separate VAL shoe clip and canonical val, using pre-existing body thresholds. Test results were not used to tune its thresholds. Final profile is frozen before repeated test evaluation; all earlier results preserved.",
+    "testReused": true
+  },
+  "shoeValidation": {
+    "before": {
+      "weights": "models/vision/yolo-stop-candidate.pt",
+      "sha256": "fd6f1514770a364471f2d0cedfe431bcce41c5f3f5969c7eb8eb9aaab9a1f76c",
+      "trafficFalsePositiveBoxes": 22,
+      "framesWithTrafficFalsePositive": 21,
+      "falseTrafficSignals": {
+        "unknown": 21,
+        "red": 1
+      }
+    },
+    "after": {
+      "weights": "models/vision/yolo-stop-improved.pt",
+      "sha256": "80543f71999a0a214d5f5eac4dddf9c31efdcdac8f711ec07f9d9c6f1d4f30e6",
+      "trafficFalsePositiveBoxes": 11,
+      "framesWithTrafficFalsePositive": 11,
+      "falseTrafficSignals": {
+        "yellow": 2,
+        "red": 9
+      }
+    }
+  },
+  "shoeFrames": 98,
+  "profile": "../../models/vision/yolo-stop-improved-profile.json",
+  "knownRegressions": [
+    "Overall test recall 62.2% -> 61.2%; one more missed bump sign and cone.",
+    "Shoe VAL clip: total traffic-FP frames 21 -> 11, but specific false red/yellow boxes 1 -> 11.",
+    "Door false yellow persists; body filter loses correct green at source 865/frame138.",
+    "Only 3 green test examples; repeated noisy agent-assisted benchmark, not independent robot footage."
+  ],
+  "productionChanged": false,
+  "modelDeployed": false,
+  "independentHumanGroundTruth": false
+}

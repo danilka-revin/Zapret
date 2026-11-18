@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>YOLO — проверка на видео</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #eaf1fc; background: #0a111c; color-scheme: dark; }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; }
+    main { max-width: 1480px; margin: auto; padding: 36px 24px 60px; }
+    a { color: #b3d4ff; text-underline-offset: 4px; }
+    a:focus-visible, button:focus-visible, select:focus-visible { outline: 3px solid #a7e9d0; outline-offset: 4px; }
+    .eyebrow { color: #8fd5bc; font-size: .78rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { font-size: clamp(1.8rem, 4vw, 2.9rem); letter-spacing: -.04em; margin: 10px 0; }
+    .lead { color: #b4c2d7; max-width: 950px; line-height: 1.65; }
+    .stats { display: flex; gap: 12px; flex-wrap: wrap; margin: 22px 0; }
+    .stat { background: #131e2e; border: 1px solid #2b3c54; padding: 10px 16px; border-radius: 9px; color: #b4c2d7; }
+    .stat strong { color: #edf4ff; }
+    .warning { padding: 14px 18px; border-left: 3px solid #e9bb75; background: #1c222c; color: #efd7b1; line-height: 1.6; margin: 22px 0; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 24px; align-items: start; }
+    .player { background: #111c2c; border: 1px solid #2b3c54; border-radius: 14px; overflow: hidden; }
+    video { width: 100%; display: block; background: #03070c; aspect-ratio: 960 / 624; }
+    .player-info { padding: 20px; }
+    h2 { font-size: 1.2rem; margin: 0 0 10px; }
+    .observation { line-height: 1.65; color: #c6d3e5; margin: 0 0 16px; }
+    .tools { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: .88rem; }
+    select, button { font: inherit; color: inherit; background: #1b2b40; border: 1px solid #3d5678; border-radius: 7px; padding: 7px 10px; }
+    button { cursor: pointer; }
+    button:hover { background: #29405c; }
+    .events { display: flex; flex-wrap: wrap; gap: 9px; margin: 16px 0; }
+    .events button { font-size: .85rem; color: #f1d3a1; text-align: left; }
+    .clip-list { display: grid; gap: 10px; }
+    .clip { display: flex; text-align: left; align-items: center; padding: 8px; gap: 11px; background: #111c2c; border-color: #2b3c54; border-radius: 10px; width: 100%; }
+    .clip[aria-pressed="true"] { background: #15342e; border-color: #82d5b3; }
+    .clip img { width: 108px; height: 70px; object-fit: contain; border-radius: 5px; background: #070d15; }
+    .clip strong { display: block; font-size: .92rem; }
+    .clip small { color: #9eafc6; display: block; margin-top: 5px; }
+    .timeline-section { border-top: 1px solid #2b3c54; padding-top: 18px; margin-top: 20px; }
+    .timeline-section h3 { font-size: .95rem; margin: 0 0 10px; }
+    .timeline { display: flex; height: 22px; width: 100%; background: #39465c; border-radius: 5px; overflow: hidden; }
+    .timeline span { min-width: 0; }
+    .legend { display: flex; flex-wrap: wrap; gap: 14px; color: #a9bad0; font-size: .78rem; margin: 10px 0; }
+    .legend i { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 2px; }
+    .explanation, footer { color: #9eafc6; font-size: .84rem; line-height: 1.7; }
+    footer { margin-top: 26px; max-width: 1100px; }
+    #load-error { color: #ffd1c9; }
+    @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } .clip-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 580px) { main { padding: 24px 12px 40px; } .player-info { padding: 14px; } .clip-list { grid-template-columns: 1fr; } .stat { padding: 9px 11px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">YOLO · последовательные кадры · без ретуши ошибок</div>
+      <h1>Проверка в движении</h1>
+      <p class="lead">Полные исходные ролики с настоящими рамками кандидата. Модель обработала каждый кадр, а не выборку раз в секунду. Пропуски, ложные срабатывания и скачки класса не сглажены.</p>
+      <div class="stats" aria-label="Объём проверки">
+        <div class="stat"><strong id="clip-count">—</strong> роликов</div>
+        <div class="stat"><strong id="frame-count">—</strong> кадров</div>
+        <div class="stat"><strong id="duration">—</strong> с исходного видео</div>
+        <div class="stat">вход <strong>512 px</strong> · порог <strong>0.25</strong></div>
+      </div>
+      <div class="warning"><strong>Для автономной езды пока не готово.</strong> Это знакомый полигон: отдельные кадры из 5 роликов были в train, из 2 — в val и из 1 — в test. Это не новый независимый тест. Статистика ниже описывает ответы модели, а не её точность.</div>
+    </header>
+    <p id="load-error" role="alert" hidden>Не удалось загрузить данные. Открой страницу через Live Preview, не как локальный HTML-файл.</p>
+    <div class="layout" id="review-layout" hidden>
+      <section class="player" aria-label="Видеоплеер с предсказаниями">
+        <video id="video" controls playsinline preload="metadata" aria-label="Ролик с рамками модели"></video>
+        <div class="player-info">
+          <h2 id="clip-title"></h2>
+          <p class="observation" id="observation"></p>
+          <div class="tools">
+            <label>Скорость <select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option></select></label>
+            <a id="download-video" download>Скачать MP4</a>
+            <a id="storyboard" target="_blank" rel="noopener">Раскладка по времени ↗</a>
+            <a id="trace" download>Предсказания JSONL</a>
+          </div>
+          <div class="events" id="events" aria-label="Перейти к отмеченному эпизоду"></div>
+          <div class="timeline-section">
+            <h3>Ответы о светофоре по времени</h3>
+            <div class="timeline" id="timeline" role="img" aria-label="Временная шкала ответов модели, не эталон цветов"></div>
+            <div class="legend"><span><i style="background:#53627a"></i>нет детекции</span><span><i style="background:#bb9afa"></i>неизвестно</span><span><i style="background:#fa6a88"></i>красный</span><span><i style="background:#f5d274"></i>жёлтый</span><span><i style="background:#78d8a6"></i>зелёный</span><span><i style="background:#ec95d8"></i>несколько ответов</span></div>
+            <p class="explanation" id="output-stats"></p>
+            <p class="explanation">«Нет детекции» не всегда означает пропуск: объект мог выйти из кадра. Цвета шкалы — ответы модели, а не реальный сигнал светофора. Без ручной покадровой разметки это нельзя переводить в precision/recall.</p>
+          </div>
+        </div>
+      </section>
+      <nav class="clip-list" id="clip-list" aria-label="Выбор из восьми роликов"></nav>
+    </div>
+    <footer>YOLO + HSV fusion, тот же кандидат, что на фотографиях. Нет трекера, дополнительного эвристического детектора или сглаживания. Видео уменьшено только для показа после инференса. Воспроизведение без звука, с исходной средней частотой кадров; оригинальные временные метки сохранены в JSONL. Число у рамки — score, не измеренная точность. Рабочая модель робота не заменялась.</footer>
+  </main>
+  <script>
+    (async () => {
+      const $ = id => document.getElementById(id);
+      const video = $('video');
+      const color = {no_detection:'#53627a', unknown:'#bb9afa', red:'#fa6a88', yellow:'#f5d274', green:'#78d8a6'};
+      const label = {no_detection:'нет детекции', unknown:'неизвестно', red:'красный', yellow:'жёлтый', green:'зелёный'};
+      try {
+        const responses = await Promise.all([fetch('summary.json'), fetch('review-notes.json')]);
+        if (responses.some(r => !r.ok)) throw new Error('Review data unavailable');
+        const [report, notes] = await Promise.all(responses.map(r => r.json()));
+        $('clip-count').textContent = report.clips.length;
+        $('frame-count').textContent = report.frames.toLocaleString('ru-RU');
+        $('duration').textContent = report.durationS.toFixed(2).replace('.', ',');
+        $('review-layout').hidden = false;
+        const buttons = [];
+        function select(clip, index) {
+          const note = notes.clips[clip.source];
+          video.pause();
+          video.poster = clip.poster;
+          video.src = clip.video;
+          video.load();
+          video.playbackRate = Number($('speed').value);
+          $('clip-title').textContent = clip.source.slice(-7, -4) + ' · ' + note.title;
+          $('observation').textContent = note.observation;
+          $('download-video').href = clip.video;
+          $('storyboard').href = clip.storyboard;
+          $('trace').href = clip.trace;
+          buttons.forEach((b, i) => b.setAttribute('aria-pressed', String(i === index)));
+          $('events').replaceChildren();
+          (note.events || []).forEach(event => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = event.timeS.toFixed(2) + ' с · ' + event.label;
+            button.title = event.detail || event.label;
+            button.addEventListener('click', () => {
+              video.currentTime = event.timeS;
+              video.pause();
+            });
+            $('events').append(button);
+          });
+          $('timeline').replaceChildren();
+          clip.trafficOutputRuns.forEach(run => {
+            const span = document.createElement('span');
+            span.style.width = (100 * run.frames / clip.frames) + '%';
+            span.style.background = color[run.state] || '#ec95d8';
+            span.title = run.startS.toFixed(2) + '–' + run.endS.toFixed(2) + ' с: ' + (label[run.state] || run.state);
+            $('timeline').append(span);
+          });
+          $('output-stats').textContent = Object.entries(clip.trafficOutputFrameCounts).map(([state, count]) => (label[state] || state) + ': ' + count + ' кадров').join(' · ') + '. Это количество ответов, не доля правильных распознаваний.';
+        }
+        report.clips.forEach((clip, index) => {
+          const note = notes.clips[clip.source];
+          const button = document.createElement('button');
+          button.type = 'button'; button.className = 'clip'; button.setAttribute('aria-pressed', 'false');
+          const image = document.createElement('img'); image.src = clip.poster; image.alt = ''; image.loading = 'lazy';
+          const text = document.createElement('span');
+          const title = document.createElement('strong'); title.textContent = clip.source.slice(-7, -4) + ' · ' + note.title;
+          const meta = document.createElement('small'); meta.textContent = clip.durationS.toFixed(2) + ' с · ' + clip.frames + ' кадров · ' + clip.split.join(', ');
+          text.append(title, meta); button.append(image, text);
+          button.addEventListener('click', () => select(clip, index));
+          buttons.push(button); $('clip-list').append(button);
+        });
+        $('speed').addEventListener('change', () => { video.playbackRate = Number($('speed').value); });
+        const initial = Math.max(0, report.clips.findIndex(clip => clip.source.endsWith('865.mp4')));
+        select(report.clips[initial], initial);
+      } catch (error) {
+        $('load-error').hidden = false;
+        console.error(error);
+      }
+    })();
+  </script>
+</body>
+</html>

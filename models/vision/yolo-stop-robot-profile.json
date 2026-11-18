@@ -1,0 +1,21 @@
+{
+  "weights": "models/vision/yolo-stop-robot.pt",
+  "sha256": "ac6c14178f841f0f5f6ed9ff8226614a768741ce10847241948820d0470bd2fe",
+  "confidence": 0.35,
+  "trafficMode": "legacy",
+  "imgsz": 512,
+  "device": "cpu",
+  "preferRed": false,
+  "backend": "yolo+fusion",
+  "heuristicEnabled": false,
+  "datasetFingerprint": "19c0d37ae4945e955a5e3126a394e2180117847695d6ffe9d3ae7acd043fd276",
+  "selectedAt": "2026-11-17T23:59:16.096032+00:00",
+  "selectedOn": "VAL only",
+  "candidatePassesRegressionGates": false,
+  "candidatePreferredToControls": false,
+  "selectionFile": "models/vision/training/robot/validation-selection.json",
+  "selectionFileSha256": "e0122299cb0077fadc4c7b71396fb98f5cd1fb65f669daea2ce689dce2e86aa5",
+  "testIsReusedBenchmark": true,
+  "deployment": "bench only; no automatic production replacement",
+  "warning": "Bench selection only, not autonomous-ready; small noisy/agent-assisted labels and ONE correlated VAL negative clip, not independent ground truth or proof of safety."
+}

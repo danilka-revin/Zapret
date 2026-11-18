@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 4,
+  "variant": "robot-reviewed-housings-and-train-backgrounds-v1",
+  "parentFingerprint": "dd280f724628cb3aef8553aa3798bcee98138b9340d555a6091b957971d322d3",
+  "fingerprint": "0346f1b0d8f18fcb2d0dabf0baeac799947cd16c4971a1b10635961f622803bf",
+  "sourceRevision": "3cb277bfadf7d0034943117f9146d4b92bb773a9",
+  "archiveSha256": "762d6fa93f6f5b8103041cfced32de30b32d752399a37742e7f05d30499a0b88",
+  "reviewSha256": "a06d4f244c3cc2fef3c67c3462a651f2771d3d2eaca2542a1005f81acd4abf34",
+  "recipeSha256": "7e1b73a398363cb485ec2a4973408b70851e720cc3281a67b134982bc782ed45",
+  "reviewedHousingBoxes": 67,
+  "videoNegatives": 34,
+  "videoSourceHashes": {
+    "VID_20261117_223120_760.mp4": "1d4cd8cd847a1dd8e5aa0aca5f2aa7409a90a17032cd11bf97ca4914fea06cef",
+    "VID_20261117_223120_293.mp4": "105204a7c1e117ebb5810dec383e9dcf2d9908a2b5e651211e21d05f6a51ee85",
+    "VID_20261117_223120_865.mp4": "77c10bc166dbe8f6dd0a4f3c435359073f1eb0eb1aaea918223f5aa67fe3c553",
+    "VID_20261117_223120_495.mp4": "4acd5763cf4d8f3f5589c4afcdf8438213cd72cf6ed02b1acebcbb2f482eb691"
+  },
+  "changedLabels": 99,
+  "splits": {
+    "train": {
+      "images": 297,
+      "counts": {
+        "cone": 208,
+        "speed_bump": 24,
+        "traffic_light_yellow": 26,
+        "stop_sign": 44,
+        "traffic_light_green": 19,
+        "traffic_light": 33,
+        "pedestrian_crossing": 11,
+        "traffic_light_red": 29
+      },
+      "missingClasses": []
+    },
+    "val": {
+      "images": 61,
+      "counts": {
+        "cone": 63,
+        "stop_sign": 7,
+        "traffic_light": 8,
+        "pedestrian_crossing": 2,
+        "speed_bump": 7,
+        "traffic_light_red": 11,
+        "traffic_light_yellow": 3,
+        "traffic_light_green": 5
+      },
+      "missingClasses": []
+    }
+  },
+  "test": "Absent. Canonical TEST and all VAL pixels/labels unchanged.",
+  "warning": "TRAIN-only agent-assisted coordinate review and visually reviewed negatives, not independent human ground truth. Inherits remaining pseudo-label noise and already-reused validation/test from its parent."
+}

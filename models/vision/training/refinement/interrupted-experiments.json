@@ -1,0 +1,20 @@
+[
+  {
+    "run": "20261117T214547Z-c0b0c1",
+    "status": "interrupted-not-published",
+    "epochsCompleted": 9,
+    "reason": "Audit rejected before publication: a five-class head alone cannot supply learned green agreement; additional displaced crop boxes found.",
+    "checkpointSha256": "7a13e7f4b23a4297c8afcd8680ba46fae81f1a980a1bb07c3508ef1b2408e975",
+    "testEvaluated": false,
+    "productionOrBaselineReplaced": false
+  },
+  {
+    "run": "20261117T215745Z-97c43c",
+    "status": "interrupted-not-published",
+    "epochsCompleted": 2,
+    "reason": "Audit rejected before publication: visual inspection found 13 real/partial/grouped cone rows wrongly proposed for deletion. Restored those rows, reviewed signal labels and restarted from the untouched baseline.",
+    "checkpointSha256": "5e31695dc819846933b48f98c9451e970535837a864fcadb38525f7c0cf890eb",
+    "testEvaluated": false,
+    "productionOrBaselineReplaced": false
+  }
+]

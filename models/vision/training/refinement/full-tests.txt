@@ -1,0 +1,84 @@
+........................................................................ [  3%]
+.............................................................s.......... [  6%]
+........................................................................ [ 10%]
+............................ss.......................................... [ 13%]
+........................................................................ [ 16%]
+........................................................................ [ 20%]
+...........s.ssssssss.s.ss.............................................. [ 23%]
+........................................................................ [ 27%]
+.................................F...................................... [ 30%]
+........................................................................ [ 33%]
+........................................................................ [ 37%]
+................................................................! serial /tmp/pytest-of-user/pytest-16/test_chassis_skips_lidar_port_0/ttyUSB0: module 'serial' has no attribute 'Serial' — повтор через 2 с
+........ [ 40%]
+........................................................................ [ 43%]
+........................................................................ [ 47%]
+........................................................................ [ 50%]
+ss...................................................................... [ 54%]
+............................ss.......................................... [ 57%]
+................................s.............................s......... [ 60%]
+........................................................................ [ 64%]
+........................................................................ [ 67%]
+........................................s............................... [ 70%]
+........................................................................ [ 74%]
+........................................................................ [ 77%]
+........................................................................ [ 81%]
+........................................................................ [ 84%]
+........................................................................ [ 87%]
+.......F...................sss...s..........s....ss..............s...... [ 91%]
+........................................................................ [ 94%]
+........................................................................ [ 97%]
+............................................                             [100%]
+=================================== FAILURES ===================================
+_____________ test_depth_to_scan_wall_in_front_and_floor_filtered ______________
+
+    def test_depth_to_scan_wall_in_front_and_floor_filtered():
+        frame = decode_depth_payload(demo_payload())
+        points = depth_to_scan(frame)
+        assert points, "стена впереди должна дать лучи"
+        assert all(-math.radians(30) <= p["a"] <= math.radians(30) for p in points)
+>       assert all(1.8 <= p["r"] <= 2.2 for p in points), points
+E       AssertionError: [{'a': -0.4912, 'r': 1.362}, {'a': -0.4788, 'r': 1.354}, {'a': -0.4663, 'r': 1.347}, {'a': -0.4539, 'r': 1.332}, {'a': -0.4415, 'r': 1.325}, {'a': -0.429, 'r': 1.318}, ...]
+E       assert False
+E        +  where False = all(<generator object test_depth_to_scan_wall_in_front_and_floor_filtered.<locals>.<genexpr> at 0x7f226e8b97e0>)
+
+tests/test_kinect_depth.py:50: AssertionError
+______ test_update_reinstalls_and_builds_even_without_requirements_change ______
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-16/test_update_reinstalls_and_bui0')
+
+    def test_update_reinstalls_and_builds_even_without_requirements_change(tmp_path):
+        """Кнопка «Обновить с GitHub»: полный цикл, а не только git merge.
+    
+        Раньше зависимости ставились лишь при смене requirements.txt, а сборки не
+        было вовсе: оператор жал обновление, а окружение и битый код могли
+        остаться прежними. Теперь каждый апдейт: fetch → ff → ensure_deps →
+        compile/import check → restart, а падение сборки откатывает код.
+        """
+        _remote, seed, clone = make_remote(tmp_path)
+        (seed / "README.md").write_text("version two, code only\n", encoding="utf-8")
+        git(seed, "add", "README.md")
+        git(seed, "commit", "-m", "code only update")
+        git(seed, "push", "origin", "main")
+    
+        calls: list[str] = []
+        manager = UpdateManager(
+            clone, branch="main",
+            dependency_installer=lambda root: (calls.append("deps") or 0, "deps ok"),
+            build_runner=lambda root: (calls.append("build") or 0, "build ok"),
+            on_restart=lambda: calls.append("restart"),
+        )
+        assert manager.start() is True
+        state = wait_for_terminal(manager)
+        assert state["status"] == "done"
+>       assert calls == ["deps", "build", "restart"]
+E       AssertionError: assert ['deps', 'build'] == ['deps', 'build', 'restart']
+E         
+E         Right contains one more item: 'restart'
+E         Use -v to get more diff
+
+tests/test_updater.py:187: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_kinect_depth.py::test_depth_to_scan_wall_in_front_and_floor_filtered
+FAILED tests/test_updater.py::test_update_reinstalls_and_builds_even_without_requirements_change
+2 failed, 2100 passed, 30 skipped in 336.93s (0:05:36)
