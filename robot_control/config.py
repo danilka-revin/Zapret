@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _load_dotenv(path: Path) -> None:
-    """Мини-загрузчик .env: KEY=VALUE построчно, без сторонних зависимостей.
-
-    Уже заданные переменные окружения имеют приоритет над файлом.
-    """
+def dotenv_items(path: Path) -> Iterator[tuple[str, str]]:
+    """Строки KEY=VALUE без исполнения файла или изменения окружения."""
     if not path.is_file():
         return
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -23,8 +21,14 @@ def _load_dotenv(path: Path) -> None:
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
+        if key:
+            yield key, value
+
+
+def _load_dotenv(path: Path) -> None:
+    """Заданные переменные окружения имеют приоритет над файлом."""
+    for key, value in dotenv_items(path):
+        os.environ.setdefault(key, value)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

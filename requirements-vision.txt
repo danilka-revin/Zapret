@@ -9,6 +9,7 @@
 #   .venv/bin/pip uninstall -y opencv-python
 #   .venv/bin/pip install --force-reinstall --no-deps "opencv-python-headless<5"
 #
+# Для бортовых камер без обучения: .venv/bin/python scripts/ensure_opencv.py
 # Обучение: .venv/bin/python scripts/train_vision.py --weights yolov8n.pt --epochs 150 --imgsz 640
 # Версии выполненного CPU-прогона: requirements-vision-training.txt; отчёт: docs/VISION_TRAINING.md
 # Проверка (pytest из requirements-dev.txt):

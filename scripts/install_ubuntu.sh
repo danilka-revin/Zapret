@@ -84,19 +84,15 @@ fi
 log "Python проекта: $PYTHON3 — $("$PYTHON3" --version 2>&1) (нужен 3.9+)"
 
 # --- 1-2. python и зависимости (работает офлайн через vendor/) -------------- #
-RC_PYTHON3="$PYTHON3" ./scripts/ensure_deps.sh
+RC_PYTHON3="$PYTHON3" ./scripts/ensure_deps.sh --base-only
 
-# USB-камеры читаются на борту. Базовый офлайн-набор пульта не требует ни
-# OpenCV, ни YOLO; отсутствие колеса/сети не должно сорвать установку пульта.
-if ! .venv/bin/python -c 'import cv2' 2>/dev/null; then
-  log "ставлю OpenCV для USB-камер…"
-  if ! .venv/bin/python -m pip install --only-binary=:all: --find-links vendor --retries 1 --timeout 8 'opencv-python-headless>=4.8,<5' ||
-     ! .venv/bin/python -c 'import cv2'; then
-    if ! command -v ffmpeg >/dev/null && command -v apt-get >/dev/null; then
-      log 'OpenCV недоступен; пробую установить FFmpeg для захвата через V4L2…'
-      $SUDO apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=8 install -y --no-install-recommends ffmpeg ||
-        log 'Для USB-камер установите ffmpeg (sudo apt install ffmpeg) или opencv-python-headless в .venv.'
-    fi
+# Полная установка готовит камеры даже до первого подключения USB. На обычном
+# запуске/обновлении этим занимается --auto, без sudo и без apt.
+if ! .venv/bin/python -I scripts/ensure_opencv.py && ! command -v ffmpeg >/dev/null; then
+  if [[ "${RC_DEPS_OFFLINE:-0}" != 1 ]] && command -v apt-get >/dev/null; then
+    log 'OpenCV недоступен; пробую установить FFmpeg для захвата через V4L2…'
+    $SUDO apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=8 install -y --no-install-recommends ffmpeg ||
+      log 'Для USB-камер установите ffmpeg (sudo apt install ffmpeg) или восстановите OpenCV в .venv.'
   fi
 fi
 
