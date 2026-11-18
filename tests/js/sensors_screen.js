@@ -241,6 +241,8 @@ function logItems() {
         (b) => ({ mode: b.getAttribute('data-strip-mode'), disabled: !!b.disabled,
                   title: b.title || '' })),
     },
+    signals: byId('sm-signals').textContent,
+    signalsTone: byId('sm-signals').dataset.tone || '',
     door: byId('sm-door').textContent,
     scans: byId('sm-scans').children.map(opt => opt.textContent),
     lock: { text: byId('sm-lock').textContent,

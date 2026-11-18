@@ -142,6 +142,9 @@ def test_telemetry_api_returns_only_public_values(kiosk_client):
             "cameras",
             # Свет, замок, карты и компас отдельной платы модуля датчиков.
             "sensorModule",
+            # Автосигналы: стоп-сигнал, тревога у препятствия и её причина.
+            # В тестовом приложении нить не поднимается и сервиса нет.
+            "signals",
         }
         cameras = body["data"]["cameras"]
         assert isinstance(cameras, list)

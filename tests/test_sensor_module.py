@@ -782,6 +782,31 @@ def test_lights_take_bool_and_reject_unknown_names(kiosk_app):
     assert client.post("/api/sensor_module/lights", json={"dim": 999}).status_code == 400
 
 
+def test_state_shows_automatic_signals_when_the_safety_thread_runs(kiosk_app):
+    """Стоп-сигнал и тревога видны в снимке платы, а не только в журнале."""
+    from robot_control.drive_signals import SignalConfig, SignalController
+
+    class Idle:
+        def state(self):
+            return {"enabled": True, "brakeLight": False, "alert": True, "buzz": True,
+                    "distanceM": 0.42, "nearM": 0.5, "reason": "препятствие 0.42 м по курсу",
+                    "error": ""}
+
+    module = FakeModule()
+    kiosk_app.extensions["rc_sensor_module"] = module
+    kiosk_app.extensions["rc_drive_signals"] = Idle()
+    try:
+        data = kiosk_app.test_client().get("/api/sensor_module").get_json()["data"]
+        assert data["driveSignals"]["alert"] is True
+        assert data["driveSignals"]["distanceM"] == 0.42
+        assert data["heading"] == 123.45          # обычная телеметрия не потерялась
+        public = kiosk_app.test_client().get("/api/kiosk_state").get_json()["data"]
+        assert public["sensorModule"]["driveSignals"]["brakeLight"] is False
+        assert public["signals"]["alert"] is True
+    finally:
+        kiosk_app.extensions.pop("rc_drive_signals", None)
+
+
 def test_buzz_endpoint_is_a_plain_check_without_pin(kiosk_app):
     """Кнопка «Проверить сигнал»: короткий тон без PIN и без побочных действий."""
     module = FakeModule()

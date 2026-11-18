@@ -119,6 +119,7 @@ from robot_control.track_autonomy import (AUTONOMY_HEADER, TRACK_SCENARIOS, Trac
                                          TrackAutonomyService)
 from robot_control.sensor_layout import layout_payload, kinect_spec, rear_kinect_enabled
 from robot_control import sensor_module as sensor_module_client
+from robot_control.drive_signals import DriveSignalService, SignalConfig, SignalController
 from robot_control import calibration as geometry_calibration
 
 log = logging.getLogger("robot_control.kiosk")
@@ -978,6 +979,31 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                                 dispatch_drive_command, dispatch_steering_command,
                                 estop_latch.latched)
     app.extensions["rc_scan_mode"] = scan_mode
+    # Автосигналы шасси: стоп-сигнал при торможении и тревога у препятствия.
+    # Только реле/зуммер платы датчиков; тягу и замок автоматика не трогает.
+    # В тестах нить не поднимается: без железа нечего опрашивать, а состояние
+    # доступно через /api/sensor_module.
+    drive_signals = None
+    if not config.testing:
+        def _signal_lidar():
+            manager_ = nav_lidar
+            return manager_.get_scan_info() if manager_ is not None else {}
+
+        def _signal_module():
+            return app.extensions.get("rc_sensor_module")
+
+        drive_signals = DriveSignalService(
+            SignalController(SignalConfig.from_env()),
+            telemetry_provider=lambda: getattr(state, "source", None).read()
+            if getattr(state, "source", None) is not None else {},
+            lidar_provider=_signal_lidar,
+            module_provider=_signal_module,
+            # Лидар стоит не в центре корпуса: смещение уже посчитано
+            # менеджером, без лишней сборки статуса на каждом такте.
+            offset_provider=lambda: float(getattr(nav_lidar, "_lidar_offset_m", 0.0) or 0.0),
+            estop_provider=estop_latch.latched,
+        )
+    app.extensions["rc_drive_signals"] = drive_signals
     neutral = NeutralControl(lambda: getattr(state, "source", None), interrupt_keyboard=keyboard.interrupt)
     app.extensions["rc_neutral"] = neutral
     full_zero = FullZeroControl(lambda: getattr(state, "source", None), estop_latch.latched,
@@ -1246,6 +1272,10 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         app.extensions["rc_map_stop"] = map_stop
         threading.Thread(target=_map_worker, args=(map_stop,),
                          name="kiosk-map", daemon=True).start()
+        signals = app.extensions.get("rc_drive_signals")
+        if signals is not None:
+            app.extensions["rc_signals_stop"] = map_stop
+            signals.start()
 
     def _send(name: str):
         from flask import send_from_directory
@@ -2007,6 +2037,9 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
             "masterMessages": snap.get("masterMessages") or [],
             # Свет, замок, карты и компас отдельной платы (может не быть).
             "sensorModule": sensor_state_payload(telemetry_only=True),
+            # Автосигналы: стоп-сигнал, тревога у препятствия и её причина.
+            "signals": (app.extensions["rc_drive_signals"].state()
+                        if app.extensions.get("rc_drive_signals") is not None else None),
         }})
 
     @app.get("/api/kiosk_wheel_state")
@@ -2427,6 +2460,11 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
                     "stripEnabled": False, "error": "не настроен (RC_SENSOR_PORT)"}
         try:
             data = module.state()
+            signals = app.extensions.get("rc_drive_signals")
+            if signals is not None:
+                # Автосигналы видны там же, где свет: оператор понимает, почему
+                # горят стопы или почему пищит зуммер.
+                data = dict(data, driveSignals=signals.state())
             if telemetry_only:
                 # Общий снимок читают в т.ч. гостевые мониторы. UID и журнал
                 # приложений нужны экрану карт, но не общей телеметрии.
