@@ -28,8 +28,10 @@ class Mode(NamedTuple):
 def modes(has_cv: bool, has_ffmpeg: bool) -> list[Mode]:
     # First try compressed UVC at USB-friendly rates (4 cameras on one hub).
     # Some webcams are raw-only; others reject all property changes.
-    profiles = [("MJPG", 640, 480, 15), ("MJPG", 320, 240, 10),
-                ("YUYV", 320, 240, 10), ("", 0, 0, 0)]
+    # 16:9, как на экранах пульта и киоска: кадр заполняет область без полей
+    # и без растяжения. Если камера не отдаёт 720p, откат — 640×360.
+    profiles = [("MJPG", 1280, 720, 15), ("MJPG", 640, 360, 15),
+                ("YUYV", 640, 360, 10), ("", 0, 0, 0)]
     backends = (["OpenCV"] if has_cv else []) + (["FFmpeg"] if has_ffmpeg else [])
     return [Mode(backend, *profile) for backend in backends for profile in profiles]
 

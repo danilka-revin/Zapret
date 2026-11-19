@@ -1216,7 +1216,8 @@ body.swipe-open .kiosk {
      задние — снизу; слева левые, справа правые. Место задано явно, чтобы
      раскладка не зависела от порядка блоков в разметке. */
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
+  grid-template-rows: auto auto;
+  align-content: start;
   gap: 10px;
   min-height: 0;
 }
@@ -1260,8 +1261,9 @@ body.swipe-open .kiosk {
 
 .cam-viewport {
   position: relative;
-  flex: 1 1 auto;
-  min-height: 180px;
+  aspect-ratio: 16 / 9;
+  flex: none;
+  min-height: 0;
   background: #0a0a0a;
   display: grid;
   place-items: center;
@@ -1883,7 +1885,7 @@ body.swipe-open .kiosk {
   .swipe-body { overflow: auto; }
   .swipe-camera-view { height: auto; min-height: 100%; grid-template-columns: 1fr; grid-template-rows: auto auto; overflow: visible; }
   .cam-stack { grid-template-rows: none; }
-  .cam-viewport { min-height: 220px; }
+  .cam-viewport { min-height: 0; }
   .log-panel { min-height: 320px; }
   .steer-panel { height: auto; min-height: 100%; overflow: visible; }
   .traction-controls { grid-template-columns: 1fr 1fr; }
@@ -2128,7 +2130,7 @@ body.swipe-open .kiosk {
 .camera-expanded .cam-stack > .cam-card[data-camera] { grid-area: auto; }
 .camera-expanded .cam-card.is-expanded { height:100%; }
 @media (max-width:1000px) {
-  .camera-expanded .cam-viewport { min-height:60vh; }
+  .camera-expanded .cam-viewport { min-height:0; max-height:70vh; }
 }
 
 /* Map links remain usable even if the swipe controller has not booted. */

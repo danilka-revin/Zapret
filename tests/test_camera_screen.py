@@ -68,6 +68,17 @@ def test_camera_panel_is_laid_out_front_first(kiosk_client):
     assert "кормовая" not in page
 
 
+def test_main_camera_grid_keeps_16_9_instead_of_overlap():
+    """Четыре камеры 16:9 не сжимаются в чужую высоту и не наезжают друг на друга."""
+    root = Path(__file__).resolve().parent.parent / "slam_gui"
+    styles = (root / "main.css").read_text(encoding="utf-8")
+    assert ".cam-viewport {" in styles and "aspect-ratio: 16 / 9;" in styles
+    # Сетка камер идёт по содержимому (auto auto), а .stage не сжимается ниже
+    # содержимого: иначе плитки вылезают за панель и наезжают друг на друга.
+    assert "grid-template-rows: auto auto;" in styles
+    assert "flex: 0 0 auto;" in styles
+
+
 def test_web_console_camera_feeds_are_ordered_the_same_way():
     """Пульт 8080 показывает камеры в том же порядке: передние сверху."""
     root = Path(__file__).resolve().parent.parent / "slam_gui"
