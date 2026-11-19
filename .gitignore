@@ -20,6 +20,10 @@ var/
 robot-update.bulka
 robot-update.zip
 .bulka-update-*.tmp
+# Здесь лежит закрытый ключ подписи пакетов: ни в Git, ни на флешку.
+bulka-release/
+# Готовый комплект для флешки (создаёт scripts/prepare_usb_update.py).
+bulka-usb/
 
 # --- Обучение YOLO: веса и метки в Git, тяжёлые кадры/логи — нет ---
 .cache/
