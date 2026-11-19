@@ -141,11 +141,28 @@ class UpdateManager:
             raise UpdateError("Не удалось определить установленную версию.")
         return result.stdout.strip()
 
+    # Локальные файлы, которые обновление никогда не перезаписывает: их можно
+    # не считать «грязной копией». Без этого робот старой версии (до того, как
+    # .env и data/ попали в .gitignore) не смог бы обновиться ни с флешки, ни
+    # по сети: доверенный ключ и настройки сами бы заблокировали установку.
+    LOCAL_PATHS = (".env", ".venv", "var", "data")
+
+    def _is_local_only(self, path: str) -> bool:
+        path = path.strip().strip('"')
+        return bool(path) and path.split("/", 1)[0] in self.LOCAL_PATHS
+
     def _working_copy_dirty(self) -> bool:
         status = self._command(["status", "--porcelain", "--untracked-files=all"])
         if status.returncode != 0:
             raise UpdateError("Не удалось проверить рабочую копию Git.")
-        return bool(status.stdout.strip())
+        for line in status.stdout.splitlines():
+            if not line.strip():
+                continue
+            if not line.startswith("??"):
+                return True  # изменён/удалён отслеживаемый файл — копия грязная
+            if not self._is_local_only(line[3:]):
+                return True  # посторонний новый файл в дереве проекта
+        return False
 
     def _require_clean_working_copy(self) -> None:
         if self._working_copy_dirty():
