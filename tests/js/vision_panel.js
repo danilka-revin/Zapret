@@ -167,20 +167,26 @@ bootHandlers.forEach((handler) => handler());
   assert.equal(mapPayload.field.length, 0, 'offline does not preserve old field/advice events');
   ctx.fetch = () => Promise.resolve({ok: true, json: () => Promise.resolve(snapshot)});
 
-  // Ограничения движения видны на панели: красный держит тягу запертой,
-  // «неровность» снижает потолок. Цвет светофора при этом не подменяется.
+  // Знаки — только индикация: выключенный ограничитель ничего не обещает даже
+  // при подтверждённом красном, а включённый вручную честно об этом пишет.
   snapshot.trafficLight = {state: 'red', label: 'Красный — стоим', cameraId: 0, action: 'stop',
-    counts: {red: 900}, guard: {blocked: true, blockedS: 3.5, bump: false, speedCapPercent: 100,
-      controlsMotors: false}};
+    counts: {red: 900}, guard: {enabled: false, blocked: false, bump: false, speedCapPercent: 100,
+      controlsMotors: false, reason: 'ограничения по знакам выключены (RC_GUARD_ENABLED=0)'}};
   await vision.refresh();
   assert.match(elements['vision-signal'].textContent, /Красный — стоим · CAM 0/);
-  assert.match(elements['vision-signal'].textContent, /ТЯГА ЗАБЛОКИРОВАНА/);
   assert.equal(elements['vision-signal'].dataset.state, 'red');
-  snapshot.trafficLight.guard = {blocked: false, bump: true, speedCapPercent: 80, slowdown: 0.2,
-    controlsMotors: false};
+  assert.doesNotMatch(elements['vision-signal'].textContent, /ТЯГА ЗАБЛОКИРОВАНА|НЕРОВНОСТЬ/,
+    'выключенный ограничитель не обещает ограничений');
+  // Ограничитель включили вручную — панель снова показывает его состояние.
+  snapshot.trafficLight.guard = {enabled: true, blocked: true, blockedS: 3.5, bump: false,
+    speedCapPercent: 100, controlsMotors: false};
+  await vision.refresh();
+  assert.match(elements['vision-signal'].textContent, /ТЯГА ЗАБЛОКИРОВАНА \(RC_GUARD_ENABLED=1\)/);
+  snapshot.trafficLight.guard = {enabled: true, blocked: false, bump: true, speedCapPercent: 80,
+    slowdown: 0.2, controlsMotors: false};
   await vision.refresh();
   assert.match(elements['vision-signal'].textContent, /НЕРОВНОСТЬ: потолок 80 %/);
-  snapshot.trafficLight.guard = {blocked: false, bump: false, speedCapPercent: 100};
+  snapshot.trafficLight.guard = {enabled: true, blocked: false, bump: false, speedCapPercent: 100};
   await vision.refresh();
   assert.doesNotMatch(elements['vision-signal'].textContent, /НЕРОВНОСТЬ|ТЯГА/);
 

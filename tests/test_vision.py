@@ -8,6 +8,7 @@ import pytest
 
 from robot_control.vision.classes import CLASS_NAMES, class_from_id, class_id
 from robot_control.vision.detector import Detection, HeuristicDetector, non_max_suppression
+from robot_control.drive_guard import DriveGuard, GuardConfig
 from robot_control.vision.service import VisionConfig, VisionService
 from robot_control.vision.traffic import (
     TrafficLightTracker, classify_traffic_light, color_counts,
@@ -249,6 +250,9 @@ def test_service_feeds_guard_from_raw_frames_per_camera():
                                 "id": cid, "role": "front_left", "x_m": 0.3, "y_m": 0.25,
                                 "yaw_deg": -25.0, "hfov_deg": 82.0} for cid in range(4)])
     service.initialize()
+    # Ограничитель по умолчанию выключен (знаки только показываются); чтобы
+    # проверить покадровую логику, включаем его явно — как на стенде.
+    service._guard = DriveGuard(GuardConfig(enabled=True))
     detector = _FakeDetector()
     service._detector = detector
     frame = np.full((360, 640, 3), (30, 30, 30), dtype=np.uint8)
