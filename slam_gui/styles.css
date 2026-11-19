@@ -122,8 +122,8 @@ section{padding:14px 16px 22px}
 .feed.map{flex:1;min-height:0;border:1px solid var(--line);box-shadow:var(--shadow)}
 .feed.map canvas{width:100%;height:calc(100vh - 260px);min-height:460px;display:block;background:#0f1a17;cursor:crosshair}
 .side-col{display:flex;flex-direction:column;gap:10px}
-.feed.cam{border-radius:14px;overflow:hidden;border:1px solid var(--line);min-height:0;box-shadow:var(--shadow)}
-.feed.cam canvas,.feed.cam .cam-stream{width:100%;height:92px;display:block;object-fit:cover;background:#0f1a17}
+.feed.cam{border-radius:14px;overflow:hidden;border:1px solid var(--line);min-height:0;aspect-ratio:16/9;box-shadow:var(--shadow)}
+.feed.cam canvas,.feed.cam .cam-stream{width:100%;height:100%;display:block;object-fit:contain;background:#0f1a17}
 .cams{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .feed .live{position:absolute;left:10px;top:10px;background:var(--danger);color:#fff;font-size:9px;font-weight:800;padding:4px 8px;border-radius:999px;letter-spacing:.08em;z-index:2;box-shadow:0 4px 10px rgba(0,0,0,.2)}
 .feed .live.maplive{background:var(--accent);color:var(--accent-ink)}

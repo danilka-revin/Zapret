@@ -525,6 +525,10 @@
       empty.title = reason;
     }
     drawLidar(canvas, pts, d);
+    // 3D-обзор (Kinect и «Общий обзор») берёт тот же скан лидара, что и 2D-карта.
+    if (window.RCKinectView && typeof window.RCKinectView.setLidarScan === 'function') {
+      window.RCKinectView.setLidarScan(pts, d && d.lidarStatus);
+    }
   }
 
   // Карта в стиле RViz — модуль lidar_view.js (сетка, оси, шасси, зум, Decay Time).
@@ -581,8 +585,17 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const cw = w / dpr, ch = h / dpr;
 
-    if (!image) { ctx.clearRect(0, 0, cw, ch); return; }
-    ctx.drawImage(image, 0, 0, cw, ch);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, cw, ch);
+    if (image && image.naturalWidth > 0 && image.naturalHeight > 0) {
+      // Кадр вписывается с сохранением пропорций: контейнер 16:9, и изображение
+      // не должно растягиваться в чужое соотношение.
+      const scale = Math.min(cw / image.naturalWidth, ch / image.naturalHeight);
+      const dw = image.naturalWidth * scale;
+      const dh = image.naturalHeight * scale;
+      ctx.drawImage(image, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+    }
+    if (!image) return;
     ctx.strokeStyle = 'rgba(255,255,255,.2)';
     ctx.lineWidth = 1;
     ctx.beginPath();

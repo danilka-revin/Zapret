@@ -52,7 +52,26 @@ def test_kinect_panel_is_included_on_robot_home():
         assert token in html
 
 
-@pytest.mark.parametrize('page', ['robot.html', 'index.html', 'scan.html'])
+def test_main_screen_shows_the_same_sensor_overview():
+    """На основном экране 8080 вместо «Лидара 360°» — обзор датчиков."""
+    html = (ROOT / 'slam_gui/main.html').read_text()
+    for token in ('data-sensor-panel', 'Обзор датчиков',
+                  'id="sensor-lidar"', 'id="sensor-kinect"', 'id="sensor-combined"',
+                  'id="sensor-lidar-view"', 'id="sensor-kinect-view"',
+                  'id="sensor-fullscreen-toggle"', 'id="lidar-fullscreen-btn"',
+                  'id="kinect-fullscreen-btn"', 'id="kinect-3d-canvas"',
+                  'id="kinect-zoom-in"', 'id="kinect-zoom-out"',
+                  'id="kinect-reset-view"', 'id="kinect-fov-toggle"',
+                  'голубая пирамида', 'lidar_view.js', 'kinect_view.js'):
+        assert token in html, token
+    assert 'Лидар 360°' not in html
+    css = (ROOT / 'slam_gui/main.css').read_text()
+    for rule in ('.sensor-switch', '.kinect-view', '.lidar.is-fullscreen',
+                 'body.sensor-fullscreen', 'position: fixed'):
+        assert rule in css, rule
+
+
+@pytest.mark.parametrize('page', ['robot.html', 'index.html', 'scan.html', 'main.html'])
 def test_vision_state_feeds_3d_overview(page):
     html = (ROOT / 'slam_gui' / page).read_text()
     assert 'vision_panel.js' in html

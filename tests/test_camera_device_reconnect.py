@@ -264,7 +264,7 @@ def test_capture_negotiates_then_serves_decodable_jpeg(kiosk_client, tmp_path, m
         def set(self, key, value): self.settings[key] = value; return False
         def get(self, key): return self.reader.get(key)
         def read(self):
-            if self.settings[cv.CAP_PROP_FRAME_WIDTH] != 320:
+            if self.settings[cv.CAP_PROP_FRAME_WIDTH] != 640:
                 return False, None
             time.sleep(.02)
             return self.reader.read()
@@ -280,7 +280,7 @@ def test_capture_negotiates_then_serves_decodable_jpeg(kiosk_client, tmp_path, m
         assert wait_for(lambda: dev.frames_received >= 2), dev.capture_error
         snap, = kiosk_client.get('/api/cameras').json['cameras']
         assert snap['openedPath'] == path and snap['frameSource'] == 'capture'
-        assert snap['active'] and snap['darkFrame'] is True and '320×240' in snap['captureMode']
+        assert snap['active'] and snap['darkFrame'] is True and '640×360' in snap['captureMode']
         assert (snap['width'], snap['height'], snap['fps']) == (64, 48, 10)
         res = kiosk_client.get('/api/camera/2/frame')
         assert res.status_code == 200 and res.mimetype == 'image/jpeg'
@@ -315,7 +315,7 @@ def test_ffmpeg_reader_releases_child_on_stop(tmp_path, monkeypatch, backend, cv
         assert args[args.index('-i')+1] == str(path) and args[args.index('-f')+1] == 'v4l2'
         out_args = args[args.index('-i')+2:]
         proc = real_popen([binary, '-loglevel', 'error', '-re', '-f', 'lavfi', '-i',
-                           'color=c=red:size=640x480:rate=10', *out_args], **kwargs)
+                           'color=c=red:size=1280x720:rate=10', *out_args], **kwargs)
         children.append(proc)
         return proc
 
@@ -330,7 +330,7 @@ def test_ffmpeg_reader_releases_child_on_stop(tmp_path, monkeypatch, backend, cv
     try:
         assert wait_for(lambda: dev.frames_received >= 2, timeout=5), dev.capture_error
         jpeg = image.open(io.BytesIO(dev.get_frame()))
-        assert jpeg.size == (640, 480) and jpeg.getpixel((32, 32))[0] >= 240
+        assert jpeg.size == (1280, 720) and jpeg.getpixel((32, 32))[0] >= 240
         assert dev.frame_source == 'capture' and 'FFmpeg' in dev.capture_mode
     finally:
         dev.stop(); dev._thread.join(timeout=2)

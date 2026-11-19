@@ -182,8 +182,21 @@ window.RCCameraFrames?.whileVisible?.((id, image) => {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
-  if (image) ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-  else ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const cw = rect.width || 320, ch = rect.height || 180;
+  const W = Math.round(cw * dpr), H = Math.round(ch * dpr);
+  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#0f1a17";
+  ctx.fillRect(0, 0, cw, ch);
+  // Контейнер 16:9: кадр вписывается без растяжения, с полями только если
+  // сам кадр не 16:9.
+  if (image && image.naturalWidth > 0 && image.naturalHeight > 0) {
+    const scale = Math.min(cw / image.naturalWidth, ch / image.naturalHeight);
+    const dw = image.naturalWidth * scale, dh = image.naturalHeight * scale;
+    ctx.drawImage(image, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+  }
   document.getElementById(name + "-hud").textContent = image ? "LIVE" : "нет кадра";
 });
 
