@@ -113,6 +113,31 @@ def test_dirty_tree_is_never_overwritten(tmp_path):
     assert (clone / "README.md").read_text(encoding="utf-8") == "operator's local edit\n"
 
 
+def test_local_config_files_do_not_block_update(tmp_path):
+    """Робот старой версии без .env и data/ в .gitignore тоже может обновиться."""
+    _remote, seed, clone = make_remote(tmp_path)
+    (seed / "README.md").write_text("remote version\n", encoding="utf-8")
+    git(seed, "add", "README.md")
+    git(seed, "commit", "-m", "remote update")
+    git(seed, "push", "origin", "main")
+
+    (clone / ".env").write_text("RC_USB_UPDATE_AUTO=1\n", encoding="utf-8")
+    (clone / "data").mkdir()
+    (clone / "data" / "usb-update-signers").write_text("bulka-update ssh-ed25519 AAAA\n", encoding="utf-8")
+    (clone / "var").mkdir()
+    (clone / "var" / "update-state.json").write_text("{}\n", encoding="utf-8")
+    (clone / ".venv").mkdir()
+    (clone / ".venv" / "bin").mkdir()
+    manager = UpdateManager(clone, branch="main")
+    check = manager.check()
+    assert check["dirty"] is False
+    assert check["canUpdate"] is True
+
+    # Посторонний новый файл в дереве проекта по-прежнему блокирует обновление.
+    (clone / "operator-notes.txt").write_text("не сохранять\n", encoding="utf-8")
+    assert manager.check()["dirty"] is True
+
+
 def test_diverged_branch_is_refused_without_reset(tmp_path):
     _remote, seed, clone = make_remote(tmp_path)
     (clone / "local.txt").write_text("local commit\n", encoding="utf-8")
