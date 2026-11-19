@@ -164,3 +164,34 @@ def test_snapshot_is_json_safe_and_carries_the_reason():
     assert isinstance(state["blockedS"], float)
     assert set(state) >= {"enabled", "blocked", "blockedReason", "blockedS", "bump",
                           "speedCapPercent", "slowdown", "reason", "stale"}
+
+
+def test_signs_are_display_only_by_default():
+    """По умолчанию знаки и светофор только показываются, тягу не трогают."""
+    guard_config = GuardConfig.from_env()
+    assert guard_config.enabled is False, "ограничитель по знакам включён без спроса"
+    g = DriveGuard(guard_config)
+    for _ in range(5):                      # даже длинная серия красного
+        state = g.observe("red", camera_id=0)
+        assert state["blocked"] is False
+    state = g.observe_signs(["speed_bump", "stop_sign"])
+    assert state["speedCapPercent"] == 100 and state["bump"] is False
+    # Распознавание при этом никуда не делось: цвет и знаки видны в состоянии.
+    assert state["enabled"] is False
+    assert "выключены" in state["reason"]
+
+
+def test_keyboard_without_guard_drives_regardless_of_detected_signs():
+    """Клавиатура без подключённого ограничителя всегда даёт полную тягу."""
+    from robot_control.keyboard import KeyboardControl
+
+    config = GuardConfig.from_env()
+    assert config.enabled is False
+    # Ровно то, что делает борт: ограничитель не подключается вовсе.
+    ctl = KeyboardControl(lambda: None, lambda *a: ({"ok": True}, 200),
+                          lambda *a: ({"ok": True}, 200), lambda: None)
+    state = ctl.guard_state()
+    assert state["blocked"] is False and state["speedCapPercent"] == 100
+    assert ctl._cap_percent(100) == 100
+    assert ctl._cap_percent(-100) == -100
+    assert ctl._guard_error() is None

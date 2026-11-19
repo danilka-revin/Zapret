@@ -971,20 +971,18 @@ def create_kiosk_app(config: Config | None = None) -> Flask:
         landmarks=None,
     )
     app.extensions["rc_exploration"] = exploration
-    # Ограничения по знакам (блокировка по красному, −20 % у «кочки»).
-    # Решение принимает борт по наблюдениям сервиса распознавания: устаревшая
-    # вкладка или ручной запрос блокировку не обходят.
-    #
-    # ``safety`` — умный круиз-контроль: пауза у препятствия. Сервис автосигналов
-    # поднимается ниже, поэтому передаём ленивый провайдер, а не сам объект:
-    # клавиатура спрашивает контроллер только в момент команды тяги.
+    # ``safety`` — умный круиз-контроль: пауза у препятствия по лидару. Сервис
+    # автосигналов поднимается ниже, поэтому передаём ленивый провайдер, а не
+    # сам объект: клавиатура спрашивает контроллер только в момент команды.
     def _keyboard_safety():
         signals = app.extensions.get("rc_drive_signals")
         return getattr(signals, "controller", None) if signals is not None else None
 
+    # Тягу ограничивает только человек: ограничитель по знакам (красный
+    # светофор, «кочка») и конусы к движению больше не подключены. Знаки
+    # распознаются и показываются на панели камер и карте — это индикация.
     keyboard = KeyboardControl(lambda: getattr(state, "source", None), dispatch_drive_command,
                                dispatch_steering_command, estop_latch.latched,
-                               guard=getattr(vision_service, "guard", None),
                                safety_provider=_keyboard_safety)
     app.extensions["rc_keyboard"] = keyboard
     # Режим «Скан»: сначала объезд и карта, потом поездки по ней. Управление

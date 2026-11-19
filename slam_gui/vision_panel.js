@@ -93,17 +93,17 @@
         }
         label.title = 'Только закрытый полигон. Это не команда моторам: E-STOP, препятствия и разрешение навигации проверяются отдельно.';
       }
-      // Ограничения движения: красный держит тягу запертой до зелёного, знак
-      // «неровность» снижает её потолок. Решение принимает борт, панель его
-      // показывает — чтобы ограничение не выглядело поломкой.
+      // Знаки и светофор — только индикация. Тягу ограничивает человек с
+      // клавиатуры, поэтому панель показывает распознанное, но не обещает
+      // блокировок: ограничитель по знакам по умолчанию выключен.
       const guard = traffic.guard || snapshot.guard || {};
-      if (snapshot.ok && snapshot.enabled && guard.blocked === true) {
-        label.textContent += ' · ТЯГА ЗАБЛОКИРОВАНА до зелёного';
-      } else if (snapshot.ok && snapshot.enabled && guard.bump === true) {
+      if (snapshot.ok && snapshot.enabled && guard.enabled === true && guard.blocked === true) {
+        label.textContent += ' · ТЯГА ЗАБЛОКИРОВАНА (RC_GUARD_ENABLED=1)';
+      } else if (snapshot.ok && snapshot.enabled && guard.enabled === true && guard.bump === true) {
         label.textContent += ' · НЕРОВНОСТЬ: потолок ' + Number(guard.speedCapPercent || 80) + ' %';
       }
-      if (guard.blocked === true) {
-        label.title = 'Красный светофор подтверждён кадрами подряд: управление с клавиатуры не выдаёт тягу до подтверждённого зелёного. Руль и остановка работают.';
+      if (guard.enabled === true && guard.blocked === true) {
+        label.title = 'Ограничитель по знакам включён вручную: тяга ждёт зелёного. Руль и остановка работают.';
       }
     }
   }
